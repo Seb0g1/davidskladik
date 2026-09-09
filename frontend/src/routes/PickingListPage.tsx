@@ -889,9 +889,8 @@ export function PickingListPage() {
                   </div>
                 ) : (
                   <button
-                    className="secondary-action"
+                    className="secondary-action pl-full-width"
                     type="button"
-                    style={{ width: "100%" }}
                     onClick={() => setResetConfirm(true)}
                   >
                     <Trash2 size={13} /> Обнулить все балансы
@@ -1126,7 +1125,7 @@ export function PickingListPage() {
                 onChange={(e) => { if (e.target.value) setReportDate(e.target.value); }}
               />
             </label>
-            {reportQuery.isFetching ? <Loader2 className="spin" size={15} style={{ opacity: 0.5 }} /> : null}
+            {reportQuery.isFetching ? <Loader2 className="spin pl-loader-muted" size={15} /> : null}
             <a
               className="secondary-action picker-report-export-btn"
               href={`/api/picker-report/export?date=${encodeURIComponent(reportDate)}`}
@@ -1143,7 +1142,7 @@ export function PickingListPage() {
                 value={fullExportFrom}
                 onChange={(e) => { if (e.target.value) setFullExportFrom(e.target.value); }}
               />
-              <span className="picker-report-date-label" style={{ padding: "0 2px" }}>—</span>
+              <span className="picker-report-date-label pl-date-sep">—</span>
               <input
                 type="date"
                 className="picker-report-date-input"
@@ -1225,9 +1224,9 @@ export function PickingListPage() {
 
                 // Format main total for header: USD big + RUB big if mixed
                 const headerTotal = (
-                  <div style={{ textAlign: "right" }}>
-                    {paidUsdTotal > 0 ? <strong style={{ fontSize: "0.95rem" }}>{paidUsdTotal.toLocaleString("ru-RU", { maximumFractionDigits: 2 })} $</strong> : null}
-                    {paidRubTotal > 0 ? <strong style={{ fontSize: "0.95rem", marginLeft: paidUsdTotal > 0 ? 8 : 0 }}>{Math.round(paidRubTotal).toLocaleString("ru-RU")} ₽</strong> : null}
+                  <div className="pl-total-right">
+                    {paidUsdTotal > 0 ? <strong className="pl-total-amount">{paidUsdTotal.toLocaleString("ru-RU", { maximumFractionDigits: 2 })} $</strong> : null}
+                    {paidRubTotal > 0 ? <strong className="pl-total-amount" style={{ marginLeft: paidUsdTotal > 0 ? 8 : 0 }}>{Math.round(paidRubTotal).toLocaleString("ru-RU")} ₽</strong> : null}
                   </div>
                 );
 
@@ -1247,10 +1246,10 @@ export function PickingListPage() {
                         <span className="picker-report-name">{picker.username}</span>
                         <span className="picker-report-meta">
                           {picker.count - unpaidCount} поз. оплачено · {suppliers.length} поставщ.
-                          {unpaidCount > 0 ? <span style={{ color: "var(--warn, #f59e0b)", marginLeft: 6 }}>· {unpaidCount} без суммы</span> : null}
+                          {unpaidCount > 0 ? <span className="pl-warn-md">· {unpaidCount} без суммы</span> : null}
                         </span>
                       </div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+                      <div className="pl-report-header-right">
                         {headerTotal}
                         <ChevronDown size={15} style={{ transform: expanded ? "rotate(180deg)" : "none", transition: "transform .2s", opacity: 0.6 }} />
                       </div>
@@ -1264,7 +1263,7 @@ export function PickingListPage() {
                               <span className="picker-report-supplier-name">{s.name}</span>
                               <span className="picker-report-supplier-count">
                                 {s.paidCount > 0 ? `${s.paidCount} оплач.` : null}
-                                {s.unpaidCount > 0 ? <span style={{ color: "var(--warn, #f59e0b)", marginLeft: 4 }}>{s.unpaidCount} без суммы</span> : null}
+                                {s.unpaidCount > 0 ? <span className="pl-warn-sm">{s.unpaidCount} без суммы</span> : null}
                               </span>
                               <span className="picker-report-supplier-cost">
                                 {s.paidRub > 0 ? (
@@ -1279,7 +1278,7 @@ export function PickingListPage() {
                                       <span className="picker-report-supplier-usd"> / {Math.round(s.paidRub).toLocaleString("ru-RU")} ₽</span>
                                     </>
                                   )
-                                ) : <span style={{ color: "var(--muted)" }}>—</span>}
+                                ) : <span className="pl-muted-dash">—</span>}
                               </span>
                             </div>
                           );
@@ -1288,7 +1287,7 @@ export function PickingListPage() {
                           Итого оплачено:{" "}
                           {paidUsdTotal > 0 ? <strong>{paidUsdTotal.toLocaleString("ru-RU", { maximumFractionDigits: 2 })} $</strong> : null}
                           {paidRubTotal > 0 ? <>{paidUsdTotal > 0 ? " + " : ""}<strong>{Math.round(paidRubTotal).toLocaleString("ru-RU")} ₽</strong></> : null}
-                          {unpaidCount > 0 ? <span style={{ color: "var(--warn, #f59e0b)", marginLeft: 8, fontWeight: 400 }}>· {unpaidCount} без суммы</span> : null}
+                          {unpaidCount > 0 ? <span className="pl-warn-total">· {unpaidCount} без суммы</span> : null}
                         </div>
                       </div>
                     ) : null}

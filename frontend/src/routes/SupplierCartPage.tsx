@@ -334,10 +334,10 @@ function ReadyToShipPanel() {
       </div>
 
       {/* Live marketplace orders */}
-      <div className="section-title compact-title" style={{ marginTop: "12px" }}>
+      <div className="section-title compact-title sc-mt">
         <div><span>Маркетплейсы</span><h3>Заказы ожидающие отгрузки</h3></div>
         {filteredMpLines.length > 0 ? (
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <div className="sc-filter-row">
             {selectedKeys.size > 0 ? (
               <button
                 className="primary-action"
@@ -458,7 +458,7 @@ function ReadyToShipPanel() {
       {/* Internal picked items */}
       {(rows.length > 0 || listQuery.isLoading) ? (
         <>
-          <div className="section-title compact-title" style={{ marginTop: "20px" }}>
+          <div className="section-title compact-title sc-mt-lg">
             <div><span>Собрано</span><h3>Позиции со статусом «собрано» — {rows.length} шт.</h3></div>
           </div>
           {!isAdmin ? (
@@ -705,10 +705,10 @@ export function PmSearchPanel({ onClose }: { onClose: () => void }) {
       ) : null}
 
       {/* Error / success */}
-      {searchQuery.error ? <div className="inline-error" style={{ margin: "8px 16px 0" }}>{errorMessage(searchQuery.error)}</div> : null}
-      {commitMutation.error ? <div className="inline-error" style={{ margin: "8px 16px 0" }}>{errorMessage(commitMutation.error)}</div> : null}
+      {searchQuery.error ? <div className="inline-error sc-padded-error">{errorMessage(searchQuery.error)}</div> : null}
+      {commitMutation.error ? <div className="inline-error sc-padded-error">{errorMessage(commitMutation.error)}</div> : null}
       {commitMutation.data ? (
-        <div className="success-strip" style={{ margin: "8px 16px 0" }}>
+        <div className="success-strip sc-padded-success">
           Добавлено: {commitMutation.data.inserted} строк · doc {commitMutation.data.docIds?.join(", ") || "-"} · строк сборки: {commitMutation.data.pickingCreated}
         </div>
       ) : null}
@@ -718,7 +718,7 @@ export function PmSearchPanel({ onClose }: { onClose: () => void }) {
         <div className="pm-search-count">
           {sortedItems.length} результатов{selectedCount > 0 ? ` · выбрано ${selectedCount}` : ""}
           {selectedCount > 0 ? (
-            <button className="secondary-action" type="button" style={{ marginLeft: 8, padding: "2px 8px", fontSize: "0.75rem" }} onClick={() => setSelected({})}>
+            <button className="secondary-action sc-clear-btn" type="button" onClick={() => setSelected({})}>
               Снять всё
             </button>
           ) : null}
@@ -755,7 +755,7 @@ export function PmSearchPanel({ onClose }: { onClose: () => void }) {
                   <span className="pm-search-item-price">{item.price ? `${item.price} ${item.currency}` : "—"}</span>
                   {item.article ? <span>{item.article}</span> : null}
                   {item.docDate ? <span>{compactDate(item.docDate)}</span> : null}
-                  {item.unavailable ? <span style={{ color: "#f59e0b", fontSize: "0.75em" }}>неактивен в PM</span> : null}
+                  {item.unavailable ? <span className="sc-unavailable-tag">неактивен в PM</span> : null}
                 </div>
                 {sel ? (
                   <div className="pm-search-item-qty" onClick={(e) => e.stopPropagation()}>
@@ -778,14 +778,14 @@ export function PmSearchPanel({ onClose }: { onClose: () => void }) {
       {commitMutation.data && !commitMutation.isPending ? (
         <div className="pm-search-footer">
           {(commitMutation.data.inserted ?? 0) > 0 ? (
-            <div className="success-strip" style={{ margin: 0, borderRadius: 6 }}>
+            <div className="success-strip sc-strip-inset">
               Добавлено в PM: {commitMutation.data.inserted} поз.{" "}
               {(commitMutation.data.docIds?.length ?? 0) > 0 ? `· Документ №${commitMutation.data.docIds.join(", ")}` : ""}
               {(commitMutation.data.pickingCreated ?? 0) > 0 ? ` · Строк сборки: ${commitMutation.data.pickingCreated}` : ""}
             </div>
           ) : null}
           {(commitMutation.data.pmBlocked?.length ?? 0) > 0 ? (
-            <div className="inline-error" style={{ margin: 0, borderRadius: 6 }}>
+            <div className="inline-error sc-strip-inset">
               Уже в PM (дубль заблокирован): {commitMutation.data.pmBlocked!.map((b) => b.productName || b.offerId).join(", ")}
             </div>
           ) : null}
@@ -793,7 +793,7 @@ export function PmSearchPanel({ onClose }: { onClose: () => void }) {
       ) : null}
       {commitMutation.error ? (
         <div className="pm-search-footer">
-          <div className="inline-error" style={{ margin: 0 }}>{String((commitMutation.error as Error).message || commitMutation.error)}</div>
+          <div className="inline-error sc-strip-no-margin">{String((commitMutation.error as Error).message || commitMutation.error)}</div>
         </div>
       ) : null}
       {selectedCount > 0 ? (
@@ -848,37 +848,37 @@ function PmHistoryPanel() {
     staleTime: 30_000,
   });
   const docs = historyQuery.data?.docs ?? [];
-  if (historyQuery.isLoading) return <div style={{ padding: "24px", color: "var(--text-secondary)" }}><Loader2 className="spin" size={16} /> Загрузка истории…</div>;
+  if (historyQuery.isLoading) return <div className="sc-history-loading"><Loader2 className="spin" size={16} /> Загрузка истории…</div>;
   return (
-    <div style={{ padding: "12px 0" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 12px 8px" }}>
-        <span style={{ fontWeight: 500, fontSize: 13 }}>Отправленные корзины PM</span>
+    <div className="sc-history-wrap">
+      <div className="sc-history-head">
+        <span className="sc-history-title">Отправленные корзины PM</span>
         <button className="icon-btn" type="button" onClick={() => void historyQuery.refetch()} title="Обновить" disabled={historyQuery.isFetching}>
           {historyQuery.isFetching ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />}
         </button>
       </div>
       {!docs.length ? (
-        <div style={{ padding: "0 12px", color: "var(--text-secondary)" }}>Нет отправленных корзин.</div>
+        <div className="sc-history-empty">Нет отправленных корзин.</div>
       ) : (
-        <div style={{ overflowX: "auto" }}>
-        <table style={{ width: "100%", minWidth: 480, borderCollapse: "collapse", fontSize: 13 }}>
+        <div className="sc-table-scroll">
+        <table className="sc-history-table">
           <thead>
-            <tr style={{ borderBottom: "1px solid var(--border)" }}>
-              <th style={{ padding: "4px 12px", textAlign: "left", color: "var(--text-secondary)", fontWeight: 500 }}>Дата</th>
-              <th style={{ padding: "4px 12px", textAlign: "left", color: "var(--text-secondary)", fontWeight: 500 }}>Поставщик</th>
-              <th style={{ padding: "4px 8px", textAlign: "right", color: "var(--text-secondary)", fontWeight: 500 }}>Позиций</th>
-              <th style={{ padding: "4px 8px", textAlign: "center", color: "var(--text-secondary)", fontWeight: 500 }}>Получен</th>
-              <th style={{ padding: "4px 12px", textAlign: "left", color: "var(--text-secondary)", fontWeight: 500 }}>Комментарий</th>
+            <tr className="sc-th-row">
+              <th className="sc-th">Дата</th>
+              <th className="sc-th">Поставщик</th>
+              <th className="sc-th sc-th--right">Позиций</th>
+              <th className="sc-th sc-th--center">Получен</th>
+              <th className="sc-th">Комментарий</th>
             </tr>
           </thead>
           <tbody>
             {docs.map((doc) => (
-              <tr key={doc.DocID} style={{ borderBottom: "1px solid var(--border-subtle)" }}>
-                <td style={{ padding: "6px 12px" }}>{doc.DocDate ? new Date(String(doc.DocDate)).toLocaleString("ru-RU") : "—"}</td>
-                <td style={{ padding: "6px 12px" }}>{doc.PartnerName || `#${doc.PartnerID}`}</td>
-                <td style={{ padding: "6px 8px", textAlign: "right" }}>{doc.rowCount}</td>
-                <td style={{ padding: "6px 8px", textAlign: "center" }}>{doc.Recieved ? "✓" : "—"}</td>
-                <td style={{ padding: "6px 12px", color: "var(--text-secondary)" }}>{doc.Comment || "—"}</td>
+              <tr key={doc.DocID} className="sc-tr">
+                <td className="sc-td">{doc.DocDate ? new Date(String(doc.DocDate)).toLocaleString("ru-RU") : "—"}</td>
+                <td className="sc-td">{doc.PartnerName || `#${doc.PartnerID}`}</td>
+                <td className="sc-td sc-td--right">{doc.rowCount}</td>
+                <td className="sc-td sc-td--center">{doc.Recieved ? "✓" : "—"}</td>
+                <td className="sc-td sc-td--muted">{doc.Comment || "—"}</td>
               </tr>
             ))}
           </tbody>
@@ -958,7 +958,7 @@ export function SupplierCartPage() {
         title="Автокорзина"
         subtitle={`Заказы ${activeMarketplaces.map((m) => m === "wb" ? "Wildberries" : m === "yandex" ? "Yandex Market" : "Ozon").join(", ")} автоматически отправляются в корзину PriceMaster по расписанию.`}
         action={
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <div className="sc-actions-row">
             <button
               className={`secondary-action${pmSearchOpen ? " active" : ""}`}
               type="button"
@@ -993,7 +993,7 @@ export function SupplierCartPage() {
           {schedule.data?.nextAutoRunAt ? `Запуск: ${formatDate(schedule.data.nextAutoRunAt)}` : "Следующий запуск: —"}
         </div>
         {(pmPendingCount.data?.rows ?? 0) > 0 ? (
-          <div className="cart-status-chip" style={{ background: "var(--accent-subtle)", color: "var(--accent)" }}>
+          <div className="cart-status-chip cart-status-chip--accent">
             <Database size={13} />
             В PM-корзине: {pmPendingCount.data!.rows} поз. ({pmPendingCount.data!.docs} докум.)
           </div>
@@ -1037,18 +1037,17 @@ export function SupplierCartPage() {
               })}
               {pendingMarketplaces ? (
                 <button
-                  className="primary-action"
+                  className="primary-action sc-mp-save-btn"
                   type="button"
                   disabled={marketplacesMutation.isPending || activeMarketplaces.length === 0}
                   onClick={() => marketplacesMutation.mutate(activeMarketplaces)}
-                  style={{ marginLeft: 8 }}
                 >
                   {marketplacesMutation.isPending ? <Loader2 className="spin" size={13} /> : null}
                   Сохранить
                 </button>
               ) : null}
             </div>
-            {marketplacesMutation.error ? <div className="inline-error" style={{ marginTop: 8 }}>{errorMessage(marketplacesMutation.error)}</div> : null}
+            {marketplacesMutation.error ? <div className="inline-error sc-error-mt8">{errorMessage(marketplacesMutation.error)}</div> : null}
           </section>
 
           <section className="cart-settings-section">
@@ -1063,7 +1062,7 @@ export function SupplierCartPage() {
               <div><span>Последний запуск</span><strong>{formatDate(schedule.data?.lastAutoRunAt)}</strong></div>
             </div>
             {last ? (
-              <div className="success-strip" style={{ marginTop: 8 }}>
+              <div className="success-strip sc-success-mt8">
                 Последний запуск: всего {Number(last.total || 0)}, готово к заказу {Number(last.ready || 0)}, пропущено {Number(last.skipped || 0)}.
                 {Number(last.alreadyCommitted || 0) > 0 ? ` Уже в PM: ${Number(last.alreadyCommitted)}.` : ""}
               </div>
@@ -1081,7 +1080,7 @@ export function SupplierCartPage() {
               <div><span>Строки PM</span><strong>{pmStatus.data?.latestRows?.length || 0}</strong></div>
             </div>
             {pmStatus.error ? <div className="inline-error">{errorMessage(pmStatus.error)}</div> : null}
-            <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <div className="sc-diag-actions">
               <button className="secondary-action danger-action" type="button" disabled={rollbackDryRun.isPending} onClick={() => rollbackDryRun.mutate()}>
                 {rollbackDryRun.isPending ? <Loader2 className="spin" size={14} /> : <AlertTriangle size={14} />} Проверить откат
               </button>
@@ -1097,7 +1096,7 @@ export function SupplierCartPage() {
               ) : null}
             </div>
             {dryRun ? (
-              <div className="inline-warning" style={{ marginTop: 8 }}>
+              <div className="inline-warning sc-warning-mt8">
                 Будет очищено: processed {dryRun.cartProcessed}, черновик {dryRun.draftRows}, сборка {dryRun.pickingRows}, блокировки {dryRun.supplierBlocks}, PM rows {countArray(pm.rowIds)}, PM docs {countArray(pm.docIds)}.
               </div>
             ) : null}
