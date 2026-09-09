@@ -1,142 +1,139 @@
 // Repair missing brand (vendor) and weight/dimensions for existing Yandex products.
 // Finds products where yandex.vendor is empty and/or weightDimensions are missing,
 // resolves them from Ozon sibling data or name extraction, and re-sends content to Yandex.
+// Processes in internal batches of 500 to avoid OOM when repairing tens of thousands of products.
 app.post("/api/ozon-yandex-import/repair-yandex-content", requireAdmin, async (request, response, next) => {
   try {
     const dryRun = request.body?.dryRun !== false;
-    const requestedLimit = Number(request.body?.limit || 5000);
-    const limit = Math.max(1, Math.min(50000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 5000));
+    const requestedLimit = Number(request.body?.limit || 50000);
+    const limit = Math.max(1, Math.min(100000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 50000));
     const repairVendor = request.body?.repairVendor !== false;
     const repairDimensions = request.body?.repairDimensions !== false;
+    const repairPictures = request.body?.repairPictures !== false;
+    const SEND_BATCH = 500;
 
-    // Page through Postgres directly — readWarehouse() does not return products in PG mode.
     const prisma = getPrisma();
     if (!prisma) return response.status(503).json({ error: "Postgres недоступен." });
-    const yandexProducts = [];
+
+    const shops = dryRun
+      ? null
+      : (uniqueYandexShopsByBusiness ? uniqueYandexShopsByBusiness() : getYandexShops().filter((shop) => shop.apiKey && shop.businessId));
+    if (!dryRun && !shops?.length) return response.status(400).json({ error: "Yandex Market не настроен." });
+    const shopByTarget = shops ? new Map(shops.map((shop) => [shop.id, shop])) : null;
+
+    let totalScanned = 0;
+    let totalCandidates = 0;
+    let totalSent = 0;
+    let totalFailed = 0;
+    let totalSkipped = 0;
+    const allErrors = [];
+    const dryRunSample = [];
     let cursorId = null;
-    while (yandexProducts.length < limit) {
+    let done = false;
+
+    while (!done && totalScanned < limit) {
+      // Read one page of YM products from Postgres
       const page = await prisma.warehouseProduct.findMany({
         where: { marketplace: "yandex" },
         select: { id: true, raw: true },
         orderBy: { id: "asc" },
-        take: 1000,
+        take: SEND_BATCH,
         ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
       });
       if (!page.length) break;
       cursorId = page[page.length - 1].id;
-      for (const row of page) {
-        const product = row.raw && typeof row.raw === "object" ? row.raw : null;
-        if (product && cleanText(product.offerId)) yandexProducts.push(product);
-        if (yandexProducts.length >= limit) break;
-      }
-      if (page.length < 1000) break;
-    }
+      if (page.length < SEND_BATCH) done = true;
 
-    const repairPictures = request.body?.repairPictures !== false;
-    const candidates = yandexProducts.filter((product) => {
-      const normalized = normalizeWarehouseProduct(product);
-      const missingVendor = repairVendor && !cleanText(normalized.yandex?.vendor);
-      const dims = normalized.yandex?.extra?.weightDimensions;
-      const missingDims = repairDimensions && !(Number(dims?.length) > 0 && Number(dims?.weight) > 0);
-      const missingPictures = repairPictures
-        && !splitList(normalized.yandex?.pictures).length
-        && !splitList(normalized.yandex?.images).length;
-      return missingVendor || missingDims || missingPictures;
-    });
+      const products = page
+        .map((row) => (row.raw && typeof row.raw === "object" ? row.raw : null))
+        .filter((p) => p && cleanText(p.offerId));
+      totalScanned += products.length;
 
-    if (dryRun) {
-      return response.json({
-        ok: true,
-        dryRun: true,
-        total: yandexProducts.length,
-        candidates: candidates.length,
-        sample: candidates.slice(0, 20).map((product) => {
-          const normalized = normalizeWarehouseProduct(product);
-          const built = buildYandexOfferMapping(normalized);
-          return {
-            id: product.id,
-            offerId: product.offerId,
-            name: normalized.name,
-            resolvedVendor: built.offer?.vendor || "",
-            hasDimensions: Boolean(built.offer?.weightDimensions),
-          };
-        }),
+      const candidates = products.filter((product) => {
+        const normalized = normalizeWarehouseProduct(product);
+        const missingVendor = repairVendor && !cleanText(normalized.yandex?.vendor);
+        const dims = normalized.yandex?.extra?.weightDimensions;
+        const missingDims = repairDimensions && !(Number(dims?.length) > 0 && Number(dims?.weight) > 0);
+        const missingPictures = repairPictures
+          && !splitList(normalized.yandex?.pictures).length
+          && !splitList(normalized.yandex?.images).length;
+        return missingVendor || missingDims || missingPictures;
       });
-    }
+      totalCandidates += candidates.length;
 
-    const shops = uniqueYandexShopsByBusiness ? uniqueYandexShopsByBusiness() : getYandexShops().filter((shop) => shop.apiKey && shop.businessId);
-    if (!shops.length) return response.status(400).json({ error: "Yandex Market не настроен." });
+      if (!candidates.length) continue;
 
-    const shopByTarget = new Map(shops.map((shop) => [shop.id, shop]));
-    const batchByShop = new Map();
-    let skipped = 0;
-
-    // Photo fallback: yandex rows created from exports often have no images of their own —
-    // borrow them from the Ozon sibling with the same offerId (images is a light column).
-    // Only load Ozon rows for the specific offerIds we need (not the full catalog).
-    const candidateOfferIds = [...new Set(
-      candidates.map((p) => cleanText(normalizeWarehouseProduct(p).offerId)).filter(Boolean)
-    )];
-    const ozonImagesByOfferId = new Map();
-    if (candidateOfferIds.length > 0) {
-      const ozonRows = await prisma.warehouseProduct.findMany({
-        where: { marketplace: "ozon", offerId: { in: candidateOfferIds } },
-        select: { offerId: true, images: true },
-      });
-      for (const row of ozonRows) {
-        const key = cleanText(row.offerId).toLowerCase();
-        const images = Array.isArray(row.images) ? row.images.filter(Boolean) : [];
-        if (key && images.length && !ozonImagesByOfferId.has(key)) ozonImagesByOfferId.set(key, images);
-      }
-    }
-
-    for (const product of candidates) {
-      const normalized = normalizeWarehouseProduct(product);
-      const ownPictures = [
-        cleanText(normalized.imageUrl),
-        ...splitList(normalized.yandex?.pictures),
-        ...splitList(normalized.yandex?.images),
-      ].filter(Boolean);
-      const fallbackPictures = ownPictures.length
-        ? []
-        : (ozonImagesByOfferId.get(cleanText(normalized.offerId).toLowerCase()) || []);
-      const built = buildYandexOfferMapping(
-        normalized,
-        fallbackPictures.length ? { yandex: { pictures: fallbackPictures } } : {},
-      );
-      const vendor = cleanText(built.offer?.vendor);
-      if (!vendor || vendor === "Без бренда") {
-        skipped += 1;
+      if (dryRun) {
+        if (dryRunSample.length < 20) {
+          for (const product of candidates.slice(0, 20 - dryRunSample.length)) {
+            const normalized = normalizeWarehouseProduct(product);
+            const built = buildYandexOfferMapping(normalized);
+            dryRunSample.push({ id: product.id, offerId: product.offerId, name: normalized.name, resolvedVendor: built.offer?.vendor || "", hasDimensions: Boolean(built.offer?.weightDimensions) });
+          }
+        }
         continue;
       }
-      const target = cleanText(normalized.target);
-      const shop = shopByTarget.get(target) || shops.find((s) => matchesYandexTarget(target, s.id));
-      if (!shop) {
-        skipped += 1;
-        continue;
+
+      // Photo fallback — load only the Ozon siblings for this batch
+      const batchOfferIds = [...new Set(candidates.map((p) => cleanText(normalizeWarehouseProduct(p).offerId)).filter(Boolean))];
+      const ozonImagesByOfferId = new Map();
+      if (batchOfferIds.length > 0) {
+        const ozonRows = await prisma.warehouseProduct.findMany({
+          where: { marketplace: "ozon", offerId: { in: batchOfferIds } },
+          select: { offerId: true, images: true },
+        });
+        for (const row of ozonRows) {
+          const key = cleanText(row.offerId).toLowerCase();
+          const images = Array.isArray(row.images) ? row.images.filter(Boolean) : [];
+          if (key && images.length && !ozonImagesByOfferId.has(key)) ozonImagesByOfferId.set(key, images);
+        }
       }
-      if (!batchByShop.has(shop.id)) batchByShop.set(shop.id, { shop, offers: [] });
-      // Send the FULL built offer: pictures, barcodes, marketCategoryId and basicPrice
-      // included — sending a partial payload left created cards without photos and price.
-      batchByShop.get(shop.id).offers.push(built.offer);
+
+      const batchByShop = new Map();
+      for (const product of candidates) {
+        const normalized = normalizeWarehouseProduct(product);
+        const ownPictures = [
+          cleanText(normalized.imageUrl),
+          ...splitList(normalized.yandex?.pictures),
+          ...splitList(normalized.yandex?.images),
+        ].filter(Boolean);
+        const fallbackPictures = ownPictures.length
+          ? []
+          : (ozonImagesByOfferId.get(cleanText(normalized.offerId).toLowerCase()) || []);
+        const built = buildYandexOfferMapping(
+          normalized,
+          fallbackPictures.length ? { yandex: { pictures: fallbackPictures } } : {},
+        );
+        const vendor = cleanText(built.offer?.vendor);
+        if (!vendor || vendor === "Без бренда") { totalSkipped += 1; continue; }
+        const target = cleanText(normalized.target);
+        const shop = shopByTarget.get(target) || shops.find((s) => matchesYandexTarget(target, s.id));
+        if (!shop) { totalSkipped += 1; continue; }
+        if (!batchByShop.has(shop.id)) batchByShop.set(shop.id, { shop, offers: [] });
+        // Send the FULL built offer: pictures, barcodes, marketCategoryId and basicPrice
+        // included — sending a partial payload left created cards without photos and price.
+        batchByShop.get(shop.id).offers.push(built.offer);
+      }
+
+      for (const { shop, offers } of batchByShop.values()) {
+        const sent = await sendYandexOfferMappings(shop, offers);
+        for (const item of sent) {
+          if (item.ok) totalSent += 1;
+          else { totalFailed += 1; if (allErrors.length < 50) allErrors.push({ ...item, target: shop.id }); }
+        }
+      }
     }
 
-    const results = [];
-    for (const { shop, offers } of batchByShop.values()) {
-      const sent = await sendYandexOfferMappings(shop, offers);
-      results.push(...sent.map((item) => ({ ...item, target: shop.id })));
-    }
-
-    const sentCount = results.filter((item) => item.ok).length;
-    const failedCount = results.filter((item) => !item.ok).length;
     response.json({
-      ok: failedCount === 0,
-      total: yandexProducts.length,
-      candidates: candidates.length,
-      skipped,
-      sent: sentCount,
-      failed: failedCount,
-      errors: results.filter((item) => !item.ok).slice(0, 50),
+      ok: totalFailed === 0,
+      dryRun,
+      total: totalScanned,
+      candidates: totalCandidates,
+      skipped: totalSkipped,
+      sent: totalSent,
+      failed: totalFailed,
+      errors: allErrors,
+      ...(dryRun ? { sample: dryRunSample } : {}),
     });
   } catch (error) {
     next(error);
