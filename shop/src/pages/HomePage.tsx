@@ -6,6 +6,7 @@ import { api } from "../api";
 import type { ShopProduct } from "../types";
 import ProductCard from "../components/ProductCard";
 import HeroShader from "../components/HeroShader";
+import BannerSlider from "../components/BannerSlider";
 
 /* ── Hero parallax ──────────────────────────────────────────────── */
 function useHeroParallax() {
@@ -930,6 +931,11 @@ export default function HomePage() {
             </div>
           ))}
         </div>
+      </section>
+
+      {/* ════════════════════ BANNERS ════════════════════ */}
+      <section style={{ padding: "clamp(24px,4vw,48px) clamp(18px,4vw,56px) 0" }}>
+        <BannerSlider />
       </section>
 
       {/* ════════════════════ BRAND GALLERY ════════════════════ */}
