@@ -1297,6 +1297,36 @@ export function SettingsPage() {
           <div className="soft-empty compact">Остатки должны уходить только в Magic Stick: 128820967.</div>
         </div>
 
+        <div className="settings-panel">
+          <div className="section-title"><div><span>Яндекс Экспресс</span><h3>Парфюмериус · экспресс-склад</h3></div></div>
+          <label>
+            <input type="checkbox"
+              checked={Boolean(asRecord(draft.sorinExpress).enabled ?? asRecord(settings.sorinExpress).enabled ?? true)}
+              onChange={(event) => update({ sorinExpress: { ...asRecord(draft.sorinExpress), enabled: event.target.checked } })}
+            />
+            Синк активен
+          </label>
+          <label>Остаток на экспресс-складе (шт.)
+            <input type="number" min="0" max="999" step="1"
+              value={String(asRecord(draft.sorinExpress).stock ?? asRecord(settings.sorinExpress).stock ?? 2)}
+              onChange={(event) => update({ sorinExpress: { ...asRecord(draft.sorinExpress), stock: Number(event.target.value) } })}
+            />
+          </label>
+          <label>Campaign ID (Яндекс Экспресс)
+            <input
+              value={String(asRecord(draft.sorinExpress).yandexCampaignId ?? asRecord(settings.sorinExpress).yandexCampaignId ?? "149026853")}
+              onChange={(event) => update({ sorinExpress: { ...asRecord(draft.sorinExpress), yandexCampaignId: event.target.value } })}
+            />
+          </label>
+          <label>Ozon warehouse ID (экспресс)
+            <input
+              value={String(asRecord(draft.sorinExpress).ozonWarehouseId ?? asRecord(settings.sorinExpress).ozonWarehouseId ?? "1020005000398404")}
+              onChange={(event) => update({ sorinExpress: { ...asRecord(draft.sorinExpress), ozonWarehouseId: event.target.value } })}
+            />
+          </label>
+          <div className="soft-empty compact">Товары с активными ссылками на Сорин в PriceMaster. Campaign ID должен совпадать с кампанией в YANDEX_SHOPS_JSON (EXPRESS · Наш склад = 149026853).</div>
+        </div>
+
       </section>}
 
       {activeTab === "tools" && <ToolsSettingsPanel />}

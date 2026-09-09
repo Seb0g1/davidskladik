@@ -26,6 +26,8 @@ async function buildBrandsTnvedReport(accounts) {
   const brandCounts = new Map();
   const tnvedCounts = new Map();
   const brandTnvedMap = new Map();
+  const brandTypeMap = new Map(); // brand → Map<"descCatId:typeId", count>
+  const catTypeNames = new Map(); // "descCatId:typeId" → human-readable type name
   let total = 0;
   let withBrand = 0;
   let withTnved = 0;
@@ -56,6 +58,16 @@ async function buildBrandsTnvedReport(accounts) {
       }
     }
     logger.info("brands-tnved offer_ids collected", { account: account.id, count: allOfferIds.length });
+
+    // Fetch Ozon category tree once to resolve type names (e.g. "Тени для век", "Шампунь")
+    if (catTypeNames.size === 0) {
+      try {
+        const fullMap = await ozonFlatCategoryMap(account);
+        for (const [key, name] of fullMap) {
+          if (String(key).includes(":") && name) catTypeNames.set(String(key), name);
+        }
+      } catch {}
+    }
 
     // Step 2: fetch attributes by offer_id chunks (no cursor = no stale-cursor bug)
     for (const chunk of chunkArray(allOfferIds, 100)) {
@@ -103,6 +115,16 @@ async function buildBrandsTnvedReport(accounts) {
             codesMap.get(code).count++;
           }
         }
+
+        // Collect product type (descCatId:typeId) per brand for cosmetics subcategory
+        const descCatId = Number(item.description_category_id || 0);
+        const typeId = Number(item.type_id || 0);
+        if (brand && !isBrandGarbageValue(brand) && descCatId && typeId) {
+          if (!brandTypeMap.has(brand)) brandTypeMap.set(brand, new Map());
+          const typeKey = `${descCatId}:${typeId}`;
+          const tm = brandTypeMap.get(brand);
+          tm.set(typeKey, (tm.get(typeKey) || 0) + 1);
+        }
       }
     }
   }
@@ -125,6 +147,7 @@ async function buildBrandsTnvedReport(accounts) {
   // Merge counts into parent
   const mergedBrandCounts = new Map();
   const mergedBrandTnvedMap = new Map();
+  const mergedBrandTypeMap = new Map();
   for (const [name, parent] of brandParent) {
     const entry = brandCounts.get(name);
     if (!mergedBrandCounts.has(parent)) mergedBrandCounts.set(parent, { brand: parent, count: 0, sample: [] });
@@ -141,16 +164,37 @@ async function buildBrandsTnvedReport(accounts) {
         pMap.get(code).count += tc.count;
       }
     }
+
+    const typeMap = brandTypeMap.get(name);
+    if (typeMap) {
+      if (!mergedBrandTypeMap.has(parent)) mergedBrandTypeMap.set(parent, new Map());
+      const pTypeMap = mergedBrandTypeMap.get(parent);
+      for (const [typeKey, count] of typeMap) {
+        pTypeMap.set(typeKey, (pTypeMap.get(typeKey) || 0) + count);
+      }
+    }
   }
 
   const brands = [...mergedBrandCounts.values()].sort((a, b) => b.count - a.count);
   const tnveds = [...tnvedCounts.values()].sort((a, b) => b.count - a.count);
   const brandTnveds = [...mergedBrandTnvedMap.entries()]
-    .map(([brand, codesMap]) => ({
-      brand,
-      totalCount: mergedBrandCounts.get(brand)?.count || 0,
-      tnvedCodes: [...codesMap.values()].sort((a, b) => b.count - a.count),
-    }))
+    .map(([brand, codesMap]) => {
+      const typeMap = mergedBrandTypeMap.get(brand);
+      const topTypes = typeMap
+        ? [...typeMap.entries()]
+            .map(([key, count]) => ({ name: catTypeNames.get(key) || "", count }))
+            .filter((t) => t.name)
+            .sort((a, b) => b.count - a.count)
+            .slice(0, 6)
+            .map((t) => t.name)
+        : [];
+      return {
+        brand,
+        totalCount: mergedBrandCounts.get(brand)?.count || 0,
+        tnvedCodes: [...codesMap.values()].sort((a, b) => b.count - a.count),
+        topTypes,
+      };
+    })
     .sort((a, b) => a.brand.localeCompare(b.brand, "ru"));
 
   return {
@@ -231,6 +275,7 @@ app.get("/api/catalog/brands-tnved/export-excel", requireAdmin, async (req, res,
       { header: "Бренд", key: "brand", width: 36 },
       { header: "Код ТН ВЭД", key: "code", width: 16 },
       { header: "Описание категории", key: "description", width: 50 },
+      { header: "Тип товара", key: "productType", width: 44 },
       { header: "SKU с кодом", key: "count", width: 14 },
     ];
 
@@ -249,6 +294,7 @@ app.get("/api/catalog/brands-tnved/export-excel", requireAdmin, async (req, res,
           brand: entry.brand,
           code: "",
           description: "— код не назначен —",
+          productType: (entry.topTypes || []).join(", "),
           count: entry.totalCount,
         });
         continue;
@@ -260,6 +306,7 @@ app.get("/api/catalog/brands-tnved/export-excel", requireAdmin, async (req, res,
           brand: i === 0 ? entry.brand : "",
           code: tc.code,
           description,
+          productType: i === 0 ? (entry.topTypes || []).join(", ") : "",
           count: tc.count,
         });
       }
@@ -274,7 +321,7 @@ app.get("/api/catalog/brands-tnved/export-excel", requireAdmin, async (req, res,
       row.eachCell({ includeEmpty: true }, (cell, colNum) => {
         if (fill) cell.fill = fill;
         if (colNum === 2) cell.font = { name: "Courier New", size: 10 }; // ТН ВЭД code
-        if (colNum === 4) cell.alignment = { horizontal: "right" };
+        if (colNum === 5) cell.alignment = { horizontal: "right" };
         cell.border = {
           bottom: { style: "thin", color: { argb: "FFE0E0E0" } },
         };
@@ -282,7 +329,7 @@ app.get("/api/catalog/brands-tnved/export-excel", requireAdmin, async (req, res,
     });
 
     // Autofilter on headers
-    sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: 4 } };
+    sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: 5 } };
 
     const dateStr = new Date().toISOString().slice(0, 10);
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");

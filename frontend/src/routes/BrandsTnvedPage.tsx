@@ -11,10 +11,17 @@ type CatEntry = { catId: string; count: number; catName?: string };
 type OzonSummary = { total: number; withBrand: number; missingBrand: number; withTnved: number; missingTnved: number };
 type YandexSummary = { total: number; withVendor: number; missingVendor: number; withTnved: number; missingTnved: number };
 
+type BrandTnvedEntry = {
+  brand: string;
+  totalCount: number;
+  topTypes: string[];
+  tnvedCodes: { code: string; fullValue: string; count: number }[];
+};
+
 type OzonReport =
   | { building: true; cachedAt: null }
   | { noData: true; building: false }
-  | { summary: OzonSummary; brands: BrandEntry[]; tnveds: TnvedEntry[]; cachedAt: string; fromCache: boolean; stale: boolean };
+  | { summary: OzonSummary; brands: BrandEntry[]; tnveds: TnvedEntry[]; brandTnveds?: BrandTnvedEntry[]; cachedAt: string; fromCache: boolean; stale: boolean };
 
 type BrandCategoryEntry = { catId: string; catName: string; count: number };
 type BrandCategoriesEntry = { brand: string; totalCount: number; categories: BrandCategoryEntry[] };
@@ -113,6 +120,74 @@ function BrandsTable({
             </tbody>
           </table>
         )}
+      </div>
+    </section>
+  );
+}
+
+function BrandTnvedTypesTable({ entries }: { entries: BrandTnvedEntry[] }) {
+  const [search, setSearch] = useState("");
+  const filtered = search
+    ? entries.filter(
+        (e) =>
+          e.brand.toLowerCase().includes(search.toLowerCase()) ||
+          (e.topTypes || []).some((t) => t.toLowerCase().includes(search.toLowerCase())),
+      )
+    : entries;
+
+  const hasTypes = entries.some((e) => e.topTypes && e.topTypes.length > 0);
+
+  return (
+    <section className="table-panel" style={{ marginTop: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px 6px", borderBottom: "1px solid var(--line)" }}>
+        <Tag size={15} style={{ opacity: 0.6 }} />
+        <span style={{ fontWeight: 600, fontSize: 14 }}>Бренд · ТН ВЭД · Тип товара ({entries.length})</span>
+        {!hasTypes && (
+          <span style={{ fontSize: 11, color: "var(--muted)", marginLeft: 8 }}>
+            Типы появятся после следующего обновления данных Ozon
+          </span>
+        )}
+      </div>
+      <div style={{ padding: "8px 16px 4px" }}>
+        <input
+          className="pm-chip-input"
+          style={{ width: "100%" }}
+          placeholder="Поиск бренда или типа товара…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+      </div>
+      <div style={{ overflowY: "auto", maxHeight: 520 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ borderBottom: "1px solid var(--line)", background: "var(--panel-2)" }}>
+              <th style={{ textAlign: "left", padding: "6px 16px", fontWeight: 600, fontSize: 12, color: "var(--muted)", width: "28%" }}>Бренд</th>
+              <th style={{ textAlign: "left", padding: "6px 16px", fontWeight: 600, fontSize: 12, color: "var(--muted)", width: "20%" }}>Код ТН ВЭД</th>
+              <th style={{ textAlign: "left", padding: "6px 16px", fontWeight: 600, fontSize: 12, color: "var(--muted)" }}>Тип товара</th>
+              <th style={{ textAlign: "right", padding: "6px 16px", fontWeight: 600, fontSize: 12, color: "var(--muted)", width: "8%" }}>SKU</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.slice(0, 300).map((entry) =>
+              entry.tnvedCodes.map((tc, i) => (
+                <tr key={`${entry.brand}:${tc.code}`} style={{ borderBottom: "1px solid var(--line)" }}>
+                  <td style={{ padding: "5px 16px", fontWeight: i === 0 ? 500 : 400, color: i === 0 ? "var(--text)" : "transparent" }}>
+                    {i === 0 ? entry.brand : ""}
+                  </td>
+                  <td style={{ padding: "5px 16px", fontFamily: "monospace", whiteSpace: "nowrap", color: "var(--muted)" }}>{tc.code}</td>
+                  <td style={{ padding: "5px 16px", color: "var(--muted)", fontSize: 12 }}>
+                    {i === 0 && entry.topTypes && entry.topTypes.length > 0
+                      ? entry.topTypes.map((t) => (
+                          <span key={t} style={{ display: "inline-block", background: "var(--panel-2)", borderRadius: 4, padding: "1px 7px", marginRight: 4, marginBottom: 2, border: "1px solid var(--line)", whiteSpace: "nowrap" }}>{t}</span>
+                        ))
+                      : null}
+                  </td>
+                  <td style={{ padding: "5px 16px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{tc.count.toLocaleString("ru")}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
       </div>
     </section>
   );
@@ -248,6 +323,11 @@ function OzonTab() {
               </div>
             </section>
           </div>
+
+          {data.brandTnveds && data.brandTnveds.length > 0 && (
+            <BrandTnvedTypesTable entries={data.brandTnveds} />
+          )}
+
           <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
             Данные от {new Date(data.cachedAt).toLocaleString("ru")}{data.stale ? " · устарели" : ""}
           </div>

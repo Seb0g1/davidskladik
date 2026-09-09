@@ -82,6 +82,7 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     ozonRecovered = activeOzon;
   }
   const ozonFirstStockActions = ozonRecovered.length ? await restoreStocksOnMarketplaces(ozonRecovered) : [];
+  await new Promise((resolve) => setImmediate(resolve));
   // When deferring, archived products are already queued via ozonQueuedUnarchiveActions.
   // Active products (ozonRecovered after the deferOzonUnarchive split) only need stock restoration
   // (done above) — attempting to unarchive them would waste Ozon API quota for a no-op.
@@ -93,6 +94,7 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
         await unarchiveProductsOnMarketplaces(ozonRecovered, { forceOzonDailyLimit: options.forceOzonDailyLimit === true }),
       )
       : []);
+  await new Promise((resolve) => setImmediate(resolve));
   // Second stock send is only needed for products that were actually unarchived (the marketplace
   // sets stock to 0 on archive, so a post-unarchive send is required to restore it). Products
   // that were never archived already had stock set by ozonFirstStockActions — sending twice
@@ -100,18 +102,22 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
   const unarchiveSuccessIds = new Set(ozonUnarchiveActions.filter((a) => a.ok && !a.pending).map((a) => String(a.id)));
   const toSecondStockOzon = ozonRecovered.filter((p) => unarchiveSuccessIds.has(String(p.id)));
   const ozonSecondStockActions = toSecondStockOzon.length ? await restoreStocksOnMarketplaces(toSecondStockOzon) : [];
+  await new Promise((resolve) => setImmediate(resolve));
   const yandexUnarchiveActions = yandexRecovered.length
     ? await verifyYandexUnarchiveActions(
       yandexRecovered,
       await unarchiveProductsOnMarketplaces(yandexRecovered, { forceOzonDailyLimit: options.forceOzonDailyLimit === true }),
     )
     : [];
+  await new Promise((resolve) => setImmediate(resolve));
   const yandexStockActions = yandexRecovered.length ? await restoreStocksOnMarketplaces(yandexRecovered) : [];
   const stockActions = [...ozonFirstStockActions, ...ozonSecondStockActions, ...yandexStockActions];
   const unarchiveActions = [...ozonUnarchiveActions, ...yandexUnarchiveActions];
   const productStatuses = summarizeSupplierRecoveryProducts(recovered, stockActions, unarchiveActions);
+  await new Promise((resolve) => setImmediate(resolve));
   // forceRefresh: re-read from Postgres so we see any snoozes written since the recovery build.
   await hydrateWarehouseProductsForIds(recovered.map((item) => item.id), { expandGroups: false, forceRefresh: true });
+  await new Promise((resolve) => setImmediate(resolve));
   const warehouse = await readWarehouse();
   const now = new Date().toISOString();
   const recoveredIds = new Set(recovered.map((item) => String(item.id)));
@@ -140,7 +146,9 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     }
   }
   const changedProducts = [];
+  let recoveryIterCount = 0;
   for (const product of warehouseProductsById.values()) {
+    if (++recoveryIterCount % 500 === 0) await new Promise((resolve) => setImmediate(resolve));
     const productId = String(product.id);
     if (!recoveredIds.has(productId)) continue;
     product.noSupplierAutomation = product.noSupplierAutomation || {};

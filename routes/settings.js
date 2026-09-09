@@ -81,6 +81,11 @@ async function saveSettingsHandler(request, response, next) {
     } else {
       rawSettings.tnved = { ...(previous.tnved || {}), ...rawSettings.tnved };
     }
+    if (!rawSettings.sorinExpress) {
+      rawSettings.sorinExpress = previous.sorinExpress || {};
+    } else {
+      rawSettings.sorinExpress = { ...(previous.sorinExpress || {}), ...rawSettings.sorinExpress };
+    }
     if (!rawSettings.ai) {
       rawSettings.ai = previous.ai || {};
     } else {

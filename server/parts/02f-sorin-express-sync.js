@@ -7,19 +7,21 @@
 // express orders when Sorin cannot fulfil the product.
 // The sync runs every stock sweep cycle (~3 min).
 
-const sorinExpressOzonWarehouseId = cleanText(
+const sorinExpressOzonWarehouseIdEnv = cleanText(
   process.env.SORIN_EXPRESS_OZON_WAREHOUSE_ID || "1020005000398404",
 );
 // Если задан — используем только этот Ozon-аккаунт для экспресс-склада (остальные игнорируем).
 // Нужно когда экспресс-склад принадлежит только одному кабинету.
 const sorinExpressOzonAccountId = cleanText(process.env.SORIN_EXPRESS_OZON_ACCOUNT_ID || "");
-const sorinExpressYandexCampaignId = cleanText(
-  process.env.SORIN_EXPRESS_YANDEX_CAMPAIGN_ID || "216697459",
+// Default: 149026853 = «EXPRESS · Наш склад» (присутствует в YANDEX_SHOPS_JSON).
+// Прежний дефолт 216697459 не был в YANDEX_SHOPS_JSON → FORBIDDEN на каждый чанк.
+const sorinExpressYandexCampaignIdEnv = cleanText(
+  process.env.SORIN_EXPRESS_YANDEX_CAMPAIGN_ID || "149026853",
 );
 // Опциональный отдельный API-ключ для Яндекс Экспресс кампании.
-// Если не задан — используем ключ первого Яндекс-магазина.
+// Если не задан — используем ключ найденного shop из YANDEX_SHOPS_JSON.
 const sorinExpressYandexApiKey = cleanText(process.env.SORIN_EXPRESS_YANDEX_API_KEY || "");
-const sorinExpressStock = Math.max(1, Number(process.env.SORIN_EXPRESS_STOCK || 2) || 2);
+const sorinExpressStockEnv = Math.max(1, Number(process.env.SORIN_EXPRESS_STOCK || 2) || 2);
 const sorinExpressSyncEnabled = process.env.SORIN_EXPRESS_SYNC_ENABLED !== "false";
 
 function productHasSorinLink(product = {}) {
@@ -81,6 +83,16 @@ async function fetchActiveSorinArticlesFromPm(articles) {
 async function syncSorinExpressStocks() {
   if (!sorinExpressSyncEnabled) return { status: "disabled" };
   if (!shouldUsePostgresStorage()) return { status: "postgres_disabled" };
+
+  // Read runtime config from DB settings (allows UI control without env restart).
+  const runtimeSettings = await readAppSettings().catch(() => null);
+  const sorinDbSettings = runtimeSettings?.sorinExpress;
+  const effectiveEnabled = sorinDbSettings ? sorinDbSettings.enabled !== false : sorinExpressSyncEnabled;
+  const sorinExpressStock = Math.max(1, Number(sorinDbSettings?.stock ?? sorinExpressStockEnv) || sorinExpressStockEnv);
+  const sorinExpressYandexCampaignId = cleanText(String(sorinDbSettings?.yandexCampaignId || sorinExpressYandexCampaignIdEnv || "149026853"));
+  const sorinExpressOzonWarehouseId = cleanText(String(sorinDbSettings?.ozonWarehouseId || sorinExpressOzonWarehouseIdEnv));
+
+  if (!effectiveEnabled) return { status: "disabled" };
 
   const rawRows = await loadSorinLinkedProducts().catch((error) => {
     logger.warn("sorin_express_sync: load failed", { detail: error?.message || String(error) });
@@ -201,7 +213,9 @@ async function syncSorinExpressStocks() {
         ...yandexInactive.map((r) => ({ offerId: r.offerId, stock: 0 })),
       ];
 
+      let yandexForbidden = false;
       for (const chunk of chunkArray(stockRows, 100)) {
+        if (yandexForbidden) { results.yandexFailed += chunk.length; continue; }
         try {
           await sendYandexStockChunk(expressShop, chunk);
           const zeroed = chunk.filter((s) => s.stock === 0).length;
@@ -209,11 +223,20 @@ async function syncSorinExpressStocks() {
           results.yandexZeroed += zeroed;
         } catch (error) {
           results.yandexFailed += chunk.length;
-          logger.warn("sorin_express_yandex_stock_failed", {
-            campaign: sorinExpressYandexCampaignId,
-            items: chunk.length,
-            detail: error?.message || String(error),
-          });
+          const isForbidden = /403|forbidden/i.test(error?.message || "") || error?.statusCode === 403 || error?.status === 403;
+          if (isForbidden) {
+            yandexForbidden = true;
+            logger.warn("sorin_express_yandex_forbidden_circuit_break", {
+              campaign: sorinExpressYandexCampaignId,
+              detail: error?.message || String(error),
+            });
+          } else {
+            logger.warn("sorin_express_yandex_stock_failed", {
+              campaign: sorinExpressYandexCampaignId,
+              items: chunk.length,
+              detail: error?.message || String(error),
+            });
+          }
         }
       }
 

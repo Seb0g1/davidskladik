@@ -55,6 +55,12 @@ function defaultAppSettings() {
       includeYandexStatuses: ["PROCESSING"],
       includeYandexSubstatuses: ["STARTED", "PACKAGING", "READY_TO_SHIP"],
     },
+    sorinExpress: {
+      enabled: process.env.SORIN_EXPRESS_SYNC_ENABLED !== "false",
+      stock: Math.max(1, Number(process.env.SORIN_EXPRESS_STOCK || 2) || 2),
+      yandexCampaignId: cleanText(process.env.SORIN_EXPRESS_YANDEX_CAMPAIGN_ID || "149026853"),
+      ozonWarehouseId: cleanText(process.env.SORIN_EXPRESS_OZON_WAREHOUSE_ID || "1020005000398404"),
+    },
   };
 }
 
@@ -117,6 +123,19 @@ function normalizeBrandingSettings(input = {}, fallback = defaultAppSettings().b
       ozon: normalizeMarketplaceBranding(marketplaces.ozon || raw.ozon, fallbackMarketplaces.ozon || { shopName: "Magic Stick", logoUrl: "" }),
       yandex: normalizeMarketplaceBranding(marketplaces.yandex || raw.yandex, fallbackMarketplaces.yandex || { shopName: "parfumerius", logoUrl: "" }),
     },
+  };
+}
+
+function normalizeSorinExpressSettings(input = {}, fallback = defaultAppSettings().sorinExpress) {
+  const raw = input && typeof input === "object" ? input : {};
+  const stock = Number(raw.stock ?? fallback.stock);
+  const yandexCampaignId = cleanText(String(raw.yandexCampaignId || raw.yandex_campaign_id || fallback.yandexCampaignId || "149026853"));
+  const ozonWarehouseId = cleanText(String(raw.ozonWarehouseId || raw.ozon_warehouse_id || fallback.ozonWarehouseId || "1020005000398404"));
+  return {
+    enabled: parseBooleanSetting(raw.enabled, fallback.enabled !== false),
+    stock: Number.isFinite(stock) && stock >= 0 ? Math.round(Math.min(999, stock)) : Number(fallback.stock || 2),
+    yandexCampaignId: yandexCampaignId || "149026853",
+    ozonWarehouseId: ozonWarehouseId || "1020005000398404",
   };
 }
 
@@ -214,6 +233,7 @@ function normalizeAppSettings(input = {}) {
     availabilityRules,
     branding: normalizeBrandingSettings(input.branding || {}, fallback.branding),
     supplierCart: normalizeSupplierCartSettings(input.supplierCart || input.supplier_cart || {}, fallback.supplierCart),
+    sorinExpress: normalizeSorinExpressSettings(input.sorinExpress || input.sorin_express || {}, fallback.sorinExpress),
     tnved: {
       code: cleanText((input.tnved?.code ?? input.tnvedCode) || "3303001000").slice(0, 20),
       autoEnabled: parseBooleanSetting(input.tnved?.autoEnabled, true),
