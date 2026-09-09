@@ -413,7 +413,7 @@ export function SuppliersPage() {
         )}
       />
 
-      {anyError ? <div className="inline-error" style={{ marginBottom: 12 }}>{errorMessage(anyError)}</div> : null}
+      {anyError ? <div className="inline-error sp-error-mb">{errorMessage(anyError)}</div> : null}
 
       <section className="dashboard-metrics">
         <Stat label="Активных" value={activeCount} tone={activeCount ? "success" : ""} icon={<Truck size={18} />} />
@@ -491,7 +491,7 @@ export function SuppliersPage() {
                 <Filter size={13} /> Есть долг
               </button>
             </div>
-            <label className="supplier-search" style={{ flex: 1 }}>
+            <label className="supplier-search sp-search-flex">
               <Search size={16} />
               <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Поиск" />
             </label>
@@ -546,10 +546,10 @@ export function SuppliersPage() {
                     {!active ? <span className="supplier-stopped-tag"><UserX size={11} /> стоп</span> : null}
                   </div>
                   <div>{supplierCurrency}</div>
-                  <div className={balanceDisplay < 0 ? "danger-text" : balanceDisplay > 0 ? "success-text" : ""} style={{ fontVariantNumeric: "tabular-nums" }}>
+                  <div className={`${balanceDisplay < 0 ? "danger-text" : balanceDisplay > 0 ? "success-text" : ""} sp-tabular`}>
                     {moneySigned(balanceDisplay, supplierCurrency)}
                   </div>
-                  <div style={{ fontVariantNumeric: "tabular-nums", color: paidDisplay > 0 ? "var(--success, #4ed39a)" : "var(--text-muted)" }}>
+                  <div className="sp-tabular" style={{ color: paidDisplay > 0 ? "var(--success, #4ed39a)" : "var(--text-muted)" }}>
                     {paidDisplay > 0 ? moneyAmount(paidDisplay, supplierCurrency) : "—"}
                   </div>
                   <div className="muted-note">
@@ -564,15 +564,15 @@ export function SuppliersPage() {
           </div>
 
           <details className="supplier-reset-details">
-            <summary className="muted-note" style={{ cursor: "pointer", padding: "8px 0", display: "flex", alignItems: "center", gap: 6, fontSize: "0.8rem" }}>
+            <summary className="muted-note sp-summary-reset">
               <Trash2 size={13} /> Сбросить все данные (долги, история заказов)
             </summary>
-            <div style={{ padding: "10px 0 4px", display: "flex", flexDirection: "column", gap: 8 }}>
-              <p className="muted-note" style={{ fontSize: "0.8rem", margin: 0 }}>
+            <div className="sp-detail-body">
+              <p className="muted-note sp-detail-note">
                 Удаляет все записи долгов, историю сборки и черновики корзин. Операция необратима.
               </p>
               {resetAllHistory.isSuccess ? (
-                <div className="success-strip" style={{ fontSize: "0.82rem" }}>
+                <div className="success-strip sp-small-strip">
                   Сброшено: долгов {resetAllHistory.data.ledger}, строк сборки {resetAllHistory.data.picking}, корзин {resetAllHistory.data.cart}
                 </div>
               ) : null}
@@ -609,7 +609,7 @@ export function SuppliersPage() {
               <div>
                 <small className="muted-note">{drawerData.supplier.partnerId ? `partner ${drawerData.supplier.partnerId}` : "local"}</small>
                 <h3>{drawerData.supplier.name || "Поставщик"}</h3>
-                <div className="supplier-badge-row" style={{ marginTop: 6 }}>
+                <div className="supplier-badge-row sp-badge-mt">
                   <span className={`supplier-status-pill${drawerData.active ? "" : " is-stopped"}`}>
                     {drawerData.active ? <><CheckCircle2 size={12} /> активен</> : <><UserX size={12} /> остановлен</>}
                   </span>
@@ -619,7 +619,7 @@ export function SuppliersPage() {
                   <span>доверие {drawerData.supplier.trustFactor ?? 100}</span>
                 </div>
               </div>
-              <button className="icon-action" type="button" onClick={() => setDrawerSupplier(null)} style={{ flexShrink: 0 }}><X size={18} /></button>
+              <button className="icon-action sp-close-btn" type="button" onClick={() => setDrawerSupplier(null)}><X size={18} /></button>
             </div>
 
             {/* Ledger strip */}
@@ -659,7 +659,7 @@ export function SuppliersPage() {
                   value={drawerData.paymentAmount}
                   onChange={(event) => setPaymentDrafts((current) => ({ ...current, [drawerData.id]: event.target.value }))}
                 />
-                {drawerData.supplierCurrency === "USD" ? <span className="muted" style={{ fontSize: 12 }}>Курс: {usdRate}₽</span> : null}
+                {drawerData.supplierCurrency === "USD" ? <span className="muted sp-rate-note">Курс: {usdRate}₽</span> : null}
                 <input
                   className="supplier-payment-note"
                   placeholder="Комментарий"
@@ -687,10 +687,10 @@ export function SuppliersPage() {
               const el = e.currentTarget as HTMLDetailsElement;
               setAdjustOpen((prev) => { const n = new Set(prev); el.open ? n.add(drawerData.id) : n.delete(drawerData.id); return n; });
             }}>
-              <summary className="muted-note" style={{ cursor: "pointer", padding: "4px 0", display: "flex", alignItems: "center", gap: 6 }}>
+              <summary className="muted-note sp-summary-toggle">
                 <Scale size={13} /> Свести баланс с поставщиком
               </summary>
-              <div className="settings-form-row supplier-payment-row" style={{ marginTop: 8 }}>
+              <div className="settings-form-row supplier-payment-row sp-form-row-mt">
                 <input
                   type="number"
                   step="0.01"
@@ -725,7 +725,7 @@ export function SuppliersPage() {
                 </button>
               </div>
               {adjustBalance.isSuccess && adjustBalance.data && adjustBalance.variables && supplierId(adjustBalance.variables.supplier) === drawerData.id && (
-                <div className="inline-success" style={{ marginTop: 6, fontSize: "0.82rem" }}>
+                <div className="inline-success sp-adjust-ok">
                   {adjustBalance.data.skipped
                     ? adjustBalance.data.message
                     : drawerData.supplierCurrency === "USD"
@@ -733,16 +733,16 @@ export function SuppliersPage() {
                       : `Корректировка: ${moneySigned(adjustBalance.data.currentBalance ?? 0, "RUB")} → ${moneySigned(adjustBalance.data.targetBalance ?? 0, "RUB")} (запись на ${moneySigned(adjustBalance.data.delta ?? 0, "RUB")})`}
                 </div>
               )}
-              {adjustBalance.isError && adjustBalance.variables && supplierId(adjustBalance.variables.supplier) === drawerData.id && <div className="inline-error" style={{ marginTop: 6 }}>{errorMessage(adjustBalance.error)}</div>}
+              {adjustBalance.isError && adjustBalance.variables && supplierId(adjustBalance.variables.supplier) === drawerData.id && <div className="inline-error sp-adjust-error">{errorMessage(adjustBalance.error)}</div>}
             </details>
 
             {/* Payment history */}
             {drawerData.paymentEntries.length > 0 ? (
-              <details open={payHistoryOpen} onToggle={(e) => setPayHistoryOpen((e.currentTarget as HTMLDetailsElement).open)} style={{ marginTop: 4 }}>
-                <summary className="muted-note" style={{ cursor: "pointer", padding: "4px 0", display: "flex", alignItems: "center", gap: 6 }}>
+              <details open={payHistoryOpen} onToggle={(e) => setPayHistoryOpen((e.currentTarget as HTMLDetailsElement).open)} className="sp-details-mt">
+                <summary className="muted-note sp-summary-toggle">
                   <CreditCard size={13} /> История оплат ({drawerData.paymentEntries.length})
                 </summary>
-                <div className="supplier-orders-list" style={{ marginTop: 8 }}>
+                <div className="supplier-orders-list sp-list-mt">
                   <div className="supplier-orders-header">
                     <span>Тип</span><span>Сумма</span><span>Дата</span><span>Заметка</span>
                   </div>
@@ -764,7 +764,7 @@ export function SuppliersPage() {
                             : moneySigned(entry.amount, "RUB")}
                         </span>
                         <span className="muted-note">{compactDate(entry.occurredAt ?? null)}</span>
-                        <span className="muted-note" style={{ fontSize: "0.78rem" }}>{entry.note || ""}</span>
+                        <span className="muted-note sp-note-xs">{entry.note || ""}</span>
                       </div>
                     );
                   })}
@@ -776,9 +776,9 @@ export function SuppliersPage() {
 
             {drawerTab === "history" ? (
             <div className="supplier-drawer-section">
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div className="sp-history-head">
                 <strong>История заказов</strong>
-                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <div className="sp-history-controls">
                   {historyQuery.isFetching ? <Loader2 className="spin" size={13} /> : null}
                   <div className="settings-tabs">
                     <button type="button" className={!historyShowAll ? "is-active" : ""} onClick={() => setHistoryShowAll(false)}>30 дней</button>
@@ -788,9 +788,9 @@ export function SuppliersPage() {
               </div>
 
               {historyQuery.isLoading ? (
-                <div className="soft-empty" style={{ marginTop: 8 }}><Loader2 className="spin" size={14} /> Загружаю историю...</div>
+                <div className="soft-empty sp-list-mt"><Loader2 className="spin" size={14} /> Загружаю историю...</div>
               ) : drawerData.pickedRows.length > 0 ? (
-                <div className="supplier-orders-list" style={{ marginTop: 8 }}>
+                <div className="supplier-orders-list sp-list-mt">
                   <div className="supplier-orders-header">
                     <span>Товар</span><span>Сумма</span><span>Дата</span><span></span>
                   </div>
@@ -832,19 +832,19 @@ export function SuppliersPage() {
                   })}
                 </div>
               ) : (
-                <div className="soft-empty" style={{ marginTop: 8 }}>
+                <div className="soft-empty sp-list-mt">
                   {historyShowAll ? "Заказов пока нет." : "Заказов за последние 30 дней нет."}
                   {!historyShowAll ? (
-                    <button type="button" style={{ marginLeft: 8, background: "none", border: "none", color: "var(--accent, #3b6dff)", cursor: "pointer", fontSize: "inherit" }} onClick={() => setHistoryShowAll(true)}>
+                    <button type="button" className="sp-show-more-btn" onClick={() => setHistoryShowAll(true)}>
                       Показать всё
                     </button>
                   ) : null}
                 </div>
               )}
 
-              <details className="supplier-manual-return-details" style={{ marginTop: 10 }}>
-                <summary className="muted-note" style={{ cursor: "pointer", padding: "4px 0" }}>Ручной возврат (произвольная сумма)</summary>
-                <div className="settings-form-row supplier-payment-row" style={{ marginTop: 8 }}>
+              <details className="supplier-manual-return-details sp-details-mt-lg">
+                <summary className="muted-note sp-summary-plain">Ручной возврат (произвольная сумма)</summary>
+                <div className="settings-form-row supplier-payment-row sp-form-row-mt">
                   <input
                     type="number"
                     min="0"
@@ -918,7 +918,7 @@ export function SuppliersPage() {
               </label>
               {drawerData.raw.note ? <p className="supplier-note">{String(drawerData.raw.note)}</p> : null}
               {!drawerData.active ? <p className="supplier-note danger-text">Остановлен {inactiveText(drawerData.supplier)}. {String(drawerData.raw.inactiveComment || drawerData.supplier.stopReason || "")}</p> : null}
-              <div className="row-actions" style={{ marginTop: 8 }}>
+              <div className="row-actions sp-actions-mt">
                 <button className="secondary-action" type="button" onClick={() => startEdit(drawerData.supplier)}><Edit3 size={16} /> Редактировать</button>
                 {drawerData.active ? (
                   <button className="secondary-action danger-action" type="button" onClick={() => startInactive(drawerData.supplier)}><UserX size={16} /> Не работает</button>

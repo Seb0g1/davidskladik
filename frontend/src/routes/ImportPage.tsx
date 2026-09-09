@@ -57,7 +57,7 @@ function OzonAttributesPanel() {
     if (!data) return null;
     const rows = data.categories?.filter((c) => !c.found) || [];
     return (
-      <div className={`info-strip${data.ok ? " success" : " warn"} compact`} style={{ marginTop: 8 }}>
+      <div className={`info-strip${data.ok ? " success" : " warn"} compact ip-status-mt`}>
         {data.dryRun ? (
           <span>Проверка: всего товаров {data.total}, будет обновлено {data.candidates ?? data.updated ?? 0}
             {data.reason ? ` (${data.reason})` : ""}.
@@ -67,18 +67,17 @@ function OzonAttributesPanel() {
             {data.failed ? ` · ошибок: ${data.failed}` : ""}.
           </span>
         )}
-        {rows.length > 0 ? <div style={{ marginTop: 4, fontSize: "0.85em", opacity: 0.8 }}>Атрибут не найден в категориях: {rows.map((c) => c.key).join(", ")}</div> : null}
-        {data.errors?.length ? <div style={{ marginTop: 4, fontSize: "0.85em", color: "var(--color-error)" }}>Ошибки: {data.errors.slice(0, 3).map((e) => e.error || "неизвестно").join("; ")}</div> : null}
+        {rows.length > 0 ? <div className="ip-sub-note">Атрибут не найден в категориях: {rows.map((c) => c.key).join(", ")}</div> : null}
+        {data.errors?.length ? <div className="ip-error-note">Ошибки: {data.errors.slice(0, 3).map((e) => e.error || "неизвестно").join("; ")}</div> : null}
       </div>
     );
   };
 
   return (
-    <div className="table-panel" style={{ marginTop: 24 }}>
+    <div className="table-panel ip-panel-mt">
       <button
         type="button"
-        className="section-title"
-        style={{ width: "100%", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px" }}
+        className="section-title ip-section-toggle"
         onClick={() => setOpen((v) => !v)}
       >
         <div>
@@ -89,31 +88,31 @@ function OzonAttributesPanel() {
       </button>
 
       {open ? (
-        <div style={{ padding: "0 16px 16px" }}>
+        <div className="ip-section-body">
 
           {/* Автозаполнение ТН ВЭД */}
-          <div style={{ marginBottom: 20, padding: "12px 14px", background: "var(--color-bg-alt, #f4f6fa)", borderRadius: 8, border: "1px solid var(--color-border, #e2e6ee)" }}>
-            <div style={{ fontWeight: 600, marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
+          <div className="ip-code-block">
+            <div className="ip-code-head">
               <RefreshCw size={14} />
               Автозаполнение ТН ВЭД (Ozon · Яндекс · WB)
             </div>
-            <div style={{ fontSize: "0.83em", opacity: 0.7, marginBottom: 10 }}>
+            <div className="ip-code-desc">
               Код определяется автоматически из справочника WB по предмету и применяется на всех маркетплейсах без вашего участия.
               Укажите код вручную только если нужен другой (переопределение).
               {savedCode ? (
-                <span style={{ display: "block", marginTop: 4, color: "var(--color-success, #16a34a)", fontWeight: 500 }}>
+                <span className="ip-code-active">
                   Сейчас активен: <code>{savedCode}</code> {autoEnabled ? "✓" : "(отключено)"}
                 </span>
               ) : (
-                <span style={{ display: "block", marginTop: 4, opacity: 0.6 }}>Не настроено</span>
+                <span className="ip-code-missing">Не настроено</span>
               )}
             </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <div className="ip-section-actions">
               <input
                 value={autoCode}
                 onChange={(e) => setAutoCode(e.target.value)}
                 placeholder="Например: 3303001000"
-                style={{ width: 180 }}
+                className="ip-code-input"
               />
               <button
                 className="primary-action"
@@ -135,20 +134,20 @@ function OzonAttributesPanel() {
                 </button>
               )}
             </div>
-            {saveAutoCode.isSuccess && <div style={{ marginTop: 6, fontSize: "0.85em", color: "var(--color-success, #16a34a)" }}>Сохранено. Следующее обслуживание маркетплейсов применит код автоматически.</div>}
-            {saveAutoCode.error && <div className="inline-error" style={{ marginTop: 6 }}>{String((saveAutoCode.error as Error).message)}</div>}
+            {saveAutoCode.isSuccess && <div className="ip-save-ok">Сохранено. Следующее обслуживание маркетплейсов применит код автоматически.</div>}
+            {saveAutoCode.error && <div className="inline-error ip-save-error">{String((saveAutoCode.error as Error).message)}</div>}
           </div>
 
           {/* Снять код маркировки Ozon */}
-          <div style={{ marginBottom: 20 }}>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>
-              <X size={14} style={{ verticalAlign: "middle", marginRight: 4 }} />
+          <div className="ip-section-block">
+            <div className="ip-section-head">
+              <X size={14} className="ip-head-icon" />
               Снять «Нужен код маркировки» на Ozon
             </div>
-            <div style={{ fontSize: "0.85em", opacity: 0.75, marginBottom: 8 }}>
+            <div className="ip-section-desc">
               Убирает галочку «Нужен код маркировки (Честный знак)» со всех товаров в кабинете Ozon.
             </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <div className="ip-section-actions">
               <button
                 className="secondary-action"
                 type="button"
@@ -174,20 +173,20 @@ function OzonAttributesPanel() {
           </div>
 
           {/* ТНВЭД Ozon */}
-          <div style={{ marginBottom: 20 }}>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>
-              <FileCode size={14} style={{ verticalAlign: "middle", marginRight: 4 }} />
+          <div className="ip-section-block">
+            <div className="ip-section-head">
+              <FileCode size={14} className="ip-head-icon" />
               ТН ВЭД для Ozon
             </div>
-            <div style={{ fontSize: "0.85em", opacity: 0.75, marginBottom: 8 }}>
+            <div className="ip-section-desc">
               Заполняет атрибут «ТН ВЭД» на всех товарах в кабинете Ozon. Код вводится в формате Ozon — например, <code>3303301000</code>.
             </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <div className="ip-section-actions">
               <input
                 value={ozonTnved}
                 onChange={(e) => setOzonTnved(e.target.value)}
                 placeholder="Например: 3303301000"
-                style={{ width: 180 }}
+                className="ip-code-input"
               />
               <button
                 className="secondary-action"
@@ -215,19 +214,19 @@ function OzonAttributesPanel() {
 
           {/* ТНВЭД Яндекс */}
           <div>
-            <div style={{ fontWeight: 600, marginBottom: 6 }}>
-              <FileCode size={14} style={{ verticalAlign: "middle", marginRight: 4 }} />
+            <div className="ip-section-head">
+              <FileCode size={14} className="ip-head-icon" />
               ТН ВЭД для Яндекс.Маркет
             </div>
-            <div style={{ fontSize: "0.85em", opacity: 0.75, marginBottom: 8 }}>
+            <div className="ip-section-desc">
               Отправляет код ТН ВЭД в карточки Яндекс.Маркет через поле <code>customsTariffCode</code>. Например: <code>3303 30 100 0</code>.
             </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <div className="ip-section-actions">
               <input
                 value={yandexTnved}
                 onChange={(e) => setYandexTnved(e.target.value)}
                 placeholder="Например: 3303 30 100 0"
-                style={{ width: 180 }}
+                className="ip-code-input"
               />
               <button
                 className="secondary-action"
@@ -442,15 +441,15 @@ export function ImportPage() {
         </div>
       ) : null}
       {refreshing && refreshStatus.data?.progress ? (
-        <div className="settings-panel" style={{ marginBottom: 8 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+        <div className="settings-panel ip-progress-panel">
+          <div className="ip-progress-head">
             <Loader2 className="spin" size={14} />
-            <strong style={{ fontSize: 13 }}>Загрузка каталога Ozon…</strong>
-            {refreshStatus.data.progress.stage ? <span className="muted" style={{ fontSize: 12 }}>{refreshStatus.data.progress.stage}</span> : null}
+            <strong className="ip-progress-title">Загрузка каталога Ozon…</strong>
+            {refreshStatus.data.progress.stage ? <span className="muted ip-progress-stage">{refreshStatus.data.progress.stage}</span> : null}
           </div>
           <div className="progress-line">
             <span style={{ width: `${Math.min(100, refreshStatus.data.progress.percent ?? 0)}%` }} />
-            <span style={{ position: "relative", zIndex: 1, fontSize: 12 }}>
+            <span className="ip-progress-text">
               {refreshStatus.data.progress.meta || `${refreshStatus.data.progress.percent ?? 0}%`}
             </span>
           </div>
