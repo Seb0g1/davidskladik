@@ -133,16 +133,16 @@ function DashboardTab() {
       {!ordersData?.orders.length ? (
         <div className="soft-empty"><Package size={18} /> Заказов пока нет</div>
       ) : (
-        <div style={{ overflowX: "auto" }}>
-          <div className="table-panel" style={{ minWidth: 560 }}>
-            <div className="table-head" style={{ display: "grid", gridTemplateColumns: "minmax(130px,1.2fr) minmax(130px,1fr) minmax(70px,.4fr) minmax(100px,.7fr) minmax(130px,.9fr)", gap: 10 }}>
+        <div className="sa-scroll-x">
+          <div className="table-panel sa-table-560">
+            <div className="table-head" className="sa-grid-orders">
               <span>Заказ / Дата</span><span>Покупатель</span><span>Товары</span><span>Сумма</span><span>Статус</span>
             </div>
             {ordersData.orders.map((o) => (
-              <div key={o.id} className="table-row" style={{ display: "grid", gridTemplateColumns: "minmax(130px,1.2fr) minmax(130px,1fr) minmax(70px,.4fr) minmax(100px,.7fr) minmax(130px,.9fr)", gap: 10 }}>
+              <div key={o.id} className="table-row" className="sa-grid-orders">
                 <span>
-                  <div style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700 }}>{o.id}</div>
-                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{fmtDate(o.createdAt)}</div>
+                  <div className="sa-mono-id">{o.id}</div>
+                  <div className="sa-sub-date">{fmtDate(o.createdAt)}</div>
                 </span>
                 <span style={{ fontSize: 13 }}>{customerName(o.customer ?? undefined, o.delivery)}</span>
                 <span style={{ color: "var(--muted)", fontSize: 12 }}>{Array.isArray(o.items) ? `${o.items.length} поз.` : "—"}</span>
@@ -207,8 +207,8 @@ function OrdersTab() {
       ) : !data?.orders.length ? (
         <div className="soft-empty"><ShoppingBag size={18} /> Заказов нет</div>
       ) : (
-        <div style={{ overflowX: "auto" }}>
-        <div className="table-panel orders-table" style={{ minWidth: 560 }}>
+        <div className="sa-scroll-x">
+        <div className="table-panel orders-table sa-table-560">
           <div className="table-head" style={{ display: "grid", gridTemplateColumns: COL, gap: 10 }}>
             <span>Заказ / Дата</span><span>Покупатель</span><span>Позиций</span><span>Сумма</span><span>Статус</span>
           </div>
@@ -222,8 +222,8 @@ function OrdersTab() {
                 onClick={() => setExpanded(expanded === o.id ? null : o.id)}
               >
                 <span>
-                  <div style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700 }}>{o.id}</div>
-                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{fmtDate(o.createdAt)}</div>
+                  <div className="sa-mono-id">{o.id}</div>
+                  <div className="sa-sub-date">{fmtDate(o.createdAt)}</div>
                 </span>
                 <span style={{ fontSize: 13 }}>
                   <div>{customerName(o.customer ?? undefined, o.delivery)}</div>
@@ -319,7 +319,7 @@ function CustomersTab() {
       ) : !data?.customers.length ? (
         <div className="soft-empty"><Users size={18} /> Зарегистрированных покупателей нет</div>
       ) : (
-        <div style={{ overflowX: "auto" }}>
+        <div className="sa-scroll-x">
           <div className="table-panel customers-table" style={{ minWidth: 580 }}>
             <div className="table-head" style={{ display: "grid", gridTemplateColumns: COL, gap: 10 }}>
               <span>Имя</span><span>Email</span><span>Телефон</span><span>Заказов</span><span>Регистрация</span>
@@ -384,6 +384,7 @@ function HolidayBannersSection() {
       <div className="section-title" style={{ marginBottom: 16 }}>
         <div><h2>Праздничные баннеры</h2><p style={{ fontSize: 12, color: "var(--muted)", marginTop: 3 }}>Автоматически включаются в сезон. Можно включить/выключить вручную.</p></div>
       </div>
+      {patchMut.error ? <div className="inline-error" style={{ marginBottom: 12 }}>{(patchMut.error as Error).message}</div> : null}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
         {holidays.map((h) => (
           <div key={h.key} style={{
@@ -427,7 +428,7 @@ function HolidayBannersSection() {
                     <span style={{ fontSize: 24 }}>{h.emoji}</span>
                     <div>
                       <div style={{ fontWeight: 600, fontSize: 14 }}>{h.name}</div>
-                      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                      <div className="sa-sub-date">
                         {formatWindow(h.windowStart, h.windowEnd)}
                         {h.inWindow && <span style={{ marginLeft: 6, color: "#4ade80", fontSize: 10, letterSpacing: "0.1em" }}>● сейчас</span>}
                       </div>
@@ -1076,13 +1077,13 @@ function ReviewsTab() {
         <div className="soft-empty"><MessageSquare size={18} /> Отзывов пока нет</div>
       )}
 
-      <div style={{ overflowX: "auto" }}>
-      <div className="table-panel" style={{ minWidth: 560 }}>
+      <div className="sa-scroll-x">
+      <div className="table-panel sa-table-560">
         {data?.reviews.map((r) => (
           <div key={r.id} className="table-row" style={{ display: "grid", gridTemplateColumns: "minmax(120px,.8fr) minmax(80px,.5fr) minmax(200px,2fr) minmax(120px,.7fr) auto", gap: 12, alignItems: "center" }}>
             <span>
               <div style={{ fontSize: 12, fontWeight: 600 }}>{r.customer?.email ?? "—"}</div>
-              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{fmtDate(r.createdAt)}</div>
+              <div className="sa-sub-date">{fmtDate(r.createdAt)}</div>
             </span>
             <span style={{ display: "flex", gap: 2 }}>
               {Array.from({ length: 5 }).map((_, i) => (
@@ -1246,28 +1247,28 @@ function BlogTab() {
           <button type="button" className="secondary-action icon-action" onClick={() => setEditing(null)}>
             <ChevronLeft size={15} />
           </button>
-          <h3 style={{ margin: 0, fontSize: 15 }}>{editing.id ? "Редактировать статью" : "Новая статья"}</h3>
+          <h3 className="sa-h3">{editing.id ? "Редактировать статью" : "Новая статья"}</h3>
         </div>
 
         <div style={{ display: "grid", gap: 12, maxWidth: 700 }}>
           <div>
-            <label style={{ fontSize: 11, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>Заголовок</label>
+            <label className="sa-form-label">Заголовок</label>
             <input className="input-base" value={editing.title ?? ""} onChange={e => setEditing(s => ({ ...s!, title: e.target.value }))} placeholder="Топ-10 ароматов весны 2027" maxLength={200} />
           </div>
           <div>
-            <label style={{ fontSize: 11, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>URL-slug (оставьте пустым для авто)</label>
+            <label className="sa-form-label">URL-slug (оставьте пустым для авто)</label>
             <input className="input-base" value={editing.slug ?? ""} onChange={e => setEditing(s => ({ ...s!, slug: e.target.value }))} placeholder="top-10-vesna-2027" maxLength={120} />
           </div>
           <div>
-            <label style={{ fontSize: 11, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>Обложка (URL изображения)</label>
+            <label className="sa-form-label">Обложка (URL изображения)</label>
             <input className="input-base" value={editing.coverUrl ?? ""} onChange={e => setEditing(s => ({ ...s!, coverUrl: e.target.value }))} placeholder="https://..." />
           </div>
           <div>
-            <label style={{ fontSize: 11, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>Краткое описание</label>
+            <label className="sa-form-label">Краткое описание</label>
             <textarea className="input-base" value={editing.excerpt ?? ""} onChange={e => setEditing(s => ({ ...s!, excerpt: e.target.value }))} rows={2} maxLength={500} style={{ resize: "vertical" }} />
           </div>
           <div>
-            <label style={{ fontSize: 11, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>Теги (через запятую)</label>
+            <label className="sa-form-label">Теги (через запятую)</label>
             <input
               className="input-base"
               value={tagInput}
@@ -1287,7 +1288,7 @@ function BlogTab() {
             )}
           </div>
           <div>
-            <label style={{ fontSize: 11, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>Содержание (HTML)</label>
+            <label className="sa-form-label">Содержание (HTML)</label>
             <textarea className="input-base" value={editing.content ?? ""} onChange={e => setEditing(s => ({ ...s!, content: e.target.value }))} rows={12} style={{ resize: "vertical", fontFamily: "monospace", fontSize: 12 }} placeholder="<h2>Заголовок</h2><p>Текст статьи...</p>" />
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -1310,7 +1311,7 @@ function BlogTab() {
                 void saveMut.mutate(editing);
               }}
               disabled={saveMut.isPending || !editing.title?.trim()}
-              style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+              className="sa-inline-flex-6"
             >
               {saveMut.isPending ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
               Сохранить
@@ -1324,13 +1325,13 @@ function BlogTab() {
 
   return (
     <div className="admin-tab-content">
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-        <h3 style={{ margin: 0, fontSize: 15 }}>Блог «Мир ароматов»</h3>
+      <div className="sa-section-head">
+        <h3 className="sa-h3">Блог «Мир ароматов»</h3>
         <button
           type="button"
           className="secondary-action"
           onClick={() => { setEditing({ ...EMPTY_POST }); setTagInput(""); }}
-          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+          className="sa-inline-flex-6"
         >
           <Plus size={14} /> Новая статья
         </button>
@@ -1406,14 +1407,14 @@ function EmailSequencesTab() {
 
   return (
     <div className="admin-tab-content">
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-        <h3 style={{ margin: 0, fontSize: 15 }}>Email-цепочки после покупки</h3>
+      <div className="sa-section-head">
+        <h3 className="sa-h3">Email-цепочки после покупки</h3>
         <button
           type="button"
           className="secondary-action"
           onClick={() => void runMut.mutate()}
           disabled={runMut.isPending}
-          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+          className="sa-inline-flex-6"
         >
           {runMut.isPending ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
           Запустить сканер
@@ -1589,7 +1590,7 @@ function PromocodesTab() {
       {isLoading ? (
         <div className="list-loading"><Loader2 size={16} className="spin" /> Загружаю промокоды…</div>
       ) : (
-        <div style={{ overflowX: "auto" }}>
+        <div className="sa-scroll-x">
           <div className="table-panel" style={{ minWidth: 600 }}>
             <div className="table-head" style={{ display: "grid", gridTemplateColumns: "minmax(120px,.8fr) minmax(60px,.35fr) minmax(180px,1.5fr) minmax(80px,.5fr) minmax(80px,.5fr) 80px 60px", gap: 10 }}>
               <span>Промокод</span><span>Скидка</span><span>Описание</span><span>Использований</span><span>Истекает</span><span>Статус</span><span />
@@ -1711,8 +1712,8 @@ function EmailSubscribersTab() {
       ) : !data?.subscribers.length ? (
         <div className="soft-empty"><Mail size={18} /> Подписчиков нет</div>
       ) : (
-        <div style={{ overflowX: "auto" }}>
-          <div className="table-panel" style={{ minWidth: 560 }}>
+        <div className="sa-scroll-x">
+          <div className="table-panel sa-table-560">
             <div className="table-head" style={{ display: "grid", gridTemplateColumns: COL, gap: 10 }}>
               <span>Email</span><span>Источник</span><span>Квиз</span><span>Промокод</span><span>Дата</span>
             </div>
@@ -1763,7 +1764,7 @@ function PushTab() {
     <div className="admin-tab-content">
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
         <Bell size={18} style={{ color: "var(--accent)" }} />
-        <h3 style={{ margin: 0, fontSize: 15 }}>Web Push — рассылка уведомлений</h3>
+        <h3 className="sa-h3">Web Push — рассылка уведомлений</h3>
         <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--text-muted)", background: "var(--surface-raised)", border: "1px solid var(--border)", borderRadius: 20, padding: "2px 10px" }}>
           {statsData?.total ?? "…"} подписчиков
         </span>

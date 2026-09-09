@@ -247,6 +247,12 @@ function normalizeAppSettings(input = {}) {
     sponsorDailyReportEnabled: parseBooleanSetting(input.sponsorDailyReportEnabled ?? input.sponsor_daily_report_enabled, false),
     sponsorDailyReportHour: Math.min(23, Math.max(0, Math.round(Number(input.sponsorDailyReportHour ?? input.sponsor_daily_report_hour ?? 20) || 20))),
     shopStubs: normalizeShopStubs(input.shopStubs || {}),
+    // Shop CMS data: passed through as-is (no normalization — validated at point of write)
+    ...(input.shopSettings !== undefined ? { shopSettings: input.shopSettings } : {}),
+    ...(input.shopBanners !== undefined ? { shopBanners: input.shopBanners } : {}),
+    ...(input.shopCategories !== undefined ? { shopCategories: input.shopCategories } : {}),
+    ...(input.shopHolidayBanners !== undefined ? { shopHolidayBanners: input.shopHolidayBanners } : {}),
+    ...(input.shopPromoCodes !== undefined ? { shopPromoCodes: input.shopPromoCodes } : {}),
   };
 }
 
