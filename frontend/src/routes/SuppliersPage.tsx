@@ -113,6 +113,7 @@ export function SuppliersPage() {
   const [adjustNotes, setAdjustNotes] = useState<Record<string, string>>({});
   const [adjustOpen, setAdjustOpen] = useState<Set<string>>(new Set());
   const [drawerSupplier, setDrawerSupplier] = useState<Supplier | null>(null);
+  const [drawerTab, setDrawerTab] = useState<"balance" | "articles" | "history" | "settings">("balance");
   const [historyShowAll, setHistoryShowAll] = useState(false);
   const [payHistoryOpen, setPayHistoryOpen] = useState(false);
 
@@ -323,6 +324,7 @@ export function SuppliersPage() {
 
   const openDrawer = (supplier: Supplier) => {
     setDrawerSupplier(supplier);
+    setDrawerTab("balance");
     setHistoryShowAll(false);
     setPayHistoryOpen(false);
   };
@@ -632,18 +634,16 @@ export function SuppliersPage() {
               <DiagnosticValue label="Последняя оплата" value={drawerData.ledger.lastPaymentAt ? compactDate(String(drawerData.ledger.lastPaymentAt)) : "—"} />
             </div>
 
-            {/* Currency selector */}
-            <label className="supplier-currency-inline">
-              <span>Валюта закупки</span>
-              <SelectField
-                ariaLabel="Валюта закупки"
-                value={drawerData.supplierCurrency}
-                disabled={patchSupplier.isPending}
-                onChange={(next) => patchSupplier.mutate({ id: drawerData.id, patch: { priceCurrency: next } })}
-                options={[{ value: "USD", label: "USD" }, { value: "RUB", label: "RUB" }]}
-              />
-            </label>
+            {/* Drawer tabs */}
+            <div className="settings-tabs supplier-drawer-tabs">
+              <button type="button" className={drawerTab === "balance" ? "is-active" : ""} onClick={() => setDrawerTab("balance")}>Баланс</button>
+              <button type="button" className={drawerTab === "articles" ? "is-active" : ""} onClick={() => setDrawerTab("articles")}>Артикулы</button>
+              <button type="button" className={drawerTab === "history" ? "is-active" : ""} onClick={() => setDrawerTab("history")}>История</button>
+              <button type="button" className={drawerTab === "settings" ? "is-active" : ""} onClick={() => setDrawerTab("settings")}>Настройки</button>
+            </div>
 
+            {drawerTab === "balance" ? (
+            <>
             {drawerData.raw.note ? <p className="supplier-note">{String(drawerData.raw.note)}</p> : null}
             {!drawerData.active ? <p className="supplier-note danger-text">Остановлен {inactiveText(drawerData.supplier)}. {String(drawerData.raw.inactiveComment || drawerData.supplier.stopReason || "")}</p> : null}
 
@@ -771,28 +771,10 @@ export function SuppliersPage() {
                 </div>
               </details>
             ) : null}
+            </>
+            ) : null}
 
-            {/* Action buttons */}
-            <div className="row-actions">
-              <button className="secondary-action" type="button" onClick={() => startEdit(drawerData.supplier)}><Edit3 size={16} /> Редактировать</button>
-              {drawerData.active ? (
-                <button className="secondary-action danger-action" type="button" onClick={() => startInactive(drawerData.supplier)}><UserX size={16} /> Не работает</button>
-              ) : (
-                <button className="secondary-action" type="button" disabled={patchSupplier.isPending} onClick={() => patchSupplier.mutate({ id: drawerData.id, patch: { stopped: false } })}><CheckCircle2 size={16} /> Вернуть</button>
-              )}
-              <button
-                className="secondary-action danger-action"
-                type="button"
-                disabled={deleteSupplier.isPending}
-                onClick={() => {
-                  if (window.confirm(`Удалить поставщика ${drawerData.supplier.name || drawerData.id}?`)) deleteSupplier.mutate(drawerData.id);
-                }}
-              >
-                <Trash2 size={16} /> Удалить
-              </button>
-            </div>
-
-            {/* Order history */}
+            {drawerTab === "history" ? (
             <div className="supplier-drawer-section">
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <strong>История заказов</strong>
@@ -887,8 +869,9 @@ export function SuppliersPage() {
                 </div>
               </details>
             </div>
+            ) : null}
 
-            {/* Articles */}
+            {drawerTab === "articles" ? (
             <div className="supplier-articles">
               <strong>Артикулы поставщика</strong>
               {drawerData.articles.map((article) => {
@@ -919,6 +902,42 @@ export function SuppliersPage() {
                 {drawerData.draft.id ? <button className="icon-action" type="button" title="Отмена" onClick={() => setArticleDraft(drawerData.id, { id: undefined, article: "", note: "" })}><X size={16} /></button> : null}
               </form>
             </div>
+            ) : null}
+
+            {drawerTab === "settings" ? (
+            <>
+              <label className="supplier-currency-inline">
+                <span>Валюта закупки</span>
+                <SelectField
+                  ariaLabel="Валюта закупки"
+                  value={drawerData.supplierCurrency}
+                  disabled={patchSupplier.isPending}
+                  onChange={(next) => patchSupplier.mutate({ id: drawerData.id, patch: { priceCurrency: next } })}
+                  options={[{ value: "USD", label: "USD" }, { value: "RUB", label: "RUB" }]}
+                />
+              </label>
+              {drawerData.raw.note ? <p className="supplier-note">{String(drawerData.raw.note)}</p> : null}
+              {!drawerData.active ? <p className="supplier-note danger-text">Остановлен {inactiveText(drawerData.supplier)}. {String(drawerData.raw.inactiveComment || drawerData.supplier.stopReason || "")}</p> : null}
+              <div className="row-actions" style={{ marginTop: 8 }}>
+                <button className="secondary-action" type="button" onClick={() => startEdit(drawerData.supplier)}><Edit3 size={16} /> Редактировать</button>
+                {drawerData.active ? (
+                  <button className="secondary-action danger-action" type="button" onClick={() => startInactive(drawerData.supplier)}><UserX size={16} /> Не работает</button>
+                ) : (
+                  <button className="secondary-action" type="button" disabled={patchSupplier.isPending} onClick={() => patchSupplier.mutate({ id: drawerData.id, patch: { stopped: false } })}><CheckCircle2 size={16} /> Вернуть</button>
+                )}
+                <button
+                  className="secondary-action danger-action"
+                  type="button"
+                  disabled={deleteSupplier.isPending}
+                  onClick={() => {
+                    if (window.confirm(`Удалить поставщика ${drawerData.supplier.name || drawerData.id}?`)) deleteSupplier.mutate(drawerData.id);
+                  }}
+                >
+                  <Trash2 size={16} /> Удалить
+                </button>
+              </div>
+            </>
+            ) : null}
           </aside>
         </div>
       ) : null}
