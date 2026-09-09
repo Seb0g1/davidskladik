@@ -11065,3 +11065,42 @@ span + .bt-cat-id { margin-left: 6px; }
 .tnved-yandex-progress { margin-top: 8px !important; padding: 10px 14px !important; }
 .tnved-yandex-progress-head { margin-bottom: 4px !important; }
 .tnved-sweep-result { margin-top: 8px; }
+
+/* ── SystemPage ── */
+.sys-card-mt { margin-top: 12px; }
+.sys-card-mt-lg { margin-top: 16px; }
+.sys-ledger-row { display: flex; gap: 16px; padding: 8px; }
+.sys-section-h3 { display: flex; align-items: center; gap: 6px; margin: 0; }
+.sys-error-text { color: var(--danger, #e55); font-size: 13px; }
+.sys-batch-body { margin-top: 8px; }
+.sys-batch-note { font-size: 13px; color: var(--muted); }
+.sys-batch-row { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 4px; }
+.sys-batch-pct { color: var(--muted); }
+.sys-progress-bar { height: 6px; background: var(--field-bg); border-radius: 4px; overflow: hidden; }
+.sys-progress-fill { height: 100%; background: var(--accent); transition: width 0.3s; }
+.sys-batch-done { font-size: 13px; color: var(--muted); margin-top: 6px; }
+.sys-journal-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; }
+.sys-badge-count { margin-left: 4px; }
+.sys-filter-row { display: flex; gap: 4px; }
+.sys-filter-btn { padding: 2px 8px !important; font-size: 12px !important; }
+.sys-error-margin { margin: 8px; }
+.sys-col-time { font-size: 12px; white-space: nowrap; }
+.sys-col-code { font-size: 11px; }
+.sys-col-source { font-size: 11px; opacity: 0.8; }
+.sys-col-msg { font-size: 12px; }
+.sys-resolve-btn { padding: 2px 8px !important; font-size: 11px !important; }
+
+/* ── WbPage ── */
+.wb-progress-panel { margin-bottom: 0; }
+.wb-progress-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.wb-progress-title { font-size: 13px; }
+.wb-progress-time { font-size: 12px; }
+.wb-progress-text { position: relative; z-index: 1; font-size: 12px; }
+.wb-error-mt { margin-top: 4px; }
+.wb-filter-strip { display: flex; align-items: center; gap: 8px; padding: 6px 12px; background: rgba(255,255,255,.04); border: 1px solid var(--border); border-radius: 8px; }
+.wb-filter-label { font-size: 13px; color: var(--muted); }
+.wb-filter-reset { padding: 2px 8px !important; font-size: 12px !important; }
+.wb-card-error-badge { margin-left: 6px; font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 4px; background: rgba(239,68,68,.15); color: #f87171; border: 1px solid rgba(239,68,68,.25); cursor: help; }
+.wb-result-mt { margin-top: 8px; }
+.wb-rules-mt { margin-top: 8px; }
+.wb-mono-input { font-family: monospace; }

@@ -131,9 +131,9 @@ export function SystemPage() {
       </div>
 
       {status.data?.supplierLedger ? (
-        <div className="card" style={{marginTop: 12}}>
+        <div className="card sys-card-mt">
           <div className="section-title"><h3>Журнал поставщиков</h3></div>
-          <div style={{display:"flex", gap:16, padding:8}}>
+          <div className="sys-ledger-row">
             {(() => {
               const sl = asRecord(status.data?.supplierLedger);
               return (<>
@@ -187,10 +187,10 @@ function FragranceNotesBatch() {
     : 0;
 
   return (
-    <div className="card" style={{ marginTop: 12 }}>
+    <div className="card sys-card-mt">
       <div className="section-title">
         <div>
-          <h3 style={{ display: "flex", alignItems: "center", gap: 6 }}><Sparkles size={16} /> Пирамида аромата — пакетная генерация</h3>
+          <h3 className="sys-section-h3"><Sparkles size={16} /> Пирамида аромата — пакетная генерация</h3>
         </div>
         <button
           className="secondary-action"
@@ -202,23 +202,23 @@ function FragranceNotesBatch() {
         </button>
       </div>
       {startMutation.error ? (
-        <p style={{ color: "var(--danger, #e55)", fontSize: 13 }}>{(startMutation.error as Error).message}</p>
+        <p className="sys-error-text">{(startMutation.error as Error).message}</p>
       ) : null}
       {batchStatus ? (
-        <div style={{ marginTop: 8 }}>
+        <div className="sys-batch-body">
           {batchStatus.total === 0 ? (
-            <p style={{ fontSize: 13, color: "var(--muted)" }}>Все товары уже имеют ноты аромата.</p>
+            <p className="sys-batch-note">Все товары уже имеют ноты аромата.</p>
           ) : (
             <>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 4 }}>
+              <div className="sys-batch-row">
                 <span>{batchStatus.done} / {batchStatus.total} товаров</span>
-                <span style={{ color: "var(--muted)" }}>{batchStatus.errors > 0 ? `ошибок: ${batchStatus.errors}` : ""} {pct}%</span>
+                <span className="sys-batch-pct">{batchStatus.errors > 0 ? `ошибок: ${batchStatus.errors}` : ""} {pct}%</span>
               </div>
-              <div style={{ height: 6, background: "var(--field-bg)", borderRadius: 4, overflow: "hidden" }}>
-                <div style={{ height: "100%", width: `${pct}%`, background: "var(--accent)", transition: "width 0.3s" }} />
+              <div className="sys-progress-bar">
+                <div className="sys-progress-fill" style={{ width: `${pct}%` }} />
               </div>
               {!batchStatus.running && batchStatus.done > 0 && (
-                <p style={{ fontSize: 13, color: "var(--muted)", marginTop: 6 }}>Завершено · {batchStatus.errors} ошибок</p>
+                <p className="sys-batch-done">Завершено · {batchStatus.errors} ошибок</p>
               )}
             </>
           )}
@@ -263,30 +263,29 @@ function AppErrorJournal() {
   const errors: AppError[] = errorsQ.data?.errors ?? [];
 
   return (
-    <div className="card" style={{ marginTop: 16 }}>
-      <div className="section-title" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px" }}>
-        <h3 style={{ margin: 0, display: "flex", alignItems: "center", gap: 6 }}>
+    <div className="card sys-card-mt-lg">
+      <div className="section-title sys-journal-head">
+        <h3 className="sys-section-h3">
           <AlertTriangle size={16} /> Журнал ошибок
-          {errorsQ.data?.total ? <span className="badge warn" style={{ marginLeft: 4 }}>{errorsQ.data.total}</span> : null}
+          {errorsQ.data?.total ? <span className="badge warn sys-badge-count">{errorsQ.data.total}</span> : null}
         </h3>
-        <div style={{ display: "flex", gap: 4 }}>
+        <div className="sys-filter-row">
           {SINCE_OPTIONS.map((opt) => (
             <button
               key={opt.value}
               type="button"
-              className={since === opt.value ? "action-button active" : "secondary-action"}
-              style={{ padding: "2px 8px", fontSize: 12 }}
+              className={`${since === opt.value ? "action-button active" : "secondary-action"} sys-filter-btn`}
               onClick={() => setSince(opt.value)}
             >
               {opt.label}
             </button>
           ))}
-          <button type="button" className="secondary-action" style={{ padding: "2px 8px", fontSize: 12 }} onClick={() => errorsQ.refetch()} disabled={errorsQ.isFetching}>
+          <button type="button" className="secondary-action sys-filter-btn" onClick={() => errorsQ.refetch()} disabled={errorsQ.isFetching}>
             <RefreshCcw size={12} />
           </button>
         </div>
       </div>
-      {errorsQ.error ? <div className="inline-error" style={{ margin: 8 }}>{String((errorsQ.error as Error).message)}</div> : null}
+      {errorsQ.error ? <div className="inline-error sys-error-margin">{String((errorsQ.error as Error).message)}</div> : null}
       <div className="table-panel system-table">
         <div className="table-head">
           <span>Время</span>
@@ -297,15 +296,14 @@ function AppErrorJournal() {
         </div>
         {errors.map((err) => (
           <div className="table-row" key={err.id}>
-            <span data-label="Время" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{dateText(err.createdAt)}</span>
-            <span data-label="Тип"><code style={{ fontSize: 11 }}>{err.type}</code></span>
-            <span data-label="Источник" style={{ fontSize: 11, opacity: 0.8 }}>{err.source}</span>
-            <span data-label="Сообщение" style={{ fontSize: 12 }}>{err.message}</span>
+            <span data-label="Время" className="sys-col-time">{dateText(err.createdAt)}</span>
+            <span data-label="Тип"><code className="sys-col-code">{err.type}</code></span>
+            <span data-label="Источник" className="sys-col-source">{err.source}</span>
+            <span data-label="Сообщение" className="sys-col-msg">{err.message}</span>
             <span data-label="Действие">
               <button
                 type="button"
-                className="secondary-action"
-                style={{ padding: "2px 8px", fontSize: 11 }}
+                className="secondary-action sys-resolve-btn"
                 disabled={resolveMut.isPending}
                 onClick={() => resolveMut.mutate(err.id)}
                 title="Отметить решённой"

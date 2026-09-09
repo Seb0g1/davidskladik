@@ -280,19 +280,19 @@ export function WbPage() {
 
       {/* Прогресс-бар отправки цен */}
       {wbConfigured && (pricesProgress?.running || syncStatus?.running || pricesProgress?.completedAt || lastSyncResult) ? (
-        <div className="settings-panel" style={{ marginBottom: 0 }}>
+        <div className="settings-panel wb-progress-panel">
           {/* Ручная отправка цен */}
           {pricesProgress && (pricesProgress.running || pricesProgress.completedAt) ? (
             <div style={{ marginBottom: lastSyncResult ? 12 : 0 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+              <div className="wb-progress-head">
                 {pricesProgress.running ? <Loader2 className="spin" size={14} /> : null}
-                <strong style={{ fontSize: 13 }}>
+                <strong className="wb-progress-title">
                   {pricesProgress.running
                     ? (pricesProgress.phase === "sending_prices" ? "Отправка цен на WB…" : "Загрузка карточек WB…")
                     : (pricesProgress.error ? "Ошибка отправки цен" : "Цены отправлены")}
                 </strong>
                 {pricesProgress.startedAt ? (
-                  <span className="muted" style={{ fontSize: 12 }}>
+                  <span className="muted wb-progress-time">
                     {new Date(pricesProgress.startedAt).toLocaleTimeString("ru-RU")}
                   </span>
                 ) : null}
@@ -302,7 +302,7 @@ export function WbPage() {
                   {pricesProgress.totalCards > 0 ? (
                     <span style={{ width: `${Math.round(((pricesProgress.prepared ?? 0) / pricesProgress.totalCards) * 100)}%` }} />
                   ) : null}
-                  <span style={{ position: "relative", zIndex: 1, fontSize: 12 }}>
+                  <span className="wb-progress-text">
                     {pricesProgress.running && pricesProgress.phase === "sending_prices"
                       ? `Отправляю ${pricesProgress.prepared ?? "…"} из ${pricesProgress.totalCards} карточек`
                       : `Готово ${pricesProgress.prepared ?? "…"} из ${pricesProgress.totalCards} карточек`}
@@ -315,23 +315,23 @@ export function WbPage() {
               ) : pricesProgress.running ? (
                 <div className="progress-line">
                   <span style={{ width: "100%", animation: "pulse 1.5s ease-in-out infinite" }} />
-                  <span style={{ position: "relative", zIndex: 1, fontSize: 12 }}>Загрузка карточек с WB…</span>
+                  <span className="wb-progress-text">Загрузка карточек с WB…</span>
                 </div>
               ) : null}
-              {pricesProgress.error ? <div className="inline-error" style={{ marginTop: 4 }}>{pricesProgress.error}</div> : null}
+              {pricesProgress.error ? <div className="inline-error wb-error-mt">{pricesProgress.error}</div> : null}
             </div>
           ) : null}
 
           {/* Автосинк WB */}
           {syncStatus ? (
             <div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+              <div className="wb-progress-head">
                 {syncStatus.running ? <Loader2 className="spin" size={14} /> : null}
-                <strong style={{ fontSize: 13 }}>
+                <strong className="wb-progress-title">
                   {syncStatus.running ? "Автосинк WB выполняется…" : "Автосинк WB"}
                 </strong>
                 {syncStatus.nextRunAt && !syncStatus.running ? (
-                  <span className="muted" style={{ fontSize: 12 }}>
+                  <span className="muted wb-progress-time">
                     следующий: {new Date(syncStatus.nextRunAt).toLocaleTimeString("ru-RU")}
                   </span>
                 ) : null}
@@ -339,12 +339,12 @@ export function WbPage() {
               {syncStatus.running ? (
                 <div className="progress-line">
                   <span style={{ width: "100%", animation: "pulse 1.5s ease-in-out infinite" }} />
-                  <span style={{ position: "relative", zIndex: 1, fontSize: 12 }}>Получение карточек и обновление цен…</span>
+                  <span className="wb-progress-text">Получение карточек и обновление цен…</span>
                 </div>
               ) : lastSyncResult ? (
                 <div className="progress-line">
                   <span style={{ width: lastSyncResult.cards > 0 ? `${Math.round((lastSyncResult.pricesSent / lastSyncResult.cards) * 100)}%` : "0%" }} />
-                  <span style={{ position: "relative", zIndex: 1, fontSize: 12 }}>
+                  <span className="wb-progress-text">
                     {lastSyncResult.status === "ok" ? "Успешно" : lastSyncResult.status === "prices_failed" ? "Цены — ошибка отправки" : lastSyncResult.status}
                     {" · "}карточек: {lastSyncResult.cards}
                     {" · "}цен отправлено: {lastSyncResult.pricesSent}
@@ -376,11 +376,11 @@ export function WbPage() {
         </div>
       </section>
       {statusFilter !== "all" && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", background: "rgba(255,255,255,.04)", border: "1px solid var(--border)", borderRadius: 8 }}>
-          <span style={{ fontSize: 13, color: "var(--muted)" }}>
+        <div className="wb-filter-strip">
+          <span className="wb-filter-label">
             Фильтр: <strong style={{ color: "var(--text)" }}>{statusFilter === "no-photo" ? `Без фото (${filteredCards.length})` : `С ошибками (${filteredCards.length})`}</strong>
           </span>
-          <button type="button" className="secondary-action" style={{ padding: "2px 8px", fontSize: 12 }} onClick={() => setStatusFilter("all")}>
+          <button type="button" className="secondary-action wb-filter-reset" onClick={() => setStatusFilter("all")}>
             <X size={12} /> Сбросить
           </button>
         </div>
@@ -450,7 +450,7 @@ export function WbPage() {
                     <span className="wb-card-vendor">
                       {card.vendorCode}
                       {cardErrs.length > 0 && (
-                        <span title={cardErrs.flatMap((e) => e.errors || []).join("; ")} style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, padding: "1px 5px", borderRadius: 4, background: "rgba(239,68,68,.15)", color: "#f87171", border: "1px solid rgba(239,68,68,.25)", cursor: "help" }}>
+                        <span title={cardErrs.flatMap((e) => e.errors || []).join("; ")} className="wb-card-error-badge">
                           ошибка
                         </span>
                       )}
@@ -493,7 +493,7 @@ export function WbPage() {
             </button>
           </div>
           {pricePreview ? (
-            <div className="info-strip success compact" style={{ marginTop: 8 }}>
+            <div className="info-strip success compact wb-result-mt">
               {pricePreview.dryRun ? "Предпросмотр: " : "Отправлено: "}
               готово {pricePreview.prepared} из {pricePreview.cards}
               {pricePreview.skippedAboveMax > 0 ? ` · выше лимита: ${pricePreview.skippedAboveMax}` : ""}
@@ -528,7 +528,7 @@ export function WbPage() {
             </button>
           </div>
           {stockPreview ? (
-            <div className="info-strip success compact" style={{ marginTop: 8 }}>
+            <div className="info-strip success compact wb-result-mt">
               {stockPreview.dryRun ? "Предпросмотр: " : "Синхронизировано: "}
               в продаже {stockPreview.inStock} · обнулено {stockPreview.zeroed} из {stockPreview.cards}.
             </div>
@@ -591,7 +591,7 @@ export function WbPage() {
                 <input type="checkbox" checked={rules.skipArchived} onChange={(e) => setRules((r) => r ? { ...r, skipArchived: e.target.checked } : r)} />
                 Пропускать архивные при импорте
               </label>
-              <div className="settings-form-row" style={{ marginTop: 8 }}>
+              <div className="settings-form-row wb-rules-mt">
                 <label className="field-label" title="Код ТН ВЭД для карточек WB. Пусто — берётся первый код из справочника WB по предмету (subjectId). Для парфюмерии: 3303009000">
                   Код ТН ВЭД
                   <input
@@ -600,7 +600,7 @@ export function WbPage() {
                     value={rules.tnved}
                     onChange={(e) => setRules((r) => r ? { ...r, tnved: e.target.value.replace(/\s/g, "") } : r)}
                     placeholder="3303009000"
-                    style={{ fontFamily: "monospace" }}
+                    className="wb-mono-input"
                   />
                 </label>
                 <label className="field-label field-label-wide">
