@@ -309,14 +309,15 @@ async function ozonFlatCategoryMap(account) {
     function walk(nodes) {
       for (const node of Array.isArray(nodes) ? nodes : []) {
         const id = Number(node.description_category_id);
-        if (id) map.set(id, cleanText(node.category_name || node.name || ""));
-        if (Array.isArray(node.children)) walk(node.children);
-        if (Array.isArray(node.types)) {
-          for (const type of node.types) {
-            const typeKey = `${id}:${Number(type.type_id || 0)}`;
-            map.set(typeKey, cleanText(type.type_name || type.name || ""));
+        if (id) {
+          map.set(id, cleanText(node.category_name || node.name || ""));
+          // In the API tree, type nodes are children with type_id (not description_category_id)
+          for (const child of (node.children || [])) {
+            const typeId = Number(child.type_id || 0);
+            if (typeId) map.set(`${id}:${typeId}`, cleanText(child.type_name || child.name || ""));
           }
         }
+        if (Array.isArray(node.children)) walk(node.children);
       }
     }
     walk(data.result || []);

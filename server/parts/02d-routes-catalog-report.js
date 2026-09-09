@@ -69,13 +69,13 @@ async function buildBrandsTnvedReport(accounts) {
       } catch {}
     }
 
-    // Step 1.5: fetch description_category_id + type_id from /v2/product/info/list
+    // Step 1.5: fetch description_category_id + type_id from /v3/product/info/list
     // (these fields are NOT available in /v4/product/info/attributes)
     const offerIdToTypeKey = new Map(); // offerId → "descCatId:typeId"
-    for (const chunk of chunkArray(allOfferIds, 1000)) {
+    for (const chunk of chunkArray(allOfferIds, 100)) {
       try {
-        const infoData = await ozonRequest("/v2/product/info/list", { offer_id: chunk }, account);
-        for (const item of (infoData.result?.items || [])) {
+        const infoData = await ozonRequest("/v3/product/info/list", { offer_id: chunk }, account);
+        for (const item of (infoData.items || [])) {
           const oid = cleanText(item.offer_id || "");
           const descCatId = Number(item.description_category_id || 0);
           const typeId = Number(item.type_id || 0);
