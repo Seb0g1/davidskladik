@@ -309,45 +309,41 @@ export function TnvedPage() {
 
       {/* Отчёт по покрытию */}
       {report ? (
-        <div className="settings-grid" style={{ marginBottom: 0 }}>
-          <div className="settings-panel" style={{ padding: "12px 16px" }}>
-            <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 4 }}>Ozon</div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div className="settings-grid tnved-status-grid">
+          <div className="settings-panel tnved-mp-panel">
+            <div className="tnved-mp-label">Ozon</div>
+            <div className="tnved-mp-status">
               {report.ozon.assignedCategories > 0
-                ? <CheckCircle2 size={14} style={{ color: "var(--success)" }} />
-                : <XCircle size={14} style={{ color: "var(--danger)" }} />}
-              <span style={{ fontWeight: 600 }}>
-                {report.ozon.assignedCategories} / {report.ozon.totalCategories} категорий с кодом
-              </span>
-              <span className="muted" style={{ fontSize: 12 }}>· {report.ozon.totalProducts} товаров</span>
+                ? <CheckCircle2 size={14} className="tnved-mp-icon-ok" />
+                : <XCircle size={14} className="tnved-mp-icon-fail" />}
+              <strong>{report.ozon.assignedCategories} / {report.ozon.totalCategories} категорий с кодом</strong>
+              <span className="muted tnved-mp-count">· {report.ozon.totalProducts} товаров</span>
             </div>
             {report.ozon.lastApplied ? (
-              <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+              <div className="muted tnved-mp-note">
                 Последнее применение: {new Date(report.ozon.lastApplied).toLocaleString("ru-RU")}
               </div>
             ) : (
-              <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>Ещё не применялось</div>
+              <div className="muted tnved-mp-note">Ещё не применялось</div>
             )}
           </div>
-          <div className="settings-panel" style={{ padding: "12px 16px" }}>
-            <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 4 }}>Яндекс.Маркет</div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div className="settings-panel tnved-mp-panel">
+            <div className="tnved-mp-label">Яндекс.Маркет</div>
+            <div className="tnved-mp-status">
               {report.yandex.defaultCode
-                ? <CheckCircle2 size={14} style={{ color: "var(--success)" }} />
-                : <XCircle size={14} style={{ color: "var(--danger)" }} />}
-              <span style={{ fontWeight: 600 }}>
-                {report.yandex.defaultCode ? `Код по умолчанию: ${report.yandex.defaultCode}` : "Код не задан"}
-              </span>
-              <span className="muted" style={{ fontSize: 12 }}>· {report.yandex.totalProducts} товаров</span>
+                ? <CheckCircle2 size={14} className="tnved-mp-icon-ok" />
+                : <XCircle size={14} className="tnved-mp-icon-fail" />}
+              <strong>{report.yandex.defaultCode ? `Код по умолчанию: ${report.yandex.defaultCode}` : "Код не задан"}</strong>
+              <span className="muted tnved-mp-count">· {report.yandex.totalProducts} товаров</span>
             </div>
             {report.yandex.lastApplied ? (
               <>
-                <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+                <div className="muted tnved-mp-note">
                   Последнее применение: {new Date(report.yandex.lastApplied).toLocaleString("ru-RU")}
                   {report.yandex.updatedCount != null ? ` · Отправлено: ${report.yandex.updatedCount}` : ""}
                 </div>
                 {(report.yandex.withCategory != null || report.yandex.withFallback != null) ? (
-                  <div className="muted" style={{ fontSize: 11, marginTop: 1 }}>
+                  <div className="muted tnved-mp-note">
                     {report.yandex.withCategory != null ? `По категории: ${report.yandex.withCategory}` : ""}
                     {report.yandex.withFallback != null ? ` · По умолчанию: ${report.yandex.withFallback}` : ""}
                     {report.yandex.skipped != null && report.yandex.skipped > 0 ? ` · Без кода: ${report.yandex.skipped}` : ""}
@@ -355,25 +351,23 @@ export function TnvedPage() {
                 ) : null}
               </>
             ) : (
-              <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+              <div className="muted tnved-mp-note">
                 Устанавливается по категориям Ozon + код по умолчанию · Ещё не применялось
               </div>
             )}
           </div>
-          <div className="settings-panel" style={{ padding: "12px 16px" }}>
-            <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 4 }}>Wildberries</div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div className="settings-panel tnved-mp-panel">
+            <div className="tnved-mp-label">Wildberries</div>
+            <div className="tnved-mp-status">
               {report.wb.tnvedCode
-                ? <CheckCircle2 size={14} style={{ color: "var(--success)" }} />
-                : <XCircle size={14} style={{ color: "var(--danger)" }} />}
-              <span style={{ fontWeight: 600 }}>
-                {report.wb.tnvedCode
-                  ? `Код: ${report.wb.tnvedCode}`
-                  : "Код не задан (берётся из справочника WB)"}
-              </span>
+                ? <CheckCircle2 size={14} className="tnved-mp-icon-ok" />
+                : <XCircle size={14} className="tnved-mp-icon-fail" />}
+              <strong>
+                {report.wb.tnvedCode ? `Код: ${report.wb.tnvedCode}` : "Код не задан (берётся из справочника WB)"}
+              </strong>
             </div>
             {report.wb.subjectName ? (
-              <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+              <div className="muted tnved-mp-note">
                 Предмет: {report.wb.subjectName} (#{report.wb.subjectId})
               </div>
             ) : null}
@@ -383,14 +377,14 @@ export function TnvedPage() {
 
       {/* Прогресс применения Ozon */}
       {(progress?.running || progress?.completedAt) ? (
-        <div className="settings-panel" style={{ marginBottom: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+        <div className="settings-panel tnved-progress-panel">
+          <div className="tnved-progress-head">
             {progress.running ? <Loader2 className="spin" size={14} /> : null}
-            <strong style={{ fontSize: 13 }}>
+            <strong className="tnved-progress-title">
               {progress.running ? phaseLabel(progress.phase) : (progress.errors ? "Завершено с ошибками" : "Успешно применено")}
             </strong>
             {progress.completedAt ? (
-              <span className="muted" style={{ fontSize: 12 }}>в {new Date(progress.completedAt).toLocaleTimeString("ru-RU")}</span>
+              <span className="muted tnved-progress-time">в {new Date(progress.completedAt).toLocaleTimeString("ru-RU")}</span>
             ) : null}
           </div>
           <div className="progress-line">
@@ -399,7 +393,7 @@ export function TnvedPage() {
             ) : (
               <span style={{ width: "100%", animation: "pulse 1.5s ease-in-out infinite" }} />
             )}
-            <span style={{ position: "relative", zIndex: 1, fontSize: 12 }}>
+            <span className="tnved-progress-text">
               {progress.running
                 ? (progress.processed != null && progress.totalProducts
                   ? `${progress.processed} из ${progress.totalProducts} товаров`
@@ -467,27 +461,26 @@ export function TnvedPage() {
           ) : (
             <>
               {/* Прогресс покрытия кодами */}
-              <div style={{ marginBottom: 12, padding: "10px 14px", background: "rgba(255,255,255,.03)", border: "1px solid var(--border)", borderRadius: 8 }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
-                  <span style={{ fontSize: 13, fontWeight: 600 }}>
+              <div className="tnved-coverage-box">
+                <div className="tnved-coverage-head">
+                  <span className="tnved-coverage-stat">
                     Покрытие: <span style={{ color: withoutCodeProducts === 0 ? "var(--success)" : "var(--warn)" }}>{withCodeProducts}</span> из {totalProducts} товаров с кодом ({coveragePct}%)
                   </span>
                   {withoutCodeProducts > 0 && (
                     <button
                       type="button"
-                      className={showOnlyWithoutCode ? "primary-action" : "secondary-action"}
-                      style={{ fontSize: 11, padding: "3px 10px" }}
+                      className={`${showOnlyWithoutCode ? "primary-action" : "secondary-action"} tnved-filter-btn`}
                       onClick={() => setShowOnlyWithoutCode((v) => !v)}
                     >
                       {showOnlyWithoutCode ? "Показать все" : `Только без кода (${withoutCodeProducts} тов.)`}
                     </button>
                   )}
                 </div>
-                <div style={{ height: 6, background: "var(--border)", borderRadius: 3, overflow: "hidden" }}>
-                  <div style={{ height: "100%", width: `${coveragePct}%`, background: withoutCodeProducts === 0 ? "var(--success)" : "var(--primary)", borderRadius: 3, transition: "width .3s" }} />
+                <div className="tnved-bar">
+                  <div className="tnved-bar-fill" style={{ width: `${coveragePct}%`, background: withoutCodeProducts === 0 ? "var(--success)" : "var(--primary)" }} />
                 </div>
                 {withoutCodeProducts > 0 && (
-                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+                  <div className="tnved-coverage-note">
                     Без кода: {withoutCodeProducts} товаров в {categories.filter((c) => !(localCodes[`${c.descCatId}:${c.typeId}`] || "").trim()).length} категориях
                   </div>
                 )}
@@ -496,13 +489,13 @@ export function TnvedPage() {
                 Введите коды ТН ВЭД и нажмите «Сохранить коды», затем «Отправить на Ozon».
                 Сохранённые коды также используются при отправке на Яндекс.Маркет. Таблица отсортирована по количеству товаров.
               </p>
-              <div style={{ overflowX: "auto" }}>
-                <table className="data-table" style={{ minWidth: 600 }}>
+              <div className="tnved-table-scroll">
+                <table className="data-table tnved-table">
                   <thead>
                     <tr>
                       <th>Категория / Тип продукта</th>
-                      <th style={{ width: 80, textAlign: "right" }}>Товаров</th>
-                      <th style={{ width: 180 }}>Код ТН ВЭД</th>
+                      <th className="tnved-th-count">Товаров</th>
+                      <th className="tnved-th-code">Код ТН ВЭД</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -512,21 +505,20 @@ export function TnvedPage() {
                       return (
                         <tr key={key}>
                           <td>
-                            <div style={{ fontWeight: 500 }}>{cat.displayName || `Категория ${cat.descCatId}`}</div>
-                            <div className="muted" style={{ fontSize: 11 }}>
+                            <div className="tnved-cat-name">{cat.displayName || `Категория ${cat.descCatId}`}</div>
+                            <div className="muted tnved-cat-id">
                               catId:{cat.descCatId} typeId:{cat.typeId}
                               {cat.offerIds.length ? ` · пр: ${cat.offerIds[0]}` : ""}
                             </div>
                           </td>
-                          <td style={{ textAlign: "right" }}>{cat.count}</td>
+                          <td className="tnved-td-right">{cat.count}</td>
                           <td>
                             <input
                               type="text"
-                              className="field-input"
+                              className="field-input tnved-code-input"
                               placeholder="например 3303001000"
                               value={code}
                               maxLength={20}
-                              style={{ width: "100%", fontFamily: "monospace" }}
                               onChange={(e) => {
                                 setSaved(false);
                                 setLocalCodes((prev) => ({ ...prev, [key]: e.target.value }));
@@ -551,86 +543,85 @@ export function TnvedPage() {
           <div className="section-title compact-title">
             <div><span>Справочник</span><h3>Актуальные коды ЕАЭС 2025</h3></div>
           </div>
-          <div className="form-hint" style={{ marginBottom: 4, lineHeight: 1.7 }}>
+          <div className="form-hint tnved-ref-label">
             <strong>Парфюмерия (3303) — Духи и туалетная вода</strong>
           </div>
-          <div className="form-hint" style={{ fontFamily: "monospace", lineHeight: 2, marginBottom: 12 }}>
-            <div style={{ background: "var(--highlight, rgba(0,180,80,.08))", borderRadius: 4, padding: "2px 6px", display: "inline-block" }}>
+          <div className="form-hint tnved-ref-codes">
+            <div className="tnved-ref-highlight">
               <strong>3303001000</strong> — Духи и туалетная вода: — духи (parfums)
             </div>
             <div>3303009000 — Духи и туалетная вода: — туалетная вода</div>
           </div>
-          <div className="form-hint" style={{ marginBottom: 4, lineHeight: 1.7 }}>
+          <div className="form-hint tnved-ref-label">
             <strong>Косметика и макияж (3304)</strong>
           </div>
-          <div className="form-hint" style={{ fontFamily: "monospace", lineHeight: 2, marginBottom: 12 }}>
+          <div className="form-hint tnved-ref-codes">
             <div>3304100000 — Средства для макияжа губ</div>
             <div>3304200000 — Средства для макияжа глаз</div>
             <div>3304300000 — Средства для маникюра или педикюра</div>
             <div>3304910000 — Средства для макияжа и ухода за кожей: — — пудра, включая компактную</div>
             <div>3304990000 — Прочие: кремы, лосьоны, тональный</div>
           </div>
-          <div className="form-hint" style={{ marginBottom: 4, lineHeight: 1.7 }}>
+          <div className="form-hint tnved-ref-label">
             <strong>Средства для волос (3305)</strong>
           </div>
-          <div className="form-hint" style={{ fontFamily: "monospace", lineHeight: 2, marginBottom: 12 }}>
+          <div className="form-hint tnved-ref-codes">
             <div>3305100000 — Средства для волос: — шампуни</div>
             <div>3305200000 — Средства для волос: — средства для перманентной завивки или распрямления волос</div>
             <div>3305300000 — Средства для волос: — лаки для волос</div>
             <div>3305900001 — Средства для волос: — прочие: — — лосьоны для волос</div>
             <div>3305900009 — Средства для волос: — прочие: — — прочие</div>
           </div>
-          <div className="form-hint" style={{ marginBottom: 4, lineHeight: 1.7 }}>
+          <div className="form-hint tnved-ref-label">
             <strong>Гигиена полости рта (3306)</strong>
           </div>
-          <div className="form-hint" style={{ fontFamily: "monospace", lineHeight: 2, marginBottom: 12 }}>
+          <div className="form-hint tnved-ref-codes">
             <div>3306100000 — Средства для гигиены полости рта: — средства для чистки зубов</div>
           </div>
-          <div className="form-hint" style={{ marginBottom: 4, lineHeight: 1.7 }}>
+          <div className="form-hint tnved-ref-label">
             <strong>Прочие туалетные средства (3307)</strong>
           </div>
-          <div className="form-hint" style={{ fontFamily: "monospace", lineHeight: 2, marginBottom: 12 }}>
+          <div className="form-hint tnved-ref-codes">
             <div>3307100000 — Средства до, во время или после бритья</div>
             <div>3307200000 — Дезодоранты и антиперспиранты индивидуального назначения</div>
             <div>3307300000 — Соли и прочие средства для ванн</div>
             <div>3307490000 — Прочие: — — прочие (ароматические палочки, диффузоры)</div>
             <div>3307900008 — Прочие туалетные средства: — прочие: — — прочие (дезодоранты для помещений)</div>
           </div>
-          <div className="form-hint" style={{ marginBottom: 4, lineHeight: 1.7 }}>
+          <div className="form-hint tnved-ref-label">
             <strong>Мыло и средства для мытья кожи (3401)</strong>
           </div>
-          <div className="form-hint" style={{ fontFamily: "monospace", lineHeight: 2, marginBottom: 12 }}>
+          <div className="form-hint tnved-ref-codes">
             <div>3401300000 — Поверхностно-активные средства для мытья кожи в виде жидкости или крема (гели для душа, жидкое мыло)</div>
           </div>
-          <div className="form-hint" style={{ marginBottom: 4, lineHeight: 1.7 }}>
+          <div className="form-hint tnved-ref-label">
             <strong>Моющие и чистящие средства (3402)</strong>
           </div>
-          <div className="form-hint" style={{ fontFamily: "monospace", lineHeight: 2, marginBottom: 12 }}>
+          <div className="form-hint tnved-ref-codes">
             <div>3402909000 — Прочие поверхностно-активные средства: — — моющие средства и чистящие средства</div>
           </div>
-          <div className="form-hint" style={{ marginBottom: 4, lineHeight: 1.7 }}>
+          <div className="form-hint tnved-ref-label">
             <strong>Свечи (3406)</strong>
           </div>
-          <div className="form-hint" style={{ fontFamily: "monospace", lineHeight: 2 }}>
+          <div className="form-hint tnved-ref-codes" style={{ marginBottom: 0 }}>
             <div>3406000000 — Свечи, тонкие восковые свечки и аналогичные изделия</div>
           </div>
 
           {/* Яндекс.Маркет */}
-          <div className="section-title compact-title" style={{ marginTop: 20 }}>
+          <div className="section-title compact-title tnved-section-mt">
             <div><span>Яндекс.Маркет</span><h3>Отправить ТН ВЭД на Яндекс</h3></div>
           </div>
           <p className="form-hint">
             Код определяется по категории Ozon (если товар связан). Для остальных — код по умолчанию.
             Яндекс.Маркет товаров: {report?.yandex.totalProducts ?? "…"}
           </p>
-          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+          <div className="tnved-yandex-input-row">
             <input
               type="text"
-              className="field-input"
+              className="field-input tnved-yandex-input"
               placeholder="3303001000"
               value={defaultCode}
               maxLength={20}
-              style={{ fontFamily: "monospace", width: 160, flexShrink: 0 }}
               onChange={(e) => { setDefaultCode(e.target.value.replace(/\s/g, "")); setDefaultCodeSaved(false); }}
             />
             <button
@@ -644,9 +635,9 @@ export function TnvedPage() {
             </button>
           </div>
           {saveDefaultCodeMutation.error ? (
-            <div className="inline-error" style={{ marginBottom: 8 }}>{String((saveDefaultCodeMutation.error as Error).message)}</div>
+            <div className="inline-error tnved-error-mb">{String((saveDefaultCodeMutation.error as Error).message)}</div>
           ) : null}
-          <div className="row-actions" style={{ marginTop: 4 }}>
+          <div className="row-actions tnved-yandex-actions">
             <button
               className="secondary-action"
               type="button"
@@ -674,10 +665,10 @@ export function TnvedPage() {
 
           {/* Прогресс применения Яндекс */}
           {(yandexProgress?.running || yandexProgress?.completedAt) ? (
-            <div className="settings-panel" style={{ marginTop: 8, padding: "10px 14px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+            <div className="settings-panel tnved-yandex-progress">
+              <div className="tnved-progress-head tnved-yandex-progress-head">
                 {yandexProgress.running ? <Loader2 className="spin" size={13} /> : null}
-                <strong style={{ fontSize: 12 }}>
+                <strong className="tnved-progress-time">
                   {yandexProgress.running
                     ? "Отправка ТН ВЭД на Яндекс.Маркет…"
                     : yandexProgress.error
@@ -687,12 +678,12 @@ export function TnvedPage() {
                         : "Успешно применено на Яндекс"}
                 </strong>
                 {yandexProgress.completedAt ? (
-                  <span className="muted" style={{ fontSize: 11 }}>в {new Date(yandexProgress.completedAt).toLocaleTimeString("ru-RU")}</span>
+                  <span className="muted tnved-mp-note">в {new Date(yandexProgress.completedAt).toLocaleTimeString("ru-RU")}</span>
                 ) : null}
               </div>
               <div className="progress-line">
                 <span style={{ width: yandexProgress.running ? "100%" : `${yandexProgress.candidates && yandexProgress.updated != null ? Math.round((yandexProgress.updated / yandexProgress.candidates) * 100) : 100}%`, animation: yandexProgress.running ? "pulse 1.5s ease-in-out infinite" : undefined }} />
-                <span style={{ position: "relative", zIndex: 1, fontSize: 11 }}>
+                <span className="tnved-progress-text--sm">
                   {yandexProgress.running
                     ? `${yandexProgress.candidates ?? "…"} товаров в очереди`
                     : `Отправлено: ${yandexProgress.updated ?? 0}${yandexProgress.failed ? ` · Ошибок: ${yandexProgress.failed}` : ""}${yandexProgress.withCategory != null ? ` · По категории: ${yandexProgress.withCategory}` : ""}${yandexProgress.withFallback != null ? ` · По умолчанию: ${yandexProgress.withFallback}` : ""}`}
@@ -702,7 +693,7 @@ export function TnvedPage() {
           ) : null}
 
           {/* Sweep: исправить пустые и неверные коды */}
-          <div className="section-title compact-title" style={{ marginTop: 20 }}>
+          <div className="section-title compact-title tnved-section-mt">
             <div><span>Sweep</span><h3>Исправить коды на Ozon</h3></div>
           </div>
           <p className="form-hint">
@@ -721,7 +712,7 @@ export function TnvedPage() {
             {sweepMutation.isPending ? <Loader2 className="spin" size={14} /> : <Wrench size={14} />} Запустить исправление
           </button>
           {sweepResult ? (
-            <div className={`info-strip ${sweepMutation.isError ? "warn" : "success"} compact`} style={{ marginTop: 8 }}>
+            <div className={`info-strip ${sweepMutation.isError ? "warn" : "success"} compact tnved-sweep-result`}>
               {sweepResult}
             </div>
           ) : null}
