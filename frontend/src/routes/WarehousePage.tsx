@@ -236,7 +236,7 @@ function ProductGroupRow({ group, selected, onSelect, bulkChecked, onBulkToggle 
           type="checkbox"
           checked={bulkChecked ?? false}
           onChange={(e) => { e.stopPropagation(); onBulkToggle?.(e as unknown as React.MouseEvent); }}
-          style={{ cursor: "pointer", width: 15, height: 15 }}
+          className="wh-bulk-check"
         />
       </span>
       <div className="product-cell">
@@ -1210,12 +1210,12 @@ function AvitoImagesPanel({ product, onSaved }: { product: Product; onSaved: () 
           <span>Avito</span>
           <h3>Фото для Avito</h3>
         </div>
-        <label className="secondary-action" style={{ cursor: "pointer" }}>
+        <label className="secondary-action wh-upload-label">
           <input
             type="file"
             accept="image/png,image/jpeg,image/webp,image/gif"
             multiple
-            style={{ display: "none" }}
+            className="wh-hidden"
             onChange={(e) => { handleUpload(e.target.files); e.target.value = ""; }}
             disabled={busy}
           />
@@ -1265,8 +1265,8 @@ function AvitoImagesPanel({ product, onSaved }: { product: Product; onSaved: () 
 
       {ozonExtras.length > 0 && (
         <>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-            <p className="avito-ozon-label" style={{ margin: 0 }}>Фото из Ozon</p>
+          <div className="wh-ozon-head">
+            <p className="avito-ozon-label wh-label-no-margin">Фото из Ozon</p>
             <button
               type="button"
               className="secondary-action"
@@ -1314,7 +1314,7 @@ function AvitoImagesPanel({ product, onSaved }: { product: Product; onSaved: () 
         </button>
       )}
 
-      {uploadError ? <div className="info-strip" style={{ borderColor: "var(--danger)", marginTop: 8 }}>{uploadError}</div> : null}
+      {uploadError ? <div className="info-strip wh-upload-error">{uploadError}</div> : null}
     </section>
   );
 }
@@ -1608,12 +1608,11 @@ function QuickOrderButton({ offerId, marketplace }: { offerId: string; marketpla
     mutationFn: () => fetchJson("/api/supplier-cart/manual-order", MpManualOrderSchema, mutationBody({ offerId, marketplace, quantity: 1 })),
     onSuccess: () => setDone(true),
   });
-  if (done) return <span style={{ color: "var(--color-success)", fontSize: 12 }}>✓ Добавлено в корзину PM</span>;
+  if (done) return <span className="wh-added-ok">✓ Добавлено в корзину PM</span>;
   return (
     <button
       type="button"
-      className="secondary-action"
-      style={{ fontSize: 12, padding: "2px 8px" }}
+      className="secondary-action wh-cart-btn"
       disabled={mut.isPending}
       onClick={() => mut.mutate()}
       title="Создать заявку на заказ у поставщика"
@@ -1696,7 +1695,7 @@ function DiagnosticsPanel({ data, error, loading }: { data?: Record<string, unkn
             </div>
             <div className="diagnostic-lines">
               {item.hasLinks && Number(item.targetStock || 0) === 0 && item.offerId ? (
-                <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span className="wh-inline-row">
                   <b>Нет остатка</b>
                   <QuickOrderButton offerId={String(item.offerId)} marketplace={String(item.marketplace || "ozon")} />
                 </span>
@@ -1719,14 +1718,14 @@ function DiagnosticsPanel({ data, error, loading }: { data?: Record<string, unkn
                 const docDate = docDateStr ? new Date(docDateStr) : null;
                 const staleDays = docDate ? Math.floor((Date.now() - docDate.getTime()) / 86400000) : null;
                 if (staleDays !== null && staleDays >= 14 && !(item as unknown as Record<string, unknown>).selectedSupplier) return (
-                  <span style={{ color: "var(--color-warn)", fontWeight: 500 }}>
+                  <span className="wh-warn-text">
                     ⚠️ PM-цена устарела: последнее разрешение {staleDays} дн. назад. Товар не найден в снапшоте — обновите привязку.
                   </span>
                 );
                 return null;
               })()}
               {asRecord((item as unknown as Record<string, unknown>).raw).notFoundOnMarketplace ? (
-                <span style={{ color: "var(--color-danger)", fontWeight: 500 }}>
+                <span className="wh-danger-text">
                   ⛔ Товар не найден на маркетплейсе — SKU удалён или архивирован на стороне площадки.
                 </span>
               ) : null}
@@ -2377,7 +2376,7 @@ function SnoozeLink({ productId, link, onDone }: { productId: string; link: Prod
   const daysLeft = snoozedUntilDate ? Math.max(0, Math.ceil((snoozedUntilDate.getTime() - Date.now()) / 86_400_000)) : 0;
 
   return (
-    <div style={{ position: "relative" }}>
+    <div className="wh-rel">
       <button
         className={`icon-action${snooze ? " snooze-active-btn" : ""}`}
         type="button"
@@ -2400,7 +2399,7 @@ function SnoozeLink({ productId, link, onDone }: { productId: string; link: Prod
             </button>
             <button className="icon-action" type="button" onClick={() => setOpen(false)}><X size={13} /></button>
           </div>
-          {snoozeMutation.error && <div className="inline-error" style={{ fontSize: 11 }}>{errorMessage(snoozeMutation.error)}</div>}
+          {snoozeMutation.error && <div className="inline-error wh-error-xs">{errorMessage(snoozeMutation.error)}</div>}
         </div>
       )}
     </div>
@@ -3067,13 +3066,13 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
         <div className="list-panel">
           {pageQuery.error && !useDemoCatalog && <div className="inline-error">{errorMessage(pageQuery.error)}</div>}
           <div className="warehouse-table-head">
-            <span style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <span className="wh-center-flex">
               <input
                 type="checkbox"
                 checked={allOnPageSelected}
                 onChange={toggleSelectAll}
                 title="Выбрать все на странице"
-                style={{ cursor: "pointer", width: 15, height: 15 }}
+                className="wh-bulk-check"
               />
             </span>
             <span>Товар</span>

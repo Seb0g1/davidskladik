@@ -11235,3 +11235,29 @@ span + .bt-cat-id { margin-left: 6px; }
 .op-actions-row { display: flex; gap: 8px; margin: 4px 0; flex-wrap: wrap; }
 .op-result-ok { font-size: 13px; align-self: center; }
 .op-result-warn { font-size: 13px; align-self: center; }
+
+/* ── AiDraftsPage ── */
+.ai-progress-58 { width: 58%; }
+.ai-img-row { display: flex; gap: 4px; overflow-x: auto; flex-wrap: wrap; }
+.ai-img-wrap { position: relative; flex-shrink: 0; }
+.ai-img-controls { position: absolute; top: 2px; right: 2px; display: flex; gap: 2px; }
+.ai-img-btn { width: 18px; height: 18px; border-radius: 3px; border: none; color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
+.ai-img-btn--approve { background: rgba(34,197,94,0.9); }
+.ai-img-btn--reject { background: rgba(239,68,68,0.85); }
+.ai-img-btn--send { background: rgba(168,85,247,0.9); }
+
+/* ── WarehousePage ── */
+.wh-bulk-check { cursor: pointer; width: 15px; height: 15px; }
+.wh-upload-label { cursor: pointer; }
+.wh-hidden { display: none; }
+.wh-ozon-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.wh-label-no-margin { margin: 0; }
+.wh-upload-error { border-color: var(--danger); margin-top: 8px; }
+.wh-added-ok { color: var(--color-success); font-size: 12px; }
+.wh-cart-btn { font-size: 12px; padding: 2px 8px; }
+.wh-inline-row { display: flex; align-items: center; gap: 8px; }
+.wh-warn-text { color: var(--color-warn); font-weight: 500; }
+.wh-danger-text { color: var(--color-danger); font-weight: 500; }
+.wh-rel { position: relative; }
+.wh-error-xs { font-size: 11px; }
+.wh-center-flex { display: flex; align-items: center; justify-content: center; }

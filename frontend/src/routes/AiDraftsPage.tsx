@@ -70,7 +70,7 @@ export function AiDraftsPage() {
         <Stat label="Черновики" value={draftsQuery.data?.total || 0} tone="success" icon={<ImagePlus size={18} />} />
       </section>
       {generate.isPending && (
-        <div className="progress-line"><span style={{ width: "58%" }} />Генерация текста и 5 фото через image endpoint...</div>
+        <div className="progress-line"><span className="ai-progress-58" />Генерация текста и 5 фото через image endpoint...</div>
       )}
       {(generate.error || send.error) && (
         <div className="inline-error">
@@ -122,7 +122,7 @@ export function AiDraftsPage() {
               <article className="ai-review-card" key={`${product.id}-${draft.id}`}>
                 <div className="ai-review-image">
                   {imageDrafts.length > 1 ? (
-                    <div style={{ display: "flex", gap: 4, overflowX: "auto", flexWrap: "wrap" }}>
+                    <div className="ai-img-row">
                       {imageDrafts.map((imgDraft, idx) => {
                         const img = asRecord(imgDraft);
                         const imgUrl = String(img.resultUrl || "");
@@ -130,21 +130,21 @@ export function AiDraftsPage() {
                         const imgStatus = String(img.status || "pending");
                         const productId = String(product.id || product.offerId || "");
                         return imgUrl ? (
-                          <div key={idx} style={{ position: "relative", flexShrink: 0 }}>
+                          <div key={idx} className="ai-img-wrap">
                             <img src={imgUrl} alt="" style={{ height: 72, width: 72, objectFit: "cover", borderRadius: 4, opacity: imgStatus === "rejected" ? 0.35 : 1, border: imgStatus === "approved" ? "2px solid rgba(34,197,94,0.7)" : "1px solid rgba(255,255,255,0.1)" }} />
-                            <div style={{ position: "absolute", top: 2, right: 2, display: "flex", gap: 2 }}>
+                            <div className="ai-img-controls">
                               {imgStatus !== "approved" && (
-                                <button type="button" onClick={() => reviewImage.mutate({ productId, draftId: imgId, action: "approve" })} disabled={reviewImage.isPending} title="Одобрить" style={{ width: 18, height: 18, borderRadius: 3, border: "none", background: "rgba(34,197,94,0.9)", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0 }}>
+                                <button type="button" onClick={() => reviewImage.mutate({ productId, draftId: imgId, action: "approve" })} disabled={reviewImage.isPending} title="Одобрить" className="ai-img-btn ai-img-btn--approve">
                                   <Check size={10} />
                                 </button>
                               )}
                               {imgStatus !== "rejected" && (
-                                <button type="button" onClick={() => reviewImage.mutate({ productId, draftId: imgId, action: "reject" })} disabled={reviewImage.isPending} title="Отклонить" style={{ width: 18, height: 18, borderRadius: 3, border: "none", background: "rgba(239,68,68,0.85)", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0 }}>
+                                <button type="button" onClick={() => reviewImage.mutate({ productId, draftId: imgId, action: "reject" })} disabled={reviewImage.isPending} title="Отклонить" className="ai-img-btn ai-img-btn--reject">
                                   <X size={10} />
                                 </button>
                               )}
                               {imgStatus === "approved" && (
-                                <button type="button" onClick={() => sendImage.mutate({ productId, draftId: imgId })} disabled={sendImage.isPending} title="Отправить на Yandex" style={{ width: 18, height: 18, borderRadius: 3, border: "none", background: "rgba(168,85,247,0.9)", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0 }}>
+                                <button type="button" onClick={() => sendImage.mutate({ productId, draftId: imgId })} disabled={sendImage.isPending} title="Отправить на Yandex" className="ai-img-btn ai-img-btn--send">
                                   <Send size={10} />
                                 </button>
                               )}
