@@ -677,9 +677,8 @@ async function getYandexPriceQuarantine(shop) {
   const items = [];
   let pageToken = "";
   for (;;) {
-    const params = new URLSearchParams({ limit: "200" });
-    if (pageToken) params.set("pageToken", pageToken);
-    const data = await yandexRequest(shop, "GET", `/v2/businesses/${shop.businessId}/price-quarantine?${params}`);
+    const body = { limit: 200, ...(pageToken ? { page_token: pageToken } : {}) };
+    const data = await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/price-quarantine`, body);
     const page = data?.result?.offerPrices || data?.offerPrices || [];
     items.push(...page);
     pageToken = data?.result?.paging?.nextPageToken || data?.paging?.nextPageToken || "";
