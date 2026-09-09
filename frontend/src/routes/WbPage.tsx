@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Archive, Image, Loader2, Package, RefreshCw, Save, Send, Warehouse, Zap } from "lucide-react";
+import { AlertTriangle, Archive, Image, Loader2, Package, RefreshCw, Save, Send, Warehouse, X, Zap } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
 import { useDebounced } from "../lib/common";
@@ -232,10 +232,18 @@ export function WbPage() {
     mutationFn: () => apiJson<{ ok: boolean; updated: number; missingTnved: number }>("/api/wb/tnved/backfill", { method: "POST", body: JSON.stringify({ limit: 20000 }) }),
   });
 
+  const [statusFilter, setStatusFilter] = useState<"all" | "no-photo" | "errors">("all");
+
   const cards = cardsQuery.data?.cards || [];
   const withPhoto = cards.filter((c) => (c.photos || []).length > 0).length;
   const withoutPhoto = cards.length - withPhoto;
   const cardErrors = errorsQuery.data?.errors || [];
+  const errorVendorCodes = new Set(cardErrors.map((e) => e.vendorCode).filter(Boolean));
+  const filteredCards = statusFilter === "no-photo"
+    ? cards.filter((c) => !(c.photos || []).length)
+    : statusFilter === "errors"
+      ? cards.filter((c) => errorVendorCodes.has(c.vendorCode))
+      : cards;
   const warehouses = warehousesQuery.data?.warehouses || [];
 
   const pricesProgress = pricesStatusQuery.data;
@@ -354,11 +362,29 @@ export function WbPage() {
       ) : null}
 
       <section className="dashboard-metrics">
-        <Stat label="Карточек WB" value={cardsQuery.isFetching ? "…" : cards.length} tone="accent" icon={<Package size={18} />} />
-        <Stat label="С фото" value={cardsQuery.isFetching ? "…" : withPhoto} tone="success" icon={<Image size={18} />} />
-        <Stat label="Без фото" value={cardsQuery.isFetching ? "…" : withoutPhoto} tone={withoutPhoto > 0 ? "warn" : undefined} icon={<Image size={18} />} />
-        <Stat label="Ошибки создания" value={errorsQuery.isFetching ? "…" : cardErrors.length} tone={cardErrors.length > 0 ? "warn" : undefined} icon={<AlertTriangle size={18} />} />
+        <div role="button" tabIndex={0} className="stat-filter-btn" onClick={() => setStatusFilter("all")} onKeyDown={(e) => e.key === "Enter" && setStatusFilter("all")} style={statusFilter === "all" ? { outline: "2px solid var(--primary)", borderRadius: 8 } : undefined}>
+          <Stat label="Карточек WB" value={cardsQuery.isFetching ? "…" : cards.length} tone="accent" icon={<Package size={18} />} />
+        </div>
+        <div role="button" tabIndex={0} className="stat-filter-btn" onClick={() => setStatusFilter("all")} onKeyDown={(e) => e.key === "Enter" && setStatusFilter("all")}>
+          <Stat label="С фото" value={cardsQuery.isFetching ? "…" : withPhoto} tone="success" icon={<Image size={18} />} />
+        </div>
+        <div role="button" tabIndex={0} className="stat-filter-btn" onClick={() => setStatusFilter(statusFilter === "no-photo" ? "all" : "no-photo")} onKeyDown={(e) => e.key === "Enter" && setStatusFilter(statusFilter === "no-photo" ? "all" : "no-photo")} style={statusFilter === "no-photo" ? { outline: "2px solid var(--warn)", borderRadius: 8 } : undefined}>
+          <Stat label="Без фото" value={cardsQuery.isFetching ? "…" : withoutPhoto} tone={withoutPhoto > 0 ? "warn" : undefined} icon={<Image size={18} />} />
+        </div>
+        <div role="button" tabIndex={0} className="stat-filter-btn" onClick={() => setStatusFilter(statusFilter === "errors" ? "all" : "errors")} onKeyDown={(e) => e.key === "Enter" && setStatusFilter(statusFilter === "errors" ? "all" : "errors")} style={statusFilter === "errors" ? { outline: "2px solid var(--danger)", borderRadius: 8 } : undefined}>
+          <Stat label="Ошибки создания" value={errorsQuery.isFetching ? "…" : cardErrors.length} tone={cardErrors.length > 0 ? "warn" : undefined} icon={<AlertTriangle size={18} />} />
+        </div>
       </section>
+      {statusFilter !== "all" && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", background: "rgba(255,255,255,.04)", border: "1px solid var(--border)", borderRadius: 8 }}>
+          <span style={{ fontSize: 13, color: "var(--muted)" }}>
+            Фильтр: <strong style={{ color: "var(--text)" }}>{statusFilter === "no-photo" ? `Без фото (${filteredCards.length})` : `С ошибками (${filteredCards.length})`}</strong>
+          </span>
+          <button type="button" className="secondary-action" style={{ padding: "2px 8px", fontSize: 12 }} onClick={() => setStatusFilter("all")}>
+            <X size={12} /> Сбросить
+          </button>
+        </div>
+      )}
 
       {sendPrices.data && !("async" in sendPrices.data) && !sendPrices.data.dryRun ? (
         <div className="info-strip success">
@@ -404,10 +430,11 @@ export function WbPage() {
               <div className="wb-cards-head">
                 <span>Фото</span><span>NM ID</span><span>Артикул</span><span>Название</span><span>Предмет</span>
               </div>
-              {cards.slice(0, 500).map((card) => {
+              {filteredCards.slice(0, 500).map((card) => {
                 const photo = cardPhotoUrl(card);
+                const cardErrs = cardErrors.filter((e) => e.vendorCode === card.vendorCode);
                 return (
-                  <div className="wb-card-row" key={card.nmID}>
+                  <div className={`wb-card-row${cardErrs.length ? " wb-card-row--error" : ""}${!photo ? " wb-card-row--no-photo" : ""}`} key={card.nmID}>
                     <span className="wb-card-photo">
                       {photo ? (
                         <img src={photo} alt="" loading="lazy" className="wb-card-thumb" />
@@ -420,13 +447,20 @@ export function WbPage() {
                         {card.nmID}
                       </a>
                     </span>
-                    <span className="wb-card-vendor">{card.vendorCode}</span>
+                    <span className="wb-card-vendor">
+                      {card.vendorCode}
+                      {cardErrs.length > 0 && (
+                        <span title={cardErrs.flatMap((e) => e.errors || []).join("; ")} style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, padding: "1px 5px", borderRadius: 4, background: "rgba(239,68,68,.15)", color: "#f87171", border: "1px solid rgba(239,68,68,.25)", cursor: "help" }}>
+                          ошибка
+                        </span>
+                      )}
+                    </span>
                     <span className="wb-card-title">{card.title || "—"}</span>
                     <span className="wb-card-subject muted">{card.subjectName || "—"}</span>
                   </div>
                 );
               })}
-              {cards.length > 500 ? <div className="table-note">Показано 500 из {cards.length}. Используйте поиск для фильтрации.</div> : null}
+              {filteredCards.length > 500 ? <div className="table-note">Показано 500 из {filteredCards.length}. Используйте поиск для фильтрации.</div> : null}
             </div>
           )}
 

@@ -8087,6 +8087,9 @@ textarea:focus-visible,
 .wb-cards-head { display: grid; grid-template-columns: 48px 90px 150px 1fr 120px; gap: 8px; padding: 6px 8px; font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--line); font-weight: 600; }
 .wb-card-row { display: grid; grid-template-columns: 48px 90px 150px 1fr 120px; gap: 8px; padding: 6px 8px; align-items: center; border-bottom: 1px solid rgba(var(--line-rgb), 0.4); font-size: 12.5px; }
 .wb-card-row:hover { background: var(--hover-bg); }
+.wb-card-row--error { background: rgba(239,68,68,.04); }
+.wb-card-row--error:hover { background: rgba(239,68,68,.08); }
+.wb-card-row--no-photo .wb-card-no-photo { background: rgba(251,146,60,.12); color: #fb923c; }
 .wb-card-photo { display: flex; align-items: center; }
 .wb-card-thumb { width: 40px; height: 40px; object-fit: cover; border-radius: 6px; display: block; }
 .wb-card-no-photo { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; background: var(--line); border-radius: 6px; color: var(--muted); }
