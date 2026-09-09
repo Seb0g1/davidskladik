@@ -622,6 +622,11 @@ export default function HomePage() {
       {/* ── Cursor aura ─────────────────────────────────────────── */}
       <div ref={auraRef} aria-hidden="true" className="cursor-aura" />
 
+      {/* ════════════════════ BANNERS ════════════════════ */}
+      <section style={{ padding: "clamp(16px,3vw,32px) clamp(18px,4vw,56px) 0" }}>
+        <BannerSlider />
+      </section>
+
       {/* ════════════════════ HERO ════════════════════ */}
       <section style={{ position: "relative", overflow: "hidden", minHeight: "84vh", display: "flex", alignItems: "center", justifyContent: "center", padding: "9vh clamp(18px,4vw,56px)" }}>
         <HeroShader />
@@ -931,11 +936,6 @@ export default function HomePage() {
             </div>
           ))}
         </div>
-      </section>
-
-      {/* ════════════════════ BANNERS ════════════════════ */}
-      <section style={{ padding: "clamp(24px,4vw,48px) clamp(18px,4vw,56px) 0" }}>
-        <BannerSlider />
       </section>
 
       {/* ════════════════════ BRAND GALLERY ════════════════════ */}
