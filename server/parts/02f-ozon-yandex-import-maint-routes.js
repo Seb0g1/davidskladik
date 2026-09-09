@@ -300,6 +300,58 @@ app.post("/api/ozon-yandex-import/fix-yandex-categories", requireAdmin, async (r
   }
 });
 
+// Zero ALL non-Sorin products on the Ozon Express warehouse.
+// Body: { dryRun?: boolean }
+app.post("/api/ozon/zero-express-stock", requireAdmin, async (request, response, next) => {
+  try {
+    const dryRun = request.body?.dryRun !== false;
+    const result = await zeroAllNonSorinExpressStock({ dryRun });
+    response.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Fast targeted category assignment for specific offer IDs — no full mapping pull.
+// Body: { offerIds: string[], marketCategoryId: number, dryRun?: boolean }
+app.post("/api/ozon-yandex-import/set-offer-categories", requireAdmin, async (request, response, next) => {
+  try {
+    const { offerIds, marketCategoryId, dryRun = false } = request.body || {};
+    if (!Array.isArray(offerIds) || !offerIds.length) return response.status(400).json({ error: "offerIds required" });
+    if (!Number.isInteger(marketCategoryId) || marketCategoryId <= 0) return response.status(400).json({ error: "marketCategoryId must be a positive integer" });
+
+    const shops = uniqueYandexShopsByBusiness
+      ? uniqueYandexShopsByBusiness()
+      : getYandexShops().filter((shop) => shop.apiKey && shop.businessId);
+    if (!shops.length) return response.status(400).json({ error: "Yandex Market не настроен." });
+
+    const payload = offerIds.map((id) => ({ offerId: String(id), marketCategoryId }));
+    const results = [];
+
+    if (!dryRun) {
+      for (const shop of shops) {
+        for (const chunk of chunkArray(payload, 500)) {
+          const sent = await sendYandexOfferMappings(shop, chunk);
+          results.push(...sent.map((item) => ({ ...item, shop: shop.id })));
+        }
+      }
+    }
+
+    response.json({
+      ok: dryRun || results.every((item) => item.ok),
+      dryRun,
+      offerCount: offerIds.length,
+      marketCategoryId,
+      shops: shops.map((s) => s.id),
+      sent: results.filter((item) => item.ok).length,
+      failed: results.filter((item) => !item.ok).length,
+      errors: results.filter((item) => !item.ok),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Sync names (and vendor/description) from Ozon products to their Yandex counterparts
 // where the stored name differs. Sends a content-mode partial update to the Yandex API.
 app.post("/api/ozon-yandex-import/sync-names", requireAdmin, async (request, response, next) => {

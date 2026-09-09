@@ -6,6 +6,7 @@ import {
   ChevronLeft, ChevronRight, Check, RefreshCw,
   LayoutDashboard, Settings, Tag, Image, ClipboardList, UserCheck,
   ChevronDown, ChevronUp, Newspaper, Star, Eye, EyeOff, MessageSquare, Bell, Video, BookOpen,
+  ToggleLeft, ToggleRight, Percent, Mail, Copy,
 } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
@@ -15,6 +16,7 @@ import { Stat } from "../components/Stat";
 interface ShopBanner {
   id: string; imageUrl: string; title?: string; subtitle?: string;
   linkUrl?: string; linkText?: string; endDate?: string; active: boolean; order: number;
+  promoCode?: string;
 }
 interface HolidayPreset {
   key: string; name: string; emoji: string;
@@ -43,6 +45,7 @@ interface ShopOrder {
   delivery: { firstName?: string; lastName?: string; phone?: string; email?: string; city?: string; address?: string; pvz?: string };
   comment?: string; createdAt: string;
   customer?: { id: string; email: string; firstName?: string; lastName?: string } | null;
+  promoCode?: string | null; refCode?: string | null;
 }
 interface Stats {
   totalOrders: number; totalCustomers: number; todayOrders: number;
@@ -247,6 +250,8 @@ function OrdersTab() {
                           </div>
                         ) : null)}
                         {o.comment && <div style={{ marginTop: 8, fontStyle: "italic", color: "var(--muted)", fontSize: 12 }}>Комментарий: {o.comment}</div>}
+                        {o.promoCode && <div style={{ marginTop: 6, fontSize: 11 }}>Промокод: <code style={{ fontFamily: "monospace", color: "var(--accent)", background: "rgba(0,0,0,0.3)", padding: "1px 6px", borderRadius: 3 }}>{o.promoCode}</code></div>}
+                        {o.refCode && <div style={{ marginTop: 4, fontSize: 11 }}>Реферал: <code style={{ fontFamily: "monospace", color: "#7dd3fc", background: "rgba(0,0,0,0.3)", padding: "1px 6px", borderRadius: 3 }}>{o.refCode}</code></div>}
                       </dl>
                     </div>
                     <div>
@@ -488,7 +493,7 @@ function BannerForm({ banner, onSave, onCancel, saving }: {
   banner?: Partial<ShopBanner>; onSave: (d: Partial<ShopBanner>) => void; onCancel: () => void; saving?: boolean;
 }) {
   const [form, setForm] = useState<Partial<ShopBanner>>({
-    imageUrl: "", title: "", subtitle: "", linkUrl: "", linkText: "", endDate: "", active: true, ...banner,
+    imageUrl: "", title: "", subtitle: "", linkUrl: "", linkText: "", endDate: "", promoCode: "", active: true, ...banner,
   });
   const set = (k: keyof ShopBanner) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
@@ -506,10 +511,16 @@ function BannerForm({ banner, onSave, onCancel, saving }: {
           ["subtitle", "Подзаголовок", "Скидки до 50%"],
           ["linkUrl", "Ссылка", "/catalog/sale"],
           ["linkText", "Текст кнопки", "Смотреть акции"],
+          ["promoCode", "Промокод в баннере (необязательно)", "SUMMER20"],
         ] as const).map(([key, label, placeholder]) => (
           <div key={key} className="mv-field">
             <label>{label}</label>
-            <input value={(form[key] as string) ?? ""} onChange={set(key)} placeholder={placeholder} />
+            <input
+              value={(form[key] as string) ?? ""}
+              onChange={set(key)}
+              placeholder={placeholder}
+              style={key === "promoCode" ? { fontFamily: "monospace", textTransform: "uppercase", letterSpacing: "0.08em" } : undefined}
+            />
           </div>
         ))}
         <div className="mv-field">
@@ -1454,6 +1465,278 @@ function EmailSequencesTab() {
   );
 }
 
+// ── PromocodesTab ─────────────────────────────────────────────────────────────
+
+interface PromoCode {
+  id: string; code: string; discountPct: number; active: boolean;
+  usageLimit: number | null; usageCount: number; note?: string | null;
+  expiresAt?: string | null; builtin?: boolean; createdAt?: string;
+}
+
+function PromocodesTab() {
+  const qc = useQueryClient();
+  const [creating, setCreating] = useState(false);
+  const [newForm, setNewForm] = useState({ code: "", discountPct: 10, note: "", usageLimit: "", expiresAt: "" });
+  const [copied, setCopied] = useState<string | null>(null);
+
+  const { data, isLoading, refetch } = useQuery<{ ok: boolean; codes: PromoCode[] }>({
+    queryKey: ["shop-admin-promo-codes"],
+    queryFn: () => apiFetch<{ ok: boolean; codes: PromoCode[] }>("/api/shop/admin/promo-codes"),
+  });
+
+  const toggleMut = useMutation({
+    mutationFn: ({ id, active }: { id: string; active: boolean }) =>
+      apiFetch<{ ok: boolean }>(`/api/shop/admin/promo-codes/${id}`, { method: "PATCH", body: JSON.stringify({ active }) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["shop-admin-promo-codes"] }),
+  });
+
+  const createMut = useMutation({
+    mutationFn: (d: object) => apiFetch<{ ok: boolean; code: PromoCode }>("/api/shop/admin/promo-codes", {
+      method: "POST", body: JSON.stringify(d),
+    }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["shop-admin-promo-codes"] }); setCreating(false); setNewForm({ code: "", discountPct: 10, note: "", usageLimit: "", expiresAt: "" }); },
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => apiFetch<{ ok: boolean }>(`/api/shop/admin/promo-codes/${id}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["shop-admin-promo-codes"] }),
+  });
+
+  function copyCode(code: string) {
+    navigator.clipboard.writeText(code).catch(() => {});
+    setCopied(code);
+    setTimeout(() => setCopied(null), 1500);
+  }
+
+  const codes = data?.codes ?? [];
+  const activeCodes = codes.filter(c => c.active);
+
+  return (
+    <div className="page-section">
+      <div className="section-title">
+        <div>
+          <h2>Промокоды</h2>
+          <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 3 }}>
+            Активных: <strong style={{ color: "var(--success)" }}>{activeCodes.length}</strong> из {codes.length}
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => void refetch()} disabled={isLoading} className="secondary-action" type="button">
+            <RefreshCw size={14} className={isLoading ? "spin" : ""} />
+          </button>
+          <button onClick={() => setCreating(true)} className="primary-action" type="button">
+            <Plus size={15} /> Создать промокод
+          </button>
+        </div>
+      </div>
+
+      {/* Warning if all disabled */}
+      {codes.length > 0 && activeCodes.length === 0 && (
+        <div style={{ padding: "10px 14px", borderRadius: 8, background: "rgba(251,191,36,.07)", border: "1px solid rgba(251,191,36,.3)", fontSize: 12, color: "#fbbf24", marginBottom: 16 }}>
+          ⚠ Все промокоды отключены — покупатели не смогут получить скидку
+        </div>
+      )}
+
+      {/* Create form */}
+      {creating && (
+        <div className="mv-form-section" style={{ marginBottom: 20 }}>
+          <h3>Новый промокод</h3>
+          <div className="mv-field-grid">
+            <div className="mv-field">
+              <label>Код (латиницей, без пробелов)</label>
+              <input
+                value={newForm.code}
+                onChange={e => setNewForm(f => ({ ...f, code: e.target.value.toUpperCase().replace(/\s+/g, "") }))}
+                placeholder="SUMMER20"
+                style={{ fontFamily: "monospace", letterSpacing: "0.08em" }}
+                maxLength={32}
+              />
+            </div>
+            <div className="mv-field">
+              <label>Скидка (%)</label>
+              <input type="number" min={1} max={100} value={newForm.discountPct}
+                onChange={e => setNewForm(f => ({ ...f, discountPct: Number(e.target.value) }))} />
+            </div>
+            <div className="mv-field">
+              <label>Описание (для себя)</label>
+              <input value={newForm.note} onChange={e => setNewForm(f => ({ ...f, note: e.target.value }))} placeholder="Летняя акция 2026" />
+            </div>
+            <div className="mv-field">
+              <label>Лимит использований (пусто = безлимит)</label>
+              <input type="number" min={1} value={newForm.usageLimit}
+                onChange={e => setNewForm(f => ({ ...f, usageLimit: e.target.value }))} placeholder="100" />
+            </div>
+            <div className="mv-field">
+              <label>Действует до (необязательно)</label>
+              <input type="datetime-local" value={newForm.expiresAt}
+                onChange={e => setNewForm(f => ({ ...f, expiresAt: e.target.value }))} />
+            </div>
+          </div>
+          {createMut.isError && <div className="inline-error">{String(createMut.error)}</div>}
+          <div className="row-actions">
+            <button
+              onClick={() => createMut.mutate({ code: newForm.code, discountPct: newForm.discountPct, note: newForm.note || null, usageLimit: newForm.usageLimit ? Number(newForm.usageLimit) : null, expiresAt: newForm.expiresAt || null })}
+              disabled={createMut.isPending || !newForm.code.trim()}
+              className="primary-action"
+            >
+              {createMut.isPending ? <Loader2 size={14} className="spin" /> : <Save size={14} />} Создать
+            </button>
+            <button onClick={() => setCreating(false)} className="secondary-action"><X size={14} /> Отмена</button>
+          </div>
+        </div>
+      )}
+
+      {isLoading ? (
+        <div className="list-loading"><Loader2 size={16} className="spin" /> Загружаю промокоды…</div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <div className="table-panel" style={{ minWidth: 600 }}>
+            <div className="table-head" style={{ display: "grid", gridTemplateColumns: "minmax(120px,.8fr) minmax(60px,.35fr) minmax(180px,1.5fr) minmax(80px,.5fr) minmax(80px,.5fr) 80px 60px", gap: 10 }}>
+              <span>Промокод</span><span>Скидка</span><span>Описание</span><span>Использований</span><span>Истекает</span><span>Статус</span><span />
+            </div>
+            {codes.map((c) => (
+              <div key={c.id} className="table-row" style={{ display: "grid", gridTemplateColumns: "minmax(120px,.8fr) minmax(60px,.35fr) minmax(180px,1.5fr) minmax(80px,.5fr) minmax(80px,.5fr) 80px 60px", gap: 10, alignItems: "center" }}>
+                <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <code style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, letterSpacing: "0.08em", color: c.active ? "var(--accent)" : "var(--muted)", background: "rgba(0,0,0,0.3)", padding: "2px 8px", borderRadius: 4 }}>
+                    {c.code}
+                  </code>
+                  {c.builtin && <span style={{ fontSize: 9, letterSpacing: "0.1em", color: "var(--muted)", background: "rgba(255,255,255,0.06)", border: "1px solid var(--border)", borderRadius: 2, padding: "1px 5px" }}>ВСТРОЕН</span>}
+                  <button type="button" onClick={() => copyCode(c.code)} title="Скопировать" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", padding: 2 }}>
+                    {copied === c.code ? <Check size={12} style={{ color: "var(--success)" }} /> : <Copy size={12} />}
+                  </button>
+                </span>
+                <span style={{ fontWeight: 700, color: "var(--accent)", fontSize: 14 }}>
+                  <Percent size={11} style={{ verticalAlign: "middle", marginRight: 1 }} />{c.discountPct}
+                </span>
+                <span style={{ fontSize: 12, color: "var(--muted)" }}>{c.note || "—"}</span>
+                <span style={{ fontSize: 12 }}>
+                  {c.usageCount}
+                  {c.usageLimit !== null && <span style={{ color: "var(--muted)" }}> / {c.usageLimit}</span>}
+                </span>
+                <span style={{ fontSize: 11, color: "var(--muted)" }}>
+                  {c.expiresAt ? new Date(c.expiresAt) < new Date()
+                    ? <span style={{ color: "var(--danger)" }}>Истёк</span>
+                    : fmtDate(c.expiresAt)
+                  : "Бессрочно"}
+                </span>
+                <span>
+                  <button
+                    type="button"
+                    onClick={() => toggleMut.mutate({ id: c.id, active: !c.active })}
+                    disabled={toggleMut.isPending}
+                    title={c.active ? "Отключить" : "Включить"}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 5,
+                      background: c.active ? "rgba(74,222,128,0.12)" : "rgba(255,255,255,0.06)",
+                      border: `1px solid ${c.active ? "rgba(74,222,128,0.3)" : "var(--border)"}`,
+                      borderRadius: 6, padding: "4px 10px", cursor: "pointer",
+                      fontSize: 11, color: c.active ? "#4ade80" : "var(--muted)", fontWeight: 600,
+                    }}
+                  >
+                    {c.active ? <><ToggleRight size={13} /> Вкл</> : <><ToggleLeft size={13} /> Выкл</>}
+                  </button>
+                </span>
+                <span style={{ display: "flex", gap: 4 }}>
+                  {!c.builtin && (
+                    <button
+                      type="button"
+                      onClick={() => { if (confirm(`Удалить промокод ${c.code}?`)) deleteMut.mutate(c.id); }}
+                      disabled={deleteMut.isPending}
+                      className="icon-action danger"
+                      title="Удалить"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  )}
+                </span>
+              </div>
+            ))}
+            {codes.length === 0 && (
+              <div className="soft-empty"><Tag size={18} /> Промокодов нет</div>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div style={{ marginTop: 20, padding: "12px 16px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, fontSize: 12, color: "var(--muted)", lineHeight: 1.7 }}>
+        <strong style={{ color: "var(--text)" }}>Встроенные промокоды</strong> нельзя удалить, только отключить.<br />
+        <strong style={{ color: "var(--accent)" }}>VIBES10</strong> — попап на сайте, −10%. <strong style={{ color: "var(--accent)" }}>QUIZ10</strong> — квиз, −10%. <strong style={{ color: "var(--accent)" }}>REVIEW5</strong> — отзыв, −5%. <strong style={{ color: "var(--accent)" }}>UNBOX7</strong> — анбоксинг, −7%.<br />
+        Промокод применяется в корзине покупателем при оформлении заказа.
+      </div>
+    </div>
+  );
+}
+
+// ── EmailSubscribersTab ───────────────────────────────────────────────────────
+
+interface EmailSubscriber {
+  id: string; email: string; source: string;
+  quizCategory?: string | null; promoSent: boolean;
+  unsubscribed: boolean; createdAt: string;
+}
+
+function EmailSubscribersTab() {
+  const [page, setPage] = useState(1);
+  const [sourceFilter, setSourceFilter] = useState("");
+
+  const { data, isLoading } = useQuery<{ ok: boolean; subscribers: EmailSubscriber[]; total: number }>({
+    queryKey: ["shop-admin-email-subscribers", { page, sourceFilter }],
+    queryFn: () => apiFetch<{ ok: boolean; subscribers: EmailSubscriber[]; total: number }>(
+      `/api/shop/admin/email-subscribers-list?page=${page}${sourceFilter ? `&source=${sourceFilter}` : ""}`
+    ),
+  });
+
+  const COL = "minmax(180px,1.5fr) minmax(80px,.5fr) minmax(120px,.8fr) minmax(80px,.5fr) minmax(120px,.8fr)";
+
+  return (
+    <div className="page-section">
+      <div className="section-title" style={{ flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <h2>Email-подписчики</h2>
+          <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 3 }}>Всего: {data?.total ?? "…"}</p>
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {["", "popup", "quiz"].map(s => (
+            <button key={s} onClick={() => { setSourceFilter(s); setPage(1); }}
+              className={`secondary-action${sourceFilter === s ? " is-active" : ""}`}
+              style={{ minHeight: 32, padding: "5px 10px", fontSize: 12 }}>
+              {s === "" ? "Все" : s === "popup" ? "Попап" : "Квиз"}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {isLoading ? (
+        <div className="list-loading"><Loader2 size={16} className="spin" /> Загружаю…</div>
+      ) : !data?.subscribers.length ? (
+        <div className="soft-empty"><Mail size={18} /> Подписчиков нет</div>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <div className="table-panel" style={{ minWidth: 560 }}>
+            <div className="table-head" style={{ display: "grid", gridTemplateColumns: COL, gap: 10 }}>
+              <span>Email</span><span>Источник</span><span>Квиз</span><span>Промокод</span><span>Дата</span>
+            </div>
+            {data.subscribers.map(s => (
+              <div key={s.id} className="table-row" style={{ display: "grid", gridTemplateColumns: COL, gap: 10 }}>
+                <span style={{ fontSize: 13 }}>{s.email}</span>
+                <span>
+                  <span className={`pill ${s.source === "popup" ? "info" : ""}`}>{s.source}</span>
+                </span>
+                <span style={{ fontSize: 12, color: "var(--muted)" }}>{s.quizCategory || "—"}</span>
+                <span>
+                  <span className={`pill ${s.promoSent ? "success" : "warn"}`}>{s.promoSent ? "Отправлен" : "Не отправлен"}</span>
+                </span>
+                <span style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(s.createdAt)}</span>
+              </div>
+            ))}
+            <Pagination page={page} total={data.total} pageSize={50} onChange={setPage} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 // ── PushTab ───────────────────────────────────────────────────────────────────
@@ -1558,7 +1841,7 @@ function PushTab() {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
-type Tab = "dashboard" | "orders" | "customers" | "banners" | "categories" | "news" | "reviews" | "unboxings" | "blog" | "emails" | "push" | "settings";
+type Tab = "dashboard" | "orders" | "customers" | "banners" | "categories" | "news" | "reviews" | "unboxings" | "blog" | "emails" | "push" | "promocodes" | "subscribers" | "settings";
 
 const TABS: { id: Tab; label: string; icon: React.ComponentType<{ size?: number }> }[] = [
   { id: "dashboard", label: "Обзор", icon: LayoutDashboard },
@@ -1566,6 +1849,8 @@ const TABS: { id: Tab; label: string; icon: React.ComponentType<{ size?: number 
   { id: "customers", label: "Покупатели", icon: UserCheck },
   { id: "banners", label: "Баннеры", icon: Image },
   { id: "categories", label: "Категории", icon: Tag },
+  { id: "promocodes", label: "Промокоды", icon: Percent },
+  { id: "subscribers", label: "Подписчики", icon: Mail },
   { id: "news", label: "Новости", icon: Newspaper },
   { id: "reviews", label: "Отзывы", icon: Star },
   { id: "unboxings", label: "Анбоксинг", icon: Video },
@@ -1615,6 +1900,8 @@ export default function ShopAdminPage() {
       {tab === "blog" && <BlogTab />}
       {tab === "emails" && <EmailSequencesTab />}
       {tab === "push" && <PushTab />}
+      {tab === "promocodes" && <PromocodesTab />}
+      {tab === "subscribers" && <EmailSubscribersTab />}
       {tab === "settings" && <SettingsTab />}
     </section>
   );

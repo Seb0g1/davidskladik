@@ -148,15 +148,10 @@ export default function PopupPromo() {
           </>
         ) : (
           <div style={{ paddingTop: 4 }}>
-            <p style={{ margin: "0 0 10px", fontSize: 13, color: "#8b8880" }}>Ваш промокод:</p>
-            <p style={{
-              margin: "0 0 14px",
-              fontFamily: "'Cormorant Garamond',Georgia,serif",
-              fontStyle: "italic",
-              fontSize: 36, color: "#c9a25e",
-              letterSpacing: "0.12em",
-            }}>VIBES10</p>
-            <p style={{ margin: 0, fontSize: 13, color: "#6f6c66" }}>Введите его при оформлении заказа</p>
+            <div style={{ margin: "0 0 14px", width: 40, height: 40, borderRadius: "50%", background: "rgba(74,222,128,0.12)", border: "1px solid rgba(74,222,128,0.3)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>✓</div>
+            <p style={{ margin: "0 0 8px", fontSize: 15, fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", color: "#f2ede6" }}>Промокод отправлен!</p>
+            <p style={{ margin: "0 0 14px", fontSize: 13, color: "#8b8880", lineHeight: 1.6 }}>Проверьте вашу почту — письмо с промокодом на <strong style={{ color: "#c9a25e" }}>−10%</strong> уже в пути.</p>
+            <p style={{ margin: 0, fontSize: 11, color: "#3a3730" }}>Не пришло? Проверьте папку «Спам»</p>
           </div>
         )}
       </div>

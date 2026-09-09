@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
-import { ChevronLeft, Loader2, Shield, Lock, MapPin, ChevronRight } from "lucide-react";
+import { ChevronLeft, Loader2, Shield, Lock, MapPin, ChevronRight, Tag, Check, X } from "lucide-react";
 import { api } from "../api";
 import { useCart } from "../CartContext";
 import { useAuth } from "../AuthContext";
@@ -84,7 +84,34 @@ export default function CheckoutPage() {
   const deliveryCost = 0;
   const refCode = localStorage.getItem("shopRefCode") || undefined;
   const refDiscount = refCode ? Math.round(totalRub * 0.07) : 0;
-  const total = totalRub + deliveryCost - refDiscount;
+
+  // Promo code state
+  const [promoInput, setPromoInput] = useState("");
+  const [promoValidating, setPromoValidating] = useState(false);
+  const [promoResult, setPromoResult] = useState<{ valid: boolean; discountPct?: number; code?: string } | null>(null);
+  const promoRef = useRef<HTMLInputElement>(null);
+
+  const promoDiscount = (promoResult?.valid && !refCode) ? Math.round(totalRub * (promoResult.discountPct ?? 0) / 100) : 0;
+  const total = totalRub + deliveryCost - refDiscount - promoDiscount;
+
+  async function applyPromo() {
+    const code = promoInput.trim().toUpperCase();
+    if (!code) return;
+    setPromoValidating(true);
+    try {
+      const r = await fetch((import.meta.env.VITE_API_BASE ?? "") + "/api/shop/promo/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code }),
+      });
+      const data = await r.json();
+      setPromoResult(data.valid ? { valid: true, discountPct: data.discountPct, code: data.code } : { valid: false });
+    } catch {
+      setPromoResult({ valid: false });
+    } finally {
+      setPromoValidating(false);
+    }
+  }
 
   const mutation = useMutation({
     mutationFn: () => api.createOrder({
@@ -101,6 +128,7 @@ export default function CheckoutPage() {
       },
       comment: form.comment || undefined,
       refCode,
+      promoCode: promoResult?.valid ? promoResult.code : undefined,
     }, token ?? undefined),
     onSuccess: (order) => {
       clear();
@@ -238,6 +266,48 @@ export default function CheckoutPage() {
                 ))}
               </div>
 
+              {/* Promo code input */}
+              {!refCode && (
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <div style={{ position: "relative", flex: 1 }}>
+                      <Tag size={13} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: S.subtle, pointerEvents: "none" }} />
+                      <input
+                        ref={promoRef}
+                        type="text"
+                        value={promoInput}
+                        onChange={e => { setPromoInput(e.target.value.toUpperCase()); setPromoResult(null); }}
+                        onKeyDown={e => e.key === "Enter" && applyPromo()}
+                        placeholder="Промокод"
+                        maxLength={32}
+                        disabled={promoResult?.valid}
+                        style={{
+                          width: "100%", paddingLeft: 34, paddingRight: 12, paddingTop: 10, paddingBottom: 10,
+                          fontSize: 12, fontFamily: "monospace", letterSpacing: "0.08em",
+                          background: promoResult?.valid ? "rgba(74,222,128,0.06)" : "rgba(255,255,255,0.04)",
+                          border: `1.5px solid ${promoResult === null ? S.border : promoResult.valid ? "rgba(74,222,128,0.4)" : "rgba(239,68,68,0.4)"}`,
+                          borderRadius: 10, color: S.text, outline: "none",
+                        }}
+                      />
+                    </div>
+                    {promoResult?.valid
+                      ? <button type="button" onClick={() => { setPromoResult(null); setPromoInput(""); }} style={{ background: "rgba(255,255,255,0.06)", border: `1px solid ${S.border}`, borderRadius: 8, padding: "9px 12px", color: S.muted, cursor: "pointer" }}><X size={13} /></button>
+                      : <button type="button" onClick={applyPromo} disabled={!promoInput.trim() || promoValidating} style={{ background: "#c9a25e", color: "#09090b", border: "none", borderRadius: 8, padding: "9px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", opacity: (!promoInput.trim() || promoValidating) ? 0.5 : 1 }}>
+                          {promoValidating ? <Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> : "Применить"}
+                        </button>
+                    }
+                  </div>
+                  {promoResult?.valid && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 6, fontSize: 12, color: "#4ade80" }}>
+                      <Check size={12} /> Промокод <strong>{promoResult.code}</strong> применён — скидка {promoResult.discountPct}%
+                    </div>
+                  )}
+                  {promoResult !== null && !promoResult.valid && (
+                    <div style={{ marginTop: 6, fontSize: 12, color: "#f87171" }}>Промокод не найден или недействителен</div>
+                  )}
+                </div>
+              )}
+
               <div style={{ borderTop: `1px solid ${S.border}`, paddingTop: 14, display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: S.muted }}>
                   <span>Товары</span>
@@ -251,6 +321,12 @@ export default function CheckoutPage() {
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
                     <span style={{ color: "#c9a25e" }}>Реферальная скидка −7%</span>
                     <span style={{ color: "#4ade80", fontWeight: 600 }}>−{refDiscount.toLocaleString("ru-RU")} ₽</span>
+                  </div>
+                )}
+                {promoDiscount > 0 && (
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                    <span style={{ color: "#c9a25e" }}>Промокод {promoResult?.code} −{promoResult?.discountPct}%</span>
+                    <span style={{ color: "#4ade80", fontWeight: 600 }}>−{promoDiscount.toLocaleString("ru-RU")} ₽</span>
                   </div>
                 )}
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 18, fontWeight: 700, color: S.text, paddingTop: 8, borderTop: `1px solid ${S.border}`, marginTop: 4 }}>

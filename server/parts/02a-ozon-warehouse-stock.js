@@ -123,16 +123,28 @@ async function getOzonWarehouses(account = null, { refresh = false } = {}) {
   return items;
 }
 
+// The Express/Sorin warehouse is managed exclusively by syncSorinExpressStocks.
+// Filter it out of every regular FBS stock sweep to avoid accidental overwrite.
+const sorinExpressOzonWarehouseIdForFilter = cleanText(
+  process.env.SORIN_EXPRESS_OZON_WAREHOUSE_ID || "1020005000398404",
+);
+function filterOutExpressWarehouse(warehouses) {
+  if (!sorinExpressOzonWarehouseIdForFilter) return warehouses;
+  return warehouses.filter((w) => cleanText(String(w.warehouseId || "")) !== sorinExpressOzonWarehouseIdForFilter);
+}
+
 async function resolveOzonStockWarehouses(account = null, product = null) {
   const configuredIds = parseOzonStockWarehouseIds(account);
   if (configuredIds.length) {
-    return configuredIds.map((warehouseId) => ({ warehouseId, warehouseName: "" }));
+    return filterOutExpressWarehouse(configuredIds.map((warehouseId) => ({ warehouseId, warehouseName: "" })));
   }
 
   const configuredNames = parseOzonStockWarehouseNames(account);
-  const storedWarehouses = Array.isArray(product?.marketplaceState?.warehouses)
-    ? product.marketplaceState.warehouses.map(normalizeOzonWarehouse).filter(Boolean)
-    : [];
+  const storedWarehouses = filterOutExpressWarehouse(
+    Array.isArray(product?.marketplaceState?.warehouses)
+      ? product.marketplaceState.warehouses.map(normalizeOzonWarehouse).filter(Boolean)
+      : [],
+  );
   if (storedWarehouses.length) {
     if (configuredNames.length) {
       const matchedStored = storedWarehouses.filter((warehouse) =>
@@ -154,7 +166,7 @@ async function resolveOzonStockWarehouses(account = null, product = null) {
   if (!ozonWarehouseListEnabled && isPrimaryAccount && storedWarehouses.length > 0 && !configuredNames.length) return [];
 
   try {
-    const warehouses = await getOzonWarehouses(account);
+    const warehouses = filterOutExpressWarehouse(await getOzonWarehouses(account));
     if (configuredNames.length) {
       return warehouses.filter((warehouse) =>
         configuredNames.some((name) => normalizeSupplierName(warehouse.warehouseName).includes(name)),

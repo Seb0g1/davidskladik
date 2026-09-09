@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Picking List — Дорожная карта улучшений</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --surface2: #1c2230;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #7d8590;
+      --accent: #388bfd;
+      --green: #3fb950;
+      --yellow: #d29922;
+      --red: #f85149;
+      --purple: #bc8cff;
+      --cyan: #39c5cf;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+      padding: 32px 20px 80px;
+      max-width: 960px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-size: 24px;
+      font-weight: 700;
+      margin-bottom: 6px;
+      color: var(--text);
+    }
+    .meta { color: var(--muted); font-size: 13px; margin-bottom: 36px; }
+
+    h2 {
+      font-size: 17px;
+      font-weight: 600;
+      margin: 36px 0 14px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 12px;
+      white-space: nowrap;
+    }
+    .badge-bug    { background: rgba(248,81,73,.15); color: var(--red); }
+    .badge-mobile { background: rgba(188,140,255,.13); color: var(--purple); }
+    .badge-design { background: rgba(57,197,207,.12); color: var(--cyan); }
+    .badge-feat   { background: rgba(63,185,80,.13); color: var(--green); }
+
+    .badge-p0 { background: rgba(248,81,73,.2); color: var(--red); }
+    .badge-p1 { background: rgba(210,153,34,.18); color: var(--yellow); }
+    .badge-p2 { background: rgba(56,139,253,.15); color: var(--accent); }
+    .badge-p3 { background: rgba(125,133,144,.12); color: var(--muted); }
+
+    .badge-xs { background: rgba(248,81,73,.13); color: var(--red); }
+    .badge-s  { background: rgba(210,153,34,.15); color: var(--yellow); }
+    .badge-m  { background: rgba(56,139,253,.13); color: var(--accent); }
+    .badge-l  { background: rgba(63,185,80,.12); color: var(--green); }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 6px;
+    }
+    th {
+      text-align: left;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      padding: 6px 10px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+    }
+    td {
+      padding: 10px 10px;
+      border-bottom: 1px solid rgba(48,54,61,.6);
+      vertical-align: top;
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(22,27,34,.7); }
+
+    .item-title {
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 3px;
+    }
+    .item-desc {
+      color: var(--muted);
+      font-size: 12.5px;
+      line-height: 1.55;
+    }
+    .file-ref {
+      display: inline-block;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 11px;
+      background: rgba(56,139,253,.1);
+      color: var(--accent);
+      padding: 1px 5px;
+      border-radius: 4px;
+      margin-top: 3px;
+    }
+
+    .section-intro {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 14px;
+      line-height: 1.7;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 28px;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .table-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      margin-bottom: 24px;
+    }
+
+    .col-num  { width: 36px; color: var(--muted); text-align: center; }
+    .col-type { width: 90px; }
+    .col-p    { width: 60px; }
+    .col-eff  { width: 60px; }
+    .col-main { }
+
+    .inline-code {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 11.5px;
+      background: rgba(255,255,255,.06);
+      padding: 1px 5px;
+      border-radius: 4px;
+      color: #e6edf3;
+    }
+
+    summary-bar {
+      display: flex;
+      gap: 24px;
+      flex-wrap: wrap;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px 20px;
+      margin-bottom: 32px;
+    }
+    summary-bar .metric {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    summary-bar .metric-val {
+      font-size: 28px;
+      font-weight: 700;
+      line-height: 1;
+    }
+    summary-bar .metric-label {
+      font-size: 12px;
+      color: var(--muted);
+    }
+  </style>
+</head>
+<body>
+
+<h1>Picking List — Дорожная карта улучшений</h1>
+<p class="meta">Аудит страницы <strong>/app/picking-list</strong> · davidsklad.ru · Дата: 7 сентября 2026</p>
+
+<div class="legend">
+  <div class="legend-item"><span class="badge badge-bug">Баг</span> некорректное поведение / данные</div>
+  <div class="legend-item"><span class="badge badge-mobile">Мобильный</span> проблема отображения на телефоне</div>
+  <div class="legend-item"><span class="badge badge-design">Дизайн</span> UX / визуальное улучшение</div>
+  <div class="legend-item"><span class="badge badge-feat">Функционал</span> новая возможность</div>
+  <div class="legend-item" style="margin-left: 12px;"><span class="badge badge-p0">P0</span> критично</div>
+  <div class="legend-item"><span class="badge badge-p1">P1</span> важно</div>
+  <div class="legend-item"><span class="badge badge-p2">P2</span> желательно</div>
+  <div class="legend-item"><span class="badge badge-p3">P3</span> идея</div>
+  <div class="legend-item" style="margin-left: 12px;"><span class="badge badge-xs">XS</span> &lt;1ч</div>
+  <div class="legend-item"><span class="badge badge-s">S</span> 1-3ч</div>
+  <div class="legend-item"><span class="badge badge-m">M</span> полдня</div>
+  <div class="legend-item"><span class="badge badge-l">L</span> 1+ день</div>
+</div>
+
+<summary-bar>
+  <div class="metric"><span class="metric-val" style="color: var(--red)">8</span><span class="metric-label">Баги</span></div>
+  <div class="metric"><span class="metric-val" style="color: var(--purple)">6</span><span class="metric-label">Mobile-проблемы</span></div>
+  <div class="metric"><span class="metric-val" style="color: var(--cyan)">8</span><span class="metric-label">Design/UX</span></div>
+  <div class="metric"><span class="metric-val" style="color: var(--green)">5</span><span class="metric-label">Функционал</span></div>
+  <div class="metric"><span class="metric-val" style="color: var(--muted)">27</span><span class="metric-label">Итого пунктов</span></div>
+</summary-bar>
+
+
+<!-- ═══════════════════════════ BUGS ═══════════════════════════ -->
+<h2><span class="badge badge-bug">Баги</span></h2>
+<p class="section-intro">Поведение, которое либо некорректно, либо вводит пользователя в заблуждение.</p>
+
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr>
+      <th class="col-num">#</th>
+      <th class="col-type">Тип</th>
+      <th class="col-p">Приор.</th>
+      <th class="col-eff">Объём</th>
+      <th class="col-main">Описание</th>
+    </tr>
+  </thead>
+  <tbody>
+
+    <tr>
+      <td class="col-num">1</td>
+      <td><span class="badge badge-bug">Баг</span></td>
+      <td><span class="badge badge-p0">P0</span></td>
+      <td><span class="badge badge-xs">XS</span></td>
+      <td>
+        <div class="item-title">Поле «Наличные сейчас» не обрабатывает запятую</div>
+        <div class="item-desc">
+          Поле суммы оплаты поставщику (верхний инпут в карточке поставщика) передаётся через
+          <span class="inline-code">Number(draftAmount)</span> без замены <span class="inline-code">,</span> → <span class="inline-code">.</span>.
+          Пользователи с RU-раскладкой часто вводят «1,5» вместо «1.5» — получают <span class="inline-code">NaN</span>, кнопка «Заплатил» остаётся задизейблена,
+          без объяснения причины.
+          <br><span class="file-ref">PickingListPage.tsx:1045</span>
+          <br><em style="color:var(--yellow); font-size: 12px">Фикс: <span class="inline-code">Number(String(draftAmount).replace(",", "."))</span> перед мутацией.</em>
+        </div>
+      </td>
+    </tr>
+
+    <tr>
+      <td class="col-num">2</td>
+      <td><span class="badge badge-bug">Баг</span></td>
+      <td><span class="badge badge-p0">P0</span></td>
+      <td><span class="badge badge-xs">XS</span></td>
+      <td>
+        <div class="item-title">Balance-панель не закрывается кликом вне её</div>
+        <div class="item-desc">
+          <span class="inline-code">balancePanelOpen</span> открывается по клику на чип, но нет click-outside обработчика.
+          Закрыть можно только повторным кликом на тот же чип. На мобильном это неудобно — пользователь случайно открывает панель и не понимает как скрыть.
+          <br><span class="file-ref">PickingListPage.tsx:470–479</span>
+          <br><em style="color:var(--yellow); font-size: 12px">Фикс: useClickOutside-ref на панели, или backdrop-overlay как у PM-поиска.</em>
+        </div>
+      </td>
+    </tr>
+
+    <tr>
+      <td class="col-num">3</td>
+      <td><span class="badge badge-bug">Баг</span></td>
+      <td><span class="badge badge-p1">P1</span></td>
+      <td><span class="badge badge-xs">XS</span></td>
+      <td>
+        <div class="item-title">Неверная иконка «Редактировать» в истории выдач</div>
+        <div class="item-desc">
+          Кнопка редактирования записи о выдаче денег использует иконку <span class="inline-code">&lt;Clock size={11} /&gt;</span>,
+          которая семантически означает «история» или «время». Пользователь-нетехнарь не может угадать, что это редактирование.
+          <br><span class="file-ref">PickingListPage.tsx:688–696</span>
+          <br><em style="color:var(--yellow); font-size: 12px">Фикс: заменить на <span class="inline-code">Pencil</span> из lucide-react.</em>
+        </div>
+      </td>
+    </tr>
+
+    <tr>
+      <td class="col-num">4</td>
+      <td><span class="badge badge-bug">Баг</span></td>
+      <td><span class="badge badge-p1">P1</span></td>
+      <td><span class="badge badge-xs">XS</span></td>
+      <td>
+        <div class="item-title">Одинаковые иконки у «Возврат» и «К сборке» в статусе picked</div>
+        <div class="item-desc">
+          Обе кнопки используют <span class="inline-code">&lt;RotateCcw size={14} /&gt;</span>. Пользователь не различает их визуально.
+          «Возврат» означает возврат товара клиентом; «К сборке» — откат статуса пикинга. Это разные операции с разными последствиями.
+          <br><span class="file-ref">PickingListPage.tsx:1256–1263</span>
+          <br><em style="color:var(--yellow); font-size: 12px">Фикс: «Возврат» → <span class="inline-code">PackageX</span> или <span class="inline-code">ArrowLeftRight</span>, «К сборке» оставить RotateCcw.</em>
+        </div>
+      </td>
+    </tr>
+
+    <tr>
+      <td class="col-num">5</td>
+      <td><span class="badge badge-bug">Баг</span></td>
+      <td><span class="badge badge-p1">P1</span></td>
+      <td><span class="badge badge-s">S</span></td>
+      <td>
+        <div class="item-title">Отложенные позиции (deferredUntil) видны дважды на странице</div>
+        <div class="item-desc">
+          Отложенные строки (с <span class="inline-code">deferredUntil > now</span>) попадают одновременно в блок «На ближайшие дни»
+          <em>и</em> в группы поставщиков ниже (т.к. их статус <span class="inline-code">open</span>).
+          Сборщик видит товар в списке и путается — надо его брать сегодня или нет?
+          <br><span class="file-ref">PickingListPage.tsx:361–384 / grouped useMemo</span>
+          <br><em style="color:var(--yellow); font-size: 12px">Фикс: исключить строки с активным deferredUntil из grouped, показывать только в календарном блоке.</em>
+        </div>
+      </td>
+    </tr>
+
+    <tr>
+      <td class="col-num">6</td>
+      <td><span class="badge badge-bug">Баг</span></td>
+      <td><span class="badge badge-p1">P1</span></td>
+      <td><span class="badge badge-xs">XS</span></td>
+      <td>
+        <div class="item-title">Нет обработчика Escape для модала «Не было»</div>
+        <div class="item-desc">
+          Модал с выбором срока отсутствия товара не реагирует на нажатие Esc.
+          Все остальные модалы в системе закрываются по Escape (PM-поиск, etc).
+          Непоследовательность в UX.
+          <br><span class="file-ref">PickingListPage.tsx:1366–1410</span>
+          <br><em style="color:var(--yellow); font-size: 12px">Фикс: добавить useEffect с keydown listener при <span class="inline-code">missingRow !== null</span>.</em>
+        </div>
+      </td>
+    </tr>
+
+    <tr>
+      <td class="col-num">7</td>
+      <td><span class="badge badge-bug">Баг</span></td>
+      <td><span class="badge badge-p2">P2</span></td>
+      <td><span class="badge badge-xs">XS</span></td>
+      <td>
+        <div class="item-title">pickQtyDrafts не сбрасываются при смене фильтра</div>
+        <div class="item-desc">
+          Частичный ввод количества сборки сохраняется в <span class="inline-code">pickQtyDrafts</span>,
+          но не очищается при смене статуса или поставщика в фильтре.
+          При возврате к тому же товару в другом фильтре черновик остаётся — риск случайной неверной сборки.
+          <br><span class="file-ref">PickingListPage.tsx:169, строки управления фильтром 778–807</span>
+        </div>
+      </td>
+    </tr>
+
+    <tr>
+      <td class="col-num">8</td>
+      <td><span class="badge badge-bug">Баг</span></td>
+      <td><span class="badge badge-p2">P2</span></td>
+      <td><span class="badge badge-xs">XS</span></td>
+      <td>
+        <div class="item-title">Переменная balance (ledger) вычисляется, но нигде не отображается</div>
+        <div class="item-desc">
+          На строке 986 вычисляется <span class="inline-code">const balance = Number(ledger.balance || 0)</span>,
+          но в JSX эта переменная не используется. Актуальный знак баланса (долг vs. аванс) не сигнализируется пользователю цветом или индикатором —
+          потеря информации.
+          <br><span class="file-ref">PickingListPage.tsx:986–989</span>
+        </div>
+      </td>
+    </tr>
+
+  </tbody>
+</table>
+</div>
+
+
+<!-- ═══════════════════════════ MOBILE ═══════════════════════════ -->
+<h2><span class="badge badge-mobile">Мобильный</span></h2>
+<p class="section-intro">Страница активно используется со смартфона (сборщик в пути). Найденные проблемы снижают скорость работы.</p>
+
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr>
+      <th class="col-num">#</th>
+      <th class="col-type">Тип</th>
+      <th class="col-p">Приор.</th>
+      <th class="col-eff">Объём</th>
+      <th class="col-main">Описание</th>
+    </tr>
+  </thead>
+  <tbody>
+
+    <tr>
+      <td class="col-num">9</td>
+      <td><span class="badge badge-mobile">Mobile</span></td>
+      <td><span class="badge badge-p0">P0</span></td>
+      <td><span class="badge badge-s">S</span></td>
+      <td>
+        <div class="item-title">«Наличные сейчас» + «Комментарий» + «Заплатил» не помещаются в строку на ≤ 390px</div>
+        <div class="item-desc">
+          <span class="inline-code">supplier-payment-row</span> использует flexbox без явного мобильного стека.
+          На iPhone SE / Galaxy A-серии все три элемента пытаются уместиться в одну строку → кнопка «Заплатил»
+          обрезается или совсем уходит за край. Инпут суммы сжимается до ~60px и неудобен для ввода.
+          <br><span class="file-ref">PickingListPage.tsx:1026–1049 / styles.css:supplier-payment-row</span>
+          <br><em style="color:var(--yellow); font-size: 12px">Фикс: на <span class="inline-code">max-width: 480px</span> — stack column, кнопка на всю ширину.</em>
+        </div>
+      </td>
+    </tr>
+
+    <tr>
+      <td class="col-num">10</td>
+      <td><span class="badge badge-mobile">Mobile</span></td>
+      <td><span class="badge badge-p0">P0</span></td>
+      <td><span class="badge badge-xs">XS</span></td>
+      <td>
+        <div class="item-title">Balance-панель не скроллируется, переполняет viewport</div>
+        <div class="item-desc">
+          Панель баланса (<span class="inline-code">picker-balance-panel</span>) не имеет
+          <span class="inline-code">max-height</span> и <span class="inline-code">overflow-y: auto</span>.
+          У администратора с несколькими сборщиками панель (список чипов + форма выдачи + история выдач + возврат + дневной итог)
+          занимает больше высоты экрана → нижняя часть недоступна без прокрутки страницы, при этом фиксированный хедер перекрывает её верх.
+          <br><span class="file-ref">styles.css:8736–8750</span>
+          <br><em style="color:var(--yellow); font-size: 12px">Фикс: <span class="inline-code">max-height: 85dvh; overflow-y: auto</span> на <span class="inline-code">.picker-balance-panel</span>.</em>
+        </div>
+      </td>
+    </tr>
+
+    <tr>
+      <td class="col-num">11</td>
+      <td><span class="badge badge-mobile">Mobile</span></td>
+      <td><span class="badge badge-p1">P1</span></td>
+      <td><span class="badge badge-xs">XS</span></td>
+      <td>
+        <div class="item-title">Цена товара (picking-row-price) скрыта на мобильных</div>
+        <div class="item-desc">
+          CSS-правило <span class="inline-code">.picking-row-price { display: none; }</span> в мобильном breakpoint
+          полностью скрывает цену в заголовке строки. Сборщик не видит, сколько стоит позиция, не разворачивая карточку.
+          Если цена важна для решения «брать или нет», он вынужден делать лишний tap.
+          <br><span class="file-ref">styles.css:9420</span>
+          <br><em style="color:var(--yellow); font-size: 12px">Фикс: сохранить цену, но скрыть только рублёвый эквивалент (<span class="inline-code">.picking-row-price-rub</span>).</em>
+        </div>
+      </td>
+    </tr>
+
+    <tr>
+      <td class="col-num">12</td>
+      <td><span class="badge badge-mobile">Mobile</span></td>
+      <td><span class="badge badge-p1">P1</span></td>
+      <td><span class="badge badge-s">S</span></td>
+      <td>
+        <div class="item-title">Кнопки действий («Не было», «Замена», «Завтра», «Удалить») слишком мелкие и плотные</div>
+        <div class="item-desc">
+          Вторичные действия в <span class="inline-code">picking-actions</span> получают минимальную высоту из grid,
+          но на мобильных с 4–5 кнопками строка переполняется. Кнопки занимают около 36px высоты при минимальной
+          касаемой зоне 44px (HIG). Риск промаха — нажал «Удалить» вместо «Завтра».
+          <br><span class="file-ref">styles.css:9436–9451</span>
+          <br><em style="color:var(--yellow); font-size: 12px">Фикс: второстепенные действия свернуть в меню "⋮" (три точки) с bottom sheet на mobile.</em>
+        </div>
+      </td>
+    </tr>
+
+    <tr>
+      <td class="col-num">13</td>
+      <td><span class="badge badge-mobile">Mobile</span></td>
+      <td><span class="badge badge-p2">P2</span></td>
+      <td><span class="badge badge-s">S</span></td>
+      <td>
+        <div class="item-title">Три фильтра (Статус / Поставщик / Поиск) занимают много места</div>
+        <div class="item-desc">
+          На мобильных три <span class="inline-code">label + select/input</span> стекаются вертикально и занимают
+          ~180px до начала списка. В сочетании с хедером, табами и счётчиками → пользователь видит
+          всего 1–2 строки без скролла. Поле «Поиск» особенно редко используется сборщиком на ходу.
+          <br><span class="file-ref">PickingListPage.tsx:777–807 / styles.css:8983</span>
+          <br><em style="color:var(--yellow); font-size: 12px">Фикс: на mobile — строка с chips статуса (open / picked / all) + кнопка «Фильтры» для остального.</em>
+        </div>
+      </td>
+    </tr>
+
+    <tr>
+      <td class="col-num">14</td>
+      <td><span class="badge badge-mobile">Mobile</span></td>
+      <td><span class="badge badge-p2">P2</span></td>
+      <td><span class="badge badge-xs">XS</span></td>
+      <td>
+        <div class="item-title">Подзаголовок строки (marketplace / orderId) скрыт на мобильных</div>
+        <div class="item-desc">
+          <span class="inline-code">.picking-row-sub { display: none; }</span> в мобильном breakpoint убирает
+          информацию о маркетплейсе и номере заказа. Для экспресс-заказов (Zap-бейдж) это ок, но для WB-supply
+          пользователь не видит <span class="inline-code">wbSupplyId</span> без раскрытия.
+          <br><span class="file-ref">styles.css:9424</span>
+          <br><em style="color:var(--yellow); font-size: 12px">Фикс: показывать marketplace-иконку (буква/цвет) вместо текста — экономия места без потери смысла.</em>
+        </div>
+      </td>
+    </tr>
+
+  </tbody>
+</table>
+</div>
+
+
+<!-- ═══════════════════════════ DESIGN ═══════════════════════════ -->
+<h2><span class="badge badge-design">Дизайн / UX</span></h2>
+<p class="section-intro">Интерфейс работоспособен, но ряд паттернов создаёт лишние когнитивные усилия при каждодневном использовании.</p>
+
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr>
+      <th class="col-num">#</th>
+      <th class="col-type">Тип</th>
+      <th class="col-p">Приор.</th>
+      <th class="col-eff">Объём</th>
+      <th class="col-main">Описание</th>
+    </tr>
+  </thead>
+  <tbody>
+
+    <tr>
+      <td class="col-num">15</td>
+      <td><span class="badge badge-design">Дизайн</span></td>
+      <td><span class="badge badge-p1">P1</span></td>
+      <td><span class="badge badge-s">S</span></td>
+      <td>
+        <div class="item-title">Кнопка «Все собрал» конкурирует с кликом для раскрытия группы</div>
+        <div class="item-desc">
+          В сгруппированном заголовке (<span class="inline-code">picking-group-header</span>) клик по всей строке сворачивает/разворачивает группу,
+          а кнопка «Все собрал» вложена в ту же зону через <span class="inline-code">e.stopPropagation()</span>.
+          На мобильном промах на кнопку → сворачивается группа. Промах на заголовок в зоне кнопки → срабатывает «Все собрал» нечаянно.
+          <br><span class="file-ref">PickingListPage.tsx:1076–1113</span>
+          <br><em style="color:var(--yellow); font-size: 12px">Фикс: вынести «Все собрал» из clickable-зоны заголовка — поместить в отдельный блок после заголовка.</em>
+        </div>
+      </td>
+    </tr>
+
+    <tr>
+      <td class="col-num">16</td>
+      <td><span class="badge badge-design">Дизайн</span></td>
+      <td><span class="badge badge-p1">P1</span></td>
+      <td><span class="badge badge-xs">XS</span></td>
+      <td>
+        <div class="item-title">Стат-блок (К сборке / Собрано / Не было) не интерактивен</div>
+        <div class="item-desc">
+          Четыре Stat-карточки показывают счётчики, но не кликабельны. Нажать «8 — К сборке» для установки фильтра
+          <span class="inline-code">status=open</span> — ожидаемое поведение, которого нет.
+          <br><span class="file-ref">PickingListPage.tsx:770–775</span>
+          <br><em style="color:var(--yellow); font-size: 12px">Фикс: обернуть в кнопки с <span class="inline-code">onClick={() => setStatus("open")} </span> и подсветкой активного.</em>
+        </div>
+      </td>
+    </tr>
+
+    <tr>
+      <td class="col-num">17</td>
+      <td><span class="badge badge-design">Дизайн</span></td>
+      <td><span class="badge badge-p1">P1</span></td>
+      <td><span class="badge badge-s">S</span></td>
+      <td>
+        <div class="item-title">Нет визуального акцента на экспресс-заказах</div>
+        <div class="item-desc">
+          Экспресс-заказы (с <span class="inline-code">isExpress: true</span> или <span class="inline-code">orderCutoffTime</span>)
+          имеют только небольшой жёлтый Zap-значок в заголовке строки. Карточка поставщика и сама строка никак не выделены.
+          Сборщик может пропустить экспресс-позицию в длинном списке, нарушив дедлайн.
+          <br><span class="file-ref">PickingListPage.tsx:1142 / styles.css:9055–9065</span>
+          <br><em style="color:var(--yellow); font-size: 12px">Фикс: левая жёлтая граница на строке + плашка с временем дедлайна поверх кнопок, если cutoffTime близко.</em>
+        </div>
+      </td>
+    </tr>
+
+    <tr>
+      <td class="col-num">18</td>
+      <td><span class="badge badge-design">Дизайн</span></td>
+      <td><span class="badge badge-p1">P1</span></td>
+      <td><span class="badge badge-xs">XS</span></td>
+      <td>
+        <div class="item-title">Hint «Долг фиксируется автоматически…» показывается всегда</div>
+        <div class="item-desc">
+          Под полем «Наличные сейчас» постоянно написан подсказочный текст. При большом числе поставщиков
+          это создаёт шум — опытный пользователь давно знает это правило.
+          Текст занимает место и снижает плотность списка.
+          <br><span class="file-ref">PickingListPage.tsx:1050–1052</span>
+          <br><em style="color:var(--yellow); font-size: 12px">Фикс: показывать hint только при фокусе на поле, или убрать в тултип иконки «?».</em>
+        </div>
+      </td>
+    </tr>
+
+    <tr>
+      <td class="col-num">19</td>
+      <td><span class="badge badge-design">Дизайн</span></td>
+      <td><span class="badge badge-p2">P2</span></td>
+      <td><span class="badge badge-xs">XS</span></td>
+      <td>
+        <div class="item-title">«Как работает сборка — справка» выглядит как обычный текст</div>
+        <div class="item-desc">
+          Элемент <span class="inline-code">&lt;details&gt;</span> со справкой стилизован только через inline CSS
+          и выглядит как небрендовый текст. Стрелка браузера по умолчанию не соответствует остальному дизайну.
+          <br><span class="file-ref">PickingListPage.tsx:809–822</span>
+          <br><em style="color:var(--yellow); font-size: 12px">Фикс: заменить на нативный <span class="inline-code">Collapsible</span>-компонент с ChevronDown, как у других раскрываемых секций.</em>
+        </div>
+      </td>
+    </tr>
+
+    <tr>
+      <td class="col-num">20</td>
+      <td><span class="badge badge-design">Дизайн</span></td>
+      <td><span class="badge badge-p2">P2</span></td>
+      <td><span class="badge badge-s">S</span></td>
+      <td>
+        <div class="item-title">Отложенные чипы («На ближайшие дни») не кликабельны</div>
+        <div class="item-desc">
+          Блок с датами отложенных позиций информирует, но не позволяет быстро отфильтровать по конкретной дате.
+          Клик по чипу «Завтра: 3 поз.» должен фильтровать список — сейчас пользователь видит только общий счётчик.
+          <br><span class="file-ref">PickingListPage.tsx:896–906</span>
+        </div>
+      </td>
+    </tr>
+
+    <tr>
+      <td class="col-num">21</td>
+      <td><span class="badge badge-design">Дизайн</span></td>
+      <td><span class="badge badge-p2">P2</span></td>
+      <td><span class="badge badge-xs">XS</span></td>
+      <td>
+        <div class="item-title">Строка «Перекупщик» (reseller) не привлекает внимания</div>
+        <div class="item-desc">
+          Флаг <span class="inline-code">reseller</span> показывается только в раскрытой секции meta
+          как <span class="inline-code">tone-warn</span>-текст. Сборщик, не раскрывший строку, не узнает о рисках.
+          <br><span class="file-ref">PickingListPage.tsx:1163–1165</span>
+          <br><em style="color:var(--yellow); font-size: 12px">Фикс: добавить иконку-предупреждение рядом с именем поставщика если у него reseller=true.</em>
+        </div>
+      </td>
+    </tr>
+
+    <tr>
+      <td class="col-num">22</td>
+      <td><span class="badge badge-design">Дизайн</span></td>
+      <td><span class="badge badge-p3">P3</span></td>
+      <td><span class="badge badge-m">M</span></td>
+      <td>
+        <div class="item-title">Balance-панель — inline-дровер вместо bottom sheet</div>
+        <div class="item-desc">
+          На десктопе панель баланса открывается прямо под кнопкой и выглядит нормально.
+          На мобильном она появляется в потоке страницы и требует скрола вниз для доступа к нижним элементам.
+          Bottom-sheet (sliding up from bottom) — стандартный мобильный паттерн для таких панелей.
+          <br><span class="file-ref">PickingListPage.tsx:497–759</span>
+        </div>
+      </td>
+    </tr>
+
+  </tbody>
+</table>
+</div>
+
+
+<!-- ═══════════════════════════ FEATURES ═══════════════════════════ -->
+<h2><span class="badge badge-feat">Функционал</span></h2>
+<p class="section-intro">Идеи, которые расширяют возможности страницы без изменения текущей логики.</p>
+
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr>
+      <th class="col-num">#</th>
+      <th class="col-type">Тип</th>
+      <th class="col-p">Приор.</th>
+      <th class="col-eff">Объём</th>
+      <th class="col-main">Описание</th>
+    </tr>
+  </thead>
+  <tbody>
+
+    <tr>
+      <td class="col-num">23</td>
+      <td><span class="badge badge-feat">Фича</span></td>
+      <td><span class="badge badge-p1">P1</span></td>
+      <td><span class="badge badge-s">S</span></td>
+      <td>
+        <div class="item-title">Индикатор «кто что собирает» на уровне поставщика</div>
+        <div class="item-desc">
+          Сейчас показываются только имена других просматривающих (chip в хедере). Непонятно, кто уже
+          взял карточку поставщика «Алекс» и работает с ней. При двух сборщиках возможны конфликты.
+          <br><em style="color:var(--yellow); font-size: 12px">Идея: при клике «Собрал» записывать <span class="inline-code">pickedBy</span> немедленно в локальный state и транслировать через heartbeat-endpoint.
+          На карточке поставщика показывать аватар сборщика который последним трогал её позиции.</em>
+        </div>
+      </td>
+    </tr>
+
+    <tr>
+      <td class="col-num">24</td>
+      <td><span class="badge badge-feat">Фича</span></td>
+      <td><span class="badge badge-p1">P1</span></td>
+      <td><span class="badge badge-s">S</span></td>
+      <td>
+        <div class="item-title">Предупреждение при приближении к дедлайну экспресс-заказа</div>
+        <div class="item-desc">
+          Поле <span class="inline-code">orderCutoffTime</span> есть в данных, но используется только в раскрытом meta.
+          Если текущее время больше cutoffTime − 30 минут — нужен визуальный алёрт прямо в строке.
+          <br><span class="file-ref">PickingListPage.tsx:1163</span>
+          <br><em style="color:var(--yellow); font-size: 12px">Идея: badge с обратным отсчётом «Осталось 23 мин» красным цветом рядом с express-иконкой.</em>
+        </div>
+      </td>
+    </tr>
+
+    <tr>
+      <td class="col-num">25</td>
+      <td><span class="badge badge-feat">Фича</span></td>
+      <td><span class="badge badge-p2">P2</span></td>
+      <td><span class="badge badge-s">S</span></td>
+      <td>
+        <div class="item-title">Звуковое / вибро-подтверждение «Собрал»</div>
+        <div class="item-desc">
+          На мобильном сборщик часто смотрит на товар, а не на экран при нажатии кнопки.
+          Короткая вибрация (<span class="inline-code">navigator.vibrate(80)</span>) или звуковой тик подтвердят действие без визуального контроля.
+          Реализуется без серверных изменений.
+        </div>
+      </td>
+    </tr>
+
+    <tr>
+      <td class="col-num">26</td>
+      <td><span class="badge badge-feat">Фича</span></td>
+      <td><span class="badge badge-p2">P2</span></td>
+      <td><span class="badge badge-m">M</span></td>
+      <td>
+        <div class="item-title">Лимит 500 строк без явного индикатора</div>
+        <div class="item-desc">
+          Запрос к API делается с <span class="inline-code">limit: "500"</span>, но при переполнении пользователь
+          не видит никакого предупреждения. Накладная секция аналогично ограничена 80 строками и лишь тогда показывает inline-warning.
+          <br><span class="file-ref">PickingListPage.tsx:101 / 1345</span>
+          <br><em style="color:var(--yellow); font-size: 12px">Идея: если <span class="inline-code">rows.length === 500</span> — показать banner «Показаны первые 500 позиций. Уточните фильтр.»</em>
+        </div>
+      </td>
+    </tr>
+
+    <tr>
+      <td class="col-num">27</td>
+      <td><span class="badge badge-feat">Фича</span></td>
+      <td><span class="badge badge-p3">P3</span></td>
+      <td><span class="badge badge-l">L</span></td>
+      <td>
+        <div class="item-title">QR / штрихкод-сканер для поиска товара в листе</div>
+        <div class="item-desc">
+          На складе у товара может быть штрихкод. Нажатие иконки-камеры в поле поиска открывает
+          <span class="inline-code">BarcodeDetector</span> (Web API) или <span class="inline-code">quagga2</span>,
+          сканирует оффер-id и сразу фильтрует список. Полезно при большом ассортименте.
+        </div>
+      </td>
+    </tr>
+
+  </tbody>
+</table>
+</div>
+
+
+<!-- ═══════════════════════════ SUMMARY ═══════════════════════════ -->
+<h2>Приоритетный план (предлагаемый порядок)</h2>
+
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr>
+      <th style="width:40px">#</th>
+      <th style="width:70px">Итерация</th>
+      <th style="width:80px">Объём</th>
+      <th>Пункты</th>
+      <th style="width:120px">Эффект</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>I</td>
+      <td><strong style="color:var(--red)">Хотфикс</strong></td>
+      <td>~2 ч</td>
+      <td>
+        <span class="badge badge-p0">1</span> Запятая в инпуте суммы &nbsp;
+        <span class="badge badge-p0">2</span> Click-outside balance-панели &nbsp;
+        <span class="badge badge-p1">6</span> Escape для модала «Не было» &nbsp;
+        <span class="badge badge-p1">3</span> Иконка карандаша для редактирования выдачи
+      </td>
+      <td>Устранение P0 ошибок</td>
+    </tr>
+    <tr>
+      <td>II</td>
+      <td><strong style="color:var(--yellow)">Мобильный</strong></td>
+      <td>~1 день</td>
+      <td>
+        <span class="badge badge-mobile">9</span> Payment row stack &nbsp;
+        <span class="badge badge-mobile">10</span> Balance-панель max-height &nbsp;
+        <span class="badge badge-mobile">11</span> Показать цену на mobile &nbsp;
+        <span class="badge badge-mobile">12</span> Кнопки действий → меню «⋮» &nbsp;
+        <span class="badge badge-bug">5</span> Отложенные позиции дважды
+      </td>
+      <td>Ежедневная работа сборщика</td>
+    </tr>
+    <tr>
+      <td>III</td>
+      <td><strong style="color:var(--cyan)">UX-polish</strong></td>
+      <td>~1 день</td>
+      <td>
+        <span class="badge badge-design">15</span> «Все собрал» зона &nbsp;
+        <span class="badge badge-design">16</span> Кликабельные стат-карточки &nbsp;
+        <span class="badge badge-design">17</span> Экспресс-акцент &nbsp;
+        <span class="badge badge-design">18</span> Hint по фокусу &nbsp;
+        <span class="badge badge-bug">4</span> Иконки возврат/к сборке &nbsp;
+        <span class="badge badge-bug">8</span> balance в ledger отображать
+      </td>
+      <td>Скорость работы, меньше ошибок</td>
+    </tr>
+    <tr>
+      <td>IV</td>
+      <td><strong style="color:var(--green)">Фичи</strong></td>
+      <td>2–3 дня</td>
+      <td>
+        <span class="badge badge-feat">23</span> Кто что собирает &nbsp;
+        <span class="badge badge-feat">24</span> Таймер дедлайна экспресс &nbsp;
+        <span class="badge badge-feat">25</span> Вибро/звук «Собрал» &nbsp;
+        <span class="badge badge-mobile">13</span> Фильтр-chips на mobile &nbsp;
+        <span class="badge badge-design">20</span> Кликабельные deferred-chips &nbsp;
+        <span class="badge badge-feat">26</span> Индикатор лимита 500
+      </td>
+      <td>Новые возможности</td>
+    </tr>
+    <tr>
+      <td>V</td>
+      <td><strong style="color:var(--muted)">Долгосрок</strong></td>
+      <td>1+ нед.</td>
+      <td>
+        <span class="badge badge-design">22</span> Bottom sheet mobile &nbsp;
+        <span class="badge badge-feat">27</span> QR-сканер &nbsp;
+        <span class="badge badge-mobile">14</span> Marketplace иконки вместо текста
+      </td>
+      <td>Зрелость продукта</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<p style="color: var(--muted); font-size: 12px; margin-top: 24px; line-height: 1.7;">
+  Аудит проведён на основе анализа <strong>PickingListPage.tsx</strong> (1421 строка),
+  <strong>styles.css</strong> (секции picking / picker-balance / assembly-sheet),
+  <strong>02d-supplier-picking-state.js</strong> и скриншота рабочей страницы.
+  <br>Итерация I не требует серверных изменений.
+</p>
+
+</body>
+</html>

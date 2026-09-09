@@ -80,6 +80,7 @@ export interface ShopOrderPayload {
   comment?: string;
   paymentMethod?: PaymentMethod;
   refCode?: string;
+  promoCode?: string;
 }
 
 export interface ShopOrderItem {

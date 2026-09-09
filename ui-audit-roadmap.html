@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>UI Аудит — Дорожная карта · davidsklad.ru</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0b1220; color: #c8d6e8; line-height: 1.6; }
+  .page { max-width: 1080px; margin: 0 auto; padding: 40px 24px; }
+  h1 { font-size: 26px; font-weight: 700; color: #e8f0fb; margin-bottom: 4px; }
+  .subtitle { color: #6b7fa3; font-size: 14px; margin-bottom: 32px; }
+  h2 { font-size: 13px; font-weight: 700; color: #a8bbd8; text-transform: uppercase; letter-spacing: .08em; margin: 36px 0 14px; padding-bottom: 8px; border-bottom: 1px solid rgba(100,140,200,.15); }
+  .card { background: rgba(255,255,255,.04); border: 1px solid rgba(100,140,200,.14); border-radius: 10px; padding: 16px 18px; margin-bottom: 10px; display: grid; grid-template-columns: 36px 1fr; gap: 14px; align-items: start; }
+  .card:hover { border-color: rgba(100,140,200,.28); }
+  .badge { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px; font-size: 11px; font-weight: 800; flex-shrink: 0; margin-top: 2px; }
+  .p0 { background: #4b1010; color: #f87171; border: 1px solid #7f1d1d; }
+  .p1 { background: #3b2400; color: #fb923c; border: 1px solid #7c2d12; }
+  .p2 { background: #1a2b1a; color: #86efac; border: 1px solid #166534; }
+  .p3 { background: #162040; color: #93c5fd; border: 1px solid #1e40af; }
+  .pf { background: #2a1040; color: #d8b4fe; border: 1px solid #6d28d9; }
+  .card-body h3 { font-size: 14px; font-weight: 600; color: #dde8f8; margin-bottom: 5px; }
+  .card-body p { font-size: 13px; color: #8ea4be; margin-bottom: 5px; }
+  .card-body p:last-child { margin-bottom: 0; }
+  .pages { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 6px; }
+  .page-tag { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 99px; background: rgba(100,140,200,.1); color: #7da8d8; border: 1px solid rgba(100,140,200,.2); }
+  .tag { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 99px; }
+  .tag-ux  { background: rgba(239,68,68,.14); color: #f87171; border: 1px solid rgba(239,68,68,.3); }
+  .tag-ui  { background: rgba(251,146,60,.14); color: #fb923c; border: 1px solid rgba(251,146,60,.3); }
+  .tag-perf { background: rgba(168,85,247,.14); color: #c084fc; border: 1px solid rgba(168,85,247,.3); }
+  .tag-feat { background: rgba(59,130,246,.14); color: #93c5fd; border: 1px solid rgba(59,130,246,.3); }
+  .tag-arch { background: rgba(34,197,94,.14); color: #86efac; border: 1px solid rgba(34,197,94,.3); }
+  .tag-new  { background: rgba(250,204,21,.15); color: #fde047; border: 1px solid rgba(250,204,21,.35); }
+  .tags { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 7px; }
+  code { background: rgba(255,255,255,.08); border-radius: 4px; padding: 1px 5px; font-family: monospace; font-size: 12px; color: #a5c4e8; }
+  .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 28px; }
+  .stat-card { background: rgba(255,255,255,.04); border: 1px solid rgba(100,140,200,.14); border-radius: 8px; padding: 12px 14px; }
+  .stat-card .num { font-size: 30px; font-weight: 700; }
+  .stat-card .lbl { font-size: 11px; color: #6b7fa3; margin-top: 2px; }
+  .red .num { color: #f87171; }
+  .orange .num { color: #fb923c; }
+  .green .num { color: #86efac; }
+  .blue .num { color: #93c5fd; }
+  .purple .num { color: #d8b4fe; }
+  .toc { background: rgba(255,255,255,.03); border: 1px solid rgba(100,140,200,.12); border-radius: 10px; padding: 14px 18px; margin-bottom: 36px; }
+  .toc h3 { font-size: 11px; font-weight: 700; color: #6b7fa3; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 10px; }
+  .toc a { display: inline-block; font-size: 12px; color: #6d9fd8; text-decoration: none; padding: 2px 8px; margin: 2px 4px; border-radius: 6px; background: rgba(100,140,200,.08); }
+  .toc a:hover { color: #93c5fd; background: rgba(100,140,200,.15); }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 28px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #6b7fa3; }
+  .page-status { background: rgba(255,255,255,.03); border: 1px solid rgba(100,140,200,.12); border-radius: 10px; overflow: hidden; margin-bottom: 28px; }
+  .ps-row { display: grid; grid-template-columns: 200px 80px 1fr; gap: 12px; padding: 9px 16px; border-bottom: 1px solid rgba(100,140,200,.08); font-size: 13px; align-items: center; }
+  .ps-row:last-child { border-bottom: none; }
+  .ps-head { font-size: 11px; font-weight: 700; color: #6b7fa3; text-transform: uppercase; letter-spacing: .06em; background: rgba(100,140,200,.06); }
+  .ps-name { color: #c8d6e8; font-weight: 500; }
+  .ps-full { color: #86efac; font-size: 12px; font-weight: 600; }
+  .ps-partial { color: #fb923c; font-size: 12px; font-weight: 600; }
+  .ps-stub { color: #f87171; font-size: 12px; font-weight: 600; }
+  .ps-note { color: #6b7fa3; font-size: 12px; }
+  .alert-box { border-radius: 8px; padding: 12px 16px; margin-bottom: 24px; font-size: 13px; }
+  .alert-red { background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.25); color: #fca5a5; }
+  .foot { font-size: 12px; color: #3d5070; text-align: center; padding-bottom: 24px; margin-top: 40px; }
+  hr { border: none; border-top: 1px solid rgba(100,140,200,.1); margin: 36px 0; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>UI Аудит — Дорожная карта</h1>
+  <p class="subtitle">davidsklad.ru · сентябрь 2026 · 29 страниц · полный аудит · <strong>только планирование, без деплоя</strong></p>
+
+  <div class="summary-grid">
+    <div class="stat-card red"><div class="num">4</div><div class="lbl">Критических</div></div>
+    <div class="stat-card orange"><div class="num">11</div><div class="lbl">Средних</div></div>
+    <div class="stat-card green"><div class="num">8</div><div class="lbl">Косметических</div></div>
+    <div class="stat-card blue"><div class="num">3</div><div class="lbl">Страниц-заглушек</div></div>
+    <div class="stat-card purple"><div class="num">1</div><div class="lbl">Новый запрос</div></div>
+  </div>
+
+  <div class="toc">
+    <h3>Разделы</h3>
+    <a href="#pages">Статус страниц</a>
+    <a href="#critical">Критические</a>
+    <a href="#medium">Средние</a>
+    <a href="#low">Косметика</a>
+    <a href="#new">Новые фичи</a>
+    <a href="#remove">Что убрать</a>
+  </div>
+
+  <div class="legend">
+    <div class="legend-item"><span class="badge p0">!</span> Критично — сломан UX</div>
+    <div class="legend-item"><span class="badge p1">2</span> Среднее — мешает работе</div>
+    <div class="legend-item"><span class="badge p2">3</span> Косметика — polish</div>
+    <div class="legend-item"><span class="badge p3">N</span> Новая функция</div>
+    <div class="legend-item"><span class="badge pf">?</span> На удаление/объединение</div>
+  </div>
+
+  <!-- ===== СТАТУС СТРАНИЦ ===== -->
+  <h2 id="pages">Статус всех страниц</h2>
+  <div class="page-status">
+    <div class="ps-row ps-head"><span>Страница</span><span>Статус</span><span>Заметка</span></div>
+    <div class="ps-row"><span class="ps-name">Dashboard</span><span class="ps-full">Полный</span><span class="ps-note">Много запросов, некоторые секции грузятся без скелетонов</span></div>
+    <div class="ps-row"><span class="ps-name">Warehouse</span><span class="ps-full">Полный</span><span class="ps-note">Огромный файл (1700+ строк), работает, но трудно поддерживать</span></div>
+    <div class="ps-row"><span class="ps-name">Prices</span><span class="ps-full">Полный</span><span class="ps-note">Хорошая страница, список товаров перегружен при 2000 строках</span></div>
+    <div class="ps-row"><span class="ps-name">Suppliers</span><span class="ps-full">Полный</span><span class="ps-note">Самая сложная страница, UI плотный — нужна разгрузка</span></div>
+    <div class="ps-row"><span class="ps-name">Finance</span><span class="ps-full">Полный</span><span class="ps-note">ОК</span></div>
+    <div class="ps-row"><span class="ps-name">PickingList</span><span class="ps-full">Полный</span><span class="ps-note">Стало лучше после последних доработок</span></div>
+    <div class="ps-row"><span class="ps-name">Operations</span><span class="ps-full">Полный</span><span class="ps-note">ОК</span></div>
+    <div class="ps-row"><span class="ps-name">Statistics</span><span class="ps-partial">Частичный</span><span class="ps-note">Дублирует Dashboard. Кандидат на объединение</span></div>
+    <div class="ps-row"><span class="ps-name">Import</span><span class="ps-partial">Частичный</span><span class="ps-note">Avito-импорт: форма есть, UX завершён частично</span></div>
+    <div class="ps-row"><span class="ps-name">System</span><span class="ps-full">Полный</span><span class="ps-note">Только текущий снапшот, нет трендов</span></div>
+    <div class="ps-row"><span class="ps-name">Settings</span><span class="ps-partial">Частичный</span><span class="ps-note">Хаб из 9+ ссылок без нормальной навигации внутри</span></div>
+    <div class="ps-row"><span class="ps-name">Reviews</span><span class="ps-full">Полный</span><span class="ps-note">ОК</span></div>
+    <div class="ps-row"><span class="ps-name">Questions</span><span class="ps-full">Полный</span><span class="ps-note">Почти идентична Reviews — кандидат на объединение компонентов</span></div>
+    <div class="ps-row"><span class="ps-name">Chats</span><span class="ps-full">Полный</span><span class="ps-note">Крупная страница, много ref-ов и состояний</span></div>
+    <div class="ps-row"><span class="ps-name">SupportChats</span><span class="ps-partial">Частичный</span><span class="ps-note">Другой стиль, несоответствие с Chats — нужно унифицировать</span></div>
+    <div class="ps-row"><span class="ps-name">AiDrafts</span><span class="ps-full">Полный</span><span class="ps-note">ОК</span></div>
+    <div class="ps-row"><span class="ps-name">Avito</span><span class="ps-stub">Заглушка</span><span class="ps-note">Грубая структура, нет полных форм настроек</span></div>
+    <div class="ps-row"><span class="ps-name">WB</span><span class="ps-stub">Заглушка</span><span class="ps-note">Неполная страница, часть функционала не реализована в UI</span></div>
+    <div class="ps-row"><span class="ps-name">OzonCardFix</span><span class="ps-full">Полный</span><span class="ps-note">ОК</span></div>
+    <div class="ps-row"><span class="ps-name">RecoveryQueue</span><span class="ps-full">Полный</span><span class="ps-note">ОК</span></div>
+    <div class="ps-row"><span class="ps-name">NoSupplier</span><span class="ps-full">Полный</span><span class="ps-note">ОК</span></div>
+    <div class="ps-row"><span class="ps-name">ProblemProducts</span><span class="ps-full">Полный</span><span class="ps-note">ОК</span></div>
+    <div class="ps-row"><span class="ps-name">NewProducts</span><span class="ps-full">Полный</span><span class="ps-note">ОК</span></div>
+    <div class="ps-row"><span class="ps-name">BrandBans</span><span class="ps-full">Полный</span><span class="ps-note">Много inline-стилей</span></div>
+    <div class="ps-row"><span class="ps-name">BrandsTnved</span><span class="ps-full">Полный</span><span class="ps-note">ОК, но много inline-стилей</span></div>
+    <div class="ps-row"><span class="ps-name">Tnved</span><span class="ps-partial">Частичный</span><span class="ps-note">Назначение кодов есть, UI прогресса незавершён</span></div>
+    <div class="ps-row"><span class="ps-name">SupplierCart</span><span class="ps-full">Полный</span><span class="ps-note">ОК</span></div>
+    <div class="ps-row"><span class="ps-name">Consignment</span><span class="ps-full">Полный</span><span class="ps-note">ОК</span></div>
+    <div class="ps-row"><span class="ps-name">ShopAdmin</span><span class="ps-stub">Заглушка</span><span class="ps-note">Баннеры/праздники/категории — только часть реализована в UI</span></div>
+  </div>
+
+  <!-- ===== КРИТИЧЕСКИЕ ===== -->
+  <h2 id="critical">Критические проблемы — сломан UX</h2>
+
+  <div class="card">
+    <span class="badge p0">!</span>
+    <div class="card-body">
+      <div class="pages"><span class="page-tag">WbPage</span></div>
+      <div class="tags"><span class="tag tag-ux">UX</span><span class="tag tag-feat">Незавершено</span></div>
+      <h3>Страница Wildberries — незавершённая заглушка</h3>
+      <p>Страница WB существует, но значительная часть функционала отсутствует в UI: нет удобного управления карточками, нет фильтров по статусам ошибок, нет детального просмотра per-карточки. Операторы вынуждены смотреть на сырые данные или пользоваться другими страницами.</p>
+      <p><strong>Что сделать:</strong> Полноценный дизайн страницы WB — статусы карточек с цветными бейджами, фильтр по ошибкам, кнопка форс-синка, прогресс загрузки фото.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge p0">!</span>
+    <div class="card-body">
+      <div class="pages"><span class="page-tag">AvitoPage</span><span class="page-tag">ImportPage</span></div>
+      <div class="tags"><span class="tag tag-ux">UX</span><span class="tag tag-feat">Незавершено</span></div>
+      <h3>Страница Avito — грубая структура без полноценного UI</h3>
+      <p>AvitoPage содержит правила фида и коэффициенты цен, но форма настроек незавершена: нет валидации, нет предпросмотра матчинга в живом режиме, нет понятного статуса фида (когда последний раз обновлён, сколько объявлений). ImportPage для Avito — тоже частичная реализация.</p>
+      <p><strong>Что сделать:</strong> Секция статуса фида (дата, кол-во объявлений, ссылка), форма правил с валидацией, живой предпросмотр нескольких товаров по текущим настройкам.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge p0">!</span>
+    <div class="card-body">
+      <div class="pages"><span class="page-tag">SupportChatsPage</span></div>
+      <div class="tags"><span class="tag tag-ux">UX</span><span class="tag tag-ui">UI</span></div>
+      <h3>SupportChats vs Chats — несоответствие стиля и опыта</h3>
+      <p>SupportChatsPage выглядит как отдельное приложение внутри панели: другие цвета кнопок, другая структура, нет общих компонентов с ChatsPage. Оператор, привыкший к Chats, не сразу понимает как работать.</p>
+      <p><strong>Что сделать:</strong> Унифицировать с ChatsPage — вынести общие компоненты (чат-лист, шаблоны, поле ввода) в shared-компоненты. Одинаковый header и layout.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge p0">!</span>
+    <div class="card-body">
+      <div class="pages"><span class="page-tag">ShopAdminPage</span></div>
+      <div class="tags"><span class="tag tag-ux">UX</span><span class="tag tag-feat">Незавершено</span></div>
+      <h3>ShopAdmin — интерфейс магазина не доделан</h3>
+      <p>Баннеры, праздники, категории, правила наценки — часть секций есть, но не все функции доступны через UI. Некоторые настройки требуют прямого редактирования БД.</p>
+      <p><strong>Что сделать:</strong> Завершить UI управления баннерами (загрузка фото, порядок), категориями (дерево), праздничным расписанием (календарь).</p>
+    </div>
+  </div>
+
+  <!-- ===== СРЕДНИЕ ===== -->
+  <h2 id="medium">Средние проблемы — мешают работе</h2>
+
+  <div class="card">
+    <span class="badge p1">2</span>
+    <div class="card-body">
+      <div class="pages"><span class="page-tag">Dashboard</span><span class="page-tag">Statistics</span></div>
+      <div class="tags"><span class="tag tag-ux">UX</span></div>
+      <h3>Dashboard и Statistics — дублирование данных, нет чёткого разделения</h3>
+      <p>Dashboard показывает метрики продаж, финансы, поставщиков, очередь операций — и Statistics тоже показывает активность, финансы, привязки. Пользователь не понимает зачем открывать Statistics если Dashboard уже всё показывает.</p>
+      <p><strong>Что сделать:</strong> Dashboard = живой операционный монитор дня (заказы, сборка, очередь, алерты). Statistics = аналитика за период (по сотрудникам, по маркетплейсам). Убрать дублирующиеся блоки.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge p1">2</span>
+    <div class="card-body">
+      <div class="pages"><span class="page-tag">SettingsPage</span></div>
+      <div class="tags"><span class="tag tag-ux">UX</span><span class="tag tag-ui">UI</span></div>
+      <h3>Settings — хаб из 9 ссылок без навигации внутри</h3>
+      <p>Страница Settings — это просто список ссылок на другие страницы. Нет breadcrumb, нет возможности понять где ты сейчас, нет группировки настроек (маркетплейсы, ценообразование, пользователи). При открытии подстраницы нет способа быстро вернуться к списку.</p>
+      <p><strong>Что сделать:</strong> Сгруппировать настройки в 3-4 категории с вертикальным меню слева (как в современных панелях). Добавить breadcrumb и кнопку «Назад».</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge p1">2</span>
+    <div class="card-body">
+      <div class="pages"><span class="page-tag">Suppliers</span></div>
+      <div class="tags"><span class="tag tag-ux">UX</span><span class="tag tag-ui">UI</span></div>
+      <h3>SuppliersPage — самая плотная страница, перегрузка информацией</h3>
+      <p>Страница поставщиков содержит: список, сальдо, артикулы, историю платежей, корзину, диагностику — всё в одном. При открытии поставщика открывается огромный аккордеон со множеством разделов. Новый сотрудник теряется.</p>
+      <p><strong>Что сделать:</strong> Разбить карточку поставщика на вкладки: «Баланс», «Артикулы», «История», «Настройки». Скрыть редкие опции за «Дополнительно».</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge p1">2</span>
+    <div class="card-body">
+      <div class="pages"><span class="page-tag">PricesPage</span></div>
+      <div class="tags"><span class="tag tag-ui">UI</span><span class="tag tag-perf">Perf</span></div>
+      <h3>Prices — список из 2000 строк без виртуализации</h3>
+      <p>При 2000 товарах и фильтрах страница рендерит весь список в DOM. С включёнными фильтрами работает быстро, но без фильтрации — тормоза на слабых машинах. Нет группировки по причине (reason) визуально понятной.</p>
+      <p><strong>Что сделать:</strong> Добавить виртуализацию списка (react-virtual уже есть в зависимостях), группировку карточек по reason с заголовками-разделителями.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge p1">2</span>
+    <div class="card-body">
+      <div class="pages"><span class="page-tag">WarehousePage</span></div>
+      <div class="tags"><span class="tag tag-ui">UI</span></div>
+      <h3>Warehouse — карточка товара перегружена, сложно найти нужное</h3>
+      <p>Карточка товара в складе открывает 10+ секций (маркетплейсы, цены, привязки, фото, группы, WB, Avito...). Всё показывается сразу. Сотруднику, который просто хочет посмотреть цену — приходится скроллить.</p>
+      <p><strong>Что сделать:</strong> Ввести «режим просмотра» (только ключевая информация) и «режим редактирования» (все секции). Или вкладки в карточке.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge p1">2</span>
+    <div class="card-body">
+      <div class="pages"><span class="page-tag">SystemPage</span></div>
+      <div class="tags"><span class="tag tag-feat">Функция</span></div>
+      <h3>System — только текущий снапшот, нет трендов</h3>
+      <p>Страница системы показывает текущее состояние (Redis, Postgres, PM, очереди). Но нет графика: не видно когда были пики нагрузки, не понятно как менялась память за сутки, нет истории рестартов.</p>
+      <p><strong>Что сделать:</strong> Добавить mini-графики (последние 24 часа): heap memory, event loop lag, slow requests/min. Хранить 24h метрик в Redis.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge p1">2</span>
+    <div class="card-body">
+      <div class="pages"><span class="page-tag">Reviews</span><span class="page-tag">Questions</span></div>
+      <div class="tags"><span class="tag tag-arch">Архитектура</span></div>
+      <h3>Reviews и Questions — почти идентичные страницы, дублирование кода</h3>
+      <p>ReviewsPage и QuestionsPage имеют одинаковый layout, одинаковые фильтры, одинаковые AI-черновики, одинаковые шаблоны. Логика дублирована. При изменении одной нужно помнить про другую.</p>
+      <p><strong>Что сделать:</strong> Вынести в общий компонент <code>FeedbackPage</code> с параметром mode=reviews/questions. Сэкономит ~400 строк и упростит поддержку.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge p1">2</span>
+    <div class="card-body">
+      <div class="pages"><span class="page-tag">PickingList</span></div>
+      <div class="tags"><span class="tag tag-ui">UI</span><span class="tag tag-ux">UX</span></div>
+      <h3>PickingList — отчёт и список сборки смешаны на одной странице</h3>
+      <p>Страница совмещает: фильтрованный список заказов для сборки, отчёт оплат по сборщикам, баланс сотрудников, историю. Переключение между режимами неочевидно, особенно для новых сотрудников.</p>
+      <p><strong>Что сделать:</strong> Разделить на две под-страницы или добавить чёткие вкладки: «Текущие заказы» / «Отчёт оплат» / «Балансы».</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge p1">2</span>
+    <div class="card-body">
+      <div class="pages"><span class="page-tag">Dashboard</span><span class="page-tag">Suppliers</span><span class="page-tag">PickingList</span></div>
+      <div class="tags"><span class="tag tag-perf">Perf</span></div>
+      <h3>Множественные параллельные запросы без скелетонов для всех секций</h3>
+      <p>Dashboard загружает 7+ queries параллельно. Некоторые секции появляются мгновенно, другие «прыгают» когда данные приходят. Визуально страница «скачет» при загрузке.</p>
+      <p><strong>Что сделать:</strong> Добавить Skeleton-заглушки для ВСЕХ секций, которые ждут данных. Зафиксировать высоту блоков во время загрузки чтобы страница не прыгала.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge p1">2</span>
+    <div class="card-body">
+      <div class="pages"><span class="page-tag">Tnved</span></div>
+      <div class="tags"><span class="tag tag-ui">UI</span><span class="tag tag-feat">Незавершено</span></div>
+      <h3>TnvedPage — прогресс назначения кодов незавершён в UI</h3>
+      <p>Страница ТН ВЭД имеет базовую таблицу назначений, но прогресс-бар и dry-run режим реализованы частично. Непонятно сколько товаров ещё без кода, нет сортировки по «срочности».</p>
+      <p><strong>Что сделать:</strong> Добавить сводку прогресса (X из Y с кодом), фильтр «только без кода», кнопку «Назначить всё по категории».</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge p1">2</span>
+    <div class="card-body">
+      <div class="pages"><span class="page-tag">All</span></div>
+      <div class="tags"><span class="tag tag-ux">UX</span></div>
+      <h3>Sidebar — нет настройки, фиксированный порядок страниц</h3>
+      <p>У каждого сотрудника разные приоритеты. Сборщик всегда идёт на PickingList, менеджер — на Suppliers, администратор — на Dashboard. Сейчас все видят одинаковый список страниц в одном порядке, нельзя ничего перенести или скрыть.</p>
+      <p><strong>Что сделать:</strong> Добавить drag-and-drop настройку sidebar. Каждый пользователь может перетащить нужные страницы наверх и скрыть ненужные. Порядок сохраняется в localStorage или в профиле пользователя на сервере.</p>
+    </div>
+  </div>
+
+  <!-- ===== КОСМЕТИКА ===== -->
+  <h2 id="low">Косметика и polish</h2>
+
+  <div class="card">
+    <span class="badge p2">3</span>
+    <div class="card-body">
+      <div class="pages"><span class="page-tag">BrandBans</span><span class="page-tag">BrandsTnved</span><span class="page-tag">Tnved</span></div>
+      <div class="tags"><span class="tag tag-ui">UI</span></div>
+      <h3>Много inline-стилей вместо CSS-классов</h3>
+      <p>BrandBansPage и BrandsTnvedPage используют <code>style={{'{'}}{'{'}}</code> вместо CSS-классов. Это делает UI несоответствующим остальным страницам и усложняет dark/light переключение в будущем.</p>
+      <p><strong>Что сделать:</strong> Перенести повторяющиеся inline-стили в <code>styles.css</code> классы.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge p2">3</span>
+    <div class="card-body">
+      <div class="pages"><span class="page-tag">All</span></div>
+      <div class="tags"><span class="tag tag-ui">UI</span></div>
+      <h3>Нет анимаций перехода между страницами</h3>
+      <p>Переход между страницами мгновенный (hard flash). Современные панели используют лёгкий fade-in для страниц. Уже подключён TailwindCSS с transition-утилитами.</p>
+      <p><strong>Что сделать:</strong> Добавить <code>opacity-0 → opacity-100</code> transition при монтировании страниц (100ms). Опционально — slide-in для модалок.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge p2">3</span>
+    <div class="card-body">
+      <div class="pages"><span class="page-tag">Statistics</span></div>
+      <div class="tags"><span class="tag tag-ui">UI</span></div>
+      <h3>Удалённые пользователи не визуально отличаются</h3>
+      <p>В Statistics удалённые сотрудники показываются с маленькой пометкой. При беглом взгляде непонятно кто активен, кто нет.</p>
+      <p><strong>Что сделать:</strong> Зачёркнутый текст + серый цвет + <code>opacity-60</code> для удалённых. Добавить toggle «показать удалённых» (по умолчанию скрыть).</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge p2">3</span>
+    <div class="card-body">
+      <div class="pages"><span class="page-tag">Chats</span><span class="page-tag">PickingList</span></div>
+      <div class="tags"><span class="tag tag-ux">UX</span></div>
+      <h3>Нет индикатора несохранённых изменений</h3>
+      <p>На страницах с формами (Chats черновики, PickingList оплата) пользователь может случайно закрыть вкладку потеряв введённый текст. Нет предупреждения.</p>
+      <p><strong>Что сделать:</strong> Добавить <code>beforeunload</code> warning когда есть несохранённые данные в форме.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge p2">3</span>
+    <div class="card-body">
+      <div class="pages"><span class="page-tag">System</span></div>
+      <div class="tags"><span class="tag tag-ui">UI</span></div>
+      <h3>Аббревиатуры в системной таблице без подсказок</h3>
+      <p>System-страница показывает названия компонентов сокращённо. Без знания кода непонятно что означает <code>pg_upsert_call</code> или <code>reconciler_recovery</code>.</p>
+      <p><strong>Что сделать:</strong> Добавить tooltip при наведении с описанием каждого компонента.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge p2">3</span>
+    <div class="card-body">
+      <div class="pages"><span class="page-tag">RecoveryQueue</span><span class="page-tag">NoSupplier</span></div>
+      <div class="tags"><span class="tag tag-ui">UI</span></div>
+      <h3>Поиск без debounce на медленных страницах</h3>
+      <p>Поле поиска на RecoveryQueuePage и NoSupplierPage фильтрует при каждом нажатии клавиши. На больших списках это вызывает лаги.</p>
+      <p><strong>Что сделать:</strong> Добавить <code>useDebounce(300ms)</code> на все поля поиска которые фильтруют большие списки.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge p2">3</span>
+    <div class="card-body">
+      <div class="pages"><span class="page-tag">Avito</span><span class="page-tag">WB</span></div>
+      <div class="tags"><span class="tag tag-ui">UI</span></div>
+      <h3>Поля цен без указания единиц (₽ или $)</h3>
+      <p>На страницах Avito и WB поля ввода для цен и коэффициентов не имеют подписи единиц. Неясно — вводить рубли, доллары или коэффициент.</p>
+      <p><strong>Что сделать:</strong> Добавить suffix/prefix к каждому полю: <code>₽</code>, <code>$</code>, <code>×</code>.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge p2">3</span>
+    <div class="card-body">
+      <div class="pages"><span class="page-tag">All</span></div>
+      <div class="tags"><span class="tag tag-ui">UI</span></div>
+      <h3>Нет единого компонента пустого состояния (empty state)</h3>
+      <p>Когда список пустой (нет товаров, нет заказов) — разные страницы показывают разный текст или вообще ничего. Нет иконки, нет подсказки что делать.</p>
+      <p><strong>Что сделать:</strong> Создать компонент <code>EmptyState</code> с иконкой и текстом. Применить на всех страницах где список может быть пустым.</p>
+    </div>
+  </div>
+
+  <!-- ===== НОВЫЕ ФИЧИ ===== -->
+  <h2 id="new">Новые функции</h2>
+
+  <div class="card">
+    <span class="badge p3">N</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-new">Новое</span><span class="tag tag-feat">Функция</span></div>
+      <h3>Настраиваемый sidebar — drag-and-drop порядок страниц для каждого пользователя</h3>
+      <p>Запрос от пользователя: каждый сотрудник должен иметь возможность настроить sidebar под себя — перетащить нужные страницы наверх, скрыть ненужные.</p>
+      <p><strong>Реализация:</strong></p>
+      <p>1. Кнопка «Настроить» в footer sidebar (шестерёнка). Открывает модалку со списком страниц.</p>
+      <p>2. Drag-and-drop порядка (библиотека <code>@dnd-kit/core</code> — уже используется в проекте или лёгкая).</p>
+      <p>3. Чекбокс «скрыть» для каждой страницы. Скрытые уходят в «Ещё» в нижней части sidebar.</p>
+      <p>4. Сохранение в <code>localStorage</code> (быстро) + синхронизация в профиль пользователя на сервере (опционально).</p>
+      <p>5. Кнопка «Сбросить» для возврата к дефолту.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge p3">N</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-new">Новое</span><span class="tag tag-feat">Функция</span></div>
+      <h3>Уведомления о событиях прямо в панели (in-app notifications)</h3>
+      <p>Сейчас события (отмена заказа, ошибка цены, новый отзыв) приходят только в Telegram. Нет способа увидеть их прямо в панели без переключения на Telegram.</p>
+      <p><strong>Реализация:</strong> Колокольчик в header с числом непрочитанных. Pull-to-refresh или WebSocket. Уже есть Web Push (VAPID ключи) — можно использовать его API.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge p3">N</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-new">Новое</span><span class="tag tag-feat">Функция</span></div>
+      <h3>Light mode / Dark mode переключатель</h3>
+      <p>Сейчас панель только тёмная. Некоторым сотрудникам в светлом офисе удобнее светлая тема. CSS уже структурирован с CSS-переменными, сделать light mode реально без большой работы.</p>
+      <p><strong>Реализация:</strong> Добавить <code>[data-theme="light"]</code> класс на body + переопределить CSS-переменные. Тумблер в header или в Settings. Сохранять в localStorage.</p>
+    </div>
+  </div>
+
+  <!-- ===== ЧТО УБРАТЬ ===== -->
+  <h2 id="remove">Что объединить или убрать</h2>
+
+  <div class="card">
+    <span class="badge pf">?</span>
+    <div class="card-body">
+      <div class="pages"><span class="page-tag">Statistics</span></div>
+      <div class="tags"><span class="tag tag-arch">Архитектура</span></div>
+      <h3>StatisticsPage — кандидат на объединение с Dashboard</h3>
+      <p>80% данных Statistics уже есть на Dashboard. Отдельная страница оправдана только если там будет глубокая аналитика по сотрудникам. Сейчас она выглядит как недодобавленный раздел Dashboard.</p>
+      <p><strong>Предложение:</strong> Перенести статистику сотрудников во вкладку на Dashboard. Страницу Statistics убрать из sidebar (оставить роут для прямых ссылок).</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge pf">?</span>
+    <div class="card-body">
+      <div class="pages"><span class="page-tag">Reviews</span><span class="page-tag">Questions</span></div>
+      <div class="tags"><span class="tag tag-arch">Архитектура</span></div>
+      <h3>Reviews и Questions — объединить в одну страницу «Обратная связь»</h3>
+      <p>Страницы идентичны по структуре. Оператор обрабатывает и отзывы, и вопросы в одном потоке. Нет смысла переключаться между двумя страницами.</p>
+      <p><strong>Предложение:</strong> Одна страница «Обратная связь» с вкладками «Отзывы / Вопросы» или единым смешанным списком с фильтром по типу.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge pf">?</span>
+    <div class="card-body">
+      <div class="pages"><span class="page-tag">Sidebar</span></div>
+      <div class="tags"><span class="tag tag-arch">Архитектура</span></div>
+      <h3>Слишком много пунктов в sidebar — реорганизация нужна</h3>
+      <p>Сейчас в sidebar 20+ пунктов — слишком много для быстрой навигации. Часть страниц (BrandBans, BrandsTnved, Tnved, RecoveryQueue, NoSupplier) используются редко и захламляют меню.</p>
+      <p><strong>Предложение:</strong> Сгруппировать редко используемые страницы в раздел «Инструменты» или «Диагностика» с раскрывающейся группой в sidebar. До внедрения drag-and-drop (см. выше) — хотя бы визуальные разделители.</p>
+    </div>
+  </div>
+
+  <hr />
+  <p class="foot">davidsklad.ru · UI Аудит · сентябрь 2026 · 29 страниц · 4 критических / 11 средних / 8 косметических · Не деплоить — только планирование</p>
+</div>
+</body>
+</html>

@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Дорожная карта magicvibes.ru — сентябрь 2026</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 13px;
+      line-height: 1.6;
+      color: #1a1a2e;
+      background: #fff;
+    }
+
+    .page {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 48px 56px;
+    }
+
+    /* ── Header ── */
+    .header {
+      border-bottom: 3px solid #7c3aed;
+      padding-bottom: 24px;
+      margin-bottom: 36px;
+    }
+    .header-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+    .brand {
+      font-size: 22px;
+      font-weight: 700;
+      color: #7c3aed;
+      letter-spacing: -0.5px;
+    }
+    .brand span { color: #1a1a2e; }
+    .meta {
+      text-align: right;
+      font-size: 11px;
+      color: #64748b;
+      line-height: 1.8;
+    }
+    .doc-title {
+      margin-top: 12px;
+      font-size: 26px;
+      font-weight: 700;
+      color: #1a1a2e;
+      letter-spacing: -0.8px;
+    }
+    .doc-subtitle {
+      margin-top: 4px;
+      color: #64748b;
+      font-size: 13px;
+    }
+
+    /* ── Summary strip ── */
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-bottom: 36px;
+    }
+    .summary-card {
+      background: #f8f5ff;
+      border: 1px solid #e9d5ff;
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+    .summary-card .num {
+      font-size: 28px;
+      font-weight: 700;
+      color: #7c3aed;
+      line-height: 1;
+    }
+    .summary-card .label {
+      font-size: 11px;
+      color: #64748b;
+      margin-top: 4px;
+    }
+
+    /* ── Section heading ── */
+    h2 {
+      font-size: 17px;
+      font-weight: 700;
+      color: #1a1a2e;
+      margin-bottom: 16px;
+      margin-top: 36px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #e2e8f0;
+      letter-spacing: -0.3px;
+    }
+    h2:first-of-type { margin-top: 0; }
+
+    /* ── Issue cards ── */
+    .issue {
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      margin-bottom: 16px;
+      overflow: hidden;
+      page-break-inside: avoid;
+    }
+    .issue-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      background: #f8fafc;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .issue-num {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+    .issue-title {
+      font-size: 14px;
+      font-weight: 600;
+      flex: 1;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 100px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      white-space: nowrap;
+    }
+
+    /* Priority colors */
+    .p-critical .issue-num { background: #fef2f2; color: #dc2626; }
+    .p-critical .badge { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+
+    .p-high .issue-num { background: #fff7ed; color: #ea580c; }
+    .p-high .badge { background: #fff7ed; color: #ea580c; border: 1px solid #fed7aa; }
+
+    .p-medium .issue-num { background: #fefce8; color: #ca8a04; }
+    .p-medium .badge { background: #fefce8; color: #ca8a04; border: 1px solid #fde68a; }
+
+    .p-low .issue-num { background: #f0fdf4; color: #16a34a; }
+    .p-low .badge { background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; }
+
+    .issue-body {
+      padding: 14px 16px;
+    }
+
+    /* ── Diagnosis / steps ── */
+    .block {
+      margin-bottom: 12px;
+    }
+    .block-label {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: #94a3b8;
+      margin-bottom: 6px;
+    }
+    .block p, .block li {
+      color: #374151;
+      font-size: 12.5px;
+    }
+    ol, ul {
+      padding-left: 18px;
+    }
+    li { margin-bottom: 4px; }
+
+    .code {
+      display: inline-block;
+      background: #f1f5f9;
+      border: 1px solid #e2e8f0;
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-family: 'Courier New', monospace;
+      font-size: 11px;
+      color: #7c3aed;
+    }
+
+    .info-row {
+      display: flex;
+      gap: 24px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+    .info-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11.5px;
+      color: #64748b;
+    }
+    .info-item strong {
+      color: #374151;
+      font-weight: 600;
+    }
+
+    /* ── Timeline ── */
+    .timeline {
+      position: relative;
+      padding-left: 24px;
+      margin-top: 8px;
+    }
+    .timeline::before {
+      content: '';
+      position: absolute;
+      left: 6px;
+      top: 8px;
+      bottom: 8px;
+      width: 2px;
+      background: #e2e8f0;
+    }
+    .tl-step {
+      position: relative;
+      margin-bottom: 10px;
+    }
+    .tl-step::before {
+      content: '';
+      position: absolute;
+      left: -20px;
+      top: 6px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #7c3aed;
+      border: 2px solid #fff;
+      box-shadow: 0 0 0 2px #7c3aed;
+    }
+    .tl-step p {
+      font-size: 12.5px;
+      color: #374151;
+    }
+
+    /* ── Warning / note box ── */
+    .note {
+      background: #fffbeb;
+      border: 1px solid #fde68a;
+      border-left: 3px solid #f59e0b;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 12px;
+      color: #92400e;
+      margin-top: 10px;
+    }
+    .note strong { color: #78350f; }
+
+    .success-note {
+      background: #f0fdf4;
+      border: 1px solid #bbf7d0;
+      border-left: 3px solid #22c55e;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 12px;
+      color: #166534;
+      margin-top: 10px;
+    }
+
+    /* ── Checklist ── */
+    .checklist { list-style: none; padding-left: 0; }
+    .checklist li {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 5px 0;
+      border-bottom: 1px dashed #f1f5f9;
+      font-size: 12.5px;
+      color: #374151;
+    }
+    .checklist li:last-child { border-bottom: none; }
+    .check-box {
+      width: 16px;
+      height: 16px;
+      border: 1.5px solid #cbd5e1;
+      border-radius: 3px;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    /* ── Sprint table ── */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 8px;
+      font-size: 12px;
+    }
+    th {
+      text-align: left;
+      padding: 8px 12px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      font-weight: 600;
+      color: #374151;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+    td {
+      padding: 8px 12px;
+      border: 1px solid #e2e8f0;
+      color: #374151;
+      vertical-align: top;
+    }
+    tr:nth-child(even) td { background: #fafafa; }
+
+    .tag {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 600;
+      margin-right: 3px;
+    }
+    .tag-be { background: #ede9fe; color: #5b21b6; }
+    .tag-fe { background: #e0f2fe; color: #0369a1; }
+    .tag-ops { background: #dcfce7; color: #166534; }
+    .tag-api { background: #fce7f3; color: #9d174d; }
+
+    /* ── Footer ── */
+    .footer {
+      margin-top: 48px;
+      padding-top: 16px;
+      border-top: 1px solid #e2e8f0;
+      display: flex;
+      justify-content: space-between;
+      font-size: 10px;
+      color: #94a3b8;
+    }
+
+    @media print {
+      body { font-size: 12px; }
+      .page { padding: 20px 24px; }
+      .issue { page-break-inside: avoid; }
+      h2 { page-break-after: avoid; }
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-top">
+      <div class="brand">Magic<span>Vibes</span>.ru</div>
+      <div class="meta">
+        Составлено: 4 сентября 2026<br>
+        Платформа: davidsklad.ru<br>
+        Версия: 1.0
+      </div>
+    </div>
+    <div class="doc-title">Дорожная карта сайта</div>
+    <div class="doc-subtitle">Диагностика проблем, план устранения и порядок запуска e-commerce функций</div>
+  </div>
+
+  <!-- Summary -->
+  <div class="summary">
+    <div class="summary-card">
+      <div class="num">8</div>
+      <div class="label">задач в карте</div>
+    </div>
+    <div class="summary-card">
+      <div class="num">2</div>
+      <div class="label">критических (блокируют продажи)</div>
+    </div>
+    <div class="summary-card">
+      <div class="num">~3</div>
+      <div class="label">недели на реализацию</div>
+    </div>
+    <div class="summary-card">
+      <div class="num">4</div>
+      <div class="label">задачи — только настройка (без кода)</div>
+    </div>
+  </div>
+
+  <!-- ────────────────────────────────── -->
+  <h2>Блок 1 — Критические проблемы (блокируют продажи)</h2>
+
+  <!-- Issue 1: Prices -->
+  <div class="issue p-critical">
+    <div class="issue-header">
+      <div class="issue-num">1</div>
+      <div class="issue-title">Неправильная цена в каталоге</div>
+      <span class="badge">Критично</span>
+    </div>
+    <div class="issue-body">
+      <div class="block">
+        <div class="block-label">Диагноз</div>
+        <p>Цена на сайте считается по формуле: <code class="code">цена_USD × курс_USD/RUB × коэффициент</code>. Цена_USD берётся из снапшота PriceMaster (MySQL), курс кэшируется 6 ч из внешнего API. Если цена_USD не найдена по артикулу — подставляется <code class="code">currentPrice</code> из склада (цена маркетплейса в рублях, без пересчёта коэффициентом). Это главная причина «неправильных» цен: у товара нет привязки в PM, или снапшот устарел.</p>
+      </div>
+      <div class="block">
+        <div class="block-label">Пошаговое устранение</div>
+        <ol>
+          <li>В панели davidsklad.ru зайти в <strong>Склад → карточка товара</strong> и убедиться, что у товара есть активная привязка к строке PriceMaster (зелёная иконка).</li>
+          <li>Проверить снапшот: <code class="code">GET /api/warehouse/pm-snapshot/status</code> — дата последнего обновления не должна быть старше 15 мин.</li>
+          <li>Проверить коэффициент магазина: Настройки → Shop → «Наценка магазина» (по умолчанию 2.2 = 120% наценки).</li>
+          <li>Если у товара несколько диапазонов USD — правила наценки (<code class="code">markupRules</code>) могут выбрать не тот коэффициент. Убедиться что диапазоны настроены правильно (от minUsd).</li>
+          <li>Текущий курс: <code class="code">GET /api/usd-rate</code> — убедиться что курс актуален (не задержался в кэше).</li>
+        </ol>
+      </div>
+      <div class="info-row">
+        <div class="info-item"><strong>Файл:</strong> <code class="code">server/parts/02d-shop-api-routes.js:159</code></div>
+        <div class="info-item"><strong>Трудозатраты:</strong> 1–2 часа (диагностика + настройка)</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Issue 2: Stock -->
+  <div class="issue p-critical">
+    <div class="issue-header">
+      <div class="issue-num">2</div>
+      <div class="issue-title">Не отображается остаток на товар</div>
+      <span class="badge">Критично</span>
+    </div>
+    <div class="issue-body">
+      <div class="block">
+        <div class="block-label">Диагноз</div>
+        <p>Сайт берёт остаток из поля <code class="code">targetStock</code> таблицы <code class="code">WarehouseProduct</code>. Поле показывает <em>желаемый</em> остаток на маркетплейсе, а не фактические штуки на полке. Если у товара <code class="code">targetStock = 0</code> или <code class="code">null</code> — сайт пишет «нет в наличии». Логика «inStock» в коде: <code class="code">stockQty > 0 OR (статус не archived AND цена > 0)</code> — то есть без targetStock товар показывается как «в наличии» без числа.</p>
+      </div>
+      <div class="block">
+        <div class="block-label">Пошаговое устранение</div>
+        <ol>
+          <li>В панели davidsklad.ru → <strong>Склад</strong>: для нужных товаров убедиться, что <code class="code">targetStock ≥ 1</code> (обычно 5 для привязанных).</li>
+          <li>Если нужно отображать реальный физический остаток — необходима доработка: добавить поле <code class="code">physicalStock</code> и синхронизировать его вручную через CSV или форму в карточке товара.</li>
+          <li>Временный фикс (без кода): в настройках магазина отображать «В наличии» / «Нет» вместо числа — это уже работает при любом <code class="code">targetStock > 0</code>.</li>
+        </ol>
+      </div>
+      <div class="note">
+        <strong>Важно:</strong> <code class="code">targetStock</code> — не физический остаток, а лимит для маркетплейса. Для интернет-магазина правильнее хранить и показывать физические штуки. Это отдельная задача разработки (~4–6 ч).
+      </div>
+      <div class="info-row">
+        <div class="info-item"><strong>Файл:</strong> <code class="code">server/parts/02d-shop-api-routes.js:283</code></div>
+        <div class="info-item"><strong>Трудозатраты:</strong> 30 мин (настройка) или 4–6 ч (доработка физического остатка)</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ────────────────────────────────── -->
+  <h2>Блок 2 — Контентные проблемы</h2>
+
+  <!-- Issue 3: Ozon reviews on product -->
+  <div class="issue p-high">
+    <div class="issue-header">
+      <div class="issue-num">3</div>
+      <div class="issue-title">Нет отзывов Ozon на карточке товара</div>
+      <span class="badge">Высокий</span>
+    </div>
+    <div class="issue-body">
+      <div class="block">
+        <div class="block-label">Диагноз</div>
+        <p>Рейтинг Ozon синхронизируется через <strong>Premium API</strong> Ozon (<code class="code">/v1/review/statistic/list</code>) раз в 6 часов и пишется в поле <code class="code">marketplaceState.ozonRating</code> каждого товара. Если синхронизация не запустилась — поле пустое, сайт показывает 0 звёзд. Возможные причины: Ozon Premium API не подключён к кабинету, воркер не запущен (<code class="code">BACKGROUND_JOBS_ENABLED=true</code> не установлен), или у товаров нет <code class="code">productId</code>.</p>
+      </div>
+      <div class="block">
+        <div class="block-label">Как проверить и исправить</div>
+        <ol>
+          <li>На сервере: <code class="code">pm2 logs davidsklad-worker | grep "rating sync"</code> — посмотреть есть ли строки «ozon rating sync: updated» каждые 6 ч. Если строк нет или есть «API unavailable» — Premium API не доступен.</li>
+          <li>Зайти в личный кабинет Ozon Seller → <strong>Аналитика → API → Права доступа</strong> — убедиться что скоуп <code class="code">statistic</code> или <code class="code">review</code> разрешён.</li>
+          <li>Если Premium API недоступен — обходное решение: показывать текстовые отзывы, которые покупатели оставляют прямо на сайте через форму (<code class="code">ShopReview</code> модель), они уже сохраняются.</li>
+        </ol>
+      </div>
+      <div class="info-row">
+        <div class="info-item"><strong>Файл:</strong> <code class="code">server/parts/02f-shop-ratings-sync.js</code></div>
+        <div class="info-item"><strong>Трудозатраты:</strong> 1 ч (диагностика + включение Premium API)</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Issue 4: Reviews on homepage -->
+  <div class="issue p-medium">
+    <div class="issue-header">
+      <div class="issue-num">4</div>
+      <div class="issue-title">Добавить блок последних отзывов Ozon/Яндекс на главную</div>
+      <span class="badge">Средний</span>
+    </div>
+    <div class="issue-body">
+      <div class="block">
+        <div class="block-label">Текущее состояние</div>
+        <p>На сайте уже есть система внутренних отзывов (<code class="code">ShopReview</code>) — покупатели пишут отзывы напрямую на magicvibes.ru, они видны на карточке товара. API <code class="code">GET /api/shop/reviews</code> уже отдаёт последние одобренные отзывы. Отзывы с Ozon и Яндекс <em>не</em> импортируются на сайт — они хранятся только в маркетплейсах.</p>
+      </div>
+      <div class="block">
+        <div class="block-label">Что нужно сделать</div>
+        <div class="timeline">
+          <div class="tl-step"><p><strong>Backend:</strong> Написать джоб синхронизации отзывов с Ozon (<code class="code">/v1/review/list</code>) и Яндекс Маркет в таблицу <code class="code">ShopReview</code> с флагом <code class="code">source = "ozon" | "yandex"</code>. Запускать 1 раз в сутки. (~4 ч)</p></div>
+          <div class="tl-step"><p><strong>Frontend:</strong> На главной странице magicvibes.ru добавить секцию «Что говорят покупатели» — горизонтальная прокрутка карточек отзывов с именем автора, звёздами, текстом, иконкой маркетплейса. (~3 ч)</p></div>
+          <div class="tl-step"><p><strong>Модерация:</strong> В ShopAdminPage добавить вкладку «Отзывы с МП» — утверждать/скрывать перед показом на главной. (~2 ч)</p></div>
+        </div>
+      </div>
+      <div class="info-row">
+        <div class="info-item"><strong>Трудозатраты:</strong> ~9 ч (бэкенд + фронт + модерация)</div>
+        <div class="info-item"><strong>Метки:</strong> <span class="tag tag-be">Backend</span><span class="tag tag-fe">Frontend</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ────────────────────────────────── -->
+  <h2>Блок 3 — Технические ошибки</h2>
+
+  <!-- Issue 5: PVZ map -->
+  <div class="issue p-high">
+    <div class="issue-header">
+      <div class="issue-num">5</div>
+      <div class="issue-title">Карта выбора ПВЗ пишет «API error key»</div>
+      <span class="badge">Высокий</span>
+    </div>
+    <div class="issue-body">
+      <div class="block">
+        <div class="block-label">Диагноз</div>
+        <p>Карта ПВЗ работает через Ozon Seller API (<code class="code">/v1/delivery/point/list</code> + <code class="code">/v1/delivery/point/info</code>). Для запроса используются стандартные ключи Ozon продавца (<code class="code">OZON_CLIENT_ID</code> / <code class="code">OZON_API_KEY</code>) — те же, что для синхронизации склада. Ошибка «API error key» означает, что ключи либо не прописаны в <code class="code">.env</code> на сервере, либо у ключа недостаточно прав, либо аккаунт не подключён к FBS-доставке Ozon.</p>
+      </div>
+      <div class="block">
+        <div class="block-label">Пошаговое устранение</div>
+        <ol>
+          <li>На сервере (root@81.17.154.153): <code class="code">cat /var/www/davidsklad/davidskladik/.env | grep OZON</code> — убедиться что <code class="code">OZON_CLIENT_ID</code> и <code class="code">OZON_API_KEY</code> заданы.</li>
+          <li>Открыть браузер → DevTools → Network → найти запрос <code class="code">/api/shop/delivery/pvz</code> и посмотреть полный ответ (там будет HTTP-статус от Ozon).</li>
+          <li>Статус <strong>403</strong> — у ключа нет права на доставку. Ozon Seller: <strong>Настройки → API-ключи</strong> → убедиться что есть права <code class="code">delivery</code>.</li>
+          <li>Статус <strong>401</strong> — неверный ключ. Перегенерировать в кабинете Ozon и обновить <code class="code">.env</code>.</li>
+          <li>Если Ozon FBS не подключён к кабинету — карта ПВЗ работать не будет. Сначала нужно подключить FBS (см. задачу №6).</li>
+        </ol>
+      </div>
+      <div class="info-row">
+        <div class="info-item"><strong>Файл:</strong> <code class="code">server/parts/02d-shop-api-routes.js:842</code></div>
+        <div class="info-item"><strong>Трудозатраты:</strong> 30 мин (диагностика + обновление ключей)</div>
+        <div class="info-item"><strong>Метки:</strong> <span class="tag tag-ops">Ops</span><span class="tag tag-api">API</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ────────────────────────────────── -->
+  <h2>Блок 4 — Доставка Ozon FBS</h2>
+
+  <!-- Issue 6: FBS -->
+  <div class="issue p-high">
+    <div class="issue-header">
+      <div class="issue-num">6</div>
+      <div class="issue-title">Что нужно для создания доставки через Ozon FBS</div>
+      <span class="badge">Высокий</span>
+    </div>
+    <div class="issue-body">
+      <div class="block">
+        <div class="block-label">FBS (Fulfillment by Seller) — полный чеклист подключения</div>
+        <ul class="checklist">
+          <li><div class="check-box"></div><strong>Шаг 1 — Склад в кабинете Ozon:</strong> Ozon Seller → Настройки → Склады → «Добавить склад» (тип FBS). Заполнить адрес, время работы, схему отгрузки (доставка курьером Ozon или самовывоз в ПВЗ Ozon).</li>
+          <li><div class="check-box"></div><strong>Шаг 2 — API-ключ с правами доставки:</strong> Ozon Seller → Настройки → API-ключи → создать ключ со скоупами <code class="code">delivery</code>, <code class="code">read:postings</code>, <code class="code">write:postings</code>. Прописать в <code class="code">.env</code>: <code class="code">OZON_CLIENT_ID</code> и <code class="code">OZON_API_KEY</code>.</li>
+          <li><div class="check-box"></div><strong>Шаг 3 — Включить FBS в настройках склада (davidsklad):</strong> Настройки → Аккаунты → Ozon → включить FBS-режим (переключатель уже есть в интерфейсе).</li>
+          <li><div class="check-box"></div><strong>Шаг 4 — Принять заказ:</strong> Когда покупатель оформляет заказ на Ozon → статус «Awaiting packaging» → в davidsklad.ru это отображается на странице Финансы/Операции. Необходимо убедиться, что робот забирает заказы через поллер Ozon (файл <code class="code">02f-notifications-pollers.js</code>).</li>
+          <li><div class="check-box"></div><strong>Шаг 5 — Упаковка и отгрузка (через код):</strong> Правильный эндпоинт Ozon: <code class="code">POST /v4/posting/fbs/ship</code> (старый <code class="code">/v1/posting/fbs/package</code> удалён Ozon). Код кнопки «Отгрузить» уже есть в проекте — нужно убедиться что он вызывает <code class="code">/v4/posting/fbs/ship</code>.</li>
+          <li><div class="check-box"></div><strong>Шаг 6 — Этикетки:</strong> После ship вызвать <code class="code">GET /v2/posting/fbs/package-label</code> → скачать PDF и наклеить на посылку.</li>
+          <li><div class="check-box"></div><strong>Шаг 7 — Передача в службу доставки:</strong> Передать посылку курьеру Ozon или отвезти в ПВЗ Ozon. Акт передачи: <code class="code">POST /v2/posting/fbs/act/create</code> → <code class="code">GET /v2/posting/fbs/act/check-status</code> → <code class="code">GET /v2/posting/fbs/digital-act/get</code>.</li>
+        </ul>
+      </div>
+      <div class="note">
+        <strong>Документация на сервере:</strong> <code class="code">docs/Ozon Доставка_ подключение...pdf</code> и <code class="code">docs/Документация Ozon Seller API*.html</code> — там подробно описаны шаги 1–7.
+      </div>
+      <div class="success-note">
+        <strong>Хорошая новость:</strong> Код отгрузки через <code class="code">/v4/posting/fbs/ship</code> уже исправлен в проекте (память: ozon-fbs-ship-api.md). ПВЗ-карта тоже уже реализована. Основное что нужно — настроить склад в кабинете Ozon и проверить ключи API.
+      </div>
+      <div class="info-row">
+        <div class="info-item"><strong>Трудозатраты:</strong> 2–4 ч (настройка Ozon) + 2 ч (тест с реальным заказом)</div>
+        <div class="info-item"><strong>Метки:</strong> <span class="tag tag-ops">Ops</span><span class="tag tag-api">API</span><span class="tag tag-be">Backend</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ────────────────────────────────── -->
+  <h2>Блок 5 — Платёжная система</h2>
+
+  <!-- Issue 7: Payment -->
+  <div class="issue p-high">
+    <div class="issue-header">
+      <div class="issue-num">7</div>
+      <div class="issue-title">Отключить тестовую платёжную систему и перейти на боевую</div>
+      <span class="badge">Высокий</span>
+    </div>
+    <div class="issue-body">
+      <div class="block">
+        <div class="block-label">Текущее состояние</div>
+        <p>На сайте реализована оплата через <strong>Ozon Pay</strong> (эквайринг). API-адрес — <code class="code">payapi.ozon.ru</code> (production URL, не sandbox). Но для работы нужны 3 секретных ключа в <code class="code">.env</code>. Если ключи не прописаны — заказ создаётся без ссылки на оплату (статус <code class="code">pending</code> вместо <code class="code">payment_pending</code>), покупатель видит «оформить заказ» без оплаты.</p>
+      </div>
+      <div class="block">
+        <div class="block-label">Что нужно сделать для боевого режима</div>
+        <ol>
+          <li>Подключить Ozon Pay: <strong>Ozon Seller → Финансы → Ozon Pay → «Подключить эквайринг»</strong>. Вам выдадут <code class="code">accessKey</code>, <code class="code">secretKey</code> и <code class="code">notificationSecretKey</code>.</li>
+          <li>Прописать в <code class="code">.env</code> на сервере:
+            <br><code class="code">OZON_PAY_ACCESS_KEY=&lt;ваш accessKey&gt;</code>
+            <br><code class="code">OZON_PAY_SECRET_KEY=&lt;ваш secretKey&gt;</code>
+            <br><code class="code">OZON_PAY_NOTIFICATION_SECRET=&lt;ваш notificationSecretKey&gt;</code>
+          </li>
+          <li>Перезапустить API: <code class="code">pm2 restart davidsklad-api</code></li>
+          <li>Настроить webhook в Ozon Pay: URL уведомлений = <code class="code">https://davidsklad.ru/api/shop/payment/notification</code> — прописать в личном кабинете Ozon Pay.</li>
+          <li>Тест: оформить тестовый заказ на magicvibes.ru → убедиться что появляется ссылка на оплату Ozon Pay → оплатить → проверить что статус заказа стал <code class="code">paid</code> в ShopAdminPage.</li>
+        </ol>
+      </div>
+      <div class="block">
+        <div class="block-label">Если хотите временно убрать оплату (только форма заказа)</div>
+        <p>В настройках магазина (ShopAdminPage → Настройки → Оплата) — выбрать режим «Оплата при получении». Тогда заказы будут приходить со статусом <code class="code">pending</code> без ссылки на оплату — нужна ручная обработка.</p>
+      </div>
+      <div class="info-row">
+        <div class="info-item"><strong>Файл:</strong> <code class="code">server/parts/02d-shop-api-routes.js:1005</code></div>
+        <div class="info-item"><strong>Трудозатраты:</strong> 1 ч (настройка ключей + webhook)</div>
+        <div class="info-item"><strong>Метки:</strong> <span class="tag tag-ops">Ops</span><span class="tag tag-api">API</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ────────────────────────────────── -->
+  <h2>Блок 6 — Обработка заказов с magicvibes.ru</h2>
+
+  <!-- Issue 8: Orders -->
+  <div class="issue p-medium">
+    <div class="issue-header">
+      <div class="issue-num">8</div>
+      <div class="issue-title">Как понимать заказы с magicvibes и что настроить до конца</div>
+      <span class="badge">Средний</span>
+    </div>
+    <div class="issue-body">
+      <div class="block">
+        <div class="block-label">Жизненный цикл заказа</div>
+        <table>
+          <thead>
+            <tr><th>Статус</th><th>Значение</th><th>Действие оператора</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code class="code">pending</code></td><td>Заказ создан, оплата не настроена</td><td>Позвонить/написать покупателю, уточнить оплату</td></tr>
+            <tr><td><code class="code">payment_pending</code></td><td>Ссылка на оплату отправлена</td><td>Ждать оплаты (webhook изменит статус)</td></tr>
+            <tr><td><code class="code">paid</code></td><td>Оплата получена</td><td>Подтвердить, перевести в <code class="code">confirmed</code></td></tr>
+            <tr><td><code class="code">confirmed</code></td><td>Заказ подтверждён</td><td>Начать сборку → <code class="code">picking</code></td></tr>
+            <tr><td><code class="code">picking</code></td><td>Сборка на складе</td><td>Упаковать → <code class="code">shipped</code></td></tr>
+            <tr><td><code class="code">shipped</code></td><td>Передан в доставку</td><td>Ждать подтверждения получения</td></tr>
+            <tr><td><code class="code">delivered</code></td><td>Доставлен</td><td>Финальный статус ✓</td></tr>
+            <tr><td><code class="code">cancelled</code></td><td>Отменён</td><td>Возврат денег (вручную через Ozon Pay)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="block">
+        <div class="block-label">Где смотреть заказы</div>
+        <p>davidsklad.ru → <strong>Магазин (ShopAdminPage)</strong> → вкладка «Заказы». Там список всех заказов с фильтрами по статусу, поиском и кнопкой смены статуса.</p>
+      </div>
+      <div class="block">
+        <div class="block-label">Что нужно настроить до конца</div>
+        <ul class="checklist">
+          <li><div class="check-box"></div><strong>Email-уведомления покупателю:</strong> Прописать SMTP в <code class="code">.env</code>: <code class="code">SHOP_SMTP_HOST</code>, <code class="code">SHOP_SMTP_PORT</code>, <code class="code">SHOP_SMTP_USER</code>, <code class="code">SHOP_SMTP_PASS</code>. Тогда при регистрации/покупке покупатель получит письмо с OTP-кодом или подтверждением заказа.</li>
+          <li><div class="check-box"></div><strong>Telegram-уведомления оператору:</strong> Добавить отправку сообщения в Telegram при новом заказе. Потребует 2–3 часа разработки: новый джоб в <code class="code">02f-notifications-pollers.js</code>.</li>
+          <li><div class="check-box"></div><strong>Контакты магазина:</strong> davidsklad.ru → Настройки → Магазин → заполнить телефон, email, дни доставки, сумму бесплатной доставки.</li>
+          <li><div class="check-box"></div><strong>Логистика:</strong> Выбрать службу доставки (СДЭК, Почта России, Boxberry). Интеграции нет — пока ручная: оператор получает заказ → сам создаёт накладную в системе доставки → вставляет трек-номер в заказ (поле <code class="code">trackingNumber</code>, добавить вручную в DB или через интерфейс).</li>
+          <li><div class="check-box"></div><strong>Фискализация:</strong> По закону 54-ФЗ нужна онлайн-касса. Ozon Pay поддерживает фискализацию — включить флаг <code class="code">enableFiscalization: true</code> в коде и передать данные чека (ИНН, наименования товаров). Без этого работа юрлица невозможна.</li>
+          <li><div class="check-box"></div><strong>Политика возврата и оферта:</strong> Разместить на сайте: страница «Оферта», «Политика возврата», «Политика конфиденциальности» — юридическое требование для интернет-магазина.</li>
+        </ul>
+      </div>
+      <div class="info-row">
+        <div class="info-item"><strong>Трудозатраты:</strong> 1 ч (настройка) + 5–8 ч (email + Telegram + фискализация)</div>
+        <div class="info-item"><strong>Метки:</strong> <span class="tag tag-be">Backend</span><span class="tag tag-fe">Frontend</span><span class="tag tag-ops">Ops</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ────────────────────────────────── -->
+  <h2>Рекомендуемый порядок работ (спринты)</h2>
+
+  <table>
+    <thead>
+      <tr><th>Спринт</th><th>Задачи</th><th>Тип</th><th>Оценка</th><th>Результат</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Спринт 1</strong><br><em>Неделя 1</em></td>
+        <td>
+          #5 — Исправить ключи Ozon API (ПВЗ)<br>
+          #7 — Подключить Ozon Pay (боевой)<br>
+          #1 — Диагностика цен + коэффициенты<br>
+          #2 — Проверить targetStock
+        </td>
+        <td><span class="tag tag-ops">Ops</span></td>
+        <td>~4 ч</td>
+        <td>Карта ПВЗ работает. Оплата принимается. Цены корректны.</td>
+      </tr>
+      <tr>
+        <td><strong>Спринт 2</strong><br><em>Неделя 1–2</em></td>
+        <td>
+          #6 — Настроить Ozon FBS в кабинете<br>
+          #8 — SMTP email для покупателей<br>
+          #8 — Telegram-алерт на новый заказ
+        </td>
+        <td><span class="tag tag-ops">Ops</span><span class="tag tag-be">Backend</span></td>
+        <td>~6 ч</td>
+        <td>FBS-доставка работает. Покупатели получают письма.</td>
+      </tr>
+      <tr>
+        <td><strong>Спринт 3</strong><br><em>Неделя 2–3</em></td>
+        <td>
+          #3 — Диагностика Ozon Premium API (рейтинги)<br>
+          #4 — Блок отзывов на главной<br>
+          #8 — Фискализация
+        </td>
+        <td><span class="tag tag-be">Backend</span><span class="tag tag-fe">Frontend</span></td>
+        <td>~15 ч</td>
+        <td>Рейтинги Ozon видны. Блок отзывов на главной. Чеки 54-ФЗ.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- Footer -->
+  <div class="footer">
+    <div>Magic Vibes — Дорожная карта сайта magicvibes.ru</div>
+    <div>Составлено автоматически на основе анализа кодовой базы davidsklad.ru · сентябрь 2026</div>
+  </div>
+
+</div>
+</body>
+</html>

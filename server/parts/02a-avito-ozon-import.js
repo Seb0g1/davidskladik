@@ -241,6 +241,8 @@ function evaluateAvitoImportCandidate(product = {}, rules = {}, pricing = {}) {
   // (см. 02a-avito-categorizer.js), Gender и PerfumeType — только для парфюмерии.
   const classification = classifyAvitoCategory(title, rules);
   const spec = classification.spec;
+  // Авито блокирует пробники/отливанты через модерацию — не включаем их в фид.
+  if (spec.key === "parfum-samples") return { ok: false, reasons: ["avito_samples_blocked"], listing: null };
   const gender = spec.gender ? detectAvitoPerfumeGender(title) : "";
   const perfumeType = spec.gender ? detectAvitoPerfumeType(title) : "";
   const volume = spec.gender ? detectAvitoVolumeMl(title) : "";

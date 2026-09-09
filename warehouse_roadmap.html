@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Склад — аудит и дорожная карта</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0b1220; color: #c8d6e8; line-height: 1.6; }
+  .page { max-width: 960px; margin: 0 auto; padding: 40px 24px; }
+  h1 { font-size: 26px; font-weight: 700; color: #e8f0fb; margin-bottom: 4px; }
+  .subtitle { color: #6b7fa3; font-size: 14px; margin-bottom: 40px; }
+  h2 { font-size: 16px; font-weight: 700; color: #a8bbd8; text-transform: uppercase; letter-spacing: .08em; margin: 40px 0 16px; padding-bottom: 8px; border-bottom: 1px solid rgba(100,140,200,.15); }
+  .card { background: rgba(255,255,255,.04); border: 1px solid rgba(100,140,200,.14); border-radius: 10px; padding: 18px 20px; margin-bottom: 12px; display: grid; grid-template-columns: auto auto 1fr; gap: 14px; align-items: start; }
+  .card.done { background: rgba(34,197,94,.04); border-color: rgba(34,197,94,.22); }
+  .card:hover { border-color: rgba(100,140,200,.28); }
+  .badge { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px; font-size: 12px; font-weight: 700; flex-shrink: 0; }
+  .p0 { background: #4b1010; color: #f87171; border: 1px solid #7f1d1d; }
+  .p1 { background: #3b2400; color: #fb923c; border: 1px solid #7c2d12; }
+  .p2 { background: #1a2b1a; color: #86efac; border: 1px solid #166534; }
+  .p3 { background: #162040; color: #93c5fd; border: 1px solid #1e40af; }
+  .status { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 99px; flex-shrink: 0; white-space: nowrap; }
+  .status-done { background: rgba(34,197,94,.14); color: #4ade80; border: 1px solid rgba(34,197,94,.3); }
+  .status-todo { background: rgba(100,140,200,.08); color: #5a7aa8; border: 1px solid rgba(100,140,200,.18); }
+  .tag-bug    { background: rgba(239,68,68,.12); color: #f87171; border: 1px solid rgba(239,68,68,.25); }
+  .tag-mobile { background: rgba(168,85,247,.12); color: #c084fc; border: 1px solid rgba(168,85,247,.25); }
+  .tag-design { background: rgba(59,130,246,.12); color: #93c5fd; border: 1px solid rgba(59,130,246,.25); }
+  .tag-ux     { background: rgba(34,197,94,.12); color: #86efac; border: 1px solid rgba(34,197,94,.25); }
+  .card-body h3 { font-size: 15px; font-weight: 600; color: #dde8f8; margin-bottom: 6px; }
+  .card-body p { font-size: 13.5px; color: #8ea4be; margin-bottom: 8px; }
+  .card-body p:last-child { margin-bottom: 0; }
+  .card-body code { background: rgba(255,255,255,.08); border-radius: 4px; padding: 1px 5px; font-family: monospace; font-size: 12.5px; color: #a5c4e8; }
+  .tags { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+  .tag { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 99px; }
+  .fix { background: rgba(255,255,255,.06); border-left: 3px solid rgba(100,200,100,.4); padding: 8px 12px; border-radius: 0 6px 6px 0; font-size: 13px; color: #94b8a0; }
+  .fix strong { color: #6ee7a0; }
+  .fix code { background: rgba(0,0,0,.3); color: #a5e8b8; font-family: monospace; font-size: 12px; padding: 1px 5px; border-radius: 3px; }
+  .done .fix { border-left-color: rgba(34,197,94,.6); }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 32px; }
+  .legend-item { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #6b7fa3; }
+  .toc { background: rgba(255,255,255,.03); border: 1px solid rgba(100,140,200,.12); border-radius: 10px; padding: 16px 20px; margin-bottom: 40px; }
+  .toc h3 { font-size: 13px; font-weight: 700; color: #6b7fa3; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 10px; }
+  .toc a { display: block; font-size: 13px; color: #6d9fd8; text-decoration: none; padding: 2px 0; }
+  .toc a:hover { color: #93c5fd; }
+  .section-count { font-size: 12px; background: rgba(100,140,200,.12); color: #6b88b8; padding: 2px 8px; border-radius: 99px; vertical-align: middle; margin-left: 8px; }
+  .done-count { font-size: 12px; background: rgba(34,197,94,.12); color: #4ade80; padding: 2px 8px; border-radius: 99px; vertical-align: middle; margin-left: 4px; }
+  hr { border: none; border-top: 1px solid rgba(100,140,200,.1); margin: 40px 0; }
+  .progress-bar { height: 6px; background: rgba(100,140,200,.12); border-radius: 99px; margin-bottom: 32px; overflow: hidden; }
+  .progress-fill { height: 100%; background: linear-gradient(90deg, #22c55e, #16a34a); border-radius: 99px; transition: width .3s; }
+  .progress-label { font-size: 13px; color: #4ade80; margin-bottom: 8px; font-weight: 600; }
+  @media (max-width: 600px) { .card { grid-template-columns: 1fr; } .badge { width: auto; padding: 2px 10px; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Склад — Аудит страницы</h1>
+  <p class="subtitle">davidsklad.ru/app/warehouse · сентябрь 2026 · код: WarehousePage.tsx + styles.css</p>
+
+  <p class="progress-label">Прогресс: 24 / 24 — дорожная карта выполнена ✓</p>
+  <div class="progress-bar"><div class="progress-fill" style="width: 100%"></div></div>
+
+  <div class="legend">
+    <div class="legend-item"><span class="badge p0">P0</span> Критический баг</div>
+    <div class="legend-item"><span class="badge p1">P1</span> Важно / заметно</div>
+    <div class="legend-item"><span class="badge p2">P2</span> Улучшение UX</div>
+    <div class="legend-item"><span class="badge p3">P3</span> Полировка / дизайн</div>
+    <div class="legend-item"><span class="status status-done">✓ Готово</span></div>
+    <div class="legend-item"><span class="status status-todo">○ Не сделано</span></div>
+  </div>
+
+  <div class="toc">
+    <h3>Содержание</h3>
+    <a href="#bugs">🐛 Баги <span class="section-count">5</span><span class="done-count">5 из 5 ✓</span></a>
+    <a href="#layout">📐 Ширина и раскладка карточки <span class="section-count">4</span><span class="done-count">4 из 4 ✓</span></a>
+    <a href="#mobile">📱 Мобильный вид <span class="section-count">7</span><span class="done-count">7 из 7 ✓</span></a>
+    <a href="#ux">✨ UX и удобство <span class="section-count">6</span><span class="done-count">6 из 6 ✓</span></a>
+  </div>
+
+  <!-- ─── BUGS ─────────────────────────────────────────────────────── -->
+  <h2 id="bugs">🐛 Баги</h2>
+
+  <div class="card done">
+    <span class="badge p0">P0</span>
+    <span class="status status-done">✓ Готово</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-bug">баг</span></div>
+      <h3>«Отправить остаток» вызывал не ту мутацию</h3>
+      <p>Кнопка «Отправить остаток» вызывала <code>recover.mutate()</code> — ту же функцию что и «Проверить и починить товар». Обе делали одно и то же.</p>
+      <div class="fix"><strong>Исправлено:</strong> Дублирующая кнопка удалена. Оставшаяся «Синхронизировать остатки» переименована с понятным <code>title</code>-атрибутом. Кнопка «Отправить цену сейчас» тоже получила описание.</div>
+    </div>
+  </div>
+
+  <div class="card done">
+    <span class="badge p0">P0</span>
+    <span class="status status-done">✓ Готово</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-bug">баг</span></div>
+      <h3>Функция <code>supplierText()</code> не была определена</h3>
+      <p>В <code>LinksPanel</code> вызывалась <code>supplierText(...)</code>, но эта функция нигде не объявлена и не импортирована — потенциальный ReferenceError.</p>
+      <div class="fix"><strong>Исправлено:</strong> Добавлена функция <code>function supplierText(s: unknown): string</code> рядом с остальными хелперами товара.</div>
+    </div>
+  </div>
+
+  <div class="card done">
+    <span class="badge p1">P1</span>
+    <span class="status status-done">✓ Готово</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-bug">баг</span></div>
+      <h3>Галочки выбранных товаров не сбрасывались при смене фильтра</h3>
+      <p><code>selectedGroupKeys</code> не обнулялся при изменении фильтров. Массовые действия применялись к товарам которых больше нет на экране.</p>
+      <div class="fix"><strong>Исправлено:</strong> В <code>setFilter()</code> добавлен <code>setSelectedGroupKeys(new Set())</code> при смене любого фильтра кроме <code>page</code>.</div>
+    </div>
+  </div>
+
+  <div class="card done">
+    <span class="badge p1">P1</span>
+    <span class="status status-done">✓ Готово</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-bug">баг</span></div>
+      <h3>Default размер страницы 40 не входил в список вариантов</h3>
+      <p><code>DEFAULT_PAGE_SIZE = 40</code>, но <code>PAGE_SIZE_OPTIONS = [20, 50, 100]</code> — select показывал несуществующее значение.</p>
+      <div class="fix"><strong>Исправлено:</strong> <code>PAGE_SIZE_OPTIONS = [20, 40, 100]</code> — 40 теперь есть в списке.</div>
+    </div>
+  </div>
+
+  <div class="card done">
+    <span class="badge p1">P1</span>
+    <span class="status status-done">✓ Готово</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-bug">баг</span><span class="tag tag-mobile">мобильный</span></div>
+      <h3>Virtualizer: расчётный размер строки не совпадал с реальным</h3>
+      <p><code>estimateSize: () => 272</code>, а CSS задавал <code>height: 260px</code> — разница 12px накапливалась при прокрутке.</p>
+      <div class="fix"><strong>Исправлено:</strong> <code>estimateSize: () =&gt; (isMobileList ? 160 : 72)</code> — соответствует новой мобильной высоте строки 148px (с запасом) и десктопной 72px.</div>
+    </div>
+  </div>
+
+  <!-- ─── LAYOUT ─────────────────────────────────────────────────────── -->
+  <h2 id="layout">📐 Ширина и раскладка карточки (правая панель)</h2>
+
+  <div class="card done">
+    <span class="badge p1">P1</span>
+    <span class="status status-done">✓ Готово</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-design">дизайн</span></div>
+      <h3>Правая панель карточки расширена</h3>
+      <p>Было: <code>minmax(360px, 430px)</code> — ~33% ширины на ноутбуке. PM-привязки, формулы цен, маркетплейс-блоки сжимались.</p>
+      <div class="fix"><strong>Исправлено:</strong> <code>minmax(480px, 560px)</code> — панель теперь занимает ~40% экрана на 1280px. Больше места для чипов формул, PM-grid и секций маркетплейсов.</div>
+    </div>
+  </div>
+
+  <div class="card done">
+    <span class="badge p3">P3</span>
+    <span class="status status-done">✓ Готово</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-design">дизайн</span></div>
+      <h3>Массовое действие — inline стили заменены на CSS-классы</h3>
+      <p>Плавающая панель «Выбрано N» была написана через атрибут <code>style={{}}</code> с захардкоженными цветами — выбивалась из тёмной темы.</p>
+      <div class="fix"><strong>Исправлено:</strong> Добавлены классы <code>.bulk-action-bar</code>, <code>.bulk-action-count</code>, <code>.bulk-result-toast</code> с переменными темы и <code>backdrop-filter: blur(12px)</code>. Кнопки используют стандартные <code>primary-action</code> / <code>secondary-action</code>.</div>
+    </div>
+  </div>
+
+  <div class="card done">
+    <span class="badge p2">P2</span>
+    <span class="status status-done">✓ Готово</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-design">дизайн</span></div>
+      <h3>Детальная панель — accordion для «Быстрых действий»</h3>
+      <p>Секции PM, Marketplace, Быстрые действия, Пирамида аромата, Avito-фото, AI-фото, Диагностика — все подряд без иерархии. На узкой панели это «стена» информации.</p>
+      <div class="fix"><strong>Исправлено:</strong> <code>QuickActions</code> получил кнопку «Открыть / Свернуть» в заголовке секции — контент скрыт по умолчанию, раскрывается по нажатию.</div>
+    </div>
+  </div>
+
+  <div class="card done">
+    <span class="badge p2">P2</span>
+    <span class="status status-done">✓ Готово</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-design">дизайн</span></div>
+      <h3>Чипы формулы цены — collapse для лишних чипов</h3>
+      <p>В <code>marketplace-flags</code> рендерятся 6–10 <code>.formula-chip</code> подряд одинакового размера. Невозможно быстро найти главное.</p>
+      <div class="fix"><strong>Исправлено:</strong> Компонент <code>FormulaChipList</code> — показывает первые 3 чипа, остальные скрыты под кнопкой «+N ещё». При нажатии раскрывает все с кнопкой «Свернуть».</div>
+    </div>
+  </div>
+
+  <div class="card done">
+    <span class="badge p3">P3</span>
+    <span class="status status-done">✓ Готово</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-design">дизайн</span></div>
+      <h3>PM-привязки — 2 колонки в широкой панели</h3>
+      <p><code>.pm-link-grid</code> в узкой правой панели занимал одну колонку — неэффективно использовал пространство после расширения панели.</p>
+      <div class="fix"><strong>Исправлено:</strong> <code>.detail-panel .pm-link-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }</code> — PM-поля теперь в 2 колонки.</div>
+    </div>
+  </div>
+
+  <!-- ─── MOBILE ─────────────────────────────────────────────────────── -->
+  <h2 id="mobile">📱 Мобильный вид</h2>
+
+  <div class="card done">
+    <span class="badge p1">P1</span>
+    <span class="status status-done">✓ Готово</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-mobile">мобильный</span></div>
+      <h3>Строка товара на телефоне — уменьшена с 260px до 148px</h3>
+      <p>260px = только 2–3 товара на экране телефона. Большинство полей (артикул, поставщик, маркетплейсы) не нужны в компактном режиме.</p>
+      <div class="fix"><strong>Исправлено:</strong> Высота 148px, сетка <code>48px + 1fr + auto</code> (фото, название+цена, статус). Скрыты: артикул, поставщик, маркетплейсы, чекбокс. Thumbnail уменьшен до 48px.</div>
+    </div>
+  </div>
+
+  <div class="card done">
+    <span class="badge p1">P1</span>
+    <span class="status status-done">✓ Готово</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-mobile">мобильный</span></div>
+      <h3>Кнопка закрыть карточку — теперь sticky</h3>
+      <p>На мобильном при прокрутке карточки вниз кнопка «×» уходила за экран.</p>
+      <div class="fix"><strong>Исправлено:</strong> <code>.detail-head</code> на мобильном: <code>position: sticky; top: 0; z-index: 10; background: var(--panel)</code>. Кнопка «×» всегда видна при любой прокрутке.</div>
+    </div>
+  </div>
+
+  <div class="card done">
+    <span class="badge p1">P1</span>
+    <span class="status status-done">✓ Готово</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-mobile">мобильный</span></div>
+      <h3>Горизонтальный скролл — убран на мобильном</h3>
+      <p><code>.virtual-list > div { min-width: 640px }</code> вызывал горизонтальный скролл на телефонах.</p>
+      <div class="fix"><strong>Исправлено:</strong> В мобильном breakpoint <code>min-width: 0</code> для <code>virtual-list > div</code>. Заголовок таблицы на мобильном скрыт (<code>display: none</code>).</div>
+    </div>
+  </div>
+
+  <div class="card done">
+    <span class="badge p2">P2</span>
+    <span class="status status-done">✓ Готово</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-mobile">мобильный</span></div>
+      <h3>Высота виртуального списка на маленьких экранах</h3>
+      <p><code>min-height: 380px</code> на iPhone SE (568px) заставлял список «вылезать» за границы.</p>
+      <div class="fix"><strong>Исправлено:</strong> <code>min-height: min(380px, 40vh)</code> — на маленьких экранах список не превышает 40% высоты viewport.</div>
+    </div>
+  </div>
+
+  <div class="card done">
+    <span class="badge p2">P2</span>
+    <span class="status status-done">✓ Готово</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-mobile">мобильный</span></div>
+      <h3>Пагинатор — tap targets увеличены</h3>
+      <p>Кнопки «Назад»/«Дальше» были слишком маленькими для нажатия на телефоне.</p>
+      <div class="fix"><strong>Исправлено:</strong> <code>.pager button { min-height: 44px; min-width: 80px }</code> — стандартный минимальный tap target по HIG.</div>
+    </div>
+  </div>
+
+  <div class="card done">
+    <span class="badge p1">P1</span>
+    <span class="status status-done">✓ Готово</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-mobile">мобильный</span></div>
+      <h3>Панель фильтров на телефоне — bottom sheet drawer</h3>
+      <p><code>.toolbar</code> содержит поиск, 4 SelectField, бренд-пикер, чекбокс, select страниц, кнопку статистики. На мобильном переносится в несколько строк неаккуратно.</p>
+      <div class="fix"><strong>Исправлено:</strong> На мобильном в toolbar остаётся только поиск + кнопка «Фильтры (+N)». Кнопка показывает счётчик активных фильтров и подсвечивается синим. При нажатии — bottom sheet с полным набором фильтров, закрывается тапом по оверлею или кнопкой «Готово».</div>
+    </div>
+  </div>
+
+  <div class="card done">
+    <span class="badge p2">P2</span>
+    <span class="status status-done">✓ Готово</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-mobile">мобильный</span></div>
+      <h3>PM-привязки — второстепенные поля скрыты под «Подробнее»</h3>
+      <p><code>.pm-link-grid</code> показывал 6 полей всегда. На узкой панели и мобильном — слишком много информации сразу.</p>
+      <div class="fix"><strong>Исправлено:</strong> Всегда видны только Row ID и Название/ключ. Partner ID, Валюта, Обновлено, Кто изменил — скрыты. Кнопка «Подробнее ↓» раскрывает их per-link (каждая привязка независимо). На мобильном — <code>grid-template-columns: 1fr</code>.</div>
+    </div>
+  </div>
+
+  <!-- ─── UX ─────────────────────────────────────────────────────── -->
+  <h2 id="ux">✨ UX и удобство</h2>
+
+  <div class="card done">
+    <span class="badge p2">P2</span>
+    <span class="status status-done">✓ Готово</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-ux">UX</span></div>
+      <h3>Пустой экран «Ничего не найдено» — улучшен</h3>
+      <p>Раньше: просто текст <code>Ничего не найдено.</code> без иконки и подсказок.</p>
+      <div class="fix"><strong>Исправлено:</strong> Компонент <code>.empty-search-state</code> с иконкой <code>SearchX</code>, описанием и кнопкой «Сбросить фильтры» (только если активны фильтры).</div>
+    </div>
+  </div>
+
+  <div class="card done">
+    <span class="badge p2">P2</span>
+    <span class="status status-done">✓ Готово</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-ux">UX</span></div>
+      <h3>Checkbox строки — anti-pattern исправлен</h3>
+      <p><code>onChange={() => {}}</code> + <code>onClick</code> — React предупреждение о controlled input без handler-а.</p>
+      <div class="fix"><strong>Исправлено:</strong> <code>onChange</code> теперь обрабатывает событие напрямую, <code>onClick</code> убран.</div>
+    </div>
+  </div>
+
+  <div class="card done">
+    <span class="badge p2">P2</span>
+    <span class="status status-done">✓ Готово</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-ux">UX</span></div>
+      <h3>Счётчик «Все (30+)» в истории цен — исправлен</h3>
+      <p>Показывал «30+» даже при 5 записях. После открытия «Все» текст не менялся.</p>
+      <div class="fix"><strong>Исправлено:</strong> В свёрнутом виде — «Все (30+)» если ≥5, точное число если меньше. В развёрнутом — «Свернуть (N)» с реальным количеством.</div>
+    </div>
+  </div>
+
+  <div class="card done">
+    <span class="badge p3">P3</span>
+    <span class="status status-done">✓ Готово</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-ux">UX</span><span class="tag tag-design">дизайн</span></div>
+      <h3>Заголовок страницы «Новый каталог» → «Каталог»</h3>
+      <p>Пометка «Новый» осталась от разработки — в продакшне вводила в заблуждение.</p>
+      <div class="fix"><strong>Исправлено:</strong> <code>title="Каталог"</code></div>
+    </div>
+  </div>
+
+  <div class="card done">
+    <span class="badge p2">P2</span>
+    <span class="status status-done">✓ Готово</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-ux">UX</span></div>
+      <h3>История цен — SVG спарклайн тренда</h3>
+      <p>Увидеть динамику из текстового списка сложно. Hover-данные (pmUsd, usdRate) невидимы на мобильном.</p>
+      <div class="fix"><strong>Исправлено:</strong> Компонент <code>PriceSparkline</code> — 48×18px SVG polyline рядом с заголовком «История цен». Зелёный если последняя цена ≥ предыдущей, красный если ниже. Не рендерится при &lt;2 точках.</div>
+    </div>
+  </div>
+
+  <div class="card done">
+    <span class="badge p2">P2</span>
+    <span class="status status-done">✓ Готово</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-ux">UX</span><span class="tag tag-design">дизайн</span></div>
+      <h3>Кнопки QuickActions — дата последней отправки цены</h3>
+      <p>Кнопки не показывали когда последний раз отправлялись цены.</p>
+      <div class="fix"><strong>Исправлено:</strong> Под кнопкой «Отправить цену сейчас» выводится <code>последний раз: {дата}</code> из поля <code>lastPriceSendAt</code> товара. После успешной отправки дата обновляется локально без перезагрузки.</div>
+    </div>
+  </div>
+
+  <hr />
+  <p style="font-size:12px;color:#3d5070;text-align:center;padding-bottom:20px">
+    Аудит составлен на основе исходного кода WarehousePage.tsx (3042 строки) и styles.css · davidsklad.ru · 2026-09-07<br>
+    Реализовано: 24/24 пунктов дорожной карты — все пункты выполнены ✓
+  </p>
+</div>
+</body>
+</html>

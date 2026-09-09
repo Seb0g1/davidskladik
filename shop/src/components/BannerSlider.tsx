@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { Link } from "react-router-dom";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, Copy, Check } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import type { ShopBanner } from "../types";
@@ -69,6 +69,34 @@ function CountdownTimer({ endDate }: { endDate: string }) {
           <span style={{ fontSize: 9, color: "#7d7a73", letterSpacing: "0.1em" }}>{label}</span>
         </span>
       ))}
+    </div>
+  );
+}
+
+function PromoCodeBadge({ code, accent = "#c9a25e" }: { code: string; accent?: string }) {
+  const [copied, setCopied] = useState(false);
+  function handleCopy() {
+    navigator.clipboard.writeText(code).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+  return (
+    <div
+      onClick={handleCopy}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer",
+        background: "rgba(0,0,0,0.45)", backdropFilter: "blur(10px)",
+        border: `1px solid ${accent}55`, borderRadius: 4, padding: "7px 14px",
+        transition: "border-color 0.2s",
+        userSelect: "none",
+      }}
+      title="Нажмите, чтобы скопировать"
+    >
+      <span style={{ fontSize: 9, letterSpacing: "0.2em", color: accent, textTransform: "uppercase" }}>Промокод</span>
+      <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 700, color: "#f2ede6", letterSpacing: "0.12em" }}>{code}</span>
+      {copied
+        ? <Check size={12} color="#4ade80" />
+        : <Copy size={12} color={accent} style={{ opacity: 0.7 }} />}
     </div>
   );
 }
@@ -163,21 +191,8 @@ function HolidayBannerArt({ banner }: { banner: ShopBanner }) {
 
         {/* Promo code badge */}
         {banner.promoCode && (
-          <div style={{
-            display: "inline-flex", alignItems: "center", gap: 8,
-            background: "rgba(0,0,0,0.45)", backdropFilter: "blur(10px)",
-            border: `1px solid ${theme.accent}44`,
-            borderRadius: 4, padding: "8px 18px", marginBottom: 20,
-          }}>
-            <span style={{ fontSize: 10, letterSpacing: "0.2em", color: theme.accent, textTransform: "uppercase" }}>
-              Промокод
-            </span>
-            <span style={{
-              fontFamily: "monospace", fontSize: 17, fontWeight: 700,
-              color: "#f2ede6", letterSpacing: "0.12em",
-            }}>
-              {banner.promoCode}
-            </span>
+          <div style={{ marginBottom: 20 }}>
+            <PromoCodeBadge code={banner.promoCode} accent={theme.accent} />
           </div>
         )}
 
@@ -227,6 +242,11 @@ function GradientBanner({ banner }: { banner: ShopBanner }) {
       )}
       {banner.subtitle && (
         <p style={{ fontSize: 15, color: "rgba(242,237,230,0.6)", marginBottom: 20 }}>{banner.subtitle}</p>
+      )}
+      {banner.promoCode && (
+        <div style={{ marginBottom: 20 }}>
+          <PromoCodeBadge code={banner.promoCode} />
+        </div>
       )}
       {banner.linkUrl && (
         <Link
@@ -330,14 +350,8 @@ export default function BannerSlider() {
           )}
           {/* Promo code on image banners */}
           {banner.promoCode && (
-            <div style={{
-              display: "inline-flex", alignItems: "center", gap: 8,
-              background: "rgba(0,0,0,0.5)", backdropFilter: "blur(6px)",
-              border: "1px solid rgba(201,162,94,0.35)", borderRadius: 3,
-              padding: "6px 14px", marginBottom: 14, alignSelf: "flex-start",
-            }}>
-              <span style={{ fontSize: 9, letterSpacing: "0.2em", color: "#c9a25e", textTransform: "uppercase" }}>Промокод</span>
-              <span style={{ fontFamily: "monospace", fontSize: 15, fontWeight: 700, color: "#f2ede6", letterSpacing: "0.12em" }}>{banner.promoCode}</span>
+            <div style={{ marginBottom: 14, alignSelf: "flex-start" }}>
+              <PromoCodeBadge code={banner.promoCode} />
             </div>
           )}
           {banner.linkUrl && (

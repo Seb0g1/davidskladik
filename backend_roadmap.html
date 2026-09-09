@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Backend Audit Roadmap</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #1c2128; --line: #30363d;
+    --text: #e6edf3; --muted: #7d8590; --blue: #58a6ff; --green: #3fb950;
+    --yellow: #d29922; --red: #f85149; --orange: #e3b341; --purple: #bc8cff;
+    --accent-rgb: 88, 166, 255;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 14px; line-height: 1.6; padding: 24px; }
+  h1 { font-size: 22px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+  .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  .stats-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 28px; }
+  .stat-chip { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 18px; }
+  .stat-chip .n { font-size: 22px; font-weight: 700; line-height: 1; }
+  .stat-chip .l { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .stat-chip.p0 .n { color: var(--red); }
+  .stat-chip.p1 .n { color: var(--orange); }
+  .stat-chip.p2 .n { color: var(--yellow); }
+  .stat-chip.p3 .n { color: var(--muted); }
+
+  .section { margin-bottom: 32px; }
+  .section-title { font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+
+  .bug-card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; display: grid; grid-template-columns: auto 1fr; gap: 12px; }
+  .bug-card:hover { border-color: rgba(var(--accent-rgb), 0.35); }
+  .severity-badge { display: flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 8px; font-size: 12px; font-weight: 800; flex-shrink: 0; margin-top: 2px; }
+  .p0 { background: rgba(248, 81, 73, 0.15); color: var(--red); border: 1px solid rgba(248,81,73,0.3); }
+  .p1 { background: rgba(227, 179, 65, 0.15); color: var(--orange); border: 1px solid rgba(227,179,65,0.3); }
+  .p2 { background: rgba(210, 153, 34, 0.15); color: var(--yellow); border: 1px solid rgba(210,153,34,0.25); }
+  .p3 { background: rgba(125, 133, 144, 0.12); color: var(--muted); border: 1px solid rgba(125,133,144,0.2); }
+
+  .bug-body {}
+  .bug-title { font-weight: 700; font-size: 14px; color: var(--text); margin-bottom: 4px; }
+  .bug-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+  .tag { display: inline-flex; align-items: center; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 5px; }
+  .tag-file { background: rgba(var(--accent-rgb), 0.1); color: var(--blue); border: 1px solid rgba(var(--accent-rgb), 0.2); font-family: monospace; }
+  .tag-cat { background: rgba(188, 140, 255, 0.1); color: var(--purple); border: 1px solid rgba(188,140,255,0.2); }
+  .bug-desc { color: #c9d1d9; font-size: 13px; line-height: 1.6; }
+  .bug-desc code { background: var(--panel2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; font-size: 12px; font-family: monospace; color: var(--blue); }
+  .bug-desc b { color: var(--text); font-weight: 600; }
+
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; font-size: 12px; color: var(--muted); }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<h1>Backend Audit — Дорожная карта</h1>
+<p class="subtitle">Аудит серверного кода. Найдено 15 багов. Реализация не выполнена — только диагностика.</p>
+
+<div class="stats-row">
+  <div class="stat-chip p0"><div class="n">2</div><div class="l">P0 · Критические</div></div>
+  <div class="stat-chip p1"><div class="n">5</div><div class="l">P1 · Неверные данные</div></div>
+  <div class="stat-chip p2"><div class="n">5</div><div class="l">P2 · Надёжность</div></div>
+  <div class="stat-chip p3"><div class="n">3</div><div class="l">P3 · Мелкие</div></div>
+</div>
+
+<div class="legend">
+  <span class="legend-item"><span class="legend-dot" style="background:rgba(248,81,73,0.6)"></span>P0 — краш / потеря данных</span>
+  <span class="legend-item"><span class="legend-dot" style="background:rgba(227,179,65,0.6)"></span>P1 — неверные данные / безопасность</span>
+  <span class="legend-item"><span class="legend-dot" style="background:rgba(210,153,34,0.5)"></span>P2 — нарушение надёжности</span>
+  <span class="legend-item"><span class="legend-dot" style="background:rgba(125,133,144,0.4)"></span>P3 — мелкие / технический долг</span>
+</div>
+
+<!-- ─── P0 ─── -->
+<div class="section">
+  <div class="section-title">P0 — Критические (потеря данных / краш)</div>
+
+  <div class="bug-card">
+    <div class="severity-badge p0">P0</div>
+    <div class="bug-body">
+      <div class="bug-title">PM-снапшот удаляется до вставки — нет транзакции, возможна пустая таблица</div>
+      <div class="bug-meta">
+        <span class="tag tag-file">02a-snapshot-core.js:170</span>
+        <span class="tag tag-cat">data-loss</span>
+      </div>
+      <div class="bug-desc">
+        <code>priceMasterSnapshotItem.deleteMany({})</code> удаляет все ~30к строк, затем
+        <code>createMany</code> вставляет порциями по 2000. Если вставка падает (сеть, OOM,
+        сигнал завершения), таблица <b>остаётся пустой</b>. Все последующие прайсы и
+        поиск по снапшоту вернут 0 результатов — пока снапшот не обновится снова.<br><br>
+        <b>Ожидаемое поведение:</b> операция должна выполняться в одной транзакции (или через
+        UPSERT / staged swap) чтобы атомарно заменить данные без окна «пустой таблицы».
+      </div>
+    </div>
+  </div>
+
+  <div class="bug-card">
+    <div class="severity-badge p0">P0</div>
+    <div class="bug-body">
+      <div class="bug-title">POST /api/warehouse/products возвращает весь склад в ответе</div>
+      <div class="bug-meta">
+        <span class="tag tag-file">02d-warehouse-products-crud.js:47</span>
+        <span class="tag tag-cat">data-leak · performance</span>
+      </div>
+      <div class="bug-desc">
+        <code>response.json({ ok: true, product: freshProduct, warehouse })</code> — поле
+        <code>warehouse</code> содержит <b>весь каталог</b> (все товары + поставщики).
+        При каталоге ~14k товаров ответ весит сотни МБ JSON и передаётся клиенту на каждое
+        сохранение карточки. Риски:<br>
+        — <b>Memory pressure</b>: сериализация всего каталога на каждый запрос.<br>
+        — <b>Data leak</b>: все внутренние поля (цены, поставщики, история) видны любому
+        аутентифицированному пользователю.<br>
+        — <b>Frontend OOM</b>: браузер получает огромный JSON и может зависнуть.<br><br>
+        Фронтенд, скорее всего, использует только поле <code>product</code> — поле
+        <code>warehouse</code> надо убрать из ответа.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── P1 ─── -->
+<div class="section">
+  <div class="section-title">P1 — Неверные данные / безопасность</div>
+
+  <div class="bug-card">
+    <div class="severity-badge p1">P1</div>
+    <div class="bug-body">
+      <div class="bug-title">Партнёрский итог комиссионки считается по операциям ВСЕХ партнёров</div>
+      <div class="bug-meta">
+        <span class="tag tag-file">02d-consignment-routes.js:1532</span>
+        <span class="tag tag-cat">logic · wrong-data</span>
+      </div>
+      <div class="bug-desc">
+        Эндпоинт <code>GET /api/consignment/partner-summary?partnerId=X</code> (Bot API)
+        фильтрует <code>consignmentItem</code> по <code>partnerId</code>, но загружает
+        <b>все 50 000 операций</b> без фильтра:<br><br>
+        <code>consignmentOperation.findMany({ take: 50000 }) // нет where: { partnerId }</code><br><br>
+        Затем <code>consignmentSummaryFromRows(items, ops)</code> суммирует <code>ops</code>
+        (все операции всех партнёров), а не только операции по товарам данного партнёра.
+        Результат: <b>неверные баланс, выручка, прибыль</b> для партнёра — он видит
+        агрегат по всей комиссионке.
+      </div>
+    </div>
+  </div>
+
+  <div class="bug-card">
+    <div class="severity-badge p1">P1</div>
+    <div class="bug-body">
+      <div class="bug-title">PM Price Monitor обнаруживает изменение цены, но не запускает перерасчёт</div>
+      <div class="bug-meta">
+        <span class="tag tag-file">02f-pm-monitoring-scheduler.js:36</span>
+        <span class="tag tag-cat">logic · stale-price</span>
+      </div>
+      <div class="bug-desc">
+        <code>runPmPriceChangeMonitor</code> сравнивает сохранённую цену поставщика с живой
+        MySQL, логирует <code>pm_price_changed</code>, но <b>не ставит задачу перерасчёта</b>
+        (не вызывает <code>queueAuthoritativePriceReprice</code> или аналог).<br><br>
+        Комментарий в файле говорит «reprice cycle should be triggered by the normal price
+        sweep» — но sweep пропускает SKU с актуальным <code>priceVerifiedAt</code> на 6 ч
+        (<code>PRICE_SWEEP_VERIFIED_COOLDOWN_HOURS</code>). Если цена поставщика выросла
+        после последней верификации, новая цена попадёт на маркетплейс <b>только через
+        ~6 часов</b>, а не ~2 минуты, как подразумевает дизайн.
+      </div>
+    </div>
+  </div>
+
+  <div class="bug-card">
+    <div class="severity-badge p1">P1</div>
+    <div class="bug-body">
+      <div class="bug-title">LIMIT в notifications-core через шаблонную строку вместо параметра</div>
+      <div class="bug-meta">
+        <span class="tag tag-file">02f-notifications-core.js:65</span>
+        <span class="tag tag-cat">sql-injection-pattern</span>
+      </div>
+      <div class="bug-desc">
+        <code>LIMIT ${limit}</code> в <code>$queryRawUnsafe</code>, где <code>limit</code>
+        вычислен через <code>Math.max(1, Math.min(100, Number(request.query.limit)))</code>.
+        Значение числовое и граничит, реальной инъекции нет — но паттерн опасен: если
+        позже кто-то ослабит валидацию или добавит другой параметр аналогично, инъекция
+        станет возможной. Надо заменить на <code>$N</code> с передачей в параметры.
+      </div>
+    </div>
+  </div>
+
+  <div class="bug-card">
+    <div class="severity-badge p1">P1</div>
+    <div class="bug-body">
+      <div class="bug-title">ids.join(",") в UPDATE app_notifications — числа без параметризации</div>
+      <div class="bug-meta">
+        <span class="tag tag-file">02f-notifications-core.js:91</span>
+        <span class="tag tag-cat">sql-injection-pattern</span>
+      </div>
+      <div class="bug-desc">
+        <code>WHERE read_at IS NULL AND id IN (${ids.join(",")})</code> — массив
+        <code>ids</code> фильтруется через <code>Number.isFinite && id > 0</code>,
+        поэтому реальной инъекции нет. Но паттерн нарушает принцип parameterized-only и
+        может стать опасным при рефакторинге. Prisma поддерживает <code>$queryRaw\`\`</code>
+        с автоматическим escape для массивов через <code>Prisma.join(ids)</code>.
+      </div>
+    </div>
+  </div>
+
+  <div class="bug-card">
+    <div class="severity-badge p1">P1</div>
+    <div class="bug-body">
+      <div class="bug-title">Числовые параметры через шаблонные строки в $queryRawUnsafe (системные)</div>
+      <div class="bug-meta">
+        <span class="tag tag-file">02f-error-audit.js:89,94,124,152 · 02f-price-sweep.js:39,44 · 02f-stock-sweep.js:47</span>
+        <span class="tag tag-cat">sql-injection-pattern</span>
+      </div>
+      <div class="bug-desc">
+        Семь файлов используют числовые переменные окружения/env в шаблонных строках SQL:
+        <code>interval '${windowDays} days'</code>, <code>LIMIT ${batchLimit * 3}</code>,
+        <code>interval '${priceSweepVerifiedCooldownHours} hours'</code> и т.д.
+        Все значения прошли <code>Math.max/Math.min/Number()</code> и не содержат инъекций.
+        Но паттерн системно неверный — при добавлении нового параметра без валидации
+        появится реальная уязвимость. Все числа должны передаваться через <code>$N</code>-параметры.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── P2 ─── -->
+<div class="section">
+  <div class="section-title">P2 — Надёжность</div>
+
+  <div class="bug-card">
+    <div class="severity-badge p2">P2</div>
+    <div class="bug-body">
+      <div class="bug-title">supplierLedgerSummaryMapForSuppliers молча обрезается на 20k записей</div>
+      <div class="bug-meta">
+        <span class="tag tag-file">02d-finance-supplier-ledger.js:103</span>
+        <span class="tag tag-cat">logic · silent-truncation</span>
+      </div>
+      <div class="bug-desc">
+        <code>getPrisma().supplierLedgerEntry.findMany({ where: { status: "active" }, take: 20000 })</code> —
+        фиксированный лимит без пагинации. При росте числа записей долги сверх 20к
+        не учитываются в балансе поставщика на странице Поставщики. Нет предупреждения
+        когда лимит достигнут — баланс молча занижается.
+      </div>
+    </div>
+  </div>
+
+  <div class="bug-card">
+    <div class="severity-badge p2">P2</div>
+    <div class="bug-body">
+      <div class="bug-title">readConsignmentSummary всегда грузит 50 000 операций без кэша</div>
+      <div class="bug-meta">
+        <span class="tag tag-file">02d-consignment-routes.js:117</span>
+        <span class="tag tag-cat">performance · n+1</span>
+      </div>
+      <div class="bug-desc">
+        <code>readConsignmentSummary()</code> вызывается на каждый GET /api/consignment/summary
+        и делает два запроса без кэша: <code>findMany 20k items</code> + <code>findMany 50k
+        operations</code>. При частом обращении (авторефреш UI) это нагружает Postgres
+        полным сканом двух крупных таблиц на каждый тик.
+      </div>
+    </div>
+  </div>
+
+  <div class="bug-card">
+    <div class="severity-badge p2">P2</div>
+    <div class="bug-body">
+      <div class="bug-title">WB-синк: не атомарен — stocks и prices обновляются раздельно</div>
+      <div class="bug-meta">
+        <span class="tag tag-file">02f-wb-sync.js:79</span>
+        <span class="tag tag-cat">race-condition · atomicity</span>
+      </div>
+      <div class="bug-desc">
+        <code>runWbMarketplaceSync</code> обновляет остатки (<code>wbUpdateStocks</code>),
+        а затем цены (<code>wbSetPrices</code>) отдельными запросами. Если процесс
+        завершается или WB возвращает ошибку между этими двумя вызовами:
+        остатки выставлены (5 шт.), а цены не обновлены (могут быть стальными или 0).
+        Покупатели видят товар с неверной ценой.
+      </div>
+    </div>
+  </div>
+
+  <div class="bug-card">
+    <div class="severity-badge p2">P2</div>
+    <div class="bug-body">
+      <div class="bug-title">priceSweepVerifiedCooldownHours=0 разрешён и заполняет очередь бесконечно</div>
+      <div class="bug-meta">
+        <span class="tag tag-file">02f-price-sweep.js:23</span>
+        <span class="tag tag-cat">logic · queue-flood</span>
+      </div>
+      <div class="bug-desc">
+        <code>Math.max(0, Number(process.env.PRICE_SWEEP_VERIFIED_COOLDOWN_HOURS || 6) || 6)</code>
+        — минимум 0. При <code>PRICE_SWEEP_VERIFIED_COOLDOWN_HOURS=0</code> в SQL генерируется
+        <code>interval '0 hours'</code> — все недавно верифицированные товары сразу же
+        переходят в кандидаты повторно. Каждый тик sweep (раз в 2 мин) ставит в очередь
+        до 500 SKU повторно, даже если цена не менялась. Очередь BullMQ переполняется.
+      </div>
+    </div>
+  </div>
+
+  <div class="bug-card">
+    <div class="severity-badge p2">P2</div>
+    <div class="bug-body">
+      <div class="bug-title">Price-send finish: readWarehouse() может не содержать только что добавленный товар</div>
+      <div class="bug-meta">
+        <span class="tag tag-file">02d-prices-send-warehouse-finish.js:3</span>
+        <span class="tag tag-cat">race-condition · stale-cache</span>
+      </div>
+      <div class="bug-desc">
+        После отправки цен вызывается <code>readWarehouse()</code> для поиска продуктов
+        по id (<code>warehouse.products.find(entry => entry.id === item.id)</code>).
+        В api-процессе (<code>postgresOnly</code>) склад — это частичный in-memory кэш.
+        Если продукт был создан недавно и ещё не попал в кэш, поиск вернёт <code>undefined</code>
+        — цена-история не запишется, статус отправки не обновится. Баг молчит: нет ни ошибки,
+        ни предупреждения.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── P3 ─── -->
+<div class="section">
+  <div class="section-title">P3 — Мелкие / Технический долг</div>
+
+  <div class="bug-card">
+    <div class="severity-badge p3">P3</div>
+    <div class="bug-body">
+      <div class="bug-title">Мёртвое добавление client-ключа в deleteKeys при удалении ссылки</div>
+      <div class="bug-meta">
+        <span class="tag tag-file">02d-warehouse-links-mutation.js:122</span>
+        <span class="tag tag-cat">logic · dead-code</span>
+      </div>
+      <div class="bug-desc">
+        После того как правильный серверный ключ добавлен (<code>deleteKeys.add(warehouseLinkTargetKey(link))</code>),
+        следующей строкой добавляется <code>ref.linkTargetKey</code> (ключ из фронтенда, другой формат):<br>
+        <code>if (ref.linkTargetKey) deleteKeys.add(ref.linkTargetKey);</code><br><br>
+        Комментарий на строках 115–121 объясняет, что форматы различаются и ключ фронтенда
+        никогда не совпадёт с серверным. Добавление мёртвое — работает только потому что
+        серверный ключ уже добавлен. Потенциально вводит неверный ключ, который может
+        случайно совпасть с другой ссылкой при рефакторинге.
+      </div>
+    </div>
+  </div>
+
+  <div class="bug-card">
+    <div class="severity-badge p3">P3</div>
+    <div class="bug-body">
+      <div class="bug-title">Email-sequence: лимит 100 заказов за тик без алерта при бэклоге</div>
+      <div class="bug-meta">
+        <span class="tag tag-file">02f-shop-email-sequences.js:327</span>
+        <span class="tag tag-cat">performance · silent-backlog</span>
+      </div>
+      <div class="bug-desc">
+        Оба SQL-запроса email-рассылки ограничены <code>LIMIT 100</code>. При накоплении
+        >100 заказов ожидающих шага 7 или шага 30 сканер обрабатывает только первые 100
+        в каждом тике (раз в сутки). Бэклог нарастает молча — нет метрики, нет алерта.
+        Клиент не получает письмо вовремя.
+      </div>
+    </div>
+  </div>
+
+  <div class="bug-card">
+    <div class="severity-badge p3">P3</div>
+    <div class="bug-body">
+      <div class="bug-title">consignmentSummaryFromRows: возврат товара дважды влияет на profitTotal</div>
+      <div class="bug-meta">
+        <span class="tag tag-file">02d-consignment-routes.js:69</span>
+        <span class="tag tag-cat">logic · wrong-data</span>
+      </div>
+      <div class="bug-desc">
+        При типе операции <code>"return"</code>:<br>
+        <code>acc.salesRevenue -= op.unitSale * op.quantity</code> (правильно — снижает выручку)<br>
+        <code>acc.profitTotal += op.sponsorDelta + op.myDelta</code> — но у возврата
+        <code>sponsorDelta</code> и <code>myDelta</code> отрицательные (реверс прибыли).
+        Таким образом <code>profitTotal</code> складывает отрицательное число, снижая прибыль.
+        Одновременно <code>balance += op.balanceDelta</code> (в общем цикле) тоже учитывает
+        возврат. В зависимости от того, как формируются <code>balanceDelta</code> и <code>sponsorDelta</code>
+        у возврата, возможно двойное вычитание из итоговой прибыли. Требует проверки бизнес-логики.
+      </div>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px;">
+  Аудит выполнен: 2026-09-07 · 15 багов · Реализация НЕ выполнена
+</div>
+
+</body>
+</html>

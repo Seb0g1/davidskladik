@@ -261,3 +261,84 @@ async function syncSorinExpressStocks() {
   });
   return { status: "ok", sorinProducts: products.length, active: activeProducts.length, inactive: inactiveProducts.length, ...results };
 }
+
+// One-shot sweep: zero ALL Ozon products on the Express warehouse except those with active
+// Sorin links (which the periodic syncSorinExpressStocks will restore to sorinExpressStock).
+// Use this endpoint after accidentally setting stock on the Express warehouse for non-Sorin goods.
+async function zeroAllNonSorinExpressStock({ dryRun = false } = {}) {
+  if (!shouldUsePostgresStorage()) return { status: "postgres_disabled" };
+
+  const runtimeSettings = await readAppSettings().catch(() => null);
+  const sorinDbSettings = runtimeSettings?.sorinExpress;
+  const sorinExpressOzonWarehouseId = cleanText(
+    String(sorinDbSettings?.ozonWarehouseId || sorinExpressOzonWarehouseIdEnv),
+  );
+  if (!sorinExpressOzonWarehouseId) return { status: "error", error: "Express warehouse ID not configured" };
+
+  // Load Sorin-linked offer IDs so we can skip them (their sync manages them separately).
+  const sorinRows = await loadSorinLinkedProducts().catch(() => []);
+  const sorinOfferIds = new Set(sorinRows.map((r) => cleanText(String(r.offerId || ""))).filter(Boolean));
+
+  const results = { zeroed: 0, failed: 0, skippedSorin: 0, total: 0, dryRun };
+
+  const ozonAccounts = sorinExpressOzonAccountId
+    ? getOzonAccounts().filter((a) => a.id === sorinExpressOzonAccountId)
+    : getOzonAccounts();
+
+  for (const account of ozonAccounts) {
+    // Page through all Ozon products and collect their offer_ids.
+    const offerIds = [];
+    let lastId = "";
+    do {
+      try {
+        const data = await ozonRequest("/v3/product/list", { filter: { visibility: "ALL" }, limit: 1000, last_id: lastId }, account);
+        const items = data.result?.items || [];
+        for (const item of items) {
+          const oid = cleanText(item.offer_id || "");
+          if (oid) offerIds.push(oid);
+        }
+        lastId = data.result?.last_id || "";
+        if (!items.length) break;
+      } catch (err) {
+        logger.warn("zero_express: product list page failed", { account: account.id, detail: err?.message });
+        break;
+      }
+    } while (lastId);
+
+    results.total += offerIds.length;
+
+    // Build zero-stock payload for non-Sorin offer IDs.
+    const toZero = offerIds.filter((oid) => {
+      if (sorinOfferIds.has(oid)) { results.skippedSorin += 1; return false; }
+      return true;
+    });
+
+    if (!dryRun) {
+      for (const chunk of chunkArray(toZero, 100)) {
+        try {
+          await ozonRequest("/v2/products/stocks", {
+            stocks: chunk.map((oid) => ({ offer_id: oid, warehouse_id: Number(sorinExpressOzonWarehouseId), stock: 0 })),
+          }, account);
+          results.zeroed += chunk.length;
+        } catch (err) {
+          results.failed += chunk.length;
+          logger.warn("zero_express: stock send failed", { account: account.id, chunk: chunk.length, detail: err?.message });
+        }
+      }
+    } else {
+      results.zeroed += toZero.length; // in dry run, "zeroed" = would zero
+    }
+
+    logger.info("zero_all_non_sorin_express_stock", {
+      account: account.id,
+      warehouseId: sorinExpressOzonWarehouseId,
+      total: offerIds.length,
+      skippedSorin: results.skippedSorin,
+      zeroed: results.zeroed,
+      failed: results.failed,
+      dryRun,
+    });
+  }
+
+  return { status: "ok", ...results };
+}

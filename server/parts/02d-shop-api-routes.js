@@ -81,6 +81,7 @@ const SHOP_SETTINGS_KEY = "shopSettings";
 const SHOP_BANNERS_KEY = "shopBanners";
 const SHOP_CATEGORIES_KEY = "shopCategories";
 const SHOP_HOLIDAY_KEY = "shopHolidayBanners";
+const SHOP_PROMO_CODES_KEY = "shopPromoCodes";
 
 // Canonical holiday presets — the source of truth for all holiday banners.
 // Admin settings only store overrides (active/promoCode per key).
@@ -286,6 +287,39 @@ async function readShopSettings() {
 async function readShopBanners() {
   const appSettings = await readAppSettings();
   return Array.isArray(appSettings[SHOP_BANNERS_KEY]) ? appSettings[SHOP_BANNERS_KEY] : [];
+}
+
+const DEFAULT_PROMO_CODES = [
+  { id: "builtin-vibes10",  code: "VIBES10",    discountPct: 10, active: true,  usageLimit: null, usageCount: 0, note: "Попап —10% на первый заказ",   builtin: true },
+  { id: "builtin-quiz10",   code: "QUIZ10",     discountPct: 10, active: true,  usageLimit: null, usageCount: 0, note: "Квиз —10% подборка",            builtin: true },
+  { id: "builtin-review5",  code: "REVIEW5",    discountPct: 5,  active: true,  usageLimit: null, usageCount: 0, note: "Отзыв —5% на следующий заказ",  builtin: true },
+  { id: "builtin-unbox7",   code: "UNBOX7",     discountPct: 7,  active: true,  usageLimit: null, usageCount: 0, note: "Анбоксинг +7% к промокоду",     builtin: true },
+];
+
+async function readShopPromoCodes() {
+  const appSettings = await readAppSettings();
+  const stored = appSettings[SHOP_PROMO_CODES_KEY];
+  if (!Array.isArray(stored) || stored.length === 0) return DEFAULT_PROMO_CODES;
+  // Merge builtins with stored overrides
+  const storedById = Object.fromEntries(stored.map(c => [c.id, c]));
+  const merged = DEFAULT_PROMO_CODES.map(def => storedById[def.id] ? { ...def, ...storedById[def.id] } : def);
+  const custom = stored.filter(c => !c.builtin);
+  return [...merged, ...custom];
+}
+
+async function writeShopPromoCodes(codes) {
+  await writeShopData(SHOP_PROMO_CODES_KEY, codes);
+}
+
+async function validatePromoCode(code) {
+  if (!code) return null;
+  const upper = String(code).toUpperCase().trim();
+  const codes = await readShopPromoCodes();
+  const found = codes.find(c => c.code.toUpperCase() === upper && c.active);
+  if (!found) return null;
+  if (found.usageLimit !== null && found.usageCount >= found.usageLimit) return null;
+  if (found.expiresAt && new Date(found.expiresAt) < new Date()) return null;
+  return found;
 }
 
 async function readShopCategories() {
@@ -1590,7 +1624,32 @@ app.post("/api/shop/orders", shopCors, async (request, response, next) => {
         referrerId = referrer.id;
       }
     }
-    const totalRub = refDiscountApplied ? Math.round(baseTotal * (1 - _REFERRAL_DISCOUNT)) : Math.round(baseTotal);
+
+    // Apply promo code discount
+    const promoCodeInput = cleanText(body.promoCode || "").toUpperCase() || null;
+    let promoDiscountApplied = false;
+    let promoDiscountPct = 0;
+    let appliedPromoCode = null;
+    if (promoCodeInput && !refDiscountApplied) {
+      const promo = await validatePromoCode(promoCodeInput);
+      if (promo) {
+        promoDiscountApplied = true;
+        promoDiscountPct = promo.discountPct;
+        appliedPromoCode = promo.code;
+        // Increment usage count
+        const codes = await readShopPromoCodes();
+        const idx = codes.findIndex(c => c.id === promo.id);
+        if (idx >= 0) {
+          codes[idx] = { ...codes[idx], usageCount: (codes[idx].usageCount || 0) + 1 };
+          await writeShopPromoCodes(codes);
+        }
+      }
+    }
+
+    const discountFactor = refDiscountApplied ? (1 - _REFERRAL_DISCOUNT)
+      : promoDiscountApplied ? (1 - promoDiscountPct / 100)
+      : 1;
+    const totalRub = Math.round(baseTotal * discountFactor);
 
     // Save order to DB
     if (prisma) {
@@ -1604,6 +1663,7 @@ app.post("/api/shop/orders", shopCors, async (request, response, next) => {
           totalRub,
           comment: body.comment ? cleanText(body.comment) : null,
           refCode: refDiscountApplied ? refCode : null,
+          promoCode: promoDiscountApplied ? appliedPromoCode : null,
         },
       });
       // Award points to referrer
@@ -1641,7 +1701,7 @@ app.post("/api/shop/orders", shopCors, async (request, response, next) => {
       await prisma.shopOrder.update({ where: { id: orderId }, data: { status: "payment_pending" } }).catch(() => {});
     }
 
-    response.json({ ok: true, id: orderId, status: paymentUrl ? "payment_pending" : "pending", totalRub, paymentUrl: paymentUrl || null, refDiscountApplied });
+    response.json({ ok: true, id: orderId, status: paymentUrl ? "payment_pending" : "pending", totalRub, paymentUrl: paymentUrl || null, refDiscountApplied, promoDiscountApplied, promoDiscountPct: promoDiscountApplied ? promoDiscountPct : 0 });
   } catch (error) {
     next(error);
   }
@@ -2042,6 +2102,17 @@ app.post("/api/shop/referral/validate", shopCors, async (request, response, next
   } catch (error) { next(error); }
 });
 
+// POST /api/shop/promo/validate — public promo code validation
+app.post("/api/shop/promo/validate", shopCors, async (request, response, next) => {
+  try {
+    const code = cleanText(request.body?.code || "").toUpperCase();
+    if (!code) return response.json({ ok: true, valid: false });
+    const found = await validatePromoCode(code);
+    if (!found) return response.json({ ok: true, valid: false });
+    response.json({ ok: true, valid: true, discountPct: found.discountPct, code: found.code, note: found.note || "" });
+  } catch (error) { next(error); }
+});
+
 // ── VIP-клуб ─────────────────────────────────────────────────────────────
 
 const _VIP_ORDER_THRESHOLD = 3;
@@ -2191,6 +2262,7 @@ app.post("/api/shop/admin/banners", requireAdmin, async (request, response, next
       linkUrl: cleanText(request.body.linkUrl || ""),
       linkText: cleanText(request.body.linkText || ""),
       endDate: cleanText(request.body.endDate || ""),
+      promoCode: cleanText(request.body.promoCode || "").toUpperCase() || null,
       active: request.body.active !== false,
       order: banners.length,
     };
@@ -2205,7 +2277,18 @@ app.put("/api/shop/admin/banners/:id", requireAdmin, async (request, response, n
     const banners = await readShopBanners();
     const idx = banners.findIndex((b) => b.id === request.params.id);
     if (idx === -1) return response.status(404).json({ error: "Banner not found" });
-    banners[idx] = { ...banners[idx], ...request.body, id: request.params.id };
+    const body = request.body || {};
+    const allowedFields = {};
+    if (body.imageUrl !== undefined) allowedFields.imageUrl = cleanText(body.imageUrl || "");
+    if (body.title !== undefined) allowedFields.title = cleanText(body.title || "");
+    if (body.subtitle !== undefined) allowedFields.subtitle = cleanText(body.subtitle || "");
+    if (body.linkUrl !== undefined) allowedFields.linkUrl = cleanText(body.linkUrl || "");
+    if (body.linkText !== undefined) allowedFields.linkText = cleanText(body.linkText || "");
+    if (body.endDate !== undefined) allowedFields.endDate = cleanText(body.endDate || "");
+    if (body.promoCode !== undefined) allowedFields.promoCode = cleanText(body.promoCode || "").toUpperCase() || null;
+    if (body.active !== undefined) allowedFields.active = Boolean(body.active);
+    if (body.order !== undefined) allowedFields.order = Number(body.order);
+    banners[idx] = { ...banners[idx], ...allowedFields, id: request.params.id };
     await writeShopData(SHOP_BANNERS_KEY, banners);
     response.json({ ok: true, banner: banners[idx] });
   } catch (error) { next(error); }
@@ -2626,5 +2709,109 @@ app.delete("/api/shop/admin/blog/:id", requireAdmin, async (req, res, next) => {
     if (!prisma) return res.status(503).json({ error: "БД недоступна" });
     await prisma.blogPost.delete({ where: { id: req.params.id } });
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ── Promo Codes (admin) ───────────────────────────────────────────────────────
+
+// GET /api/shop/admin/promo-codes
+app.get("/api/shop/admin/promo-codes", requireAdmin, async (_req, res, next) => {
+  try {
+    const codes = await readShopPromoCodes();
+    res.json({ ok: true, codes });
+  } catch (e) { next(e); }
+});
+
+// POST /api/shop/admin/promo-codes — create custom promo
+app.post("/api/shop/admin/promo-codes", requireAdmin, async (req, res, next) => {
+  try {
+    const code = cleanText(req.body?.code || "").toUpperCase().replace(/\s+/g, "");
+    const discountPct = Math.min(100, Math.max(1, Number(req.body?.discountPct || 10)));
+    const note = cleanText(req.body?.note || "").slice(0, 200) || null;
+    const usageLimit = req.body?.usageLimit ? Math.max(1, Number(req.body.usageLimit)) : null;
+    const expiresAt = req.body?.expiresAt ? new Date(req.body.expiresAt).toISOString() : null;
+    if (!code || code.length < 2 || code.length > 32) {
+      return res.status(400).json({ error: "Код должен быть от 2 до 32 символов" });
+    }
+    const codes = await readShopPromoCodes();
+    if (codes.some(c => c.code.toUpperCase() === code)) {
+      return res.status(409).json({ error: "Такой промокод уже существует" });
+    }
+    const newCode = {
+      id: `custom-${nanoid8()}`,
+      code,
+      discountPct,
+      active: true,
+      usageLimit,
+      usageCount: 0,
+      note,
+      expiresAt,
+      builtin: false,
+      createdAt: new Date().toISOString(),
+    };
+    codes.push(newCode);
+    await writeShopPromoCodes(codes);
+    res.json({ ok: true, code: newCode });
+  } catch (e) { next(e); }
+});
+
+// PATCH /api/shop/admin/promo-codes/:id — update (toggle, change discount, note, etc.)
+app.patch("/api/shop/admin/promo-codes/:id", requireAdmin, async (req, res, next) => {
+  try {
+    const codes = await readShopPromoCodes();
+    const idx = codes.findIndex(c => c.id === req.params.id);
+    if (idx < 0) return res.status(404).json({ error: "Не найден" });
+    const c = codes[idx];
+    const updated = { ...c };
+    if (typeof req.body.active === "boolean") updated.active = req.body.active;
+    if (req.body.discountPct !== undefined) updated.discountPct = Math.min(100, Math.max(1, Number(req.body.discountPct)));
+    if (req.body.note !== undefined) updated.note = cleanText(req.body.note).slice(0, 200) || null;
+    if (req.body.usageLimit !== undefined) updated.usageLimit = req.body.usageLimit ? Math.max(1, Number(req.body.usageLimit)) : null;
+    if (req.body.expiresAt !== undefined) updated.expiresAt = req.body.expiresAt ? new Date(req.body.expiresAt).toISOString() : null;
+    if (req.body.code !== undefined && !c.builtin) {
+      const newCode = cleanText(req.body.code).toUpperCase().replace(/\s+/g, "");
+      if (newCode.length >= 2 && newCode.length <= 32) {
+        if (!codes.some((x, i) => i !== idx && x.code.toUpperCase() === newCode)) {
+          updated.code = newCode;
+        }
+      }
+    }
+    codes[idx] = updated;
+    await writeShopPromoCodes(codes);
+    res.json({ ok: true, code: updated });
+  } catch (e) { next(e); }
+});
+
+// DELETE /api/shop/admin/promo-codes/:id — only custom codes
+app.delete("/api/shop/admin/promo-codes/:id", requireAdmin, async (req, res, next) => {
+  try {
+    const codes = await readShopPromoCodes();
+    const found = codes.find(c => c.id === req.params.id);
+    if (!found) return res.status(404).json({ error: "Не найден" });
+    if (found.builtin) return res.status(400).json({ error: "Встроенный промокод нельзя удалить, только отключить" });
+    await writeShopPromoCodes(codes.filter(c => c.id !== req.params.id));
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// GET /api/shop/admin/email-subscribers
+app.get("/api/shop/admin/email-subscribers-list", requireAdmin, async (req, res, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return res.status(503).json({ error: "БД недоступна" });
+    const page = Math.max(1, Number(req.query.page || 1));
+    const pageSize = 50;
+    const source = req.query.source ? String(req.query.source) : null;
+    const where = source ? { source, unsubscribed: false } : { unsubscribed: false };
+    const [subscribers, total] = await Promise.all([
+      prisma.shopEmailSubscriber.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      prisma.shopEmailSubscriber.count({ where }),
+    ]);
+    res.json({ ok: true, subscribers, total });
   } catch (e) { next(e); }
 });

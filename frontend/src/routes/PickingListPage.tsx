@@ -575,7 +575,7 @@ export function PickingListPage() {
         title="Сборка"
         subtitle="Лист закупки: собрать товар у поставщика или отметить, что товара не было."
         action={
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <div className="pl-header-actions">
             {(() => {
               const others = (viewersQuery.data?.viewers || []).filter((v) => v.username !== myUsername);
               return others.length > 0 ? (
@@ -596,7 +596,7 @@ export function PickingListPage() {
               <div className="picker-balance-chip picker-balance-chip--neutral" title={`Суммарный заказ сегодня: ${dailyItems} поз.`}>
                 <ClipboardList size={14} />
                 <span>{rubStr(dailyTotal)}</span>
-                {dailyItems > 0 ? <span style={{ opacity: 0.6, fontSize: "0.8em" }}>{dailyItems} поз.</span> : null}
+                {dailyItems > 0 ? <span className="pl-chip-sub">{dailyItems} поз.</span> : null}
               </div>
             ) : null}
             {/* Balance chip — visible to all */}
@@ -618,7 +618,7 @@ export function PickingListPage() {
               <span className="hide-xs">Обновить</span>
             </button>
             {listQuery.dataUpdatedAt ? (
-              <span style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>
+              <span className="muted pl-update-time">
                 {new Date(listQuery.dataUpdatedAt).toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" })}
               </span>
             ) : null}
@@ -646,7 +646,7 @@ export function PickingListPage() {
                   <span className="muted-note">Потрачено</span>
                   <span className="tone-warn">{balanceStr(spentLifetime)}</span>
                 </div>
-                <div className="picker-day-row" style={{ fontWeight: 600 }}>
+                <div className="picker-day-row pl-day-row-bold">
                   <span>Остаток</span>
                   <span className={myBalance > 0 ? "tone-danger" : myBalance < 0 ? "tone-success" : ""}>{balanceStr(myBalance)}</span>
                 </div>
@@ -658,7 +658,7 @@ export function PickingListPage() {
                   <div className="picker-balance-history-row" key={c.id}>
                     <span className={`picker-cash-amount${Number(c.amount) >= 0 ? " tone-success" : " tone-danger"}`}>{Number(c.amount) >= 0 ? "+" : ""}{balanceStr(c.amount ?? 0)}</span>
                     <span className="muted-note">{c.note || "—"}</span>
-                    <span className="muted-note" style={{ marginLeft: "auto" }}>{compactDate(c.createdAt ?? null)}</span>
+                    <span className="muted-note pl-ml-auto">{compactDate(c.createdAt ?? null)}</span>
                   </div>
                 ))}
               </div>
@@ -728,11 +728,11 @@ export function PickingListPage() {
                 </button>
               </div>
 
-              {issueBalanceMutation.error ? <div className="inline-error" style={{ margin: "6px 0 0" }}>{errorMessage(issueBalanceMutation.error)}</div> : null}
+              {issueBalanceMutation.error ? <div className="inline-error pl-error-mt">{errorMessage(issueBalanceMutation.error)}</div> : null}
 
               {/* Return cash form */}
               <div className="picker-return-body">
-                <div className="picker-select-label" style={{ paddingTop: 0 }}>Принять возврат</div>
+                <div className="picker-select-label pl-label-flush">Принять возврат</div>
                 <div className="picker-issue-body">
                   <div className="picker-issue-amount-wrap">
                     <span className="picker-issue-currency">$</span>
@@ -779,7 +779,7 @@ export function PickingListPage() {
                     </button>
                   );
                 })() : null}
-                {returnCashMutation.error ? <div className="inline-error" style={{ margin: "6px 0 0" }}>{errorMessage(returnCashMutation.error)}</div> : null}
+                {returnCashMutation.error ? <div className="inline-error pl-error-mt">{errorMessage(returnCashMutation.error)}</div> : null}
               </div>
 
               {/* Per-picker credit history with live edit/delete */}
@@ -850,15 +850,15 @@ export function PickingListPage() {
                         </div>
                       );
                     })}
-                    {editBalanceCreditMutation.error ? <div className="inline-error" style={{ marginTop: 4 }}>{errorMessage(editBalanceCreditMutation.error)}</div> : null}
+                    {editBalanceCreditMutation.error ? <div className="inline-error pl-error-mt4">{errorMessage(editBalanceCreditMutation.error)}</div> : null}
                   </div>
                 );
               })()}
 
               {/* Daily order total summary */}
               {(dailyTotal > 0 || dailyItems > 0) ? (
-                <div className="picker-day-summary" style={{ marginTop: 12, borderTop: "1px solid var(--border-soft)", paddingTop: 10 }}>
-                  <div className="picker-select-label" style={{ paddingTop: 0 }}><ClipboardList size={13} /> Итог заказа сегодня</div>
+                <div className="picker-day-summary pl-summary-divider">
+                  <div className="picker-select-label pl-label-flush"><ClipboardList size={13} /> Итог заказа сегодня</div>
                   <div className="picker-day-row">
                     <span className="muted-note">Заказано (накоплено)</span>
                     <span className="tone-success">{rubStr(dailyTotal)}</span>
@@ -873,10 +873,10 @@ export function PickingListPage() {
               ) : null}
 
               {/* Reset all balances */}
-              <div style={{ marginTop: 12, borderTop: "1px solid var(--border-soft)", paddingTop: 10 }}>
+              <div className="pl-summary-divider">
                 {resetConfirm ? (
-                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                    <span className="muted-note" style={{ fontSize: "0.85em" }}>Обнулить все балансы?</span>
+                  <div className="pl-confirm-row">
+                    <span className="muted-note pl-confirm-note">Обнулить все балансы?</span>
                     <button
                       className="danger-action"
                       type="button"
@@ -897,7 +897,7 @@ export function PickingListPage() {
                     <Trash2 size={13} /> Обнулить все балансы
                   </button>
                 )}
-                {resetAllBalancesMutation.error ? <div className="inline-error" style={{ marginTop: 4 }}>{errorMessage(resetAllBalancesMutation.error)}</div> : null}
+                {resetAllBalancesMutation.error ? <div className="inline-error pl-error-mt4">{errorMessage(resetAllBalancesMutation.error)}</div> : null}
               </div>
             </div>
           ) : null}
@@ -1316,7 +1316,7 @@ export function PickingListPage() {
                   <span className="muted-note">Потрачено</span>
                   <span className="tone-warn">{balanceStr(spentLifetime)}</span>
                 </div>
-                <div className="picker-day-row" style={{ fontWeight: 600 }}>
+                <div className="picker-day-row pl-day-row-bold">
                   <span>Остаток</span>
                   <span className={myBalance > 0 ? "tone-danger" : myBalance < 0 ? "tone-success" : ""}>{balanceStr(myBalance)}</span>
                 </div>
@@ -1328,7 +1328,7 @@ export function PickingListPage() {
                   <div className="picker-balance-history-row" key={c.id}>
                     <span className={`picker-cash-amount${Number(c.amount) >= 0 ? " tone-success" : " tone-danger"}`}>{Number(c.amount) >= 0 ? "+" : ""}{balanceStr(c.amount ?? 0)}</span>
                     <span className="muted-note">{c.note || "—"}</span>
-                    <span className="muted-note" style={{ marginLeft: "auto" }}>{compactDate(c.createdAt ?? null)}</span>
+                    <span className="muted-note pl-ml-auto">{compactDate(c.createdAt ?? null)}</span>
                   </div>
                 ))}
               </div>
@@ -1390,9 +1390,9 @@ export function PickingListPage() {
                   : <><Check size={15} /> Выдать {issuePickerDraft ? `→ ${issuePickerDraft}` : ""}</>}
               </button>
             </div>
-            {issueBalanceMutation.error ? <div className="inline-error" style={{ margin: "6px 0 0" }}>{errorMessage(issueBalanceMutation.error)}</div> : null}
+            {issueBalanceMutation.error ? <div className="inline-error pl-error-mt">{errorMessage(issueBalanceMutation.error)}</div> : null}
             <div className="picker-return-body">
-              <div className="picker-select-label" style={{ paddingTop: 0 }}>Принять возврат</div>
+              <div className="picker-select-label pl-label-flush">Принять возврат</div>
               <div className="picker-issue-body">
                 <div className="picker-issue-amount-wrap">
                   <span className="picker-issue-currency">$</span>
@@ -1428,9 +1428,8 @@ export function PickingListPage() {
                 if (pickerBal <= 0) return null;
                 return (
                   <button
-                    className="secondary-action picker-issue-submit"
+                    className="secondary-action picker-issue-submit pl-btn-mt4"
                     type="button"
-                    style={{ marginTop: 4 }}
                     disabled={returnCashMutation.isPending}
                     onClick={() => returnCashMutation.mutate({ pickerUsername: issuePickerDraft.trim(), amount: pickerBal, note: returnDraftNote || "Возврат всего остатка" })}
                   >
@@ -1438,7 +1437,7 @@ export function PickingListPage() {
                   </button>
                 );
               })() : null}
-              {returnCashMutation.error ? <div className="inline-error" style={{ margin: "6px 0 0" }}>{errorMessage(returnCashMutation.error)}</div> : null}
+              {returnCashMutation.error ? <div className="inline-error pl-error-mt">{errorMessage(returnCashMutation.error)}</div> : null}
             </div>
             {issuePickerDraft && (() => {
               const b = allBalances.find((x) => x.username === issuePickerDraft);
@@ -1507,13 +1506,13 @@ export function PickingListPage() {
                       </div>
                     );
                   })}
-                  {editBalanceCreditMutation.error ? <div className="inline-error" style={{ marginTop: 4 }}>{errorMessage(editBalanceCreditMutation.error)}</div> : null}
+                  {editBalanceCreditMutation.error ? <div className="inline-error pl-error-mt4">{errorMessage(editBalanceCreditMutation.error)}</div> : null}
                 </div>
               );
             })()}
             {(dailyTotal > 0 || dailyItems > 0) ? (
-              <div className="picker-day-summary" style={{ marginTop: 12, borderTop: "1px solid var(--border-soft)", paddingTop: 10 }}>
-                <div className="picker-select-label" style={{ paddingTop: 0 }}><ClipboardList size={13} /> Итог заказа сегодня</div>
+              <div className="picker-day-summary pl-summary-divider">
+                <div className="picker-select-label pl-label-flush"><ClipboardList size={13} /> Итог заказа сегодня</div>
                 <div className="picker-day-row">
                   <span className="muted-note">Заказано (накоплено)</span>
                   <span className="tone-success">{rubStr(dailyTotal)}</span>
@@ -1550,7 +1549,7 @@ export function PickingListPage() {
                   <Trash2 size={13} /> Обнулить все балансы
                 </button>
               )}
-              {resetAllBalancesMutation.error ? <div className="inline-error" style={{ marginTop: 4 }}>{errorMessage(resetAllBalancesMutation.error)}</div> : null}
+              {resetAllBalancesMutation.error ? <div className="inline-error pl-error-mt4">{errorMessage(resetAllBalancesMutation.error)}</div> : null}
             </div>
           </div>
           </div>

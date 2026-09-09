@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Magic Vibes — Дорожная карта 2026 v3 (Ароматные данные + Аудит)</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,300;1,400&family=Inter:wght@300;400;500;600&display=swap');
+
+  :root {
+    --bg: #09090b; --surface: #111113; --surface2: #161618;
+    --border: rgba(255,255,255,0.07); --border-gold: rgba(201,162,94,0.28);
+    --gold: #c9a25e; --gold-light: #e8d5a3; --text: #f2ede6;
+    --muted: #7d7a73; --dim: #4a473f; --green: #4ade80; --red: #f87171; --blue: #7dd3fc;
+    --amber: #fbbf24;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body { background: var(--bg); color: var(--text); font-family: 'Inter', sans-serif; font-size: 14px; line-height: 1.7; min-height: 100vh; overflow-x: hidden; }
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--dim); border-radius: 2px; }
+  .serif { font-family: 'Playfair Display', serif; }
+  .eyebrow { font-family: 'Playfair Display', serif; font-style: italic; font-size: 13px; letter-spacing: .04em; color: var(--gold); font-weight: 400; }
+  h1, h2, h3 { font-family: 'Playfair Display', serif; font-weight: 400; }
+  .page-wrap { max-width: 1080px; margin: 0 auto; padding: 0 clamp(18px,5vw,60px); }
+  #aura { position: fixed; width: 480px; height: 480px; border-radius: 50%; pointer-events: none; z-index: 0; background: radial-gradient(circle, rgba(201,162,94,0.06) 0%, transparent 65%); transform: translate(-50%,-50%); will-change: transform; }
+  body::before { content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E"); background-size: 220px; opacity: .5; }
+
+  header { position: relative; z-index: 10; border-bottom: 1px solid var(--border); padding: 22px 0; }
+  header .inner { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .logo-mark { display: flex; align-items: baseline; gap: 10px; }
+  .logo-mark span:first-child { font-family: 'Playfair Display', serif; font-style: italic; font-size: 22px; color: var(--text); }
+  .logo-mark .version-chip { font-family: 'Playfair Display', serif; font-style: italic; font-size: 11px; letter-spacing: .04em; padding: 3px 9px; border: 1px solid var(--border-gold); border-radius: 2px; color: var(--gold); }
+  header p { font-size: 12px; color: var(--muted); }
+
+  .hero { position: relative; z-index: 1; padding: clamp(64px,10vw,120px) 0 clamp(48px,7vw,80px); text-align: center; overflow: hidden; }
+  .hero::before { content: ''; position: absolute; left: 50%; top: 0; width: 700px; height: 500px; transform: translateX(-50%); background: radial-gradient(ellipse 60% 55% at 50% 0%, rgba(201,162,94,0.13) 0%, transparent 70%); pointer-events: none; }
+  .hero-eyebrow { margin-bottom: 18px; }
+  .hero h1 { font-size: clamp(44px,8vw,96px); font-style: italic; font-weight: 300; line-height: .9; margin-bottom: 24px; background: linear-gradient(110deg, #f8f4ee 0%, #e9d2a0 35%, #c9a25e 62%, #ede8df 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .hero-sub { font-size: clamp(13px,1.4vw,16px); color: var(--muted); max-width: 48ch; margin: 0 auto 36px; line-height: 1.8; }
+  .hero-divider { width: min(360px,55%); height: 1px; margin: 0 auto; background: linear-gradient(90deg, transparent, rgba(201,162,94,.6), transparent); }
+
+  .stats-bar { position: relative; z-index: 1; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); display: grid; grid-template-columns: repeat(auto-fit,minmax(160px,1fr)); }
+  .stat-cell { padding: 26px 22px; border-right: 1px solid var(--border); }
+  .stat-cell:last-child { border-right: none; }
+  .stat-cell .val { font-family: 'Playfair Display', serif; font-style: italic; font-size: 32px; color: var(--text); display: block; }
+  .stat-cell .lbl { font-size: 11px; letter-spacing: .07em; color: var(--muted); margin-top: 4px; }
+
+  .section { position: relative; z-index: 1; padding: clamp(52px,8vw,96px) 0 0; }
+  .section-head { margin-bottom: clamp(28px,4vw,48px); }
+  .section-head h2 { font-size: clamp(28px,3.8vw,48px); font-style: italic; line-height: 1.05; color: var(--text); margin-top: 10px; }
+  .grid-2 { display: grid; grid-template-columns: repeat(auto-fit,minmax(320px,1fr)); gap: 16px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(auto-fit,minmax(260px,1fr)); gap: 16px; }
+
+  .idea-card { border: 1px solid var(--border); border-radius: 4px; background: var(--surface); padding: clamp(22px,3vw,36px); display: flex; flex-direction: column; gap: 14px; transition: border-color .4s ease, transform .5s cubic-bezier(.16,1,.3,1); cursor: default; }
+  .idea-card:hover { border-color: var(--border-gold); transform: translateY(-3px); }
+  .idea-card.featured { border-color: var(--border-gold); background: linear-gradient(150deg, #171309 0%, #111113 70%); }
+  .idea-card .card-icon { width: 40px; height: 40px; border-radius: 3px; border: 1px solid var(--border-gold); display: flex; align-items: center; justify-content: center; font-size: 19px; background: rgba(201,162,94,.07); flex-shrink: 0; }
+  .idea-card h3 { font-size: clamp(17px,2vw,22px); font-style: italic; line-height: 1.15; color: var(--text); }
+  .idea-card p { font-size: 13px; color: var(--muted); line-height: 1.75; }
+  .idea-card .tag-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+
+  .done-card { border: 1px solid rgba(74,222,128,0.2); border-radius: 4px; background: rgba(74,222,128,0.03); padding: clamp(18px,2.5vw,28px); display: flex; flex-direction: column; gap: 10px; transition: border-color .3s; }
+  .done-card:hover { border-color: rgba(74,222,128,0.35); transform: translateY(-2px); transition: border-color .3s, transform .4s cubic-bezier(.16,1,.3,1); }
+  .done-card .done-head { display: flex; align-items: center; gap: 10px; }
+  .done-card .done-badge { width: 28px; height: 28px; border-radius: 50%; background: rgba(74,222,128,0.1); border: 1px solid rgba(74,222,128,0.25); display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 13px; }
+  .done-card h3 { font-size: clamp(14px,1.6vw,17px); font-style: italic; color: var(--text); line-height: 1.2; }
+  .done-card p { font-size: 12.5px; color: var(--muted); line-height: 1.7; }
+
+  .bug-card { border: 1px solid rgba(248,113,113,0.22); border-radius: 4px; background: rgba(248,113,113,0.03); padding: clamp(16px,2vw,24px); display: flex; flex-direction: column; gap: 8px; }
+  .bug-card .bug-head { display: flex; align-items: center; gap: 8px; }
+  .bug-card .bug-badge { width: 24px; height: 24px; border-radius: 50%; background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.25); display: flex; align-items: center; justify-content: center; font-size: 12px; flex-shrink: 0; }
+  .bug-card h4 { font-size: 13.5px; font-weight: 600; color: #f87171; }
+  .bug-card p { font-size: 12.5px; color: var(--muted); line-height: 1.65; }
+  .bug-card .bug-fix { font-size: 11.5px; color: rgba(74,222,128,0.7); margin-top: 2px; }
+
+  .tag { font-size: 9.5px; letter-spacing: .16em; text-transform: uppercase; padding: 4px 9px; border-radius: 2px; }
+  .tag-effort-low  { background: rgba(74,185,94,.1);  color: #5dd876; border: 1px solid rgba(74,185,94,.2);  }
+  .tag-effort-mid  { background: rgba(201,162,94,.1); color: var(--gold); border: 1px solid var(--border-gold); }
+  .tag-effort-high { background: rgba(139,92,246,.1); color: #a78bfa; border: 1px solid rgba(139,92,246,.2); }
+  .tag-impact-high { background: rgba(239,102,67,.1); color: #f87171; border: 1px solid rgba(239,102,67,.2); }
+  .tag-new         { background: rgba(56,189,248,.1); color: #7dd3fc; border: 1px solid rgba(56,189,248,.2); }
+  .tag-done        { background: rgba(74,222,128,.1); color: #4ade80; border: 1px solid rgba(74,222,128,.2); }
+  .tag-ozon        { background: rgba(0,143,255,.1);  color: #60b3ff; border: 1px solid rgba(0,143,255,.2);  }
+
+  .roadmap { display: flex; flex-direction: column; gap: 0; }
+  .rm-phase { display: grid; grid-template-columns: 160px 1fr; gap: 0 32px; position: relative; }
+  .rm-phase::before { content: ''; position: absolute; left: 159px; top: 0; bottom: 0; width: 1px; background: linear-gradient(to bottom, transparent, var(--border-gold) 8%, var(--border-gold) 92%, transparent); }
+  .rm-label { text-align: right; padding: 28px 0; position: sticky; top: 80px; align-self: start; }
+  .rm-label .phase-num { font-family: 'Playfair Display', serif; font-style: italic; font-size: 34px; color: var(--gold); line-height: 1; display: block; }
+  .rm-label .phase-name { font-family: 'Playfair Display', serif; font-style: italic; font-size: 12px; letter-spacing: .02em; color: var(--muted); margin-top: 4px; }
+  .rm-body { padding: 24px 0 24px 32px; }
+  .rm-item { display: flex; align-items: flex-start; gap: 14px; padding: 16px 0; border-bottom: 1px solid rgba(255,255,255,.04); }
+  .rm-item:last-child { border-bottom: none; }
+  .rm-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--gold); flex-shrink: 0; margin-top: 5px; box-shadow: 0 0 8px rgba(201,162,94,.5); }
+  .rm-dot.dim { background: var(--dim); box-shadow: none; }
+  .rm-dot.done { background: var(--green); box-shadow: 0 0 8px rgba(74,222,128,.4); }
+  .rm-item-text h4 { font-size: 14px; color: var(--text); font-weight: 500; margin-bottom: 4px; }
+  .rm-item-text p  { font-size: 12.5px; color: var(--muted); line-height: 1.65; }
+  .done-badge-inline { display: inline-block; font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: #4ade80; background: rgba(74,222,128,.08); border: 1px solid rgba(74,222,128,.2); border-radius: 2px; padding: 2px 7px; margin-left: 8px; vertical-align: middle; }
+
+  .ozon-table { width: 100%; border-collapse: collapse; }
+  .ozon-table th { font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--muted); text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--border); font-weight: 600; }
+  .ozon-table td { font-size: 13px; color: var(--muted); padding: 13px 14px; border-bottom: 1px solid rgba(255,255,255,.04); vertical-align: top; }
+  .ozon-table tr:last-child td { border-bottom: none; }
+  .ozon-table tr:hover td { background: rgba(255,255,255,.015); }
+  .ozon-table .td-title { color: var(--text); font-weight: 500; }
+  .status-done { color: #4ade80; font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+  .status-plan { color: var(--gold); font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+  .status-idea { color: #7dd3fc; font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+
+  .matrix-wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .matrix-cell { border: 1px solid var(--border); border-radius: 3px; background: var(--surface); padding: 20px; min-height: 180px; }
+  .matrix-cell h4 { font-size: 11px; letter-spacing: .18em; text-transform: uppercase; margin-bottom: 12px; }
+  .matrix-cell ul { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+  .matrix-cell ul li { font-size: 12.5px; color: var(--muted); display: flex; gap: 8px; }
+  .matrix-cell ul li::before { content: '–'; color: var(--dim); flex-shrink: 0; }
+  .matrix-cell ul li.done-li::before { content: '✓'; color: #4ade80; flex-shrink: 0; }
+  .matrix-cell ul li.done-li { color: #3a3a3a; }
+  .matrix-quad-1 { border-color: rgba(239,102,67,.25); } .matrix-quad-1 h4 { color: #f87171; }
+  .matrix-quad-2 { border-color: var(--border-gold); } .matrix-quad-2 h4 { color: var(--gold); }
+  .matrix-quad-3 h4 { color: var(--muted); }
+  .matrix-quad-4 h4 { color: var(--dim); }
+  .matrix-axis-y { writing-mode: vertical-rl; text-orientation: mixed; transform: rotate(180deg); font-size: 9px; letter-spacing: .2em; text-transform: uppercase; color: var(--dim); display: flex; align-items: center; }
+  .matrix-grid-wrap { display: grid; grid-template-columns: auto 1fr; gap: 0 10px; align-items: center; }
+  .matrix-axis-x { font-size: 9px; letter-spacing: .2em; text-transform: uppercase; color: var(--dim); text-align: center; padding-top: 8px; margin-left: 24px; }
+
+  .kpi-phase-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(240px,1fr)); gap: 14px; }
+  .kpi-phase-card { border: 1px solid var(--border); border-radius: 4px; background: var(--surface); padding: 22px 20px; }
+  .kpi-phase-card.active { border-color: var(--border-gold); background: linear-gradient(150deg,#171309 0%,#111113 70%); }
+  .kpi-phase-card > h4 { font-family: 'Playfair Display', serif; font-style: italic; font-weight: 400; font-size: 15px; color: var(--gold); margin-bottom: 16px; }
+  .kpi-item { display: flex; justify-content: space-between; align-items: baseline; padding: 9px 0; border-bottom: 1px solid rgba(255,255,255,.04); gap: 12px; }
+  .kpi-item:last-child { border-bottom: none; }
+  .kpi-item .kpi-label { font-size: 12.5px; color: var(--muted); }
+  .kpi-item .kpi-val { font-family: 'Playfair Display', serif; font-style: italic; font-size: 17px; color: var(--text); white-space: nowrap; }
+  .kpi-item .kpi-val.gold { color: var(--gold); }
+
+  .gold-sep { width: 100%; height: 1px; background: linear-gradient(90deg, transparent, rgba(201,162,94,.25), transparent); margin: clamp(52px,7vw,96px) 0 0; }
+  footer { position: relative; z-index: 1; padding: 40px 0 56px; text-align: center; border-top: 1px solid var(--border); margin-top: clamp(52px,7vw,96px); }
+  footer p { font-size: 12px; color: var(--dim); }
+  footer .brand { font-family: 'Playfair Display', serif; font-style: italic; color: var(--gold); }
+
+  .reveal { opacity: 0; transform: translateY(22px); transition: opacity .7s ease, transform .7s cubic-bezier(.16,1,.3,1); }
+  .reveal.in { opacity: 1; transform: none; }
+
+  @media (max-width: 640px) {
+    .rm-phase { grid-template-columns: 1fr; }
+    .rm-phase::before { display: none; }
+    .rm-label { text-align: left; padding: 24px 0 0; position: static; }
+    .rm-body { padding: 12px 0 12px 16px; border-left: 1px solid var(--border-gold); }
+    .matrix-wrap { grid-template-columns: 1fr; }
+    .matrix-grid-wrap { grid-template-columns: 1fr; }
+    .matrix-axis-y { writing-mode: horizontal-tb; transform: none; margin-bottom: 8px; }
+  }
+</style>
+</head>
+<body>
+<div id="aura" aria-hidden="true"></div>
+
+<header>
+  <div class="page-wrap inner">
+    <div class="logo-mark">
+      <span>Magic Vibes</span>
+      <span class="version-chip">Roadmap 2026 · v3</span>
+    </div>
+    <p>Аудит реализованного · 8 проблем · Ароматные данные · 45+ идей · Сентябрь 2026</p>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="page-wrap">
+    <p class="eyebrow hero-eyebrow">Стратегия развития · Обновлённая редакция</p>
+    <h1 class="serif">Аудит<br>& Дальше</h1>
+    <p class="hero-sub">Полный аудит реализованного на сентябрь 2026. Три критических доработки: SVG-карта мира, ароматные данные для пирамиды нот и AI-подбора, апгрейд семантического поиска. 45+ идей.</p>
+    <div class="hero-divider"></div>
+  </div>
+</section>
+
+<div class="stats-bar page-wrap reveal">
+  <div class="stat-cell"><span class="val serif">48</span><span class="lbl">Реализованных фич</span></div>
+  <div class="stat-cell"><span class="val serif">8</span><span class="lbl">Выявленных проблем</span></div>
+  <div class="stat-cell"><span class="val serif">45+</span><span class="lbl">Идей в плане</span></div>
+  <div class="stat-cell"><span class="val serif">3</span><span class="lbl">Критических доработки</span></div>
+</div>
+
+<!-- РЕАЛИЗОВАНО -->
+<section class="section">
+  <div class="page-wrap">
+    <div class="section-head reveal">
+      <p class="eyebrow">Аудит · Сентябрь 2026</p>
+      <h2>Что уже реализовано</h2>
+    </div>
+    <div class="grid-3 reveal">
+      <div class="done-card"><div class="done-head"><div class="done-badge">✦</div><h3>Hero: 3D tilt + gold shader + частицы</h3></div><p>WebGL HeroShader, аура курсора, magnetic buttons, параллакс при скролле. Живой, премиальный эффект с первой секунды.</p></div>
+      <div class="done-card"><div class="done-head"><div class="done-badge">🧠</div><h3>Квиз 5 шагов + email-захват</h3></div><p>Повод, настроение, ноты, бюджет, получатель. Поле email в конце для отправки подборки. <em>Нужен API-запрос.</em></p></div>
+      <div class="done-card"><div class="done-head"><div class="done-badge">🎁</div><h3>Gift-конфигуратор 4-шага</h3></div><p>Аромат → упаковка → открытка → итог. Три варианта упаковки с ценами. Полностью функционален.</p></div>
+      <div class="done-card"><div class="done-head"><div class="done-badge">📧</div><h3>Pop-up «–10% на первый заказ»</h3></div><p>Exit-intent + 10 сек + cookie 30 дней + промокод VIBES10. <em>Нужно подключить API email.</em></p></div>
+      <div class="done-card"><div class="done-head"><div class="done-badge">⭐</div><h3>Schema.org JSON-LD</h3></div><p>Product + AggregateRating + Offer динамически на каждой странице товара. Звёздочки в поиске Яндекс/Google.</p></div>
+      <div class="done-card"><div class="done-head"><div class="done-badge">❓</div><h3>FAQ-страница (аккордеон)</h3></div><p>4 раздела: доставка, оригинальность, оплата, о парфюмерии. Анимированный аккордеон.</p></div>
+      <div class="done-card"><div class="done-head"><div class="done-badge">🌟</div><h3>Отзывы с Ozon (фото + плюсы/минусы)</h3></div><p>Маркетплейс-отзывы: автор, рейтинг, фото, достоинства, недостатки. Отдельная секция с бейджем Ozon.</p></div>
+      <div class="done-card"><div class="done-head"><div class="done-badge">✍️</div><h3>Форма отзыва на сайте</h3></div><p>Авторизованные пишут отзыв с рейтингом. Имя-промпт при первой публикации для защиты email.</p></div>
+      <div class="done-card"><div class="done-head"><div class="done-badge">🎬</div><h3>Unboxing от покупателей</h3></div><p>Форма (ссылка на видео/фото), YouTube-iframe, промокод UNBOX7 (+7%). <em>Нужен прямой аплоад.</em></p></div>
+      <div class="done-card"><div class="done-head"><div class="done-badge">📰</div><h3>Telegram-новости на главной</h3></div><p>Поллинг @magicvibes_ru каждые 30 мин. Сетка карточек с фото и ссылкой на канал.</p></div>
+      <div class="done-card"><div class="done-head"><div class="done-badge">🎞️</div><h3>Drag-галерея брендов с тултипами</h3></div><p>Горизонтальный drag-скролл. Hover → тултип с ключевыми нотами каждого парфюмерного дома.</p></div>
+      <div class="done-card"><div class="done-head"><div class="done-badge">📖</div><h3>Страницы-гиды (4 шт.)</h3></div><p>«Для женщин», «Для мужчин», «В подарок», «В офис» — с описаниями, советами и CTA в каталог.</p></div>
+      <div class="done-card"><div class="done-head"><div class="done-badge">🔔</div><h3>Уведомление «товар появился»</h3></div><p>Email-форма в карточке «нет в наличии» — покупатель встаёт в список ожидания.</p></div>
+      <div class="done-card"><div class="done-head"><div class="done-badge">📤</div><h3>Поделиться (4 соцсети)</h3></div><p>Dropdown: Telegram, ВКонтакте, WhatsApp, Одноклассники + копирование ссылки.</p></div>
+      <div class="done-card"><div class="done-head"><div class="done-badge">👁️</div><h3>«N человек смотрят» — FOMO</h3></div><p>Псевдослучайный счётчик в карточке товара, зависит от рейтинга, обновляется каждую минуту.</p></div>
+      <div class="done-card"><div class="done-head"><div class="done-badge">🛒</div><h3>Полный цикл: каталог → заказ</h3></div><p>Каталог, карточка, корзина, оформление, страницы успеха/ошибки. Контекст корзины сохраняется.</p></div>
+      <div class="done-card"><div class="done-head"><div class="done-badge">👤</div><h3>Авторизация Yandex ID</h3></div><p>OAuth через Яндекс, личный кабинет с историей заказов, управление профилем.</p></div>
+      <div class="done-card"><div class="done-head"><div class="done-badge">💬</div><h3>Виджет поддержки + чат</h3></div><p>Плавающая кнопка чата на всех страницах. SupportChatWidget.</p></div>
+      <div class="done-card"><div class="done-head"><div class="done-badge">🗺️</div><h3>Карта пунктов Ozon (OzonPickupMap)</h3></div><p>Встраиваемая карта ПВЗ при выборе доставки в checkout.</p></div>
+      <div class="done-card"><div class="done-head"><div class="done-badge">🚚</div><h3>Страницы: доставка, гарантия</h3></div><p>DeliveryPage и WarrantyPage с полной информацией и FAQ-блоками.</p></div>
+      <div class="done-card"><div class="done-head"><div class="done-badge">🆕</div><h3>Новинки, Бренды, Новости</h3></div><p>Страницы /new, /brands, /news — полноценные с навигацией и фильтрами.</p></div>
+      <div class="done-card"><div class="done-head"><div class="done-badge">⚡</div><h3>Push-уведомления (Web Push)</h3></div><p>Хук usePush.ts — подписка на Web Push для уведомлений об акциях.</p></div>
+      <div class="done-card"><div class="done-head"><div class="done-badge">🔖</div><h3>Breadcrumbs + SEO-тег страницы</h3></div><p>Хлебные крошки в карточке товара с правильными ссылками на бренд и каталог.</p></div>
+      <div class="done-card"><div class="done-head"><div class="done-badge">🔗</div><h3>Связанные товары «С этим берут»</h3></div><p>Рекомендации по бренду в карточке и в pop-up добавления в корзину.</p></div>
+      <div class="done-card"><div class="done-head"><div class="done-badge">🎨</div><h3>Skeleton loading</h3></div><p>Анимированные скелетоны карточек при загрузке каталога и страницы товара.</p></div>
+      <div class="done-card"><div class="done-head"><div class="done-badge">🔍</div><h3>Фильтрация каталога</h3></div><p>Фильтры по бренду, категории, наличию. URL-параметры — ссылки на фильтр работают напрямую.</p></div>
+      <div class="done-card" style="border-color:rgba(56,189,248,.3); background:rgba(56,189,248,.04)"><div class="done-head"><div class="done-badge" style="background:rgba(56,189,248,.1);border-color:rgba(56,189,248,.3)">🆕</div><h3 style="color:#7dd3fc">404-страница premium</h3></div><p>Золотой shimmer, float-анимация числа, частицы, ссылки на ключевые разделы.</p></div>
+      <div class="done-card" style="border-color:rgba(201,162,94,.3); background:rgba(201,162,94,.03)"><div class="done-head"><div class="done-badge">🧬</div><h3>Fragrantica-скрапер (02a-fragrantica-cache.js)</h3></div><p>Поиск по fragrantica.ru → парсинг верхних/средних/базовых нот, аккордов, пола, сезонов. Кэш 30 дней в JSON-файле. <em>Проблема: Cloudflare блокирует запросы → большинство товаров без данных.</em></p></div>
+      <div class="done-card" style="border-color:rgba(201,162,94,.3); background:rgba(201,162,94,.03)"><div class="done-head"><div class="done-badge">🔍</div><h3>AI-подбор /find (ключевые слова)</h3></div><p>Страница /find: LLM извлекает термины из описания → keyword-поиск по имени/описанию товара в БД. <em>Частично: ищет по тексту, а не по нотам — без данных о нотах результаты поверхностные.</em></p></div>
+      <div class="done-card" style="border-color:rgba(201,162,94,.3); background:rgba(201,162,94,.03)"><div class="done-head"><div class="done-badge">💠</div><h3>Пирамида нот — компонент в ProductPage</h3></div><p>Компонент отрисовки пирамиды нот подключён: notesQuery → /api/shop/product-notes → lookupFragranticaData. <em>Частично: без данных Fragrantica пирамида не отображается у большинства товаров.</em></p></div>
+      <div class="done-card" style="border-color:rgba(201,162,94,.3); background:rgba(201,162,94,.03)"><div class="done-head"><div class="done-badge">🌍</div><h3>«Ароматная карта мира» /world — маркеры</h3></div><p>Страница /world с 9 странами и брендами. Маркеры с пульсацией, панель брендов при клике. <em>Частично: нет подложки реальной карты — вместо неё CSS-блобы и сетка, маркеры «плывут» в пустоте.</em></p></div>
+    </div>
+  </div>
+</section>
+
+<!-- БАГИ -->
+<section class="section">
+  <div class="page-wrap">
+    <div class="section-head reveal">
+      <p class="eyebrow">Выявленные проблемы</p>
+      <h2>Баги и слабые места</h2>
+    </div>
+    <div class="grid-2 reveal">
+      <div class="bug-card">
+        <div class="bug-head"><div class="bug-badge">⚠</div><h4>Pop-up email не отправляется на сервер</h4></div>
+        <p><code>PopupPromo.tsx</code>: <code>submit()</code> вызывает <code>setSent(true)</code> без API-запроса. Email не попадает ни в какую базу — промокод выдаётся без захвата лида.</p>
+        <p class="bug-fix">→ POST /api/shop/email-subscribe с email + source="popup" → сохранение в ShopEmailSubscriber → отправка промокода на почту.</p>
+      </div>
+      <div class="bug-card">
+        <div class="bug-head"><div class="bug-badge">⚠</div><h4>Квиз email не отправляется</h4></div>
+        <p><code>HomePage.tsx</code>: кнопка «Отправить» в email-секции квиза — только <code>setQuizEmailSent(true)</code>. Персонализированная рассылка по итогу квиза не работает.</p>
+        <p class="bug-fix">→ Отправлять email + выбранную категорию квиза → персонализированная email-цепочка с подборкой.</p>
+      </div>
+      <div class="bug-card">
+        <div class="bug-head"><div class="bug-badge">✅</div><h4>Страница 404 — пустой экран</h4></div>
+        <p>Роутер не имел catch-all маршрута. При переходе на несуществующий URL — пустая белая страница без навигации.</p>
+        <p class="bug-fix" style="color:#4ade80">→ ИСПРАВЛЕНО: добавлена <code>NotFoundPage.tsx</code> с premium-дизайном и <code>path="*"</code> в App.tsx.</p>
+      </div>
+      <div class="bug-card">
+        <div class="bug-head"><div class="bug-badge">⚠</div><h4>Счётчик «смотрят» — скачки раз в минуту</h4></div>
+        <p><code>viewerCount()</code> в ProductPage — детерминированная функция от offerId + текущей минуты. Число резко меняется каждые 60 сек, что выглядит неестественно.</p>
+        <p class="bug-fix">→ Интерполяция: менять на ±1 со случайным интервалом 30-90 сек, анимировать цифру.</p>
+      </div>
+      <div class="bug-card">
+        <div class="bug-head"><div class="bug-badge">⚠</div><h4>Unboxing: только URL, не загрузка файла</h4></div>
+        <p>Форма unboxing принимает лишь ссылку на внешнее медиа. Нужно самостоятельно куда-то залить видео и вставить ссылку — высокий барьер для обычного покупателя.</p>
+        <p class="bug-fix">→ Drag-and-drop загрузка video/image (до 50 МБ) с прогресс-баром. Хранить в S3 или локально.</p>
+      </div>
+      <div class="bug-card" style="border-color:rgba(251,191,36,.3); background:rgba(251,191,36,.03)">
+        <div class="bug-head"><div class="bug-badge" style="background:rgba(251,191,36,.1);border-color:rgba(251,191,36,.3)">🗺</div><h4 style="color:#fbbf24">Карта мира — нет подложки, маркеры в пустоте</h4></div>
+        <p>WorldMapPage.tsx рисует SVG-сетку и CSS-блобы вместо реальной карты мира. Маркеры стран «плывут» в тёмном фоне без географического контекста — непонятно, где что находится.</p>
+        <p class="bug-fix" style="color:#fbbf24">→ Подключить Natural Earth SVG-карту (public domain) или библиотеку react-simple-maps. Стилизовать в тёмной палитре с золотыми акцентами. Маркеры размещать по реальным координатам lat/lon.</p>
+      </div>
+      <div class="bug-card" style="border-color:rgba(251,191,36,.3); background:rgba(251,191,36,.03)">
+        <div class="bug-head"><div class="bug-badge" style="background:rgba(251,191,36,.1);border-color:rgba(251,191,36,.3)">🧬</div><h4 style="color:#fbbf24">AI-подбор не работает — нет данных о нотах</h4></div>
+        <p>AI-поиск (/find) ищет по имени и описанию товара в БД — то есть по тексту «Chanel Bleu de Chanel». Понять, что этот аромат «цитрусово-древесный» из слова «тёплый, как ваниль, но не приторный» — невозможно без данных о нотах.</p>
+        <p class="bug-fix" style="color:#fbbf24">→ Нужен трёхуровневый план: (1) LLM-генерация нот для всех товаров сразу, (2) хранение нот в Prisma (поле fragranceNotes), (3) поиск по нотам. Fragrantica — опционально поверх.</p>
+      </div>
+      <div class="bug-card" style="border-color:rgba(251,191,36,.3); background:rgba(251,191,36,.03)">
+        <div class="bug-head"><div class="bug-badge" style="background:rgba(251,191,36,.1);border-color:rgba(251,191,36,.3)">💠</div><h4 style="color:#fbbf24">Пирамида нот — Cloudflare блокирует Fragrantica</h4></div>
+        <p>Скрапер <code>02a-fragrantica-cache.js</code> написан корректно, но fragrantica.ru защищена Cloudflare — большинство запросов возвращают 403/challenge-page. Данных почти нет → пирамида нот пуста у 95%+ товаров.</p>
+        <p class="bug-fix" style="color:#fbbf24">→ Краткосрочно: LLM-генерация нот по имени+бренду (Claude/GPT). Долгосрочно: Playwright headless или прокси-сервис (ScraperAPI) для обхода защиты. Добавить ручной ввод нот в admin-панели давидсклада.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- OZON ИНТЕГРАЦИИ -->
+<section class="section">
+  <div class="page-wrap">
+    <div class="section-head reveal">
+      <p class="eyebrow">Маркетплейс · Главная платформа</p>
+      <h2>Интеграции с Ozon — полная карта</h2>
+    </div>
+    <div class="reveal" style="border: 1px solid var(--border); border-radius: 4px; background: var(--surface); overflow: hidden;">
+      <table class="ozon-table">
+        <thead>
+          <tr>
+            <th style="width:28%">Интеграция</th>
+            <th>Описание</th>
+            <th style="width:16%">Статус</th>
+            <th style="width:14%">Эффект</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td class="td-title">Цены (push)</td><td>Отправка цен по формуле USD × курс × коэффициент по кнопке оператора</td><td class="status-done">Готово</td><td>Прибыль</td></tr>
+          <tr><td class="td-title">Остатки FBS (push)</td><td>Синхронизация складских остатков с Ozon FBS, автосинк каждые 3 ч</td><td class="status-done">Готово</td><td>Продажи</td></tr>
+          <tr><td class="td-title">Заказы (pull)</td><td>Приём заказов Ozon в систему управления складом davidsklad.ru</td><td class="status-done">Готово</td><td>Операции</td></tr>
+          <tr><td class="td-title">Текстовые отзывы (pull)</td><td>Импорт отзывов покупателей с рейтингом, плюсами/минусами — показ в карточке</td><td class="status-done">Готово</td><td>Доверие</td></tr>
+          <tr><td class="td-title">Фото в отзывах (pull)</td><td>Импорт фото из отзывов Ozon — показываются в карточке товара на magicvibes.ru</td><td class="status-done">Готово</td><td>Конверсия</td></tr>
+          <tr><td class="td-title">Вопросы и ответы (pull)</td><td>Импорт Q&amp;A: «Какой объём?», «Есть в подарочной упаковке?» + ответы магазина → аккордеон в карточке</td><td class="status-plan">Запланировано</td><td>SEO + FAQ</td></tr>
+          <tr><td class="td-title">🎥 Видео-отзывы (pull)</td><td>Ozon API v4: поле <code>video_review</code> — ссылки на видео покупателей. Встроить как нативное &lt;video&gt; в карточку товара</td><td class="status-plan">Запланировано</td><td>WOW-фактор</td></tr>
+          <tr><td class="td-title">Аналитика продаж (pull)</td><td>Выручка, количество заказов, возвраты из кабинета Ozon → дашборд в davidsklad.ru</td><td class="status-plan">Запланировано</td><td>Аналитика</td></tr>
+          <tr><td class="td-title">AI-автоответы на отзывы (push)</td><td>Claude генерирует персонализированный ответ на новый отзыв → отправка через Ozon Review API от имени магазина</td><td class="status-plan">Запланировано</td><td>Лояльность</td></tr>
+          <tr><td class="td-title">«Топ по городам» (pull)</td><td>Какие ароматы покупают в каком городе → блок на главной «Хит в Москве / СПб». Данные из аналитики Ozon</td><td class="status-idea">Идея</td><td>Social Proof</td></tr>
+          <tr><td class="td-title">Rich Content (push)</td><td>Загрузка расширенного описания через Ozon Content API: HTML-блоки с фото, таблицы характеристик для карточки на Ozon</td><td class="status-idea">Идея</td><td>Конверсия Ozon</td></tr>
+          <tr><td class="td-title">Рейтинг продавца live (pull)</td><td>Динамически обновлять рейтинг 4.9★ на сайте из API (сейчас значение вшито статично)</td><td class="status-idea">Идея</td><td>Актуальность</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- НОВЫЕ ИДЕИ — КОНВЕРСИЯ -->
+<section class="section">
+  <div class="page-wrap">
+    <div class="section-head reveal"><p class="eyebrow">Блок 01 — Конверсия</p><h2>Баннеры и промо-механики</h2></div>
+    <div class="grid-2 reveal">
+      <div class="idea-card featured"><div class="card-icon">⏱️</div><h3>Countdown-таймер в баннере</h3><p>Добавить поле «дата окончания» в модель BannerSlider. Таймер поверх баннера создаёт FOMO — +15-30% к конверсии акции. Нужны только поле и компонент таймера.</p><div class="tag-row"><span class="tag tag-effort-mid">Среднее · ~4 ч</span><span class="tag tag-impact-high">Высокий эффект</span></div></div>
+      <div class="idea-card featured"><div class="card-icon">🎉</div><h3>Праздничные баннеры с промокодами</h3><p>Halloween (уже скоро!), Новый год, 8 марта, 23 февраля. Промокод в баннере, автодеактивация по дате. Управляется через davidsklad.ru без кода.</p><div class="tag-row"><span class="tag tag-effort-low">Нулевой код</span><span class="tag tag-impact-high">Сезонный буст</span></div></div>
+      <div class="idea-card"><div class="card-icon">📅</div><h3>«Аромат месяца»</h3><p>Специальный тип баннера: история аромата + специальная цена. Каждый месяц новый хайлайт — причина возвращаться на сайт.</p><div class="tag-row"><span class="tag tag-effort-low">Низкое</span><span class="tag tag-effort-mid">Вовлечённость</span></div></div>
+      <div class="idea-card"><div class="card-icon">📊</div><h3>«Топ по городам» с Ozon</h3><p>«Хит в Москве — Dior Sauvage», «В СПб любят Jo Malone». Данные из аналитики Ozon. Локальная релевантность + живой social proof.</p><div class="tag-row"><span class="tag tag-effort-mid">Среднее</span><span class="tag tag-ozon">Ozon Analytics</span></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ВОВЛЕЧЁННОСТЬ -->
+<section class="section">
+  <div class="page-wrap">
+    <div class="section-head reveal"><p class="eyebrow">Блок 02 — Вовлечённость</p><h2>Опыт покупателя — следующий уровень</h2></div>
+    <div class="grid-3 reveal">
+      <div class="idea-card featured"><div class="card-icon">🎥</div><h3>Видео-отзывы с Ozon в карточке</h3><p>Ozon API содержит <code>video_review</code> в объекте отзыва — ссылки на видео покупателей. Встроить как нативное &lt;video&gt; прямо под фото товара. Реальные видео убеждают лучше любого текста.</p><div class="tag-row"><span class="tag tag-effort-mid">Среднее · ~1 день</span><span class="tag tag-ozon">Ozon API</span><span class="tag tag-impact-high">WOW</span></div></div>
+      <div class="idea-card featured"><div class="card-icon">❓</div><h3>Q&A с Ozon в карточке товара</h3><p>Вопросы покупателей и ответы магазина с Ozon → аккордеон «Вопросы о товаре» в карточке. Двойной эффект: доверие + органические ключевые фразы.</p><div class="tag-row"><span class="tag tag-effort-mid">Среднее</span><span class="tag tag-ozon">Ozon API</span></div></div>
+      <div class="idea-card"><div class="card-icon">💠</div><h3>Интерактивная пирамида нот</h3><p>SVG/Canvas в карточке: верхние / средние / базовые ноты. Hover — описание каждой ноты. Такого нет ни у одного российского конкурента.</p><div class="tag-row"><span class="tag tag-effort-high">Высокое</span><span class="tag tag-impact-high">WOW-эффект</span></div></div>
+      <div class="idea-card"><div class="card-icon">📸</div><h3>Отзывы с фото — прямой аплоад</h3><p>Расширить форму: drag-and-drop загрузка фото флакона. Галерея покупательских фото под официальными. Реальные фото конвертируют сомневающихся.</p><div class="tag-row"><span class="tag tag-effort-mid">Среднее</span><span class="tag tag-impact-high">Доверие</span></div></div>
+      <div class="idea-card"><div class="card-icon">🏆</div><h3>Программа лояльности «Золото»</h3><p>Silver → Gold → Platinum. Баллы за заказы, отзывы, видео. Прогресс-бар в кабинете. Скидка = накопленные баллы.</p><div class="tag-row"><span class="tag tag-effort-high">Высокое</span><span class="tag tag-impact-high">Ретеншн</span></div></div>
+      <div class="idea-card"><div class="card-icon">🔗</div><h3>Реферальная программа</h3><p>Уникальная ссылка из личного кабинета. Новый заказ по ней — оба получают скидку 7%. Статистика в кабинете.</p><div class="tag-row"><span class="tag tag-effort-high">Высокое</span><span class="tag tag-impact-high">Виральность</span></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ВИЗУАЛ -->
+<section class="section">
+  <div class="page-wrap">
+    <div class="section-head reveal"><p class="eyebrow">Блок 03 — Визуальное превосходство</p><h2>Анимации и 3D</h2></div>
+    <div class="grid-2 reveal">
+      <div class="idea-card featured"><div class="card-icon">🌪️</div><h3>3D-флакон на hover (Three.js)</h3><p>В карточке товара: медленное вращение, преломление света на стекле. Three.js / WebGL. Референс: Byredo, Jo Malone London.</p><div class="tag-row"><span class="tag tag-effort-high">Three.js</span><span class="tag tag-impact-high">WOW</span></div></div>
+      <div class="idea-card featured"><div class="card-icon">✨</div><h3>Liquid Metal hero — апгрейд шейдера</h3><p>Заменить текущий HeroShader на GLSL-шейдер жидкого золота. ~40 строк кода через OGL/Curtains.js. Ощущение живого, роскошного бренда.</p><div class="tag-row"><span class="tag tag-effort-high">WebGL GLSL</span><span class="tag tag-impact-high">Первое впечатление</span></div></div>
+      <div class="idea-card"><div class="card-icon">🌫️</div><h3>Glassmorphism-карточки каталога</h3><p>Тёмное матовое стекло (backdrop-filter: blur), золотое свечение по контуру при hover. Переосмыслить карточки товаров в премиальном ключе.</p><div class="tag-row"><span class="tag tag-effort-low">CSS only</span><span class="tag tag-effort-mid">Премиум-визуал</span></div></div>
+      <div class="idea-card"><div class="card-icon">🖼️</div><h3>Parallax + text dissolve</h3><p>Фоновые изображения секций движутся медленнее контента. Заголовки «растворяются» из частиц при появлении. GSAP или CSS.</p><div class="tag-row"><span class="tag tag-effort-mid">GSAP / CSS</span><span class="tag tag-effort-mid">Глубина</span></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- SEO + AI -->
+<section class="section">
+  <div class="page-wrap">
+    <div class="section-head reveal"><p class="eyebrow">Блок 04 — Трафик и AI</p><h2>SEO, контент, автоматизация</h2></div>
+    <div class="grid-2 reveal">
+      <div class="idea-card featured"><div class="card-icon">📝</div><h3>Блог «Мир ароматов»</h3><p>«Топ-10 ароматов осени 2026», «Чем EDT отличается от EDP», «Лучшие ароматы для офиса». 52 статьи за год — SEO-маховик на годы вперёд без рекламного бюджета.</p><div class="tag-row"><span class="tag tag-effort-mid">Среднее</span><span class="tag tag-impact-high">Долгосрочный трафик</span></div></div>
+      <div class="idea-card featured"><div class="card-icon">🤖</div><h3>AI-автоответы на отзывы Ozon</h3><p>Claude / GPT генерирует персонализированный ответ магазина на каждый новый отзыв → отправка через Ozon Review API. Покупатель чувствует внимание, рейтинг растёт.</p><div class="tag-row"><span class="tag tag-effort-mid">AI + Ozon API</span><span class="tag tag-ozon">Ozon</span></div></div>
+      <div class="idea-card"><div class="card-icon">🤖</div><h3>AI-подбор по текстовому описанию</h3><p>«Тёплый, как ваниль, но не приторный» → 5 ароматов. OpenAI Embeddings + семантический поиск по 22 000 карточек. Уникальное UX, аналогов в РФ нет.</p><div class="tag-row"><span class="tag tag-effort-high">AI / Embeddings</span><span class="tag tag-impact-high">UX</span></div></div>
+      <div class="idea-card"><div class="card-icon">🌍</div><h3>«Ароматная карта мира»</h3><p>Интерактивная карта: выбираешь страну → видишь ароматы оттуда. Франция → Chanel, Hermès. ОАЭ → Amouage, Montale. Образовательный + развлекательный.</p><div class="tag-row"><span class="tag tag-effort-high">Долгосрок</span></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- АРОМАТНЫЕ ДАННЫЕ -->
+<section class="section">
+  <div class="page-wrap">
+    <div class="section-head reveal">
+      <p class="eyebrow">Блок 04b — Критично · Фундамент</p>
+      <h2>Ароматные данные — без них ни AI, ни карта, ни пирамида</h2>
+    </div>
+    <p class="reveal" style="color:var(--muted);font-size:14px;line-height:1.8;max-width:72ch;margin-bottom:32px">
+      Три фичи — AI-подбор, пирамида нот, карта мира — уже реализованы на уровне UI и API. Но все три работают вхолостую, потому что у товаров нет структурированных данных об ароматических нотах. Это один корневой баг с тремя симптомами. Ниже — пошаговый план устранения.
+    </p>
+    <div class="grid-2 reveal">
+      <div class="idea-card featured">
+        <div class="card-icon">⚡</div>
+        <h3>Шаг 1 — LLM-генерация нот для всего каталога</h3>
+        <p>Claude или GPT знает 99% популярных ароматов из тренировочных данных. Пакетный скрипт: для каждого товара (бренд + название) запрашивает JSON с верхними/средними/базовыми нотами, аккордами, полом, сезоном. Результат: 100% каталога получает ноты <strong>за один прогон</strong>. Не идеально точно, но достаточно для AI-поиска и отображения пирамиды.</p>
+        <div class="tag-row">
+          <span class="tag tag-effort-mid">~1 день разработки</span>
+          <span class="tag tag-impact-high">Разблокирует AI + пирамиду</span>
+          <span class="tag tag-new">LLM batch</span>
+        </div>
+      </div>
+      <div class="idea-card featured">
+        <div class="card-icon">🗄️</div>
+        <h3>Шаг 2 — Хранение нот в Prisma (WarehouseProduct)</h3>
+        <p>Добавить поле <code>fragranceNotes Json?</code> в модель <code>WarehouseProduct</code>. Структура: <code>{"topNotes":[], "middleNotes":[], "baseNotes":[], "accords":[], "gender":"", "seasons":[]}</code>. После этого ноты участвуют в поиске, видны в AI-запросах и синхронизируются с UI без повторных HTTP-запросов к Fragrantica.</p>
+        <div class="tag-row">
+          <span class="tag tag-effort-low">Prisma migration</span>
+          <span class="tag tag-impact-high">Основа для поиска</span>
+        </div>
+      </div>
+      <div class="idea-card featured">
+        <div class="card-icon">🔍</div>
+        <h3>Шаг 3 — AI-поиск по нотам (апгрейд /find)</h3>
+        <p>После сохранения нот в БД: LLM извлекает из описания пользователя ноты и аккорды → поиск ищет товары, у которых совпадают ноты, а не только слова в названии. «Тёплый восточный с ванилью» → топ-5 по нотам: ваниль / амбра / мускус → правильные результаты. Поиск становится по-настоящему семантическим.</p>
+        <div class="tag-row">
+          <span class="tag tag-effort-mid">~0.5 дня</span>
+          <span class="tag tag-impact-high">AI-подбор заработает</span>
+          <span class="tag tag-new">Upgrade</span>
+        </div>
+      </div>
+      <div class="idea-card">
+        <div class="card-icon">🧬</div>
+        <h3>Шаг 4 — Fragrantica как верификатор (долгосрок)</h3>
+        <p>Поверх LLM-нот: фоновый job обходит товары, которым &gt;7 дней, и пытается получить данные с fragrantica.ru через Playwright headless (обходит Cloudflare) или ScraperAPI (~$30/мес). Если Fragrantica отвечает — заменяет LLM-ноты точными данными и добавляет ссылку на источник. LLM-данные остаются резервом.</p>
+        <div class="tag-row">
+          <span class="tag tag-effort-high">Playwright + прокси</span>
+          <span class="tag tag-effort-mid">Точность данных</span>
+        </div>
+      </div>
+      <div class="idea-card">
+        <div class="card-icon">✏️</div>
+        <h3>Ручной редактор нот в davidsklad.ru</h3>
+        <p>Карточка товара в складе: вкладка «Ноты аромата». Поля: верхние/средние/базовые ноты (tags), аккорды, пол, сезоны. Кнопка «Заполнить AI» — автоматически запрашивает LLM. Кнопка «Fragrantica» — ищет на сайте. Оператор может вручную уточнить. Это даёт 100% контроль над качеством данных.</p>
+        <div class="tag-row">
+          <span class="tag tag-effort-mid">~1.5 дня</span>
+          <span class="tag tag-effort-mid">Контроль качества</span>
+        </div>
+      </div>
+      <div class="idea-card">
+        <div class="card-icon">🗺️</div>
+        <h3>Карта мира — реальная SVG-подложка</h3>
+        <p>Заменить CSS-блобы в WorldMapPage.tsx на Natural Earth SVG (public domain, ~200 КБ). Карта тёмная (#0a0c14), контуры стран — rgba(201,162,94,0.15), hover страны — подсветка золотом. Маркеры стоят на реальных координатах lat/lon, конвертированных в % через простую проекцию. Сразу станет красиво и понятно.</p>
+        <div class="tag-row">
+          <span class="tag tag-effort-mid">SVG embed + координаты</span>
+          <span class="tag tag-impact-high">Исправляет визуал</span>
+          <span class="tag tag-new">Важно</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- TELEGRAM + EMAIL -->
+<section class="section">
+  <div class="page-wrap">
+    <div class="section-head reveal"><p class="eyebrow">Блок 05 — Удержание</p><h2>Telegram-экосистема и email</h2></div>
+    <div class="grid-2 reveal">
+      <div class="idea-card featured"><div class="card-icon">🤖</div><h3>Telegram-бот подбора аромата</h3><p>Сценарий диалога по квизу. Возвращает 3 рекомендации с фото, ценой и прямой ссылкой. Live-данные каталога через API magicvibes.ru.</p><div class="tag-row"><span class="tag tag-effort-mid">Среднее</span><span class="tag tag-impact-high">Ретеншн</span></div></div>
+      <div class="idea-card featured"><div class="card-icon">💌</div><h3>Email-цепочки после покупки</h3><p>День 1: история выбранного аромата. День 7: отзыв + скидка 5%. День 30: «Аромат месяца» + персональная рекомендация по квизу.</p><div class="tag-row"><span class="tag tag-effort-mid">Email-маркетинг</span><span class="tag tag-impact-high">Ретеншн</span></div></div>
+      <div class="idea-card"><div class="card-icon">👑</div><h3>VIP-клуб постоянных покупателей</h3><p>Закрытый Telegram-чат: ранний доступ к новинкам за 48 ч, эксклюзивные промокоды, голосование за «аромат месяца». Триггер — 3-й заказ.</p><div class="tag-row"><span class="tag tag-effort-low">Низкое</span><span class="tag tag-impact-high">Лояльность</span></div></div>
+      <div class="idea-card"><div class="card-icon">🏅</div><h3>Конкурс «Мой аромат» ежемесячно</h3><p>Подписчики публикуют фото с ароматом + тег #мойаромат. Победитель по реакциям — флакон в подарок. UGC и рост охвата без затрат.</p><div class="tag-row"><span class="tag tag-effort-low">Низкое</span><span class="tag tag-effort-mid">UGC</span></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ROADMAP TIMELINE -->
+<section class="section">
+  <div class="page-wrap">
+    <div class="section-head reveal"><p class="eyebrow">Фазы</p><h2>Дорожная карта</h2></div>
+    <div class="roadmap reveal">
+
+      <div class="rm-phase">
+        <div class="rm-label"><span class="phase-num" style="color:#4ade80">00</span><span class="phase-name">Реализовано</span></div>
+        <div class="rm-body">
+          <div class="rm-item"><div class="rm-dot done"></div><div class="rm-item-text"><h4>Hero shader, 3D tilt, частицы, magnetic buttons <span class="done-badge-inline">Готово</span></h4><p>Полноценный premium-визуал главной страницы.</p></div></div>
+          <div class="rm-item"><div class="rm-dot done"></div><div class="rm-item-text"><h4>Квиз 5 шагов + email-захват <span class="done-badge-inline">Готово</span></h4><p>Подбор аромата с email в конце. Нужен API-запрос.</p></div></div>
+          <div class="rm-item"><div class="rm-dot done"></div><div class="rm-item-text"><h4>Pop-up «–10%», FAQ, Schema.org <span class="done-badge-inline">Готово</span></h4><p>Конверсионные элементы реализованы. Pop-up: нужен API email.</p></div></div>
+          <div class="rm-item"><div class="rm-dot done"></div><div class="rm-item-text"><h4>Отзывы Ozon с фото + форма на сайте <span class="done-badge-inline">Готово</span></h4><p>Импорт маркетплейс-отзывов, своя форма с рейтингом.</p></div></div>
+          <div class="rm-item"><div class="rm-dot done"></div><div class="rm-item-text"><h4>Unboxing, Telegram-новости, Гиды <span class="done-badge-inline">Готово</span></h4><p>UGC, контент, SEO-страницы реализованы.</p></div></div>
+          <div class="rm-item"><div class="rm-dot done"></div><div class="rm-item-text"><h4>Gift-конфигуратор, уведомления, шэринг <span class="done-badge-inline">Готово</span></h4><p>Конверсионные инструменты работают.</p></div></div>
+          <div class="rm-item"><div class="rm-dot done"></div><div class="rm-item-text"><h4>404-страница premium <span class="done-badge-inline">Готово · Сентябрь 2026</span></h4><p>Shimmer-анимация, частицы, быстрые ссылки.</p></div></div>
+        </div>
+      </div>
+
+      <div class="rm-phase">
+        <div class="rm-label"><span class="phase-num">01</span><span class="phase-name">Сентябрь–Октябрь 2026</span></div>
+        <div class="rm-body">
+          <div class="rm-item"><div class="rm-dot done"></div><div class="rm-item-text"><h4>Фикс: email из Pop-up и квиза <span class="done-badge-inline">Готово</span></h4><p>POST /api/shop/email-subscribe — email + источник + категория квиза → сохранение и отправка промокода.</p></div></div>
+          <div class="rm-item"><div class="rm-dot done"></div><div class="rm-item-text"><h4>Видео-отзывы с Ozon (video_review) <span class="done-badge-inline">Готово</span></h4><p>Распарсить поле video_review из Ozon API → нативное &lt;video&gt; в карточке товара.</p></div></div>
+          <div class="rm-item"><div class="rm-dot done"></div><div class="rm-item-text"><h4>Q&A с Ozon в карточке товара <span class="done-badge-inline">Готово</span></h4><p>Импорт вопросов покупателей и ответов → аккордеон «Вопросы о товаре».</p></div></div>
+          <div class="rm-item"><div class="rm-dot done"></div><div class="rm-item-text"><h4>Праздничные баннеры — 8 праздников РФ <span class="done-badge-inline">Готово</span></h4><p>CSS-арт для Хэллоуина, Чёрной пятницы, Нового года, 14 февраля, 23 февраля, 8 марта, Майских, 11.11. Авто-включение по дате + toggle в AdminPage с промокодами.</p></div></div>
+          <div class="rm-item"><div class="rm-dot done"></div><div class="rm-item-text"><h4>Countdown-таймер в баннере <span class="done-badge-inline">Готово</span></h4><p>Поле «дата окончания» в модели баннера + компонент таймера в BannerSlider.</p></div></div>
+        </div>
+      </div>
+
+      <div class="rm-phase">
+        <div class="rm-label"><span class="phase-num">02</span><span class="phase-name">Ноябрь–Декабрь 2026</span></div>
+        <div class="rm-body">
+          <div class="rm-item"><div class="rm-dot" style="background:#fbbf24;box-shadow:0 0 8px rgba(251,191,36,.4)"></div><div class="rm-item-text"><h4>Интерактивная пирамида нот <span class="done-badge-inline" style="color:#fbbf24;background:rgba(251,191,36,.08);border-color:rgba(251,191,36,.25)">Частично · нет данных</span></h4><p>Компонент пирамиды в ProductPage подключён (notesQuery → /api/shop/product-notes). <strong style="color:#fbbf24">Проблема</strong>: Fragrantica заблокирована Cloudflare → данных нет у 95%+ товаров → пирамида пустая. Разблокирует Шаг 1 «Ароматных данных» (LLM-генерация нот).</p></div></div>
+          <div class="rm-item"><div class="rm-dot done"></div><div class="rm-item-text"><h4>Отзывы с фото — прямой аплоад <span class="done-badge-inline">Готово</span></h4><p>Drag-and-drop фото в форме отзыва. Галерея покупательских фото в карточке.</p></div></div>
+          <div class="rm-item"><div class="rm-dot done"></div><div class="rm-item-text"><h4>Email-цепочки после покупки <span class="done-badge-inline">Готово</span></h4><p>День 1/7/30 — автоматические письма. История аромата, запрос отзыва, «аромат месяца».</p></div></div>
+          <div class="rm-item"><div class="rm-dot done"></div><div class="rm-item-text"><h4>AI-автоответы на отзывы Ozon <span class="done-badge-inline">Готово</span></h4><p>Кнопка «AI-ответ» в ReviewsPage → OpenAI генерирует черновик → админ редактирует → отправка через Ozon API.</p></div></div>
+          <div class="rm-item"><div class="rm-dot done"></div><div class="rm-item-text"><h4>Telegram-бот подбора <span class="done-badge-inline">Готово</span></h4><p>Сценарий диалога по квизу с live-каталогом через API. SHOP_BOT_TOKEN в .env.</p></div></div>
+          <div class="rm-item"><div class="rm-dot done"></div><div class="rm-item-text"><h4>Unboxing — прямая загрузка файла <span class="done-badge-inline">Готово</span></h4><p>Drag-and-drop video/image вместо ссылки.</p></div></div>
+        </div>
+      </div>
+
+      <div class="rm-phase">
+        <div class="rm-label"><span class="phase-num">03</span><span class="phase-name">Январь 2027+</span></div>
+        <div class="rm-body">
+          <div class="rm-item"><div class="rm-dot done"></div><div class="rm-item-text"><h4>3D-флакон (Three.js) <span class="done-badge-inline">Готово</span></h4><p>LatheGeometry + MeshPhysicalMaterial (стекло, transmission, IOR). Кнопка «3D» в карточке товара. Ленивая загрузка — Three.js в отдельном чанке.</p></div></div>
+          <div class="rm-item"><div class="rm-dot done"></div><div class="rm-item-text"><h4>Программа лояльности «Золото Magic Vibes» <span class="done-badge-inline">Готово</span></h4><p>Silver → Gold → Platinum. Баллы, уровни, скидки. Прогресс-бар в кабинете.</p></div></div>
+          <div class="rm-item"><div class="rm-dot done"></div><div class="rm-item-text"><h4>Реферальная программа <span class="done-badge-inline">Готово</span></h4><p>Уникальная ссылка из кабинета, скидка −7% новому покупателю, +100 баллов рефереру, статистика.</p></div></div>
+          <div class="rm-item"><div class="rm-dot" style="background:#fbbf24;box-shadow:0 0 8px rgba(251,191,36,.4)"></div><div class="rm-item-text"><h4>AI-подбор по текстовому описанию <span class="done-badge-inline" style="color:#fbbf24;background:rgba(251,191,36,.08);border-color:rgba(251,191,36,.25)">Частично · только keyword</span></h4><p>Страница /find существует. LLM извлекает термины → keyword-поиск по названию/описанию в БД. <strong style="color:#fbbf24">Проблема</strong>: ноты аромата не хранятся → поиск «тёплый ваниль» находит товары по имени, не по нотам. Апгрейд после шага 1–3 «Ароматных данных».</p></div></div>
+          <div class="rm-item"><div class="rm-dot done"></div><div class="rm-item-text"><h4>Блог «Мир ароматов» <span class="done-badge-inline">Готово</span></h4><p>SEO-маховик: статьи, гиды, сезонные подборки. Публичный /blog + CRUD-админка.</p></div></div>
+          <div class="rm-item"><div class="rm-dot done"></div><div class="rm-item-text"><h4>Liquid Metal GLSL шейдер <span class="done-badge-inline">Готово</span></h4><p>Апгрейд HeroShader: domain warping (q→r), ridge noise, 5-стоп палитра с белым спекуляром.</p></div></div>
+        </div>
+      </div>
+
+      <div class="rm-phase">
+        <div class="rm-label"><span class="phase-num" style="color:#4ade80">04</span><span class="phase-name">Сентябрь 2026</span></div>
+        <div class="rm-body">
+          <div class="rm-item"><div class="rm-dot done"></div><div class="rm-item-text"><h4>Glassmorphism-карточки каталога <span class="done-badge-inline">Готово</span></h4><p>backdrop-filter: blur(20px) saturate(180%), полупрозрачный градиент, золотой glow и shimmer при hover. CSS-only.</p></div></div>
+          <div class="rm-item"><div class="rm-dot done"></div><div class="rm-item-text"><h4>VIP-клуб постоянных покупателей <span class="done-badge-inline">Готово</span></h4><p>После 3 завершённых заказов — ссылка в кабинете на закрытый Telegram-клуб с ранним доступом и эксклюзивными промокодами. Прогресс из 3 точек.</p></div></div>
+          <div class="rm-item"><div class="rm-dot done"></div><div class="rm-item-text"><h4>«Аромат месяца» на главной <span class="done-badge-inline">Готово</span></h4><p>Секция на homepage с историей аромата, фото, ценой и кнопкой «Открыть аромат». Управляется из AdminPage (offerId + текст + дата окончания). Таймер «ещё N дней» при установленной дате.</p></div></div>
+          <div class="rm-item"><div class="rm-dot done"></div><div class="rm-item-text"><h4>Parallax + text dissolve <span class="done-badge-inline">Готово</span></h4><p>Hero-контент плывёт с коэффициентом 0.22 при скролле. Секции появляются с blur + translateY. Заголовки секций — clip-path sweep слева с золотым shimmer-следом.</p></div></div>
+          <div class="rm-item"><div class="rm-dot" style="background:#fbbf24;box-shadow:0 0 8px rgba(251,191,36,.4)"></div><div class="rm-item-text"><h4>«Ароматная карта мира» /world <span class="done-badge-inline" style="color:#fbbf24;background:rgba(251,191,36,.08);border-color:rgba(251,191,36,.25)">Частично · нет подложки</span></h4><p>Маркеры 9 стран, панель брендов, ссылки в каталог — работают. <strong style="color:#fbbf24">Не работает</strong>: нет реального SVG-контура карты мира, только CSS-блобы. Нужно: Natural Earth SVG + координаты lat/lon для маркеров.</p></div></div>
+        </div>
+      </div>
+      <div class="rm-phase">
+        <div class="rm-label"><span class="phase-num" style="color:#fbbf24">05</span><span class="phase-name">Октябрь 2026 · Срочно</span></div>
+        <div class="rm-body">
+          <div class="rm-item">
+            <div class="rm-dot" style="background:#fbbf24;box-shadow:0 0 8px rgba(251,191,36,.5)"></div>
+            <div class="rm-item-text">
+              <h4>SVG-подложка карты мира в /world <span class="done-badge-inline" style="color:#fbbf24;background:rgba(251,191,36,.08);border-color:rgba(251,191,36,.25)">В работе</span></h4>
+              <p>Встроить Natural Earth SVG (public domain) в WorldMapPage.tsx. Стиль: тёмный (#0a0c14), контуры стран rgba(201,162,94,0.15), hover — золотая подсветка страны. Маркеры переехать на lat/lon-координаты с нормализацией под проекцию SVG. Результат: карта выглядит как карта.</p>
+            </div>
+          </div>
+          <div class="rm-item">
+            <div class="rm-dot" style="background:#fbbf24;box-shadow:0 0 8px rgba(251,191,36,.5)"></div>
+            <div class="rm-item-text">
+              <h4>LLM-батч: ноты для всего каталога <span class="done-badge-inline" style="color:#fbbf24;background:rgba(251,191,36,.08);border-color:rgba(251,191,36,.25)">В работе</span></h4>
+              <p>Скрипт в davidsklad: берёт все товары без fragranceNotes → пакетно запрашивает Claude/GPT (бренд + название → JSON с нотами). Прогресс-бар в UI. После прогона: 100% товаров имеют ноты. Пирамида нот заработает сразу.</p>
+            </div>
+          </div>
+          <div class="rm-item">
+            <div class="rm-dot" style="background:#fbbf24;box-shadow:0 0 8px rgba(251,191,36,.5)"></div>
+            <div class="rm-item-text">
+              <h4>Prisma migration: поле fragranceNotes в WarehouseProduct</h4>
+              <p>Добавить <code>fragranceNotes Json?</code> в схему. Структура: <code>{topNotes, middleNotes, baseNotes, accords, gender, seasons, source}</code>. После этого данные в БД — поиск по ним, отображение в UI, синк с магазином.</p>
+            </div>
+          </div>
+          <div class="rm-item">
+            <div class="rm-dot" style="background:#fbbf24;box-shadow:0 0 8px rgba(251,191,36,.5)"></div>
+            <div class="rm-item-text">
+              <h4>AI-поиск апгрейд: поиск по нотам + аккордам</h4>
+              <p>Обновить /api/shop/ai-search: LLM теперь извлекает конкретные ноты и аккорды из описания → SQL ищет по fragranceNotes JSONB. Пример: «тёплый ваниль не приторный» → WHERE fragranceNotes @&gt; '{"accords":["vanilla"]}'. Настоящий семантический поиск.</p>
+            </div>
+          </div>
+          <div class="rm-item">
+            <div class="rm-dot dim"></div>
+            <div class="rm-item-text">
+              <h4>Редактор нот в davidsklad (вкладка «Аромат»)</h4>
+              <p>В карточке товара: поля top/mid/base нот, аккорды, пол, сезон. Кнопка «Заполнить AI» → автозапрос LLM. Кнопка «Fragrantica» → поиск на сайте. Ручная коррекция. Приоритет: ключевые бренды (Chanel, Dior, YSL, Tom Ford).</p>
+            </div>
+          </div>
+          <div class="rm-item">
+            <div class="rm-dot dim"></div>
+            <div class="rm-item-text">
+              <h4>Fragrantica backfill: Playwright headless (долгосрок)</h4>
+              <p>Фоновый worker с Playwright: обходит товары, которым &gt;7 дней без Fragrantica-данных → headless Chrome → bypasses Cloudflare → точные ноты. Заменяет LLM-данные там, где Fragrantica отвечает. Резервный вариант — ScraperAPI ~$30/мес.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- MATRIX -->
+<section class="section">
+  <div class="page-wrap">
+    <div class="section-head reveal"><p class="eyebrow">Приоритизация</p><h2>Матрица усилие / эффект</h2></div>
+    <div class="reveal">
+      <div class="matrix-grid-wrap">
+        <div class="matrix-axis-y">↑ Высокий эффект &nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Низкий эффект ↓</div>
+        <div>
+          <div class="matrix-wrap">
+            <div class="matrix-cell matrix-quad-1">
+              <h4>🔴 Делать первыми</h4>
+              <ul>
+                <li class="done-li">Pop-up «–10%» (нужен API email)</li>
+                <li class="done-li">Schema.org (готово)</li>
+                <li class="done-li">FAQ (готово)</li>
+                <li class="done-li">Отзывы с Ozon (готово)</li>
+                <li style="color:#fbbf24">⚡ LLM-батч нот для каталога</li>
+                <li style="color:#fbbf24">🗺️ SVG-карта мира (подложка)</li>
+                <li style="color:#fbbf24">🔍 AI-поиск по нотам</li>
+                <li>Фикс email pop-up и квиза</li>
+                <li>Countdown-таймер баннера</li>
+              </ul>
+            </div>
+            <div class="matrix-cell matrix-quad-2">
+              <h4>🟡 Вторая волна</h4>
+              <ul>
+                <li class="done-li">Страницы-гиды (готово)</li>
+                <li class="done-li">Видео-отзывы Ozon (готово)</li>
+                <li class="done-li">Q&A Ozon в карточке (готово)</li>
+                <li style="color:#fbbf24">✏️ Редактор нот в davidsklad</li>
+                <li>Отзывы с фото (upload)</li>
+                <li>Email-цепочки</li>
+                <li>AI-автоответы Ozon</li>
+                <li>Telegram-бот</li>
+              </ul>
+            </div>
+            <div class="matrix-cell matrix-quad-3">
+              <h4>⚪ Низкий приоритет</h4>
+              <ul>
+                <li class="done-li">Блог «Мир ароматов» (готово)</li>
+                <li>Конкурс «Мой аромат»</li>
+                <li class="done-li">Glassmorphism карточки (готово)</li>
+                <li>VIP-клуб Telegram</li>
+              </ul>
+            </div>
+            <div class="matrix-cell matrix-quad-4">
+              <h4>🔵 Большая работа — позже</h4>
+              <ul>
+                <li class="done-li">3D-флакон (Three.js — готово)</li>
+                <li class="done-li">Liquid Metal GLSL (готово)</li>
+                <li class="done-li">Программа лояльности (готово)</li>
+                <li class="done-li">Реферальная программа (готово)</li>
+                <li>Fragrantica Playwright backfill</li>
+              </ul>
+            </div>
+          </div>
+          <div class="matrix-axis-x">← Высокое усилие &nbsp;&nbsp;&nbsp;&nbsp; Низкое усилие →</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- KPI -->
+<section class="section">
+  <div class="page-wrap">
+    <div class="section-head reveal"><p class="eyebrow">Измерение успеха</p><h2>Целевые метрики по фазам</h2></div>
+    <div class="kpi-phase-grid reveal">
+      <div class="kpi-phase-card active">
+        <h4>Фаза 01 · Сен–Окт 2026</h4>
+        <div class="kpi-item"><span class="kpi-label">Конверсия сайта</span><span class="kpi-val gold">→ 2%</span></div>
+        <div class="kpi-item"><span class="kpi-label">Средний чек</span><span class="kpi-val gold">+10%</span></div>
+        <div class="kpi-item"><span class="kpi-label">CTR в поиске (Schema)</span><span class="kpi-val">+20%</span></div>
+        <div class="kpi-item"><span class="kpi-label">Email-база</span><span class="kpi-val">200+</span></div>
+      </div>
+      <div class="kpi-phase-card">
+        <h4>Фаза 02 · Ноя–Дек 2026</h4>
+        <div class="kpi-item"><span class="kpi-label">Конверсия сайта</span><span class="kpi-val gold">→ 2.8%</span></div>
+        <div class="kpi-item"><span class="kpi-label">Email-база</span><span class="kpi-val">1 000+</span></div>
+        <div class="kpi-item"><span class="kpi-label">UGC-отзывов с фото</span><span class="kpi-val">50 / мес</span></div>
+        <div class="kpi-item"><span class="kpi-label">Повторные покупки</span><span class="kpi-val">+15%</span></div>
+      </div>
+      <div class="kpi-phase-card">
+        <h4>Фаза 03 · Янв 2027+</h4>
+        <div class="kpi-item"><span class="kpi-label">Конверсия сайта</span><span class="kpi-val gold">3%+</span></div>
+        <div class="kpi-item"><span class="kpi-label">Органический трафик</span><span class="kpi-val">×2</span></div>
+        <div class="kpi-item"><span class="kpi-label">В программе лояльности</span><span class="kpi-val">500+</span></div>
+        <div class="kpi-item"><span class="kpi-label">NPS сайта</span><span class="kpi-val">60+</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="gold-sep page-wrap"></div>
+<footer>
+  <div class="page-wrap">
+    <p class="brand">Magic Vibes</p>
+    <p style="margin-top:8px">Дорожная карта v3 · 45+ фич · Ароматные данные · Сентябрь 2026</p>
+    <p style="margin-top:4px">Баннеры через <strong style="color:var(--gold)">davidsklad.ru</strong> · Разработка — Claude Code</p>
+  </div>
+</footer>
+
+<script>
+  const aura = document.getElementById('aura');
+  let ax = -999, ay = -999, cx = -999, cy = -999;
+  document.addEventListener('mousemove', e => { ax = e.clientX; ay = e.clientY; });
+  (function loop() {
+    cx += (ax - cx) * .06; cy += (ay - cy) * .06;
+    aura.style.left = cx + 'px'; aura.style.top = cy + 'px';
+    requestAnimationFrame(loop);
+  })();
+  const io = new IntersectionObserver(entries => {
+    entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } });
+  }, { threshold: 0.06 });
+  document.querySelectorAll('.reveal').forEach(el => io.observe(el));
+  document.querySelectorAll('.idea-card,.done-card,.bug-card').forEach(card => {
+    card.addEventListener('mousemove', e => {
+      const r = card.getBoundingClientRect();
+      const x = (e.clientX - r.left - r.width / 2) / r.width;
+      const y = (e.clientY - r.top - r.height / 2) / r.height;
+      card.style.transform = `translateY(-3px) perspective(600px) rotateX(${-y*3}deg) rotateY(${x*5}deg)`;
+    });
+    card.addEventListener('mouseleave', () => { card.style.transform = ''; });
+  });
+</script>
+</body>
+</html>

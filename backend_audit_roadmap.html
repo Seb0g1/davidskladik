@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Backend Audit — Дорожная карта багов</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0b1220; color: #c8d6e8; line-height: 1.6; }
+  .page { max-width: 1060px; margin: 0 auto; padding: 40px 24px; }
+  h1 { font-size: 26px; font-weight: 700; color: #e8f0fb; margin-bottom: 4px; }
+  .subtitle { color: #6b7fa3; font-size: 14px; margin-bottom: 32px; }
+  h2 { font-size: 15px; font-weight: 700; color: #a8bbd8; text-transform: uppercase; letter-spacing: .08em; margin: 36px 0 14px; padding-bottom: 8px; border-bottom: 1px solid rgba(100,140,200,.15); }
+  .card { background: rgba(255,255,255,.04); border: 1px solid rgba(100,140,200,.14); border-radius: 10px; padding: 16px 18px; margin-bottom: 10px; display: grid; grid-template-columns: 36px 1fr; gap: 14px; align-items: start; }
+  .card:hover { border-color: rgba(100,140,200,.28); }
+  .badge { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 8px; font-size: 11px; font-weight: 800; flex-shrink: 0; margin-top: 1px; }
+  .bp0 { background: #4b1010; color: #f87171; border: 1px solid #7f1d1d; }
+  .bp1 { background: #3b2400; color: #fb923c; border: 1px solid #7c2d12; }
+  .bp2 { background: #1a2b1a; color: #86efac; border: 1px solid #166534; }
+  .bp3 { background: #162040; color: #93c5fd; border: 1px solid #1e40af; }
+  .card-body h3 { font-size: 14px; font-weight: 600; color: #dde8f8; margin-bottom: 5px; }
+  .card-body p { font-size: 13px; color: #8ea4be; margin-bottom: 6px; }
+  .card-body p:last-child { margin-bottom: 0; }
+  code { background: rgba(255,255,255,.08); border-radius: 4px; padding: 1px 5px; font-family: monospace; font-size: 12px; color: #a5c4e8; }
+  .loc { display: block; font-size: 11px; font-family: monospace; color: #3d5878; margin-top: 5px; }
+  .tags { display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 7px; }
+  .tag { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 99px; }
+  .tag-security { background: rgba(239,68,68,.14); color: #f87171; border: 1px solid rgba(239,68,68,.3); }
+  .tag-logic    { background: rgba(251,146,60,.14); color: #fb923c; border: 1px solid rgba(251,146,60,.3); }
+  .tag-perf     { background: rgba(168,85,247,.14); color: #c084fc; border: 1px solid rgba(168,85,247,.3); }
+  .tag-sql      { background: rgba(59,130,246,.14); color: #93c5fd; border: 1px solid rgba(59,130,246,.3); }
+  .tag-error    { background: rgba(234,179,8,.14); color: #fbbf24; border: 1px solid rgba(234,179,8,.3); }
+  .tag-data     { background: rgba(34,197,94,.14); color: #86efac; border: 1px solid rgba(34,197,94,.3); }
+  .tag-concur   { background: rgba(99,102,241,.14); color: #a5b4fc; border: 1px solid rgba(99,102,241,.3); }
+  .tag-auth     { background: rgba(239,68,68,.2); color: #fca5a5; border: 1px solid rgba(239,68,68,.4); }
+  .tag-new      { background: rgba(250,204,21,.15); color: #fde047; border: 1px solid rgba(250,204,21,.35); }
+  .toc { background: rgba(255,255,255,.03); border: 1px solid rgba(100,140,200,.12); border-radius: 10px; padding: 16px 20px; margin-bottom: 36px; }
+  .toc h3 { font-size: 12px; font-weight: 700; color: #6b7fa3; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 10px; }
+  .toc a { display: inline-block; font-size: 12px; color: #6d9fd8; text-decoration: none; padding: 2px 8px; margin: 2px 4px; border-radius: 6px; background: rgba(100,140,200,.08); }
+  .toc a:hover { color: #93c5fd; background: rgba(100,140,200,.15); }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 28px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #6b7fa3; }
+  .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 28px; }
+  .stat-card { background: rgba(255,255,255,.04); border: 1px solid rgba(100,140,200,.14); border-radius: 8px; padding: 12px 14px; }
+  .stat-card .num { font-size: 30px; font-weight: 700; color: #e8f0fb; }
+  .stat-card .lbl { font-size: 11px; color: #6b7fa3; margin-top: 2px; }
+  .stat-p0 .num { color: #f87171; }
+  .stat-p1 .num { color: #fb923c; }
+  .stat-p2 .num { color: #86efac; }
+  .stat-p3 .num { color: #93c5fd; }
+  hr { border: none; border-top: 1px solid rgba(100,140,200,.1); margin: 36px 0; }
+  .foot { font-size:12px; color:#3d5070; text-align:center; padding-bottom:24px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Backend — Аудит и дорожная карта багов</h1>
+  <p class="subtitle">davidsklad.ru · сентябрь 2026 · ручной аудит + deep scan всех server/parts/ (240+ файлов) · <strong>Не реализовывать — только дорожная карта</strong></p>
+
+  <div class="summary-grid">
+    <div class="stat-card stat-p0"><div class="num">7</div><div class="lbl">P0 — критические</div></div>
+    <div class="stat-card stat-p1"><div class="num">16</div><div class="lbl">P1 — важные</div></div>
+    <div class="stat-card stat-p2"><div class="num">17</div><div class="lbl">P2 — средние</div></div>
+    <div class="stat-card stat-p3"><div class="num">9</div><div class="lbl">P3 — технический долг</div></div>
+  </div>
+
+  <div class="legend">
+    <div class="legend-item"><span class="badge bp0">P0</span> Падение / потеря данных / критическая дыра</div>
+    <div class="legend-item"><span class="badge bp1">P1</span> Неверное поведение в prod</div>
+    <div class="legend-item"><span class="badge bp2">P2</span> Edge case / скрытый баг</div>
+    <div class="legend-item"><span class="badge bp3">P3</span> Технический долг</div>
+    <div class="legend-item"><span class="tag tag-new">NEW</span> Найдено deep-scan агентом</div>
+  </div>
+
+  <div class="toc">
+    <h3>Категории</h3>
+    <a href="#sec-auth">🔐 Авторизация (6)</a>
+    <a href="#sec-security">🛡 Безопасность (5)</a>
+    <a href="#sec-logic">⚠️ Логика (10)</a>
+    <a href="#sec-concur">⚡ Конкурентность (5)</a>
+    <a href="#sec-perf">🐢 Производительность (3)</a>
+    <a href="#sec-error">🔴 Обработка ошибок (4)</a>
+    <a href="#sec-debt">🏗 Технический долг (9)</a>
+  </div>
+
+  <!-- ──────────────────────── АВТОРИЗАЦИЯ ──────────────────────── -->
+  <h2 id="sec-auth">🔐 Авторизация (пропущенные middleware)</h2>
+
+  <div class="card">
+    <span class="badge bp0">P0</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-auth">auth</span><span class="tag tag-security">security</span></div>
+      <h3>PATCH /api/warehouse/products/:id — нет requireAdmin</h3>
+      <p>Любой авторизованный сотрудник может менять наценку, autoPriceMin/Max, autoPriceEnabled, keyword — без прав администратора. Прямое влияние на цены всех маркетплейсов.</p>
+      <span class="loc">02d-warehouse-product-patch-routes.js:1</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp0">P0</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-auth">auth</span><span class="tag tag-security">security</span></div>
+      <h3>POST+DELETE /api/warehouse/products/:id/links/:linkId/snooze — нет requireAdmin</h3>
+      <p>Любой авторизованный пользователь может поставить снуз на привязку поставщика — это обнуляет остаток на маркетплейсе. Отмена снуза восстанавливает остаток без прав администратора.</p>
+      <span class="loc">02d-warehouse-snooze-routes.js:73, 193</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp1">P1</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-auth">auth</span></div>
+      <h3>PATCH /api/warehouse/products/markups/bulk — нет requireAdmin</h3>
+      <p>Массовое изменение наценок набора товаров без проверки прав администратора.</p>
+      <span class="loc">02d-warehouse-product-patch-routes.js:56</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp1">P1</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-auth">auth</span></div>
+      <h3>POST /api/warehouse/products/enrich — нет requireAdmin</h3>
+      <p>Запускает обогащение товаров (запросы к Ozon/Yandex API) без проверки прав. Злоупотребление квотами внешних API.</p>
+      <span class="loc">02d-warehouse-repair-routes.js:1</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp1">P1</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-auth">auth</span></div>
+      <h3>Все роуты /api/avito/* — нет requireAdmin</h3>
+      <p>Профиль, баланс Avito, статистика объявлений — доступны любому авторизованному сотруднику. Финансовые данные рекламного кабинета без явного разграничения прав.</p>
+      <span class="loc">02d-routes-avito.js:15, 35, 45</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp2">P2</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-auth">auth</span></div>
+      <h3>POST /api/warehouse/products/links/bulk — нет requireAdmin</h3>
+      <p>Массовое добавление PM-привязок (поставщиков) доступно любому авторизованному пользователю. PM-привязки напрямую определяют выбор поставщика и цену товара.</p>
+      <span class="loc">02d-warehouse-links-routes-bulk.js:1</span>
+    </div>
+  </div>
+
+  <!-- ──────────────────────── БЕЗОПАСНОСТЬ ──────────────────────── -->
+  <h2 id="sec-security">🛡 Безопасность</h2>
+
+  <div class="card">
+    <span class="badge bp0">P0</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-security">security</span><span class="tag tag-sql">sql-injection</span><span class="tag tag-new">NEW</span></div>
+      <h3>ids.join(",") в SQL UPDATE без параметризации — возможна SQL injection</h3>
+      <p>Массив <code>ids</code> (идентификаторы уведомлений) склеивается запятыми и подставляется в сырой SQL UPDATE. Если <code>ids</code> не гарантированно целые числа к этому моменту — возможна инъекция. Нужны параметризованные запросы или Prisma-методы.</p>
+      <span class="loc">02f-notifications-core.js:91</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp0">P0</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-security">security</span><span class="tag tag-error">XSS</span></div>
+      <h3>XSS в HTML-письме отмены заказа (cancellationEmailHtml)</h3>
+      <p>HTML-тело письма поставщику формируется через шаблонные строки без экранирования. Поля <code>productName</code>, <code>quantity</code>, <code>orderId</code> берутся из данных маркетплейса напрямую. Вредоносное название товара — произвольный HTML в письме.</p>
+      <span class="loc">02f-cancellation-watcher.js:19–37</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp1">P1</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-security">security</span></div>
+      <h3>SMTP с rejectUnauthorized: false — уязвим к MITM</h3>
+      <p>Email-рассылки магазина и email-последовательности подключаются к SMTP без проверки TLS-сертификата. Злоумышленник в сети может перехватить письма с кодами подтверждения заказов покупателей.</p>
+      <span class="loc">02f-shop-email-sequences.js:26</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp1">P1</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-security">security</span></div>
+      <h3>API secret в query-параметре URL (/api/consignment/partner-summary)</h3>
+      <p><code>?secret=...</code> логируется nginx, попадает в браузерную историю и Referer-заголовки. Следует использовать Authorization header.</p>
+      <span class="loc">02d-consignment-routes.js:1517–1523</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp2">P2</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-security">security</span><span class="tag tag-sql">sql</span></div>
+      <h3>alias в duplicateNameSqlExclusion — подставляется в raw SQL без экранирования</h3>
+      <p>Параметр <code>alias</code> интерполируется в raw SQL напрямую. Сейчас все вызывающие места передают хардкоженный <code>"p"</code>, но функция публична и не защищена. Одна ошибка в вызове — SQL injection.</p>
+      <span class="loc">02a-warehouse-page-postgres-where.js:37–43</span>
+    </div>
+  </div>
+
+  <!-- ──────────────────────── ЛОГИКА ──────────────────────── -->
+  <h2 id="sec-logic">⚠️ Логические баги и неверные данные</h2>
+
+  <div class="card">
+    <span class="badge bp0">P0</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-logic">logic</span><span class="tag tag-error">crash</span></div>
+      <h3>TDZ-баг: prisma используется до const в POST /api/shop/reviews</h3>
+      <p>В обработчике POST <code>/api/shop/reviews</code> переменная <code>prisma</code> используется на строке ~47 (<code>prisma.shopCustomer.findUnique</code>), но объявляется через <code>const prisma = getPrisma()</code> только на строке ~56. Из-за temporal dead zone вызов падает с <code>ReferenceError</code> — создание отзывов в магазине не работает.</p>
+      <span class="loc">02f-shop-reviews.js:47 (использование) vs :56 (объявление const)</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp0">P0</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-data">data</span><span class="tag tag-new">NEW</span></div>
+      <h3>deleteMany без транзакции в snapshot-core — PM-таблица может остаться пустой</h3>
+      <p>Обновление PM-снапшота делает <code>deleteMany</code>, затем отдельную вставку. Если процесс упадёт между ними — таблица пуста: цены и остатки не читаются до следующего прогона (~12 мин). Нужна транзакция или паттерн upsert.</p>
+      <span class="loc">02a-snapshot-core.js:170</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp0">P0</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-logic">logic</span><span class="tag tag-security">security</span><span class="tag tag-new">NEW</span></div>
+      <h3>POST /api/warehouse/products — ответ возвращает весь склад (сотни МБ)</h3>
+      <p>После создания нового товара роут возвращает полный результат <code>readWarehouse()</code> — весь in-memory склад. Это сотни мегабайт JSON на клиент, гигантская утечка памяти и данных. Клиент ожидает только созданный товар.</p>
+      <span class="loc">02d-warehouse-products-crud.js:47</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp1">P1</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-data">data</span><span class="tag tag-new">NEW</span></div>
+      <h3>/api/consignment/partner-summary — считает баланс ВСЕХ партнёров</h3>
+      <p>Запрос грузит все 50 000 операций без фильтра по <code>partnerId</code> и суммирует в памяти. Итоговый summary включает операции чужих партнёров → неверный баланс. Фильтр по <code>partnerId</code> должен быть в SQL.</p>
+      <span class="loc">02d-consignment-routes.js:1532–1534</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp1">P1</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-logic">logic</span><span class="tag tag-new">NEW</span></div>
+      <h3>PM Price Monitor обнаруживает изменение цены, но не запускает перерасчёт</h3>
+      <p>Планировщик фиксирует факт изменения цены поставщика в PM, но не ставит товар в очередь на пересчёт. Новая цена применится только при следующем плановом синке — задержка до 6 часов.</p>
+      <span class="loc">02f-pm-monitoring-scheduler.js</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp1">P1</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-sql">sql</span><span class="tag tag-new">NEW</span></div>
+      <h3>LIMIT ${limit} в $queryRawUnsafe шаблонной строкой (notifications)</h3>
+      <p>Значение <code>limit</code> подставляется в raw SQL через шаблонную строку. Сейчас число проверяется, но архитектурно опасный паттерн — один пропуск валидации открывает SQL injection.</p>
+      <span class="loc">02f-notifications-core.js:65</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp1">P1</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-logic">logic</span></div>
+      <h3>Мёртвый код в DELETE /api/warehouse/products/links/delete</h3>
+      <p>Функция делает <code>return await deleteWarehouseGroupLinkRefs(...)</code>, после чего идёт старая реализация (строки 15–65) — никогда не выполняется. Изменение логики удаления в мёртвом коде пройдёт незамеченным.</p>
+      <span class="loc">02d-warehouse-links-routes-manage.js:14–65</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp1">P1</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-error">encoding</span></div>
+      <h3>Mojibake в сообщении об ошибке — Windows-1251 вместо UTF-8</h3>
+      <p>Строка <code>"РўРѕРІР°СЂС‹ СЃРєР»Р°РґР° РЅРµ РЅР°Р№РґРµРЅС‹."</code> — кириллица "Товары склада не найдены." в неверной кодировке. Frontend получает нечитаемый текст.</p>
+      <span class="loc">02d-warehouse-links-routes-bulk.js:44</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp1">P1</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-logic">logic</span></div>
+      <h3>buildSupplierCartPreview: лимит для Yandex и WB не учитывает уже выбранные Ozon-строки</h3>
+      <p>При <code>marketplace="all"</code> Ozon получает уменьшенный лимит (<code>limit - lines.length</code>), Yandex и WB — полный <code>limit</code>. Итоговый slice обрезает, но лишние API-запросы уже выполнены.</p>
+      <span class="loc">02d-supplier-cart-build.js:11–42</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp2">P2</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-data">data</span><span class="tag tag-new">NEW</span></div>
+      <h3>Ledger-саммари молча обрезается на 20k записей → заниженный баланс поставщика</h3>
+      <p>При более чем 20 000 операций запрос берёт только первые 20k без предупреждения. Итоговый баланс в UI занижен, но внешне выглядит корректным — нет никакого алерта об усечении.</p>
+      <span class="loc">02d-finance-supplier-ledger.js</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp2">P2</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-data">data</span></div>
+      <h3>supplierLedgerSummary: RUB-коррекция только в display — не сохраняется в Postgres</h3>
+      <p><code>correctEntryAmountForRubSupplier</code> исправляет сумму при отображении, но не пишет в БД. При изменении данных поставщика (смена валюты) исторический баланс ретроактивно меняется.</p>
+      <span class="loc">02d-finance-supplier-ledger.js:13–26</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp2">P2</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-sql">sql</span></div>
+      <h3>interval/LIMIT из env vars в raw SQL шаблонной строкой (7+ файлов)</h3>
+      <p>Паттерн <code>interval '${N} hours'</code> и <code>LIMIT ${N}</code> используется в price-sweep, stock-sweep и других файлах. Сейчас числа приводятся через <code>Number()</code>, но архитектурно опасно — один пропуск валидации = SQL injection.</p>
+      <span class="loc">02f-price-sweep.js:39–43; 02f-stock-sweep.js:33–48 и ещё 5+ файлов</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp2">P2</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-data">data</span></div>
+      <h3>photoUrl в отзывах магазина — не валидируется как URL</h3>
+      <p>POST /api/shop/reviews принимает <code>photoUrl</code> как строку до 1000 символов без проверки протокола. Можно подставить <code>javascript:</code> или <code>data:</code> URI.</p>
+      <span class="loc">02f-shop-reviews.js:54</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp2">P2</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-data">data</span></div>
+      <h3>financeOrder.upsert: update не включает все поля из create</h3>
+      <p>При PATCH /api/finance/orders/:id upsert обновляет только финансовые суммы. Поля <code>marketplace</code>, <code>target</code>, <code>productName</code>, <code>offerId</code>, <code>soldAt</code> не обновляются — остаются от первого create.</p>
+      <span class="loc">02d-prices-finance-routes-api.js:48–100</span>
+    </div>
+  </div>
+
+  <!-- ──────────────────────── КОНКУРЕНТНОСТЬ ──────────────────────── -->
+  <h2 id="sec-concur">⚡ Конкурентность и race conditions</h2>
+
+  <div class="card">
+    <span class="badge bp1">P1</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-concur">concur</span></div>
+      <h3>applyWarehouseLinkSnooze — нет withWarehouseProductMutationLock</h3>
+      <p>Функция читает продукт из Postgres, модифицирует и пишет без mutex. Два одновременных запроса на снуз одного товара создадут race condition — один снуз перезапишет другой.</p>
+      <span class="loc">02d-warehouse-snooze-routes.js:11–70</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp1">P1</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-concur">concur</span></div>
+      <h3>cancelWarehouseLinkSnooze — нет mutex</h3>
+      <p>Аналогично apply: два одновременных вызова отмены снуза конкурируют за запись обновлений товара и его сиблингов.</p>
+      <span class="loc">02d-warehouse-snooze-routes.js:89–191</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp2">P2</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-concur">concur</span></div>
+      <h3>markPickingRowCancelledBySystem — два write-state без транзакции</h3>
+      <p>Функция пишет picking state, затем cart state в двух отдельных операциях. При падении между ними: picking row помечен cancelled, но запись в cart state не удалена — заказ в полусогласованном состоянии.</p>
+      <span class="loc">02f-cancellation-watcher.js:40–78</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp2">P2</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-concur">concur</span><span class="tag tag-new">NEW</span></div>
+      <h3>WB-синк неатомарен — stocks и prices в разных запросах</h3>
+      <p>Синхронизация Wildberries отправляет остатки и цены двумя отдельными API-вызовами. При ошибке второго — WB получает обновлённые остатки со старыми ценами до следующего синка.</p>
+      <span class="loc">02e/02f WB sync scheduler</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp2">P2</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-concur">concur</span><span class="tag tag-data">data</span><span class="tag tag-new">NEW</span></div>
+      <h3>readWarehouse() может не найти новые товары в api-процессе (partial-cache)</h3>
+      <p>После отправки цен api-процесс может иметь устаревший in-memory кэш. Новые товары, созданные в worker, становятся видны только после следующего цикла обновления кэша.</p>
+      <span class="loc">02a-warehouse-postgres-io.js; 02a-snapshot-core.js</span>
+    </div>
+  </div>
+
+  <!-- ──────────────────────── ПРОИЗВОДИТЕЛЬНОСТЬ ──────────────────────── -->
+  <h2 id="sec-perf">🐢 Производительность</h2>
+
+  <div class="card">
+    <span class="badge bp1">P1</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-perf">perf</span><span class="tag tag-sql">sql</span></div>
+      <h3>appendPriceHistoryRows: N+1 запросов при дедупликации</h3>
+      <p>Для каждой строки истории цен — отдельный последовательный <code>prisma.priceHistory.findFirst</code>. При отправке 100+ товаров — 100+ последовательных SQL-запросов вместо одного SELECT IN.</p>
+      <span class="loc">02a-price-history-storage.js:53–69</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp2">P2</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-perf">perf</span></div>
+      <h3>JSON.parse 77MB снапшота блокирует event loop</h3>
+      <p><code>readSnapshot()</code> парсит весь снапшот PM (~77 МБ) синхронно. Маркер event_loop_blocked добавлен, но блокировка не устранена. Решение: streaming JSON parse или chunked processing.</p>
+      <span class="loc">02a-snapshot-core.js:43–67</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp2">P2</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-perf">perf</span><span class="tag tag-new">NEW</span></div>
+      <h3>PRICE_SWEEP_VERIFIED_COOLDOWN_HOURS=0 разрешён — затопляет очередь</h3>
+      <p>Если переменная равна 0, cooldown не применяется. Price sweep каждые 2 минуты ставит в очередь все eligible товары без ограничений — перегрузка BullMQ и API маркетплейсов.</p>
+      <span class="loc">02f-price-sweep.js:17</span>
+    </div>
+  </div>
+
+  <!-- ──────────────────────── ОБРАБОТКА ОШИБОК ──────────────────────── -->
+  <h2 id="sec-error">🔴 Обработка ошибок</h2>
+
+  <div class="card">
+    <span class="badge bp1">P1</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-error">error-handling</span></div>
+      <h3>seqSendMail: close без ошибки resolve()ит промис — письмо может не уйти</h3>
+      <p>Событие <code>sock.on("close")</code> вызывает <code>resolve()</code> если <code>done=false</code>. Если SMTP закрыл соединение после ошибки 4xx/5xx и <code>done</code> не был установлен — промис резолвится успехом. Письмо не отправлено, ошибка проглочена.</p>
+      <span class="loc">02f-shop-email-sequences.js:78</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp1">P1</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-error">error-handling</span></div>
+      <h3>enqueueMarketplaceJobAccepted: при BullMQ timeout — fire-and-forget в worker</h3>
+      <p>Если BullMQ недоступен и процесс — worker, job запускается через <code>setTimeout</code> с ответом <code>{ accepted: true }</code>. Вызывающий код считает job принятым, но он без retry, без гарантий — тихая потеря задачи.</p>
+      <span class="loc">02d-prices-authoritative-queue.js:14–20</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp2">P2</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-error">error-handling</span></div>
+      <h3>readDailySyncState: SyntaxError не обработан</h3>
+      <p>Функция ловит только <code>ENOENT</code>. При повреждённом <code>daily-sync.json</code> SyntaxError улетает наверх и роняет daily sync при старте. В отличие от readSnapshot — нет карантина и recovery.</p>
+      <span class="loc">02a-warehouse-daily-sync.js:1–16</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp2">P2</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-error">error-handling</span></div>
+      <h3>writeDailySyncState: не атомарная запись (нет tmp+rename)</h3>
+      <p>В отличие от <code>writeSnapshot</code> (атомарный tmp+rename), запись идёт напрямую через <code>fs.writeFile</code>. При убийстве процесса в середине — <code>daily-sync.json</code> усечён и не парсится при следующем запуске.</p>
+      <span class="loc">02a-warehouse-daily-sync.js:18–33</span>
+    </div>
+  </div>
+
+  <!-- ──────────────────────── ТЕХНИЧЕСКИЙ ДОЛГ ──────────────────────── -->
+  <h2 id="sec-debt">🏗 Технический долг</h2>
+
+  <div class="card">
+    <span class="badge bp3">P3</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-logic">logic</span></div>
+      <h3>Hand-rolled SMTP дублирует shopSendEmail из 02d-shop-api-routes.js</h3>
+      <p>В <code>02f-shop-email-sequences.js</code> полный SMTP state machine (~80 строк) вместо переиспользования <code>shopSendEmail</code>. Два места с разными багами, несинхронными фиксами.</p>
+      <span class="loc">02f-shop-email-sequences.js:12–80</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp3">P3</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-logic">logic</span></div>
+      <h3>sendZeroStocksToMarketplace в snooze: fire-and-forget без await</h3>
+      <p><code>sendZeroStocksToMarketplace(allToZero).catch(...)</code> не ожидается. HTTP-ответ <code>{ ok: true }</code> уходит до того как stock фактически обнулился на маркетплейсе. Ошибка API только логируется.</p>
+      <span class="loc">02d-warehouse-snooze-routes.js:65–67</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp3">P3</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-perf">perf</span></div>
+      <h3>priceSweepRecentlyQueued / stockSweepRecentlySent: in-memory Map без персистентности</h3>
+      <p>Cooldown-карты в памяти процесса. После рестарта worker — cooldown сбрасывается, первый sweep re-queues все eligible товары (дублирующие пуши цен и остатков в маркетплейс).</p>
+      <span class="loc">02f-price-sweep.js:17; 02f-stock-sweep.js:18</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp3">P3</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-logic">logic</span></div>
+      <h3>findWarehouseProductById: тройная fallback-цепочка без логирования причины</h3>
+      <p>Пробует hydrate → in-memory → Postgres (дважды). Если нашёл только на 3-м шаге — продукт не был в кэше, но это нигде не логируется. Диагностика рассинхронизации cache/DB затруднена.</p>
+      <span class="loc">02a-warehouse-postgres-io.js:6–22</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp3">P3</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-data">data</span></div>
+      <h3>enabledWarehouseTargetWhere: при 1 Yandex-магазине не фильтрует по target</h3>
+      <p>При <code>yandexShops.length === 1</code> добавляется <code>{ marketplace: "yandex" }</code> без target-фильтра. При добавлении второго магазина поведение немедленно изменится, но исторические записи без target останутся.</p>
+      <span class="loc">02a-warehouse-page-postgres-where.js:73–76</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp3">P3</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-logic">logic</span><span class="tag tag-new">NEW</span></div>
+      <h3>Мёртвое добавление client-ключа в deleteKeys при удалении PM-ссылок</h3>
+      <p>При удалении ссылок в <code>deleteKeys</code> добавляется client-ключ, который нигде не используется — операция выполняется, результат игнорируется. Вводит в заблуждение при чтении кода.</p>
+      <span class="loc">02d-warehouse-links-routes-manage.js</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp3">P3</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-error">error-handling</span><span class="tag tag-new">NEW</span></div>
+      <h3>Email-sequence: лимит 100 писем за тик без алерта при накоплении бэклога</h3>
+      <p>Планировщик отправляет максимум 100 писем за тик. При переполнении очереди задержка растёт молча — нигде не логируется размер бэклога и нет алерта операторам.</p>
+      <span class="loc">02f-shop-email-sequences.js (batch limit)</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp3">P3</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-data">data</span><span class="tag tag-new">NEW</span></div>
+      <h3>Возврат товара в комиссионке потенциально дважды вычитает из прибыли</h3>
+      <p>При обработке возврата комиссионного заказа сумма может дважды попасть в ledger — через операцию возврата и через корректировку balance. Итоговая прибыль партнёра занижена.</p>
+      <span class="loc">02d-consignment-routes.js (return handling)</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <span class="badge bp3">P3</span>
+    <div class="card-body">
+      <div class="tags"><span class="tag tag-perf">perf</span></div>
+      <h3>OR-clauses в readWarehouseGroupSiblingsFromPostgres — большой WHERE clause</h3>
+      <p>При большой группе seed-продуктов создаётся WHERE с сотнями OR-условий. Chunking по 4000 clause-ов есть, но сам OR-clause дорог для Postgres query planner. Лучше переписать на <code>IN (SELECT ...)</code>.</p>
+      <span class="loc">02a-warehouse-postgres-io.js:60–81</span>
+    </div>
+  </div>
+
+  <hr />
+  <p class="foot">
+    Аудит: ручной обзор + deep scan всех server/parts/ (240+ файлов) · davidsklad.ru · сентябрь 2026<br>
+    Итого: <strong>7×P0 · 16×P1 · 17×P2 · 9×P3 = 49 пунктов</strong> · Не реализовывать — только дорожная карта
+  </p>
+</div>
+</body>
+</html>
