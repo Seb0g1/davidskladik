@@ -11261,3 +11261,62 @@ span + .bt-cat-id { margin-left: 6px; }
 .wh-rel { position: relative; }
 .wh-error-xs { font-size: 11px; }
 .wh-center-flex { display: flex; align-items: center; justify-content: center; }
+
+/* ── ConsignmentPage ── */
+.cn-accent-badge { margin-left: 4px; font-size: 11px; background: var(--accent, #6366f1); color: #fff; border-radius: 8px; padding: 1px 6px; }
+.cn-strip-mb { margin-bottom: 12px; }
+.cn-icon-ml { margin-left: 8px; }
+.cn-modal-sm { max-width: 700px; width: 100%; }
+.cn-modal-lg { max-width: 860px; width: 100%; max-height: 92vh; overflow: auto; display: flex; flex-direction: column; gap: 0; }
+.cn-title-mb { margin-bottom: 12px; }
+.cn-row-mb8 { margin-bottom: 8px; }
+.cn-row-mb12 { margin-bottom: 12px; }
+.cn-flex1 { flex: 1; }
+.cn-error-mb8 { margin-bottom: 8px; }
+.cn-product-row { display: flex; flex-direction: column; gap: 6px; padding: 9px 12px; border-bottom: 1px solid rgba(148,163,184,0.12); }
+.cn-product-row-head { display: flex; width: 100%; gap: 8px; align-items: center; }
+.cn-product-id { min-width: 52px; color: var(--muted); font-size: 11px; flex-shrink: 0; }
+.cn-product-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.cn-product-price { min-width: 70px; text-align: right; flex-shrink: 0; font-size: 13px; }
+.cn-badge-sm { font-size: 11px; }
+.cn-product-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; width: 100%; }
+.cn-price-input { width: 120px; min-width: 80px; flex: 1 1 80px; }
+.cn-w90 { width: 90px; }
+.cn-actions-spread { margin-top: 12px; justify-content: space-between; }
+.cn-section-div { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 16px; }
+.cn-nm-panel { margin-bottom: 12px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.cn-nm-head { background: var(--bg-secondary, #f5f5f5); padding: 8px 12px; display: flex; gap: 8px; align-items: center; }
+.cn-nm-search { flex: 1; background: transparent; border: none; outline: none; }
+.cn-nm-list { max-height: 260px; overflow-y: auto; }
+.cn-empty-p12 { padding: 12px; }
+.cn-nm-id { min-width: 52px; color: var(--text-muted); font-size: 11px; }
+.cn-nm-name { flex: 1; font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cn-nm-price { min-width: 72px; text-align: right; font-size: 13px; color: var(--text-muted); flex-shrink: 0; }
+.cn-nm-added { font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
+.cn-nm-pick { font-size: 11px; color: var(--accent, #6366f1); flex-shrink: 0; display: inline-flex; align-items: center; gap: 2px; }
+.cn-nm-pager { display: flex; align-items: center; justify-content: space-between; padding: 6px 12px; background: var(--bg-secondary, #f5f5f5); font-size: 12px; }
+.cn-nm-pager-btn { padding: 2px 8px; font-size: 12px; }
+.cn-table-scroll { overflow-x: auto; }
+.cn-lines-table { width: 100%; min-width: 380px; border-collapse: collapse; margin-bottom: 8px; font-size: 14px; }
+.cn-th-left { text-align: left; padding: 4px 8px; font-weight: 500; }
+.cn-th-qty { width: 80px; text-align: center; padding: 4px; font-weight: 500; }
+.cn-th-price { width: 110px; text-align: center; padding: 4px; font-weight: 500; }
+.cn-th-del { width: 32px; }
+.cn-td-name { padding: 4px 8px; }
+.cn-td-center { padding: 4px; }
+.cn-td-name-text { font-size: 13px; }
+.cn-td-article { font-size: 11px; color: var(--text-muted); }
+.cn-td-input { width: 100%; text-align: center; }
+.cn-invoice-footer { display: flex; gap: 8px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+.cn-invoice-actions { display: flex; gap: 8px; align-items: center; }
+.cn-invoice-check-label { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; user-select: none; }
+.cn-strip-mt8 { margin-top: 8px; }
+.cn-h4-mb { margin-bottom: 8px; font-size: 14px; }
+.cn-inv-row { border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 8px; }
+.cn-inv-head { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 4px; }
+.cn-inv-num { font-size: 14px; }
+.cn-inv-supplier { font-size: 13px; }
+.cn-inv-summary { font-size: 13px; color: var(--text-secondary); }
+.cn-row-rel { position: relative; }
+.cn-opacity-faint { opacity: 0.65; }
+.cn-search-input { min-width: 0; flex: 1 1 160px; }
