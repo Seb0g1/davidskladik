@@ -4,6 +4,7 @@ import { AlertCircle, BookOpen, BotMessageSquare, Loader2, MessageSquareReply, R
 import { z } from "zod";
 import { fetchJson } from "../api";
 import { PageHeader } from "../components/PageHeader";
+import { ReplyBox } from "../components/ReplyBox";
 import { SelectField } from "../components/SelectField";
 import { Stat } from "../components/Stat";
 import { TemplatesDrawer } from "../components/TemplatesDrawer";
@@ -27,7 +28,7 @@ type ReviewRow = {
 
 type ReviewTemplate = { id: string; title: string; text: string };
 
-const EMOJI_ROW = ["🙏", "❤️", "😊", "🌸", "✨", "👍", "🎁", "🥰", "💫", "🤝"];
+const REVIEW_EMOJI = ["🙏", "❤️", "😊", "🌸", "✨", "👍", "🎁", "🥰", "💫", "🤝"];
 
 
 function Stars({ rating }: { rating: number }) {
@@ -100,32 +101,17 @@ function ReviewCard({ review, templates, onReplied }: { review: ReviewRow; templ
         {aiDraft.error ? <span className="inline-error" style={{fontSize: 11}}>{String((aiDraft.error as Error).message)}</span> : null}
       </div>
       {open ? (
-        <div className="review-reply-box">
-          {templates.length ? (
-            <select defaultValue="" onChange={(event) => {
-              const template = templates.find((item) => item.id === event.target.value);
-              if (template) setText((current) => (current ? `${current}\n${template.text}` : template.text));
-              event.target.value = "";
-            }}>
-              <option value="" disabled>Вставить шаблон…</option>
-              {templates.map((template) => <option key={template.id} value={template.id}>{template.title}</option>)}
-            </select>
-          ) : null}
-          <div className="emoji-row">
-            {EMOJI_ROW.map((emoji) => (
-              <button key={emoji} type="button" onClick={() => setText((current) => current + emoji)}>{emoji}</button>
-            ))}
-          </div>
-          <textarea rows={4} value={text} onChange={(event) => setText(event.target.value)} placeholder="Текст ответа покупателю" />
-          <div style={{fontSize: 11, color: "var(--muted)", textAlign: "right"}}>{text.length}/5000</div>
-          {reply.error ? <div className="inline-error">{String((reply.error as Error).message)}</div> : null}
-          <button className="primary-action" type="button" disabled={!text.trim() || reply.isPending} onClick={() => {
-            if (!window.confirm("Отправить ответ? Это действие необратимо.")) return;
-            reply.mutate();
-          }}>
-            {reply.isPending ? <Loader2 className="spin" size={15} /> : <MessageSquareReply size={15} />} Отправить ответ
-          </button>
-        </div>
+        <ReplyBox
+          text={text}
+          setText={setText}
+          templates={templates}
+          onSubmit={() => reply.mutate()}
+          isPending={reply.isPending}
+          error={reply.error as Error | null}
+          emojiRow={REVIEW_EMOJI}
+          placeholder="Текст ответа покупателю"
+          confirmMessage="Отправить ответ? Это действие необратимо."
+        />
       ) : null}
     </div>
   );

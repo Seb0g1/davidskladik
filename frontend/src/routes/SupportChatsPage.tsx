@@ -111,7 +111,7 @@ export function SupportChatsPage() {
         className={`chat-item${isSelected ? " is-active" : ""}${item.unreadAdmin && item.status === "open" ? " has-unread" : ""}`}
       >
         <span className="chat-item-top">
-          <span className="market-badge" style={{ background: "rgba(124,58,237,0.2)", color: "#c4b5fd", border: "1px solid rgba(124,58,237,0.25)", fontSize: 10 }}>
+          <span className="market-badge support-category-badge">
             {item.category}
           </span>
           <strong>{item.visitorName}</strong>
@@ -125,12 +125,12 @@ export function SupportChatsPage() {
               ? (item.lastMessage.role === "admin" ? "Вы: " : "") + item.lastMessage.body
               : ""}
           </small>
-          <small style={{ color: "var(--muted-soft)", fontSize: 10, flexShrink: 0 }}>
+          <small className="chat-item-time">
             {item.lastMessageAt ? timeAgo(item.lastMessageAt) : ""}
           </small>
         </span>
         {item.status === "closed" && (
-          <small style={{ color: "var(--muted-soft)", fontSize: 10, marginTop: 2, display: "block" }}>закрыт</small>
+          <small className="chat-item-closed">закрыт</small>
         )}
       </button>
     );
@@ -154,16 +154,15 @@ export function SupportChatsPage() {
 
       <div className="chats-layout">
         {/* ── LEFT LIST ── */}
-        <div className={`chats-list${mobileView === "thread" ? " mobile-hidden" : ""}`} style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+        <div className={`chats-list${mobileView === "thread" ? " mobile-hidden" : ""}`}>
           {/* Filter tabs */}
-          <div className="settings-tabs" style={{ marginBottom: 8, padding: "0 0 8px 0", borderBottom: "1px solid var(--line)" }}>
+          <div className="support-filter-tabs">
             {(["open", "closed", "all"] as const).map((s) => (
               <button
                 key={s}
                 type="button"
                 onClick={() => setStatusFilter(s)}
-                className={`secondary-action${statusFilter === s ? " is-active" : ""}`}
-                style={{ fontSize: 12 }}
+                className={`secondary-action support-filter-btn${statusFilter === s ? " is-active" : ""}`}
               >
                 {s === "open" ? "Открытые" : s === "closed" ? "Закрытые" : "Все"}
               </button>
@@ -176,13 +175,13 @@ export function SupportChatsPage() {
           {!listQuery.isLoading && chats.length === 0 && (
             <div className="empty-state"><MessageCircleHeart size={18} /> Обращений нет</div>
           )}
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, overflowY: "auto", flex: 1 }}>
+          <div className="chats-list-scroll">
             {chats.map(renderChatItem)}
           </div>
         </div>
 
         {/* ── RIGHT THREAD ── */}
-        <div className={`chat-thread${mobileView === "list" ? " mobile-hidden" : ""}`} style={{ display: "flex", flexDirection: "column", minHeight: 520 }}>
+        <div className={`chat-thread${mobileView === "list" ? " mobile-hidden" : ""}`}>
           {!selectedId && (
             <div className="chat-placeholder">
               <Headphones size={34} />
@@ -201,34 +200,27 @@ export function SupportChatsPage() {
                 <button type="button" className="chat-back-btn" onClick={() => setMobileView("list")} title="Назад">
                   <ArrowLeft size={18} />
                 </button>
-                <User size={15} style={{ color: "#c4b5fd", flexShrink: 0 }} />
+                <User size={15} className="support-thread-user-icon" />
                 <strong>{chat.visitorName}</strong>
-                <span style={{ fontSize: 11, color: "var(--muted-soft)" }}>{chat.category}</span>
-                <span
-                  style={{
-                    fontSize: 10, padding: "2px 8px", borderRadius: 8, marginLeft: "auto",
-                    background: chat.status === "open" ? "rgba(74,222,128,0.15)" : "rgba(255,255,255,0.08)",
-                    color: chat.status === "open" ? "#4ade80" : "var(--muted-soft)",
-                  }}
-                >
+                <span className="support-thread-category">{chat.category}</span>
+                <span className={`support-thread-status${chat.status === "open" ? " is-open" : ""}`}>
                   {chat.status === "open" ? "открыт" : "закрыт"}
                 </span>
-                <span style={{ color: "var(--muted-soft)", fontSize: 10, display: "flex", alignItems: "center", gap: 4 }}>
+                <span className="support-thread-age">
                   <Clock size={10} />{timeAgo(chat.createdAt)}
                 </span>
                 <button
                   type="button"
                   onClick={() => statusMutation.mutate(chat.status === "open" ? "closed" : "open")}
                   disabled={statusMutation.isPending}
-                  className="secondary-action"
-                  style={{ fontSize: 12, padding: "4px 10px", marginLeft: 4 }}
+                  className="secondary-action support-thread-toggle"
                 >
                   {chat.status === "open" ? <><X size={12} /> Закрыть</> : <><Check size={12} /> Открыть</>}
                 </button>
               </div>
 
               {/* Messages */}
-              <div className="chat-messages" style={{ maxHeight: "none", flex: 1, minHeight: 200, overflowY: "auto", padding: "14px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+              <div className="chat-messages chat-messages--thread">
                 {chat.messages.map((msg) => (
                   <div key={msg.id} className={`chat-bubble${msg.role === "admin" ? " mine" : ""}`}>
                     <p className="chat-text">{msg.body}</p>
@@ -236,14 +228,14 @@ export function SupportChatsPage() {
                   </div>
                 ))}
                 {chat.messages.length === 0 && (
-                  <div style={{ color: "var(--muted-soft)", fontSize: 13, textAlign: "center", marginTop: 16 }}>Сообщений нет</div>
+                  <div className="chat-empty-note">Сообщений нет</div>
                 )}
                 <div ref={messagesEndRef} />
               </div>
 
               {/* Reply input */}
               {statusMutation.error && (
-                <div className="inline-error" style={{ margin: "4px 16px 0" }}>
+                <div className="inline-error chat-status-error">
                   {statusMutation.error instanceof Error ? statusMutation.error.message : String(statusMutation.error)}
                 </div>
               )}
@@ -256,13 +248,12 @@ export function SupportChatsPage() {
                       onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(e); } }}
                       placeholder="Напишите ответ…"
                       rows={2}
-                      style={{ resize: "vertical" }}
+                      className="chat-composer-textarea"
                     />
                     <button
                       type="submit"
                       disabled={!reply.trim() || replyMutation.isPending}
-                      className="primary-action"
-                      style={{ height: 44, padding: "0 14px" }}
+                      className="primary-action chat-send-btn"
                     >
                       <Send size={15} />
                     </button>
@@ -274,7 +265,7 @@ export function SupportChatsPage() {
                   )}
                 </form>
               ) : (
-                <div className="chat-composer" style={{ textAlign: "center", color: "var(--muted-soft)", fontSize: 12 }}>
+                <div className="chat-composer chat-composer--closed">
                   Чат закрыт. Нажмите «Открыть» чтобы ответить.
                 </div>
               )}
