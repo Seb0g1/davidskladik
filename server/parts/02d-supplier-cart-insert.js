@@ -339,11 +339,18 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
         }
         // Secondary dedup by NativeID (article): catches the case where the same product
         // resolved to a different OfferRowID in a previous commit (e.g., after a crash).
+        // Guard: only merge when the existing row points to the SAME OfferRowID. If they
+        // differ, the supplier reuses the same article for distinct products (e.g. Далик),
+        // and merging would add quantity to the wrong PM row — the wrong product gets ordered.
         if (!existingRow?.RowID) {
           const entryNativeId = nativeIdByOfferRowId.get(Number(entry.offerRowId));
           if (entryNativeId && existingByNativeId.has(entryNativeId)) {
             const dup = existingByNativeId.get(entryNativeId);
-            if (Number(dup.Sended) === 0) {
+            if (Number(dup.existingOfferRowId) !== Number(entry.offerRowId)) {
+              // Different OfferRowIDs sharing the same NativeID means different products
+              // under one supplier article — do not merge, fall through to insert a fresh row.
+              logger.info("supplier_cart_insert_skip_native_id_dedup_different_offer_row", { offerRowId: entry.offerRowId, existingOfferRowId: dup.existingOfferRowId, partnerId, nativeId: entryNativeId });
+            } else if (Number(dup.Sended) === 0) {
               await connection.query(
                 "UPDATE RequestRows SET RequestQuant = RequestQuant + ? WHERE RowID = ?",
                 [entry.totalQuantity, Number(dup.RowID)],
@@ -354,9 +361,10 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
                 inserted.push({ ...sourceRow, requestDocId: String(dup.DocID), requestRowId: String(dup.RowID), committedAt });
               }
               continue;
+            } else {
+              // Sended=1: in transit by NativeID — log but still insert (genuinely new order).
+              logger.info("supplier_cart_insert_new_despite_transit_native_id", { offerRowId: entry.offerRowId, partnerId, nativeId: entryNativeId, existingRowId: dup.RowID });
             }
-            // Sended=1: in transit by NativeID — log but still insert (genuinely new order).
-            logger.info("supplier_cart_insert_new_despite_transit_native_id", { offerRowId: entry.offerRowId, partnerId, nativeId: entryNativeId, existingRowId: dup.RowID });
           }
         }
         const requestRowId = nextRowId++;
