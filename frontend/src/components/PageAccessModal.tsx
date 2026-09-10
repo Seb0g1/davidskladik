@@ -38,6 +38,7 @@ export const PAGE_CATALOG: PageCatalogItem[] = [
 const PRESETS: Array<{ label: string; pages: string[] }> = [
   { label: "Только Реализация", pages: ["consignment"] },
   { label: "Склад + Сборка", pages: ["warehouse", "picking-list"] },
+  { label: "Саппорт", pages: ["warehouse", "picking-list", "reviews", "questions", "chats"] },
   { label: "Все страницы", pages: PAGE_CATALOG.map((page) => page.key) },
 ];
 
