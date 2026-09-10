@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckSquare, ClipboardCopy, Eye, Link2, Loader2, MessageCircle, PackageCheck, RefreshCw, Save, Send, Trash2, Upload, Wallet } from "lucide-react";
+import { Archive, CheckSquare, ClipboardCopy, Eye, Link2, Loader2, MessageCircle, PackageCheck, RefreshCw, Save, Send, Trash2, Upload, Wallet } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
 import { useDebounced } from "../lib/common";
@@ -376,6 +376,9 @@ export function AvitoPage() {
   const restoreExpired = useMutation({
     mutationFn: () => apiJson<{ ok: boolean; restored: number; total: number; remaining: number; message?: string }>("/api/avito/restore-expired", { method: "POST", body: JSON.stringify({ limit: 2000 }) }),
   });
+  const archiveDuplicates = useMutation({
+    mutationFn: () => apiJson<{ ok: boolean; archived: number; errors: number; remaining: number; done: boolean; message?: string }>("/api/avito/archive-old-duplicates", { method: "POST", body: JSON.stringify({ limit: 200 }) }),
+  });
   const backfillImages = useMutation({
     mutationFn: () => apiJson<{ ok: boolean; status: string; updatedFromPostgres?: number; updatedFromOzon?: number; remaining?: number }>("/api/avito/images/backfill", { method: "POST", body: JSON.stringify({ limit: 500 }) }),
     onSuccess: () => {
@@ -438,6 +441,9 @@ export function AvitoPage() {
             <button className="secondary-action" type="button" disabled={!avitoConfigured || restoreExpired.isPending} onClick={() => restoreExpired.mutate()} title="Снимает outOfStock с объявлений и тригерит скачивание фида — Avito переиздаёт просроченные. До 2000 за раз.">
               {restoreExpired.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Восстановить истёкшие
             </button>
+            <button className="secondary-action" type="button" disabled={!avitoConfigured || archiveDuplicates.isPending || archiveDuplicates.data?.done} onClick={() => archiveDuplicates.mutate()} title="Архивирует старые дублирующие объявления, вызывающие ошибку «Повторное размещение». По 200 за нажатие.">
+              {archiveDuplicates.isPending ? <Loader2 className="spin" size={16} /> : <Archive size={16} />} {archiveDuplicates.data?.done ? "Дубли архивированы ✓" : `Архивировать дубли${archiveDuplicates.data ? ` (ост. ${archiveDuplicates.data.remaining})` : " (~8259)"}`}
+            </button>
           </div>
         )}
       />
@@ -491,6 +497,12 @@ export function AvitoPage() {
         </div>
       ) : null}
       {restoreExpired.error ? <div className="inline-error">{String((restoreExpired.error as Error).message)}</div> : null}
+      {archiveDuplicates.data ? (
+        <div className={`info-strip ${archiveDuplicates.data.done ? "success" : "warn"}`}>
+          {archiveDuplicates.data.message}
+        </div>
+      ) : null}
+      {archiveDuplicates.error ? <div className="inline-error">{String((archiveDuplicates.error as Error).message)}</div> : null}
 
       <div className="settings-grid">
         <section className="settings-panel settings-panel-wide">

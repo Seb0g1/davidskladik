@@ -782,6 +782,69 @@ app.post("/api/avito/restore-expired", requireAdmin, async (request, response, n
   }
 });
 
+// --- Архивация старых дублирующих объявлений ---
+
+// Читает очередь дублей из data/avito-archive-queue.json (сформированную из
+// отчёта автозагрузки: Avito-ID объявлений, вызвавших «Повторное размещение»).
+// Архивирует до limit штук за вызов, удаляя обработанные из файла.
+// Когда очередь опустеет — возвращает done: true.
+app.post("/api/avito/archive-old-duplicates", requireAdmin, async (request, response, next) => {
+  try {
+    const account = resolveAvitoAccountOr404(request, response);
+    if (!account) return;
+    const limit = Math.max(10, Math.min(500, Number(request.body?.limit || 200) || 200));
+    const queuePath = path.join(dataDir, "avito-archive-queue.json");
+
+    let queue = [];
+    try {
+      const raw = await fs.readFile(queuePath, "utf8");
+      queue = JSON.parse(raw);
+      if (!Array.isArray(queue)) queue = [];
+    } catch {
+      return response.json({ ok: true, archived: 0, remaining: 0, done: true, message: "Очередь не найдена или уже пуста." });
+    }
+
+    if (!queue.length) {
+      return response.json({ ok: true, archived: 0, remaining: 0, done: true, message: "Очередь пуста — все дубли уже архивированы." });
+    }
+
+    const batch = queue.slice(0, limit);
+    const userId = await getAvitoUserId(account);
+    let archived = 0;
+    const errors = [];
+    for (const avitoId of batch) {
+      try {
+        await archiveAvitoItemById(account, userId, Number(avitoId));
+        archived++;
+      } catch (err) {
+        // 404 = уже удалён/не существует — не считаем ошибкой
+        if (err?.statusCode !== 404 && !String(err?.message).includes("404")) {
+          errors.push(String(err?.message || err));
+        } else {
+          archived++; // уже нет — считаем обработанным
+        }
+      }
+      await sleep(60); // ~16 req/s
+    }
+
+    // Убираем обработанный батч из файла
+    const remaining = queue.slice(batch.length);
+    await fs.writeFile(queuePath, JSON.stringify(remaining), "utf8");
+
+    await appendAudit(request, "avito.archive_duplicates", { archived, errors: errors.length, remaining: remaining.length });
+    response.json({
+      ok: true,
+      archived,
+      errors: errors.length,
+      remaining: remaining.length,
+      done: remaining.length === 0,
+      message: `Архивировано ${archived} дублей. Осталось в очереди: ${remaining.length}.${remaining.length === 0 ? " Готово!" : " Нажмите ещё раз."}`,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/avito/callback", (_request, response) => {
   response.status(200).send("OK");
 });

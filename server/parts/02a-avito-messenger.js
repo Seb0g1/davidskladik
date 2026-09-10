@@ -185,6 +185,14 @@ async function activateAvitoItem(account, userId, avitoId) {
   });
 }
 
+// Отправляет объявление в архив через core API.
+async function archiveAvitoItemById(account, userId, avitoId) {
+  return avitoRequest(`/core/v1/accounts/${userId}/items/${avitoId}/archive`, {
+    method: "PUT",
+    account,
+  });
+}
+
 async function getAvitoItemStats(account, itemIds, { dateFrom = "", dateTo = "" } = {}) {
   if (!itemIds?.length) return [];
   const userId = await getAvitoUserId(account);
