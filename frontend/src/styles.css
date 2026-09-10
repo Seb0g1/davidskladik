@@ -5462,6 +5462,21 @@ textarea {
   gap: 14px;
 }
 
+.stat-row-deleted { opacity: 0.45; }
+.stat-cell-deleted { text-decoration: line-through; color: var(--muted); }
+.stat-pill-deleted {
+  font-size: 10px;
+  font-weight: 600;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(239, 68, 68, .12);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, .2);
+  text-decoration: none;
+  display: inline-block;
+}
+
 .dashboard-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);

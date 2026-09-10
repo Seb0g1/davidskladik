@@ -108,10 +108,10 @@ export function StatisticsPage() {
             <span>Последнее</span>
           </div>
           {sortedRows.map((row) => (
-            <div className="table-row" key={row.username} style={row.deletedAt ? { opacity: 0.45 } : undefined}>
-              <span data-label="Сотрудник" style={row.deletedAt ? { textDecoration: "line-through", color: "var(--muted)" } : undefined}>
+            <div className={`table-row${row.deletedAt ? " stat-row-deleted" : ""}`} key={row.username}>
+              <span data-label="Сотрудник" className={row.deletedAt ? "stat-cell-deleted" : undefined}>
                 <strong>{row.username}</strong>
-                {row.deletedAt && <span style={{ fontSize: 10, fontWeight: 600, marginLeft: 6, padding: "1px 5px", borderRadius: 4, background: "rgba(239,68,68,.12)", color: "#f87171", border: "1px solid rgba(239,68,68,.2)" }}>удалён</span>}
+                {row.deletedAt && <span className="pill stat-pill-deleted">удалён</span>}
               </span>
               <span data-label="Роль">{row.role || "-"}</span>
               <span data-label="Действий">{row.actionsTotal}</span>
