@@ -730,56 +730,52 @@ app.get("/public/avito-stock/:token.csv", async (request, response, next) => {
 
 // --- Восстановление (переопубликация) просроченных объявлений ---
 
-// Активирует объявления Avito, у которых «Истёк срок размещения», через core
-// API (PUT /activate). Avito переводит их из «Неопубликованных» обратно в
-// «Активные» без нового прохождения модерации.
-// Берём adId всех наших объявлений помеченных outOfStock или disabled в файле
-// листингов — именно они кандидаты на «истёк срок».
-// Одна операция — до 300 объявлений; при большом количестве нажимать несколько раз.
+// Для autoupload-объявлений Avito API /activate не работает — их жизненный цикл
+// управляется ТОЛЬКО через XML-фид. Принцип: если объявление появляется в фиде
+// со Stock > 0, Avito его (пере)публикует, даже если оно было «Истёк срок».
+//
+// Что делает этот маршрут:
+// 1. Снимает флаг outOfStock в avito-listings.json для всех outOfStock-объявлений
+//    (до limit штук), выставляя stockQuantity = avitoFeedDefaultStock (5 шт.).
+//    buildAvitoFeedXml при trustStoredOutOfStock=true доверяет этому значению →
+//    товар попадает в фид.
+// 2. Сразу тригерит скачивание фида Avito (обходя 55-минутный лимит).
+// 3. Avito скачивает обновлённый фид, видит Stock=5 → переиздаёт просроченные.
+//
+// Следующий plановый runAvitoFeedRefresh (каждые 30 мин) скорректирует outOfStock
+// по актуальным ценам PM: товары с поставщиком останутся в фиде навсегда,
+// товары без поставщика снова уйдут в outOfStock, но их 30-дневный таймер в
+// Avito сброшен — они не истекут ещё 30 дней.
 app.post("/api/avito/restore-expired", requireAdmin, async (request, response, next) => {
   try {
     const account = resolveAvitoAccountOr404(request, response);
     if (!account) return;
-    const limit = Math.max(10, Math.min(300, Number(request.body?.limit || 300) || 300));
+    const limit = Math.max(10, Math.min(2000, Number(request.body?.limit || 2000) || 2000));
     const state = await readAvitoListingsFile();
-    // Кандидаты на восстановление: объявления без остатков или отключённые в нашем фиде.
-    const candidateAdIds = state.items
-      .filter((item) => item.adId && (item.enabled === false || item.outOfStock === true))
-      .map((item) => cleanText(item.adId))
-      .filter(Boolean)
-      .slice(0, limit);
-    if (!candidateAdIds.length) {
-      return response.json({ ok: true, restored: 0, total: 0, message: "Нет кандидатов для восстановления." });
+    const candidates = state.items.filter((item) => item.adId && item.outOfStock === true && item.enabled !== false);
+    const batch = candidates.slice(0, limit);
+    if (!batch.length) {
+      return response.json({ ok: true, restored: 0, total: candidates.length, message: "Все объявления уже активны (нет outOfStock-кандидатов)." });
     }
-    // Получаем Avito-ID по нашим adId через autoload mapping.
-    const mapping = await getAvitoIdsByAdIds(account, candidateAdIds).catch(() => null);
-    const avitoIdPairs = (mapping?.items || [])
-      .map((m) => ({ adId: cleanText(m.ad_id || m.adId || ""), avitoId: Number(m.avito_id || m.avitoId || 0) }))
-      .filter((pair) => pair.avitoId > 0);
-    if (!avitoIdPairs.length) {
-      return response.json({ ok: true, restored: 0, total: candidateAdIds.length, found: 0, message: "Avito не вернул ID для кандидатов — возможно, они уже не в системе Avito." });
-    }
-    const userId = await getAvitoUserId(account);
-    let restored = 0;
-    const errors = [];
-    for (const { avitoId } of avitoIdPairs) {
-      try {
-        await activateAvitoItem(account, userId, avitoId);
-        restored++;
-      } catch (err) {
-        errors.push(String(err?.message || err));
-      }
-      await sleep(60); // ~16 req/s — в пределах лимитов Avito core API
-    }
-    const totalInactive = state.items.filter((item) => item.adId && (item.enabled === false || item.outOfStock === true)).length;
-    await appendAudit(request, "avito.restore_expired", { restored, total: candidateAdIds.length, errors: errors.length });
+    // Снимаем outOfStock и выставляем дефолтный остаток для всего батча.
+    const batchAdIds = new Set(batch.map((item) => item.adId));
+    const nextItems = state.items.map((item) =>
+      batchAdIds.has(item.adId)
+        ? { ...item, outOfStock: false, stockQuantity: avitoFeedDefaultStock }
+        : item
+    );
+    await writeAvitoListingsFile({ ...state, items: nextItems });
+    // Тригерим скачивание фида — обходим 55-минутный rate-limit через force=true.
+    const uploadResult = await runAvitoUploadTriggerIfNeeded({ force: true }).catch((err) => ({ ok: false, error: err?.message }));
+    const remaining = Math.max(0, candidates.length - batch.length);
+    await appendAudit(request, "avito.restore_expired", { restored: batch.length, total: candidates.length, remaining });
     response.json({
       ok: true,
-      restored,
-      total: candidateAdIds.length,
-      found: avitoIdPairs.length,
-      errors: errors.length,
-      remaining: Math.max(0, totalInactive - limit),
+      restored: batch.length,
+      total: candidates.length,
+      remaining,
+      uploadResult,
+      message: `${batch.length} объявлений включено в фид со стоком ${avitoFeedDefaultStock} шт. Avito скачает обновлённый фид и переиздаст просроченные.${remaining > 0 ? ` Осталось ещё ${remaining}.` : ""}`,
     });
   } catch (error) {
     next(error);

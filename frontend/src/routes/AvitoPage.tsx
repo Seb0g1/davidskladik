@@ -374,7 +374,7 @@ export function AvitoPage() {
     },
   });
   const restoreExpired = useMutation({
-    mutationFn: () => apiJson<{ ok: boolean; restored: number; total: number; found: number; errors: number; remaining: number; message?: string }>("/api/avito/restore-expired", { method: "POST", body: JSON.stringify({ limit: 300 }) }),
+    mutationFn: () => apiJson<{ ok: boolean; restored: number; total: number; remaining: number; message?: string }>("/api/avito/restore-expired", { method: "POST", body: JSON.stringify({ limit: 2000 }) }),
   });
   const backfillImages = useMutation({
     mutationFn: () => apiJson<{ ok: boolean; status: string; updatedFromPostgres?: number; updatedFromOzon?: number; remaining?: number }>("/api/avito/images/backfill", { method: "POST", body: JSON.stringify({ limit: 500 }) }),
@@ -435,7 +435,7 @@ export function AvitoPage() {
             <button className="secondary-action" type="button" disabled={!avitoConfigured || triggerUpload.isPending} onClick={() => triggerUpload.mutate()} title="Avito скачает фид и обновит объявления. Не чаще раза в час.">
               {triggerUpload.isPending ? <Loader2 className="spin" size={16} /> : <Send size={16} />} Запустить автозагрузку
             </button>
-            <button className="secondary-action" type="button" disabled={!avitoConfigured || restoreExpired.isPending} onClick={() => restoreExpired.mutate()} title="Восстанавливает объявления с «Истёк срок размещения» обратно в Активные. До 300 за раз.">
+            <button className="secondary-action" type="button" disabled={!avitoConfigured || restoreExpired.isPending} onClick={() => restoreExpired.mutate()} title="Снимает outOfStock с объявлений и тригерит скачивание фида — Avito переиздаёт просроченные. До 2000 за раз.">
               {restoreExpired.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Восстановить истёкшие
             </button>
           </div>
@@ -487,8 +487,7 @@ export function AvitoPage() {
       {triggerUpload.error ? <div className="inline-error">{String((triggerUpload.error as Error).message)}</div> : null}
       {restoreExpired.data ? (
         <div className="info-strip success">
-          Восстановлено {restoreExpired.data.restored} объявлений из {restoreExpired.data.found} найденных (всего кандидатов: {restoreExpired.data.total}).
-          {restoreExpired.data.remaining > 0 ? ` Осталось ещё ~${restoreExpired.data.remaining} — нажмите кнопку ещё раз.` : " Все обработаны."}
+          {restoreExpired.data.message || `Включено в фид: ${restoreExpired.data.restored} из ${restoreExpired.data.total}.${restoreExpired.data.remaining > 0 ? ` Осталось: ${restoreExpired.data.remaining}.` : ""}`}
         </div>
       ) : null}
       {restoreExpired.error ? <div className="inline-error">{String((restoreExpired.error as Error).message)}</div> : null}
