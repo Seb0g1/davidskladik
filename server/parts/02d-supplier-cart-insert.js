@@ -12,8 +12,8 @@ async function confirmOzonPostingPackaged(postingNumber, products = [], account 
     const errMsg = error?.message || String(error);
     // Ozon returns errors when the order is already in a shipped/assembled state.
     // Treat "wrong state" as already-confirmed — the operator has nothing to do.
-    const alreadyShipped = /wrong.?state|awaiting_deliver|not.*awaiting_packaging|нельзя|уже собран/i.test(errMsg)
-      || (typeof ozonResponse === "object" && /wrong.?state|awaiting_deliver/i.test(String(ozonResponse?.message || "")));
+    const alreadyShipped = /wrong.?state|awaiting_deliver|not.*awaiting_packaging|нельзя|уже собран|POSTING_ALREADY_SHIPPED/i.test(errMsg)
+      || (typeof ozonResponse === "object" && /wrong.?state|awaiting_deliver|POSTING_ALREADY_SHIPPED/i.test(String(ozonResponse?.message || "")));
     if (alreadyShipped) {
       logger.info("ozon posting already in assembled state — skipping re-ship", { postingNumber, accountId: account?.id, detail: errMsg });
       return { ok: true, postingNumber, alreadyConfirmed: true };
