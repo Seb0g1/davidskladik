@@ -99,10 +99,25 @@ function priceMasterArticleCandidateScore(row = {}, productContext = {}) {
   else score -= 35;
   if (String(row.active ?? row.Active ?? true) === "false" || row.active === false || row.Active === false) score -= 30;
 
+  // Mutual name divergence penalty: when the PM row has distinctive tokens absent from the
+  // product name AND the product has distinctive tokens absent from the row, they almost
+  // certainly represent different products sharing the same article code (e.g. Далик encodes
+  // TAUREAN DE COMBAT and RAGHBA WOOD INTENSE under the same NativeID). Without this penalty
+  // the volume-match bonus (+45) for a row that explicitly says "100 ML" outscores a correct
+  // row whose PM name omits the volume entirely. One-sided divergence (shorter/longer name,
+  // Russian description words not in PM) is tolerated by requiring BOTH sides to have unique
+  // tokens before applying any penalty.
+  const uniqueToRow = [...rowTokens].filter((t) => !productTokens.includes(t));
+  const uniqueToProduct = productTokens.filter((t) => !rowTokens.has(t));
+  const divergencePenalty = uniqueToRow.length > 0 && uniqueToProduct.length > 0
+    ? Math.min(uniqueToRow.length, 4) * 20 : 0;
+  if (divergencePenalty) score -= divergencePenalty;
+
   const reason = [
     shared.length ? `tokens:${shared.join(",")}` : "tokens:none",
     sharedVolumes.length ? `volume:${sharedVolumes.join(",")}` : (volumeMismatch ? `volume_mismatch:${productVolumes.join("/")}->${rowVolumes.join("/")}` : "volume:unknown"),
     productTester === rowTester ? "tester:match" : "tester:mismatch",
+    ...(divergencePenalty ? [`divergence:-${divergencePenalty}(${uniqueToRow.join(",")})`] : []),
   ];
   return {
     score,

@@ -589,7 +589,14 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { p
   // is only one row or names are identical.
   // Prefer marketplace order name; fall back to warehouse product name when the order
   // name is absent (e.g. WB orders) so Dalik multi-product articles still disambiguate.
-  const disambigName = normalizedLine.productName || normalizeWarehouseProduct(product).name;
+  // Prefer the marketplace order product name for name-based disambiguation. Fall back to the
+  // warehouse product name when the order line only carries an article code (WB normalizer sets
+  // productName = offerId, which gives zero Jaccard overlap with any PM row name and prevents
+  // the disambiguation from filtering out wrong rows that share the same Далик article code).
+  const orderHasRealName = normalizedLine.productName && normalizedLine.productName !== normalizedLine.offerId;
+  const disambigName = (orderHasRealName ? normalizedLine.productName : null)
+    || normalizeWarehouseProduct(product).name
+    || normalizedLine.productName;
   if (disambigName) {
     const matchesBefore = matches;
     matches = disambiguateSupplierCartMatchesByOrderName(matches, disambigName);
