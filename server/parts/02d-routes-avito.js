@@ -796,7 +796,8 @@ app.post("/api/avito/collect-expired-for-archive", requireAdmin, async (request,
     const account = resolveAvitoAccountOr404(request, response);
     if (!account) return;
     const userId = await getAvitoUserId(account);
-    const statuses = ["expired", "not_active"];
+    // Avito Items API status values: "old" = Истёк срок, "not_published" = Неопубликованное
+    const statuses = ["old", "not_published"];
     const allIds = [];
     for (const status of statuses) {
       let page = 1;
