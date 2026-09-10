@@ -208,7 +208,7 @@ function OrdersTab() {
       ) : (
         <div className="sa-scroll-x">
         <div className="table-panel orders-table sa-table-560">
-          <div className="table-head" style={{ display: "grid", gridTemplateColumns: COL, gap: 10 }}>
+          <div className="table-head">
             <span>Заказ / Дата</span><span>Покупатель</span><span>Позиций</span><span>Сумма</span><span>Статус</span>
           </div>
 
@@ -217,7 +217,7 @@ function OrdersTab() {
               <button
                 type="button"
                 className="table-row"
-                style={{ display: "grid", gridTemplateColumns: COL, gap: 10, width: "100%", textAlign: "left", cursor: "pointer" }}
+                style={{ width: "100%", textAlign: "left", cursor: "pointer" }}
                 onClick={() => setExpanded(expanded === o.id ? null : o.id)}
               >
                 <span>
@@ -318,12 +318,12 @@ function CustomersTab() {
         <div className="soft-empty"><Users size={18} /> Зарегистрированных покупателей нет</div>
       ) : (
         <div className="sa-scroll-x">
-          <div className="table-panel customers-table" style={{ minWidth: 580 }}>
-            <div className="table-head" style={{ display: "grid", gridTemplateColumns: COL, gap: 10 }}>
+          <div className="table-panel customers-table">
+            <div className="table-head">
               <span>Имя</span><span>Email</span><span>Телефон</span><span>Заказов</span><span>Регистрация</span>
             </div>
             {data.customers.map((c) => (
-              <div key={c.id} className="table-row" style={{ display: "grid", gridTemplateColumns: COL, gap: 10 }}>
+              <div key={c.id} className="table-row">
                 <span className="sa-bold">{[c.firstName, c.lastName].filter(Boolean).join(" ") || "—"}</span>
                 <span className="sa-muted-soft-13">{c.email}</span>
                 <span className="sa-text-13">{c.phone || "—"}</span>
@@ -588,12 +588,12 @@ function BannersTab() {
         <div className="soft-empty"><ImageIcon size={18} /> Баннеры не добавлены — на главной показывается градиентный фон</div>
       ) : (
         <div className="table-panel banners-table">
-          <div className="table-head" style={{ display: "grid", gridTemplateColumns: COL, gap: 10 }}>
+          <div className="table-head">
             <span>Фото</span><span>Заголовок</span><span>Ссылка</span><span>Статус</span><span />
           </div>
           {banners.map((b) => (
             <div key={b.id}>
-              <div className="table-row" style={{ display: "grid", gridTemplateColumns: COL, gap: 10 }}>
+              <div className="table-row">
                 <span>
                   {b.imageUrl
                     ? <img src={b.imageUrl} alt="" className="mv-banner-preview" />
@@ -693,11 +693,11 @@ function CategoriesTab() {
         <div className="soft-empty"><Tag size={18} /> Категории не добавлены</div>
       ) : (
         <div className="table-panel cats-table">
-          <div className="table-head" style={{ display: "grid", gridTemplateColumns: COL, gap: 10 }}>
+          <div className="table-head">
             <span>Категория</span><span>Slug</span><span>Тег фильтра</span><span />
           </div>
           {cats.map((c) => (
-            <div key={c.id} className="table-row" style={{ display: "grid", gridTemplateColumns: COL, gap: 10 }}>
+            <div key={c.id} className="table-row">
               <span className="sa-flex-center-8">
                 {c.imageUrl && <img src={c.imageUrl} alt="" className="sa-cat-img" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />}
                 <span className="sa-bold">{c.name}</span>
@@ -1005,7 +1005,7 @@ function NewsTab() {
 
       <div className="sa-news-grid">
         {data?.posts.map((post) => (
-          <div key={post.id} className="card-panel" style={{ opacity: post.active ? 1 : 0.5 }}>
+          <div key={post.id} className={`card-panel${post.active ? "" : " sa-inactive"}`}>
             {post.photoUrl && (
               <img src={post.photoUrl} alt="" className="sa-news-img" />
             )}
@@ -1237,14 +1237,14 @@ function BlogTab() {
   if (editing !== null) {
     return (
       <div className="admin-tab-content">
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+        <div className="sa-title-wrap">
           <button type="button" className="secondary-action icon-action" onClick={() => setEditing(null)}>
             <ChevronLeft size={15} />
           </button>
           <h3 className="sa-h3">{editing.id ? "Редактировать статью" : "Новая статья"}</h3>
         </div>
 
-        <div style={{ display: "grid", gap: 12, maxWidth: 700 }}>
+        <div className="sa-blog-form">
           <div>
             <label className="sa-form-label">Заголовок</label>
             <input className="input-base" value={editing.title ?? ""} onChange={e => setEditing(s => ({ ...s!, title: e.target.value }))} placeholder="Топ-10 ароматов весны 2027" maxLength={200} />
@@ -1274,26 +1274,26 @@ function BlogTab() {
               placeholder="парфюмерия, новинки, гид"
             />
             {(editing.tags?.length ?? 0) > 0 && (
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+              <div className="sa-tags-preview">
                 {editing.tags!.map(t => (
-                  <span key={t} style={{ fontSize: 11, padding: "2px 8px", border: "1px solid var(--border)", borderRadius: 2, color: "var(--text-muted)" }}>{t}</span>
+                  <span key={t} className="sa-tag-chip">{t}</span>
                 ))}
               </div>
             )}
           </div>
           <div>
             <label className="sa-form-label">Содержание (HTML)</label>
-            <textarea className="input-base" value={editing.content ?? ""} onChange={e => setEditing(s => ({ ...s!, content: e.target.value }))} rows={12} style={{ resize: "vertical", fontFamily: "monospace", fontSize: 12 }} placeholder="<h2>Заголовок</h2><p>Текст статьи...</p>" />
+            <textarea className="input-base sa-resize-v sa-editor-textarea" value={editing.content ?? ""} onChange={e => setEditing(s => ({ ...s!, content: e.target.value }))} rows={12} placeholder="<h2>Заголовок</h2><p>Текст статьи...</p>" />
           </div>
-          <div className="sa-flex-center-10">
-            <label style={{ fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+          <div>
+            <label className="sa-check-label">
               <input type="checkbox" checked={editing.published ?? false} onChange={e => setEditing(s => ({ ...s!, published: e.target.checked }))} />
               Опубликовать
             </label>
           </div>
 
           {saveMut.isError && (
-            <p style={{ fontSize: 12, color: "#f87171" }}>{(saveMut.error as Error).message}</p>
+            <p className="sa-err-inline">{(saveMut.error as Error).message}</p>
           )}
 
           <div className="sa-flex-8">

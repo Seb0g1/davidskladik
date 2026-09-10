@@ -8943,6 +8943,11 @@ textarea:focus-visible,
 .sa-add-rule-btn { font-size: 12px; padding: 4px 10px; display: inline-flex; align-items: center; gap: 4px; }
 .sa-del-rule-btn { color: var(--danger, #f87171); background: none; border: none; cursor: pointer; padding: 4px; line-height: 1; }
 .sa-del-rule-btn:hover { opacity: 0.75; }
+.sa-inactive { opacity: 0.5; }
+.sa-blog-form { display: grid; gap: 12px; max-width: 700px; }
+.sa-tags-preview { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.sa-tag-chip { font-size: 11px; padding: 2px 8px; border: 1px solid var(--border, var(--line)); border-radius: 2px; color: var(--text-muted, var(--muted)); }
+.sa-editor-textarea { font-family: monospace; font-size: 12px; }
 
 /* ===== Picker Cash (касса сборщика) ===== */
 .picker-cash-card {
