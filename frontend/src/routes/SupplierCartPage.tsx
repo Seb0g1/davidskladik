@@ -488,7 +488,7 @@ function ReadyToShipPanel() {
             {filteredRows.map((row: PickingRow) => (
               <article className="supplier-cart-row ready" key={row.key}>
                 <span className="checkline">
-                  <span>{row.marketplace.toUpperCase()} · {row.orderId || row.postingNumber || "-"} · {row.offerId}</span>
+                  <span><MarketplaceBadge marketplace={row.marketplace} /> · {row.orderId || row.postingNumber || "-"} · {row.offerId}</span>
                 </span>
                 <strong>{row.productName || row.offerId}</strong>
                 <div className="meta-grid">

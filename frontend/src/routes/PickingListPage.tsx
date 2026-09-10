@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { DiagnosticValue } from "../components/DiagnosticValue";
+import { MarketplaceBadge } from "../components/MarketplaceBadge";
 import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
 import { ListSkeleton } from "../components/Skeleton";
@@ -1096,7 +1097,7 @@ export function PickingListPage() {
                       <div className="picking-row status-picked" key={row.key}>
                         <div className="picking-main">
                           <strong>{row.productName || row.offerId}</strong>
-                          <span>{row.marketplace.toUpperCase()} · {row.orderId || row.postingNumber || "-"} · {row.offerId}</span>
+                          <span><MarketplaceBadge marketplace={row.marketplace} /> · {row.orderId || row.postingNumber || "-"} · {row.offerId}</span>
                         </div>
                         <div className="meta-grid">
                           <span>Поставщик: {row.supplierName || "-"}</span>
@@ -1618,7 +1619,7 @@ export function PickingListPage() {
                               <div className="picking-row-header" onClick={() => toggleRowExpand(row.key)}>
                                 <div className="picking-row-header-left">
                                   <strong className="picking-row-name">{row.productName || row.offerId}</strong>
-                                  <span className="picking-row-sub">{row.marketplace.toUpperCase()}{row.isExpress ? <span className="express-badge"><Zap size={11} /> Экспресс</span> : null}</span>
+                                  <span className="picking-row-sub"><MarketplaceBadge marketplace={row.marketplace} />{row.isExpress ? <span className="express-badge"><Zap size={11} /> Экспресс</span> : null}</span>
                                 </div>
                                 <div className="picking-row-header-right">
                                   <span className="picking-row-qty">×{row.pickedQuantity && row.pickedQuantity !== row.quantity ? `${row.pickedQuantity}/${row.quantity}` : row.quantity}</span>
@@ -1815,7 +1816,7 @@ export function PickingListPage() {
                                 >
                                   <div className="picking-group-header-left">
                                     <strong>{pRows[0].productName || pKey}</strong>
-                                    <span className="picking-row-sub">{pKey} · {pRows[0].marketplace.toUpperCase()} · {pRows.length} заказа</span>
+                                    <span className="picking-row-sub">{pKey} · <MarketplaceBadge marketplace={pRows[0].marketplace} /> · {pRows.length} заказа</span>
                                   </div>
                                   <button
                                     type="button"
@@ -1958,7 +1959,7 @@ export function PickingListPage() {
                                         <Copy size={12} />
                                       </button>
                                       <span className="picking-row-sub">
-                                        <span className={`marketplace-dot marketplace-dot--${row.marketplace}`}>{row.marketplace.slice(0, 1).toUpperCase()}</span>
+                                        <MarketplaceBadge marketplace={row.marketplace} />
                                         {isMulti ? ` · ${row.orderId || row.postingNumber || row.offerId}` : null}
                                       </span>
                                     </div>

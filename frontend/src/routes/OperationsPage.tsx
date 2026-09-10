@@ -4,6 +4,7 @@ import { AlertTriangle, Clock3, Copy, ListChecks, Loader2, Plus, RefreshCw, Repe
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { OperationCreateSchema, OperationDetailSchema, OperationsSchema, SupplierAlternativesSchema, SupplierCartCommitSchema, SupplierCartHistorySchema, SupplierCartOverrideSchema, SupplierCartPreviewSchema, SupplierCartScheduleSchema } from "../types";
+import { MarketplaceBadge } from "../components/MarketplaceBadge";
 import { SupplierAltPicker } from "../components/SupplierAltPicker";
 import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
@@ -495,7 +496,7 @@ export function SupplierCartPanel() {
                 <article className={`supplier-cart-row ${row.ready ? "ready" : "skipped"}${row.isExpress ? " is-express" : ""}`} key={row.key}>
                   <label className="checkline">
                     <input type="checkbox" disabled={disabled} checked={selected.has(row.key)} onChange={() => toggleRow(row.key)} />
-                    <span>{row.marketplace.toUpperCase()} · {row.orderId || row.postingNumber || "-"} · {row.offerId}</span>
+                    <span><MarketplaceBadge marketplace={row.marketplace} /> · {row.orderId || row.postingNumber || "-"} · {row.offerId}</span>
                     {row.isExpress ? <span className="express-badge"><Zap size={12} /> Экспресс</span> : null}
                   </label>
                   <strong>{row.productName || row.offerId}</strong>
