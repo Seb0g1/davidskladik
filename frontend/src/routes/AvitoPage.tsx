@@ -373,8 +373,8 @@ export function AvitoPage() {
       void queryClient.invalidateQueries({ queryKey: ["avito-listings"] });
     },
   });
-  const archiveExpired = useMutation({
-    mutationFn: () => apiJson<{ ok: boolean; archived: number; total: number; found: number; errors: number; remaining: number; message?: string }>("/api/avito/archive-expired", { method: "POST", body: JSON.stringify({ limit: 300 }) }),
+  const restoreExpired = useMutation({
+    mutationFn: () => apiJson<{ ok: boolean; restored: number; total: number; found: number; errors: number; remaining: number; message?: string }>("/api/avito/restore-expired", { method: "POST", body: JSON.stringify({ limit: 300 }) }),
   });
   const backfillImages = useMutation({
     mutationFn: () => apiJson<{ ok: boolean; status: string; updatedFromPostgres?: number; updatedFromOzon?: number; remaining?: number }>("/api/avito/images/backfill", { method: "POST", body: JSON.stringify({ limit: 500 }) }),
@@ -435,8 +435,8 @@ export function AvitoPage() {
             <button className="secondary-action" type="button" disabled={!avitoConfigured || triggerUpload.isPending} onClick={() => triggerUpload.mutate()} title="Avito скачает фид и обновит объявления. Не чаще раза в час.">
               {triggerUpload.isPending ? <Loader2 className="spin" size={16} /> : <Send size={16} />} Запустить автозагрузку
             </button>
-            <button className="secondary-action" type="button" disabled={!avitoConfigured || archiveExpired.isPending} onClick={() => archiveExpired.mutate()} title="Архивирует на Avito объявления без остатков (Истёк срок размещения). До 300 за раз.">
-              {archiveExpired.isPending ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />} Архивировать устаревшие
+            <button className="secondary-action" type="button" disabled={!avitoConfigured || restoreExpired.isPending} onClick={() => restoreExpired.mutate()} title="Восстанавливает объявления с «Истёк срок размещения» обратно в Активные. До 300 за раз.">
+              {restoreExpired.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Восстановить истёкшие
             </button>
           </div>
         )}
@@ -485,13 +485,13 @@ export function AvitoPage() {
       {preview.error ? <div className="inline-error">{String((preview.error as Error).message)}</div> : null}
       {triggerUpload.data ? <div className="info-strip success">Автозагрузка запущена — Avito скачает фид в течение нескольких минут.</div> : null}
       {triggerUpload.error ? <div className="inline-error">{String((triggerUpload.error as Error).message)}</div> : null}
-      {archiveExpired.data ? (
+      {restoreExpired.data ? (
         <div className="info-strip success">
-          Архивировано {archiveExpired.data.archived} объявлений из {archiveExpired.data.found} найденных (всего неактивных: {archiveExpired.data.total}).
-          {archiveExpired.data.remaining > 0 ? ` Осталось ещё ~${archiveExpired.data.remaining} — нажмите кнопку ещё раз.` : " Все обработаны."}
+          Восстановлено {restoreExpired.data.restored} объявлений из {restoreExpired.data.found} найденных (всего кандидатов: {restoreExpired.data.total}).
+          {restoreExpired.data.remaining > 0 ? ` Осталось ещё ~${restoreExpired.data.remaining} — нажмите кнопку ещё раз.` : " Все обработаны."}
         </div>
       ) : null}
-      {archiveExpired.error ? <div className="inline-error">{String((archiveExpired.error as Error).message)}</div> : null}
+      {restoreExpired.error ? <div className="inline-error">{String((restoreExpired.error as Error).message)}</div> : null}
 
       <div className="settings-grid">
         <section className="settings-panel settings-panel-wide">

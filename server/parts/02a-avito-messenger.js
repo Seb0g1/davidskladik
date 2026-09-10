@@ -176,9 +176,10 @@ async function getAvitoMe(account) {
   };
 }
 
-// Архивирует одно объявление через core API (убирает из активных/просроченных в архив).
-async function archiveAvitoItem(account, userId, avitoId) {
-  return avitoRequest(`/core/v1/accounts/${userId}/items/${avitoId}/archive`, {
+// Восстанавливает (активирует) объявление через core API —
+// переводит из «Истёк срок размещения» / «Неопубликованное» в «Активные».
+async function activateAvitoItem(account, userId, avitoId) {
+  return avitoRequest(`/core/v1/accounts/${userId}/items/${avitoId}/activate`, {
     method: "PUT",
     account,
   });

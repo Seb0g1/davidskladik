@@ -728,56 +728,58 @@ app.get("/public/avito-stock/:token.csv", async (request, response, next) => {
 });
 
 
-// --- Архивирование просроченных объявлений ---
+// --- Восстановление (переопубликация) просроченных объявлений ---
 
-// Архивирует объявления Avito, которые есть в нашем фиде как outOfStock или
-// disabled, через core API. Решает проблему «Истёк срок размещения» (10k+
-// неопубликованных): Avito перестаёт обновлять выключенные объявления и через
-// 30 дней помечает их просроченными. Одна операция — до 500 объявлений;
-// при большом количестве вызывать несколько раз.
-app.post("/api/avito/archive-expired", requireAdmin, async (request, response, next) => {
+// Активирует объявления Avito, у которых «Истёк срок размещения», через core
+// API (PUT /activate). Avito переводит их из «Неопубликованных» обратно в
+// «Активные» без нового прохождения модерации.
+// Берём adId всех наших объявлений помеченных outOfStock или disabled в файле
+// листингов — именно они кандидаты на «истёк срок».
+// Одна операция — до 300 объявлений; при большом количестве нажимать несколько раз.
+app.post("/api/avito/restore-expired", requireAdmin, async (request, response, next) => {
   try {
     const account = resolveAvitoAccountOr404(request, response);
     if (!account) return;
-    const limit = Math.max(10, Math.min(500, Number(request.body?.limit || 300) || 300));
+    const limit = Math.max(10, Math.min(300, Number(request.body?.limit || 300) || 300));
     const state = await readAvitoListingsFile();
-    // Берём adIds объявлений, которые в нашем фиде неактивны (outOfStock или disabled).
-    const inactiveAdIds = state.items
+    // Кандидаты на восстановление: объявления без остатков или отключённые в нашем фиде.
+    const candidateAdIds = state.items
       .filter((item) => item.adId && (item.enabled === false || item.outOfStock === true))
       .map((item) => cleanText(item.adId))
       .filter(Boolean)
       .slice(0, limit);
-    if (!inactiveAdIds.length) {
-      return response.json({ ok: true, archived: 0, total: 0, message: "Нет неактивных объявлений для архивирования." });
+    if (!candidateAdIds.length) {
+      return response.json({ ok: true, restored: 0, total: 0, message: "Нет кандидатов для восстановления." });
     }
     // Получаем Avito-ID по нашим adId через autoload mapping.
-    const mapping = await getAvitoIdsByAdIds(account, inactiveAdIds).catch(() => null);
+    const mapping = await getAvitoIdsByAdIds(account, candidateAdIds).catch(() => null);
     const avitoIdPairs = (mapping?.items || [])
       .map((m) => ({ adId: cleanText(m.ad_id || m.adId || ""), avitoId: Number(m.avito_id || m.avitoId || 0) }))
       .filter((pair) => pair.avitoId > 0);
     if (!avitoIdPairs.length) {
-      return response.json({ ok: true, archived: 0, total: inactiveAdIds.length, message: "Avito не вернул ID для найденных объявлений — возможно, их уже нет в системе Avito." });
+      return response.json({ ok: true, restored: 0, total: candidateAdIds.length, found: 0, message: "Avito не вернул ID для кандидатов — возможно, они уже не в системе Avito." });
     }
     const userId = await getAvitoUserId(account);
-    let archived = 0;
+    let restored = 0;
     const errors = [];
     for (const { avitoId } of avitoIdPairs) {
       try {
-        await archiveAvitoItem(account, userId, avitoId);
-        archived++;
+        await activateAvitoItem(account, userId, avitoId);
+        restored++;
       } catch (err) {
         errors.push(String(err?.message || err));
       }
       await sleep(60); // ~16 req/s — в пределах лимитов Avito core API
     }
-    await appendAudit(request, "avito.archive_expired", { archived, total: inactiveAdIds.length, errors: errors.length });
+    const totalInactive = state.items.filter((item) => item.adId && (item.enabled === false || item.outOfStock === true)).length;
+    await appendAudit(request, "avito.restore_expired", { restored, total: candidateAdIds.length, errors: errors.length });
     response.json({
       ok: true,
-      archived,
-      total: inactiveAdIds.length,
+      restored,
+      total: candidateAdIds.length,
       found: avitoIdPairs.length,
       errors: errors.length,
-      remaining: Math.max(0, state.items.filter((item) => item.adId && (item.enabled === false || item.outOfStock === true)).length - limit),
+      remaining: Math.max(0, totalInactive - limit),
     });
   } catch (error) {
     next(error);
