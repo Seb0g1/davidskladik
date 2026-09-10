@@ -577,7 +577,13 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { p
       const linkMatches = preloadedMatches.get(link.id);
       if (linkMatches !== undefined) matches.set(link.id, linkMatches);
     }
-    if (!matches.size) {
+    // Fall back to live query not only when no link was in the batch map, but also when all
+    // pre-fetched results are empty — the batch path honours the negative cache (30 min) which
+    // can return [] for a selected_row link whose PM row was temporarily absent when a previous
+    // reconciler lookup cached the empty result. The live path (findPriceMasterRowsForLink)
+    // bypasses the cache and queries MySQL directly, recovering the correct PM row.
+    const hasAnyRows = [...matches.values()].some((rows) => Array.isArray(rows) && rows.length > 0);
+    if (!matches.size || !hasAnyRows) {
       matches = await getLivePriceMasterMatchesForLinks(groupLinks, warehouse.suppliers || [], usdRate);
     }
   } else {

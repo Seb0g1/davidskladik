@@ -72,7 +72,7 @@ async function findPriceMasterRowsForLinkFast(linkInput, usdRate, managedSupplie
   // Пустой/таймаутный live не повторяем чаще раза в PM_LIVE_NEGATIVE_TTL_MS;
   // появление товара в PM подхватит шаг снапшота (синк ~12 мин) раньше.
   const negativeTtlMs = Math.max(60_000, Number(process.env.PM_LIVE_NEGATIVE_TTL_MS || 30 * 60_000) || 30 * 60_000);
-  if (cached && cached.rows.length === 0 && Date.now() - cached.at < negativeTtlMs) return [];
+  if (!options.skipNegativeCache && cached && cached.rows.length === 0 && Date.now() - cached.at < negativeTtlMs) return [];
 
   // После GC-пауз (8-9 с) Node.js обрабатывает таймеры ДО poll-фазы (ответ MySQL),
   // поэтому 2.5 с давало ложные timeouts даже если MySQL ответил во время паузы.
@@ -107,6 +107,7 @@ async function getBatchPriceMasterMatchesForLinks(links, managedSuppliers = [], 
       map.set(link.id, await findPriceMasterRowsForLinkFast(link, usdRate, managedSuppliers, {
         timeoutMs,
         cacheEmpty: false,
+        skipNegativeCache: true,
       }));
     }
   }
