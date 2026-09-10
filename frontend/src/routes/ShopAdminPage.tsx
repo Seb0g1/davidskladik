@@ -1865,14 +1865,13 @@ export default function ShopAdminPage() {
         }
       />
 
-      <div className="settings-tabs" style={{ marginBottom: 6 }}>
+      <div className="settings-tabs">
         {TABS.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
             type="button"
             onClick={() => setTab(id)}
             className={`secondary-action${tab === id ? " is-active" : ""}`}
-            style={{ display: "inline-flex", alignItems: "center", gap: 7 }}
           >
             <Icon size={15} /> {label}
           </button>
