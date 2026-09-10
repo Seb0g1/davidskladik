@@ -155,8 +155,8 @@ function detectAvitoPerfumeGender(title) {
 // используем пробел/начало/конец как границы слов.
 function detectAvitoPerfumeType(title) {
   const text = ` ${normalizeAvitoMatchText(title)} `;
-  // EDP = Eau de Parfum = Парфюмерная вода
-  if (/парфюмерная вода| edp | eau de parfum/.test(text)) return "Парфюмерная вода";
+  // EDP = Eau de Parfum = Парфюмерная вода (+ разговорный вариант «Парфюмированная вода»)
+  if (/парфюм[еи]рная вода|парфюмированная вода| edp | eau de parfum/.test(text)) return "Парфюмерная вода";
   // EDT = Eau de Toilette = Туалетная вода
   if (/туалетная вода| edt | eau de toilette/.test(text)) return "Туалетная вода";
   // Cologne = Одеколон
