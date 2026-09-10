@@ -8,8 +8,7 @@ import { ThemeSwitcher } from "./components/ThemeSwitcher";
 // тормозил первый вход — теперь каждый раздел приезжает своим чанком.
 const WarehousePage = lazy(() => import("./routes/WarehousePage").then((m) => ({ default: m.WarehousePage })));
 const DashboardPage = lazy(() => import("./routes/DashboardPage").then((m) => ({ default: m.DashboardPage })));
-const ReviewsPage = lazy(() => import("./routes/ReviewsPage").then((m) => ({ default: m.ReviewsPage })));
-const QuestionsPage = lazy(() => import("./routes/QuestionsPage").then((m) => ({ default: m.QuestionsPage })));
+const FeedbackPage = lazy(() => import("./routes/FeedbackPage").then((m) => ({ default: m.FeedbackPage })));
 const ChatsPage = lazy(() => import("./routes/ChatsPage").then((m) => ({ default: m.ChatsPage })));
 const ImportPage = lazy(() => import("./routes/ImportPage").then((m) => ({ default: m.ImportPage })));
 const AvitoPage = lazy(() => import("./routes/AvitoPage").then((m) => ({ default: m.AvitoPage })));
@@ -340,8 +339,8 @@ function AppShell() {
       {sessionReady && !accessDenied && route === "suppliers" ? <SuppliersPage /> : null}
       {sessionReady && !accessDenied && route === "supplier-cart" ? <SupplierCartPage /> : null}
       {sessionReady && !accessDenied && route === "recovery-queue" ? <RecoveryQueuePage /> : null}
-      {sessionReady && !accessDenied && route === "reviews" ? <ReviewsPage /> : null}
-      {sessionReady && !accessDenied && route === "questions" ? <QuestionsPage /> : null}
+      {sessionReady && !accessDenied && route === "reviews" ? <FeedbackPage defaultTab="reviews" /> : null}
+      {sessionReady && !accessDenied && route === "questions" ? <FeedbackPage defaultTab="questions" /> : null}
       {sessionReady && !accessDenied && route === "chats" ? <ChatsPage /> : null}
       {sessionReady && !accessDenied && route === "support" ? <SupportChatsPage /> : null}
       {sessionReady && !accessDenied && route === "import" ? <ImportPage /> : null}

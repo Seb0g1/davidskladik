@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Loader2, Pencil, PlugZap, Plus, RotateCcw, Trash2, X } from "lucide-react";
+import { MarketplaceBadge } from "./MarketplaceBadge";
 import { SelectField } from "./SelectField";
 
 type MarketplaceAccount = {
@@ -206,7 +207,7 @@ export function MarketplaceAccountsPanel() {
           return (
             <div className={`account-modern-card${account.configured ? "" : " not-configured"}${account.syncEnabled === false ? " sync-disabled" : ""}`} key={account.id}>
               <div className="account-modern-head">
-                <span className={`market-badge market-${account.marketplace}`}>{marketplaceLabel(account.marketplace)}</span>
+                <MarketplaceBadge marketplace={account.marketplace} />
                 <strong>{account.name}</strong>
                 <span className={`pill ${account.configured ? "ok" : "warn"}`}>{account.configured ? "ключи подключены" : "не настроен"}</span>
                 {account.syncEnabled === false ? <span className="pill muted">синхр. выкл</span> : null}

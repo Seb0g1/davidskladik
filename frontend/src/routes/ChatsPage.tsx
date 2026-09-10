@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { apiJson } from "../api";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, BellRing, BookOpen, Download, ImageIcon, Loader2, MessageCircle, Paperclip, RefreshCw, Send, X } from "lucide-react";
+import { MarketplaceBadge } from "../components/MarketplaceBadge";
 import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
 import { ListSkeleton } from "../components/Skeleton";
@@ -362,7 +363,7 @@ export function ChatsPage() {
               onClick={() => { setSelected(chat); setMobileView("thread"); }}
             >
               <span className="chat-item-top">
-                <span className={`market-badge market-${chat.marketplace}`}>{marketplaceLabel(chat.marketplace)}</span>
+                <MarketplaceBadge marketplace={chat.marketplace} />
                 <strong>{chat.title}</strong>
                 {chat.unreadCount ? <span className="notify-badge chat-unread">{chat.unreadCount}</span> : null}
               </span>
@@ -385,7 +386,7 @@ export function ChatsPage() {
                 <button type="button" className="chat-back-btn" title="Назад к чатам" onClick={() => { setMobileView("list"); }}>
                   <ArrowLeft size={18} />
                 </button>
-                <span className={`market-badge market-${selected.marketplace}`}>{marketplaceLabel(selected.marketplace)}</span>
+                <MarketplaceBadge marketplace={selected.marketplace} />
                 <strong>{selected.title}</strong>
                 {selected.subtitle ? <small className="chat-subtitle">{selected.subtitle}</small> : null}
                 {historyQuery.data?.context?.buyerName ? (
