@@ -230,25 +230,12 @@ async function processLinkedReconcilerBatch(seedProducts = []) {
       .map((p) => [String(p.id), p.marketplaceState]),
   );
 
-  await new Promise((r) => setImmediate(r));
-
-  // Rebuild with live PriceMaster to get fresh supplier prices, then overlay the live
-  // marketplace state captured above so archived/stock flags are always current regardless
-  // of whether the DB persist inside refreshMarketplaceStateForProducts succeeded.
-  closePhaseMarker = setEventLoopBlockMarker("reconciler_rebuild");
-  let rebuilt;
-  try {
-    rebuilt = await buildFreshWarehouseProducts(ids, {
-      livePriceMaster: true,
-      refreshPrices: false,
-      batchPriceMaster: true,
-      persistMutations: true,
-      priceMasterTimeoutMs: autoPricePmTimeoutMs,
-    });
-  } finally {
-    closePhaseMarker();
-  }
-  products = rebuilt.map((p) => {
+  // Overlay the live marketplace state from the API onto the products built above.
+  // A second buildFreshWarehouseProducts pass is not needed: the first pass already has
+  // fresh PM prices, and the liveStateById overlay overwrites any marketplace state from
+  // Postgres anyway — doing a full rebuild (Postgres re-fetch + PM re-query + price calc)
+  // just to overwrite marketplace state immediately after is pure waste.
+  products = products.map((p) => {
     const liveState = liveStateById.get(String(p.id));
     return liveState ? { ...p, marketplaceState: liveState } : p;
   });
