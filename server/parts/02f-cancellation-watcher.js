@@ -26,12 +26,7 @@ function cancellationEmailHtml(row) {
   return `
 <html><body style="font-family:Arial,sans-serif;font-size:14px;color:#333;line-height:1.6">
 <p>Здравствуйте!</p>
-<p>Отмена товара:</p>
-<table style="border-collapse:collapse;margin:12px 0">
-  <tr><td style="padding:4px 12px 4px 0;color:#666">Товар:</td><td style="padding:4px 0"><strong>${productName}</strong></td></tr>
-  <tr><td style="padding:4px 12px 4px 0;color:#666">Количество:</td><td style="padding:4px 0">${quantity} шт.</td></tr>
-</table>
-<p>Заявка автоматически аннулирована в системе сборки Magic Vibes.</p>
+<p>Отмена товара: <strong>${productName}</strong>, ${quantity} шт.</p>
 <p>Если у вас возникли вопросы, свяжитесь с нами.</p>
 <p style="color:#999;font-size:12px">— Magic Vibes Склад</p>
 </body></html>`.trim();
