@@ -371,7 +371,8 @@ async function buildAvitoFeedXml() {
   let deletedCount = 0;
   for (const oldAdId of oldAdIds) {
     if (!oldAdId || activeAdIds.has(oldAdId)) continue; // не удаляем активные
-    xml += `<Ad><Id>${oldAdId}</Id><Status>Удалено</Status></Ad>\n`;
+    const safeId = oldAdId.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    xml += `<Ad><Id>${safeId}</Id><Status>Удалено</Status></Ad>\n`;
     deletedCount += 1;
   }
   xml += "</Ads>\n";
