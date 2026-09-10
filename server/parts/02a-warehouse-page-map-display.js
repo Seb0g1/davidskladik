@@ -4,6 +4,15 @@ function mapWarehousePageItemFromProduct(product = {}) {
   const selectedSupplier = product.selectedSupplier || null;
   const stockOnlyFallbackActive = Boolean(product.stockOnlyFallbackActive);
   const hasSupplier = Boolean(selectedSupplier) || stockOnlyFallbackActive;
+  // DB stores 0 for "never set" (null written as 0) and for "explicitly zeroed" — can't
+  // distinguish, so fall back through formula → marketplace state for a better display value.
+  const dbTargetStock = product.targetStock != null ? Number(product.targetStock) : null;
+  const formulaTargetStock = product.priceFormula?.targetStock != null ? Number(product.priceFormula.targetStock) : null;
+  const mpsStock = Number(item.marketplaceState?.stock) || null;
+  const resolvedTargetStock = (dbTargetStock != null && dbTargetStock > 0) ? dbTargetStock
+    : (formulaTargetStock != null && formulaTargetStock > 0) ? formulaTargetStock
+    : (mpsStock != null && mpsStock > 0) ? mpsStock
+    : dbTargetStock;
   return {
     ...item,
     autoPriceEnabled: item.autoPriceEnabled !== false,
@@ -22,9 +31,7 @@ function mapWarehousePageItemFromProduct(product = {}) {
     priceSelectionReason: product.priceSelectionReason || null,
     noSupplierAutomation: item.noSupplierAutomation || {},
     marketplaceState: item.marketplaceState || {},
-    targetStock: Number.isFinite(Number(product.targetStock))
-      ? Number(product.targetStock)
-      : (Number.isFinite(Number(product.priceFormula?.targetStock)) ? Number(product.priceFormula.targetStock) : item.targetStock),
+    targetStock: resolvedTargetStock,
     partial: Boolean(product.partial) || (links.length > 0 && !hasSupplier),
   };
 }
