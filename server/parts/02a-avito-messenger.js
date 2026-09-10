@@ -176,6 +176,14 @@ async function getAvitoMe(account) {
   };
 }
 
+// Архивирует одно объявление через core API (убирает из активных/просроченных в архив).
+async function archiveAvitoItem(account, userId, avitoId) {
+  return avitoRequest(`/core/v1/accounts/${userId}/items/${avitoId}/archive`, {
+    method: "PUT",
+    account,
+  });
+}
+
 async function getAvitoItemStats(account, itemIds, { dateFrom = "", dateTo = "" } = {}) {
   if (!itemIds?.length) return [];
   const userId = await getAvitoUserId(account);

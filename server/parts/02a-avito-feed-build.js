@@ -88,7 +88,14 @@ function buildAvitoAdXml(listing, feedDefaults = {}) {
   // в шаблоне категории (у Парфюмерии — PerfumeryType и Condition, у «Уход и
   // гигиена» — GoodsSubType/SubType без Condition). Для старых объявлений без
   // categoryKey — прежнее поведение на feedDefaults.
-  const spec = getAvitoCategorySpec(listing.categoryKey);
+  //
+  // makeup-eyes/lips/face/nails имеют CosmeticsType, но Avito дополнительно
+  // требует «Тип косметики для …» (обязательный параметр), шаблон которого
+  // у нас отсутствует. Пока используем родительскую категорию «Макияж и
+  // маникюр» (только GoodsType) — без ошибок параметров в дашборде.
+  const MAKEUP_SUBCATEGORY_FALLBACK = new Set(["makeup-eyes", "makeup-lips", "makeup-face", "makeup-nails"]);
+  const specKey = MAKEUP_SUBCATEGORY_FALLBACK.has(listing.categoryKey) ? "makeup" : listing.categoryKey;
+  const spec = getAvitoCategorySpec(specKey);
   if (spec) {
     emit("Category", AVITO_FEED_CATEGORY);
     emit("GoodsType", spec.tags.GoodsType);

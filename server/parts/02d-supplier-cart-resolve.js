@@ -385,7 +385,9 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
   // uniqueYandexShopsByBusiness() drops all but one shop per businessId, which means
   // orders from secondary campaigns (e.g. express warehouse) are never fetched.
   // We use the business API with ALL campaignIds so every campaign's orders are included.
-  const allShops = getYandexShops();
+  // includeSyncDisabled: express campaign has syncEnabled=false to protect its stock,
+  // but its orders must still appear in the supplier cart.
+  const allShops = getYandexShops({ includeSyncDisabled: true });
   const byBusiness = new Map();
   for (const shop of allShops) {
     const businessId = cleanText(shop.businessId || "");

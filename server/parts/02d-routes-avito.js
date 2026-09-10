@@ -728,6 +728,62 @@ app.get("/public/avito-stock/:token.csv", async (request, response, next) => {
 });
 
 
+// --- Архивирование просроченных объявлений ---
+
+// Архивирует объявления Avito, которые есть в нашем фиде как outOfStock или
+// disabled, через core API. Решает проблему «Истёк срок размещения» (10k+
+// неопубликованных): Avito перестаёт обновлять выключенные объявления и через
+// 30 дней помечает их просроченными. Одна операция — до 500 объявлений;
+// при большом количестве вызывать несколько раз.
+app.post("/api/avito/archive-expired", requireAdmin, async (request, response, next) => {
+  try {
+    const account = resolveAvitoAccountOr404(request, response);
+    if (!account) return;
+    const limit = Math.max(10, Math.min(500, Number(request.body?.limit || 300) || 300));
+    const state = await readAvitoListingsFile();
+    // Берём adIds объявлений, которые в нашем фиде неактивны (outOfStock или disabled).
+    const inactiveAdIds = state.items
+      .filter((item) => item.adId && (item.enabled === false || item.outOfStock === true))
+      .map((item) => cleanText(item.adId))
+      .filter(Boolean)
+      .slice(0, limit);
+    if (!inactiveAdIds.length) {
+      return response.json({ ok: true, archived: 0, total: 0, message: "Нет неактивных объявлений для архивирования." });
+    }
+    // Получаем Avito-ID по нашим adId через autoload mapping.
+    const mapping = await getAvitoIdsByAdIds(account, inactiveAdIds).catch(() => null);
+    const avitoIdPairs = (mapping?.items || [])
+      .map((m) => ({ adId: cleanText(m.ad_id || m.adId || ""), avitoId: Number(m.avito_id || m.avitoId || 0) }))
+      .filter((pair) => pair.avitoId > 0);
+    if (!avitoIdPairs.length) {
+      return response.json({ ok: true, archived: 0, total: inactiveAdIds.length, message: "Avito не вернул ID для найденных объявлений — возможно, их уже нет в системе Avito." });
+    }
+    const userId = await getAvitoUserId(account);
+    let archived = 0;
+    const errors = [];
+    for (const { avitoId } of avitoIdPairs) {
+      try {
+        await archiveAvitoItem(account, userId, avitoId);
+        archived++;
+      } catch (err) {
+        errors.push(String(err?.message || err));
+      }
+      await sleep(60); // ~16 req/s — в пределах лимитов Avito core API
+    }
+    await appendAudit(request, "avito.archive_expired", { archived, total: inactiveAdIds.length, errors: errors.length });
+    response.json({
+      ok: true,
+      archived,
+      total: inactiveAdIds.length,
+      found: avitoIdPairs.length,
+      errors: errors.length,
+      remaining: Math.max(0, state.items.filter((item) => item.adId && (item.enabled === false || item.outOfStock === true)).length - limit),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/avito/callback", (_request, response) => {
   response.status(200).send("OK");
 });

@@ -91,9 +91,9 @@ function Pagination({ page, total, pageSize, onChange }: { page: number; total: 
   if (totalPages <= 1) return null;
   return (
     <div className="pager">
-      <span style={{ color: "var(--muted)", fontSize: 12 }}>{fmt(total)} записей</span>
+      <span className="sa-muted-12">{fmt(total)} записей</span>
       <button onClick={() => onChange(page - 1)} disabled={page <= 1} className="secondary-action icon-action"><ChevronLeft size={15} /></button>
-      <span style={{ fontSize: 13 }}>{page} / {totalPages}</span>
+      <span className="sa-text-13">{page} / {totalPages}</span>
       <button onClick={() => onChange(page + 1)} disabled={page >= totalPages} className="secondary-action icon-action"><ChevronRight size={15} /></button>
     </div>
   );
@@ -135,18 +135,18 @@ function DashboardTab() {
       ) : (
         <div className="sa-scroll-x">
           <div className="table-panel sa-table-560">
-            <div className="table-head" className="sa-grid-orders">
+            <div className="table-head sa-grid-orders">
               <span>Заказ / Дата</span><span>Покупатель</span><span>Товары</span><span>Сумма</span><span>Статус</span>
             </div>
             {ordersData.orders.map((o) => (
-              <div key={o.id} className="table-row" className="sa-grid-orders">
+              <div key={o.id} className="table-row sa-grid-orders">
                 <span>
                   <div className="sa-mono-id">{o.id}</div>
                   <div className="sa-sub-date">{fmtDate(o.createdAt)}</div>
                 </span>
-                <span style={{ fontSize: 13 }}>{customerName(o.customer ?? undefined, o.delivery)}</span>
-                <span style={{ color: "var(--muted)", fontSize: 12 }}>{Array.isArray(o.items) ? `${o.items.length} поз.` : "—"}</span>
-                <span style={{ fontWeight: 600 }}>{fmt(o.totalRub)} ₽</span>
+                <span className="sa-text-13">{customerName(o.customer ?? undefined, o.delivery)}</span>
+                <span className="sa-muted-12">{Array.isArray(o.items) ? `${o.items.length} поз.` : "—"}</span>
+                <span className="sa-bold">{fmt(o.totalRub)} ₽</span>
                 <span>
                   <span className={`pill ${STATUS_TONE[o.status] ?? ""}`}>{STATUS_LABELS[o.status] ?? o.status}</span>
                 </span>
@@ -186,15 +186,14 @@ function OrdersTab() {
   return (
     <div className="page-section">
       {updateStatus.isError && <div className="inline-error">Ошибка: {String(updateStatus.error)}</div>}
-      <div className="section-title" style={{ flexWrap: "wrap", gap: "10px" }}>
+      <div className="section-title sa-title-wrap">
         <div><h2>Заказы</h2></div>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <div className="sa-filter-wrap">
           {["", ...Object.keys(STATUS_LABELS)].map((s) => (
             <button
               key={s}
               onClick={() => { setStatusFilter(s); setPage(1); }}
-              className={`secondary-action${statusFilter === s ? " is-active" : ""}`}
-              style={{ minHeight: 32, padding: "5px 10px", fontSize: 12 }}
+              className={`secondary-action sa-filter-btn${statusFilter === s ? " is-active" : ""}`}
             >
               {s ? STATUS_LABELS[s] : "Все"}
             </button>
@@ -225,15 +224,15 @@ function OrdersTab() {
                   <div className="sa-mono-id">{o.id}</div>
                   <div className="sa-sub-date">{fmtDate(o.createdAt)}</div>
                 </span>
-                <span style={{ fontSize: 13 }}>
+                <span className="sa-text-13">
                   <div>{customerName(o.customer ?? undefined, o.delivery)}</div>
-                  {o.delivery?.city && <div style={{ fontSize: 11, color: "var(--muted)" }}>{o.delivery.city}</div>}
+                  {o.delivery?.city && <div className="sa-muted-11">{o.delivery.city}</div>}
                 </span>
-                <span style={{ color: "var(--muted)", fontSize: 12 }}>{Array.isArray(o.items) ? o.items.length : "—"}</span>
-                <span style={{ fontWeight: 600 }}>{fmt(o.totalRub)} ₽</span>
-                <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                <span className="sa-muted-12">{Array.isArray(o.items) ? o.items.length : "—"}</span>
+                <span className="sa-bold">{fmt(o.totalRub)} ₽</span>
+                <span className="sa-status-cell">
                   <span className={`pill ${STATUS_TONE[o.status] ?? ""}`}>{STATUS_LABELS[o.status] ?? o.status}</span>
-                  {expanded === o.id ? <ChevronUp size={14} style={{ color: "var(--muted)", flexShrink: 0 }} /> : <ChevronDown size={14} style={{ color: "var(--muted)", flexShrink: 0 }} />}
+                  {expanded === o.id ? <ChevronUp size={14} className="sa-muted-shrink" /> : <ChevronDown size={14} className="sa-muted-shrink" />}
                 </span>
               </button>
 
@@ -244,27 +243,27 @@ function OrdersTab() {
                       <strong>Доставка</strong>
                       <dl>
                         {Object.entries(o.delivery).map(([k, v]) => v ? (
-                          <div key={k} style={{ display: "flex", gap: 8 }}>
-                            <dt style={{ width: 90, flexShrink: 0 }}>{DELIVERY_LABELS[k] ?? k}</dt>
+                          <div key={k} className="sa-dl-row">
+                            <dt className="sa-dl-term">{DELIVERY_LABELS[k] ?? k}</dt>
                             <dd>{String(v)}</dd>
                           </div>
                         ) : null)}
-                        {o.comment && <div style={{ marginTop: 8, fontStyle: "italic", color: "var(--muted)", fontSize: 12 }}>Комментарий: {o.comment}</div>}
-                        {o.promoCode && <div style={{ marginTop: 6, fontSize: 11 }}>Промокод: <code style={{ fontFamily: "monospace", color: "var(--accent)", background: "rgba(0,0,0,0.3)", padding: "1px 6px", borderRadius: 3 }}>{o.promoCode}</code></div>}
-                        {o.refCode && <div style={{ marginTop: 4, fontSize: 11 }}>Реферал: <code style={{ fontFamily: "monospace", color: "#7dd3fc", background: "rgba(0,0,0,0.3)", padding: "1px 6px", borderRadius: 3 }}>{o.refCode}</code></div>}
+                        {o.comment && <div className="sa-order-comment">Комментарий: {o.comment}</div>}
+                        {o.promoCode && <div className="sa-order-promo">Промокод: <code className="sa-inline-code sa-inline-code--accent">{o.promoCode}</code></div>}
+                        {o.refCode && <div className="sa-order-promo">Реферал: <code className="sa-inline-code sa-inline-code--blue">{o.refCode}</code></div>}
                       </dl>
                     </div>
                     <div>
                       <strong>Позиции</strong>
-                      <div style={{ display: "grid", gap: 6 }}>
+                      <div className="sa-items-grid">
                         {Array.isArray(o.items) && o.items.map((item, idx) => {
                           const it = item as { name?: string; quantity?: number; priceRub?: number };
                           return (
-                            <div key={idx} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13 }}>
-                              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            <div key={idx} className="sa-item-row">
+                              <span className="sa-item-name">
                                 {it.name || `Товар ${idx + 1}`} × {it.quantity ?? 1}
                               </span>
-                              <span style={{ flexShrink: 0, fontWeight: 600 }}>{fmt((it.priceRub ?? 0) * (it.quantity ?? 1))} ₽</span>
+                              <span className="sa-item-price">{fmt((it.priceRub ?? 0) * (it.quantity ?? 1))} ₽</span>
                             </div>
                           );
                         })}
@@ -272,15 +271,14 @@ function OrdersTab() {
                     </div>
                   </div>
                   <div className="mv-order-status-bar">
-                    <span style={{ fontSize: 12, color: "var(--muted)", marginRight: 4 }}>Статус:</span>
+                    <span className="sa-muted-12-mr4">Статус:</span>
                     {Object.entries(STATUS_LABELS).map(([s, label]) => (
                       <button
                         key={s}
                         type="button"
                         disabled={o.status === s || updateStatus.isPending}
                         onClick={() => updateStatus.mutate({ id: o.id, status: s })}
-                        className={`secondary-action${o.status === s ? " is-active" : ""}`}
-                        style={{ minHeight: 30, padding: "4px 10px", fontSize: 12, display: "inline-flex", alignItems: "center", gap: 5 }}
+                        className={`secondary-action sa-status-btn${o.status === s ? " is-active" : ""}`}
                       >
                         {o.status === s && <Check size={12} />} {label}
                       </button>
@@ -326,13 +324,13 @@ function CustomersTab() {
             </div>
             {data.customers.map((c) => (
               <div key={c.id} className="table-row" style={{ display: "grid", gridTemplateColumns: COL, gap: 10 }}>
-                <span style={{ fontWeight: 600 }}>{[c.firstName, c.lastName].filter(Boolean).join(" ") || "—"}</span>
-                <span style={{ fontSize: 13, color: "var(--muted-soft)" }}>{c.email}</span>
-                <span style={{ fontSize: 13 }}>{c.phone || "—"}</span>
+                <span className="sa-bold">{[c.firstName, c.lastName].filter(Boolean).join(" ") || "—"}</span>
+                <span className="sa-muted-soft-13">{c.email}</span>
+                <span className="sa-text-13">{c.phone || "—"}</span>
                 <span>
                   <span className="section-count">{c._count.orders}</span>
                 </span>
-                <span style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(c.createdAt)}</span>
+                <span className="sa-muted-12">{fmtDate(c.createdAt)}</span>
               </div>
             ))}
             <Pagination page={page} total={data.total} pageSize={20} onChange={setPage} />
@@ -380,12 +378,12 @@ function HolidayBannersSection() {
   if (isLoading) return <div className="list-loading"><Loader2 size={14} className="spin" /> Загружаю…</div>;
 
   return (
-    <div style={{ marginBottom: 32 }}>
-      <div className="section-title" style={{ marginBottom: 16 }}>
-        <div><h2>Праздничные баннеры</h2><p style={{ fontSize: 12, color: "var(--muted)", marginTop: 3 }}>Автоматически включаются в сезон. Можно включить/выключить вручную.</p></div>
+    <div className="sa-mb-32">
+      <div className="section-title sa-mb-16">
+        <div><h2>Праздничные баннеры</h2><p className="sa-note-p">Автоматически включаются в сезон. Можно включить/выключить вручную.</p></div>
       </div>
-      {patchMut.error ? <div className="inline-error" style={{ marginBottom: 12 }}>{(patchMut.error as Error).message}</div> : null}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+      {patchMut.error ? <div className="inline-error sa-mb-12">{(patchMut.error as Error).message}</div> : null}
+      <div className="sa-banners-grid">
         {holidays.map((h) => (
           <div key={h.key} style={{
             border: `1px solid ${h.active ? "rgba(201,162,94,0.35)" : "rgba(255,255,255,0.07)"}`,
@@ -393,10 +391,10 @@ function HolidayBannersSection() {
             padding: "16px 18px", transition: "border-color 0.3s",
           }}>
             {editingKey === h.key ? (
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                  <span style={{ fontSize: 20 }}>{h.emoji}</span>
-                  <strong style={{ fontSize: 14 }}>{h.name}</strong>
+              <div className="sa-flex-col-10">
+                <div className="sa-flex-center-8-mb4">
+                  <span className="sa-fs-20">{h.emoji}</span>
+                  <strong className="sa-fs-14">{h.name}</strong>
                 </div>
                 <div className="mv-field">
                   <label>Промокод</label>
@@ -410,11 +408,11 @@ function HolidayBannersSection() {
                   <label>Подзаголовок</label>
                   <input value={editForm.subtitle} onChange={e => setEditForm(f => ({ ...f, subtitle: e.target.value }))} placeholder={h.defaultSubtitle} />
                 </div>
-                <div style={{ display: "flex", gap: 8 }}>
+                <div className="sa-flex-8">
                   <button
                     onClick={() => patchMut.mutate({ key: h.key, patch: { promoCode: editForm.promoCode, title: editForm.title, subtitle: editForm.subtitle } })}
                     disabled={patchMut.isPending}
-                    className="primary-action" style={{ flex: 1 }}
+                    className="primary-action sa-flex1"
                   >
                     {patchMut.isPending ? <Loader2 size={13} className="spin" /> : <Save size={13} />} Сохранить
                   </button>
@@ -423,14 +421,14 @@ function HolidayBannersSection() {
               </div>
             ) : (
               <>
-                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, marginBottom: 10 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <span style={{ fontSize: 24 }}>{h.emoji}</span>
+                <div className="sa-banner-head">
+                  <div className="sa-flex-center-10">
+                    <span className="sa-fs-24">{h.emoji}</span>
                     <div>
-                      <div style={{ fontWeight: 600, fontSize: 14 }}>{h.name}</div>
+                      <div className="sa-bold-14">{h.name}</div>
                       <div className="sa-sub-date">
                         {formatWindow(h.windowStart, h.windowEnd)}
-                        {h.inWindow && <span style={{ marginLeft: 6, color: "#4ade80", fontSize: 10, letterSpacing: "0.1em" }}>● сейчас</span>}
+                        {h.inWindow && <span className="sa-now-badge">● сейчас</span>}
                       </div>
                     </div>
                   </div>
@@ -453,22 +451,18 @@ function HolidayBannersSection() {
                   </button>
                 </div>
 
-                <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8, lineHeight: 1.5, minHeight: 36 }}>
+                <div className="sa-banner-desc">
                   {h.title}
                 </div>
 
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                  <div style={{
-                    display: "inline-flex", alignItems: "center", gap: 6,
-                    background: "rgba(0,0,0,0.3)", border: "1px solid rgba(201,162,94,0.25)",
-                    borderRadius: 3, padding: "4px 10px",
-                  }}>
-                    <span style={{ fontSize: 9, letterSpacing: "0.15em", color: "#c9a25e", textTransform: "uppercase" }}>Промокод</span>
-                    <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: "#f2ede6" }}>{h.promoCode}</span>
+                <div className="sa-flex-between-8">
+                  <div className="sa-promo-badge">
+                    <span className="sa-promo-label">Промокод</span>
+                    <span className="sa-promo-value">{h.promoCode}</span>
                   </div>
                   <button
                     onClick={() => { setEditingKey(h.key); setEditForm({ promoCode: h.promoCode, title: h.title, subtitle: h.subtitle }); }}
-                    className="secondary-action" style={{ padding: "4px 10px", fontSize: 12 }}
+                    className="secondary-action sa-btn-sm"
                   >
                     <Edit2 size={12} /> Изменить
                   </button>
@@ -502,7 +496,7 @@ function BannerForm({ banner, onSave, onCancel, saving }: {
   return (
     <div className="mv-form-section">
       {form.imageUrl && (
-        <img src={form.imageUrl} alt="" className="mv-banner-preview" style={{ marginBottom: 8, height: 80, width: "auto", maxWidth: "100%" }}
+        <img src={form.imageUrl} alt="" className="mv-banner-preview sa-banner-img-sm"
           onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
       )}
       <div className="mv-field-grid">
@@ -532,8 +526,8 @@ function BannerForm({ banner, onSave, onCancel, saving }: {
             onChange={set("endDate")}
           />
         </div>
-        <div className="mv-field" style={{ justifyContent: "flex-end" }}>
-          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div className="mv-field sa-field-end">
+          <label className="sa-flex-center-8">
             <input type="checkbox" checked={form.active !== false} onChange={set("active")} />
             Активен (показывать)
           </label>
@@ -603,24 +597,24 @@ function BannersTab() {
                 <span>
                   {b.imageUrl
                     ? <img src={b.imageUrl} alt="" className="mv-banner-preview" />
-                    : <div style={{ width: 72, height: 44, background: "rgba(8,17,31,.6)", display: "flex", alignItems: "center", justifyContent: "center" }}><ImageIcon size={16} style={{ color: "var(--muted)" }} /></div>
+                    : <div className="sa-img-placeholder"><ImageIcon size={16} className="sa-muted-icon" /></div>
                   }
                 </span>
                 <span>
-                  <div style={{ fontWeight: 600 }}>{b.title || "(без названия)"}</div>
-                  {b.subtitle && <div style={{ fontSize: 12, color: "var(--muted)" }}>{b.subtitle}</div>}
+                  <div className="sa-bold">{b.title || "(без названия)"}</div>
+                  {b.subtitle && <div className="sa-muted-12">{b.subtitle}</div>}
                 </span>
-                <span style={{ fontSize: 12, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.linkUrl || "—"}</span>
+                <span className="sa-muted-12-ellipsis">{b.linkUrl || "—"}</span>
                 <span>
                   <span className={`pill ${b.active ? "success" : ""}`}>{b.active ? "Активен" : "Скрыт"}</span>
                 </span>
-                <span style={{ display: "flex", gap: 4 }}>
+                <span className="sa-flex-4">
                   <button onClick={() => setEditing(editing === b.id ? null : b.id)} className="secondary-action icon-action"><Edit2 size={14} /></button>
                   <button onClick={() => { if (confirm("Удалить баннер?")) deleteMut.mutate(b.id); }} className="icon-action danger"><Trash2 size={14} /></button>
                 </span>
               </div>
               {editing === b.id && (
-                <div style={{ padding: "0 0 12px" }}>
+                <div className="sa-pad-bottom-12">
                   <BannerForm banner={b} onSave={(d) => saveMut.mutate({ ...d, id: b.id })} onCancel={() => setEditing(null)} saving={saveMut.isPending} />
                 </div>
               )}
@@ -704,13 +698,13 @@ function CategoriesTab() {
           </div>
           {cats.map((c) => (
             <div key={c.id} className="table-row" style={{ display: "grid", gridTemplateColumns: COL, gap: 10 }}>
-              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                {c.imageUrl && <img src={c.imageUrl} alt="" style={{ width: 28, height: 28, objectFit: "cover", borderRadius: 4, background: "#f8fafc" }} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />}
-                <span style={{ fontWeight: 600 }}>{c.name}</span>
+              <span className="sa-flex-center-8">
+                {c.imageUrl && <img src={c.imageUrl} alt="" className="sa-cat-img" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />}
+                <span className="sa-bold">{c.name}</span>
               </span>
-              <span style={{ fontFamily: "monospace", fontSize: 12, color: "var(--muted)" }}>{c.slug}</span>
-              <span style={{ fontSize: 12, color: "var(--muted)" }}>{c.filterTag || "—"}</span>
-              <span style={{ display: "flex", gap: 4 }}>
+              <span className="sa-mono-muted-12">{c.slug}</span>
+              <span className="sa-muted-12">{c.filterTag || "—"}</span>
+              <span className="sa-flex-4">
                 <button onClick={() => { setForm({ ...c }); setEditing(c.id); }} className="secondary-action icon-action"><Edit2 size={14} /></button>
                 <button onClick={() => { if (confirm("Удалить категорию?")) deleteMut.mutate(c.id); }} className="icon-action danger"><Trash2 size={14} /></button>
               </span>
@@ -747,15 +741,15 @@ function AromaMesyatsaEditor({ value, onChange }: {
 
   return (
     <div>
-      <label style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, cursor: "pointer" }}>
+      <label className="sa-check-label">
         <input type="checkbox" checked={enabled} onChange={e => {
           setEnabled(e.target.checked);
           if (!e.target.checked) onChange(null);
         }} />
-        <span style={{ fontSize: 13, color: "var(--text)" }}>Показывать «Аромат месяца» на главной</span>
+        <span className="sa-text-on-13">Показывать «Аромат месяца» на главной</span>
       </label>
       {enabled && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "14px 16px", background: "var(--surface)", borderRadius: 8, border: "1px solid var(--border)" }}>
+        <div className="sa-aroma-panel">
           <div className="mv-field">
             <label>OfferId товара</label>
             <input
@@ -763,7 +757,7 @@ function AromaMesyatsaEditor({ value, onChange }: {
               onChange={e => { setOfferId(e.target.value); update(e.target.value, note, validUntil); }}
               placeholder="Например: 1234567890"
             />
-            <span style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>Найдите в каталоге товаров и скопируйте Ozon offerId</span>
+            <span className="sa-hint-11">Найдите в каталоге товаров и скопируйте Ozon offerId</span>
           </div>
           <div className="mv-field">
             <label>Описание / история аромата</label>
@@ -781,7 +775,7 @@ function AromaMesyatsaEditor({ value, onChange }: {
               value={validUntil}
               onChange={e => { setValidUntil(e.target.value); update(offerId, note, e.target.value); }}
             />
-            <span style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>Если указана — покажем таймер «ещё N дней»</span>
+            <span className="sa-hint-11">Если указана — покажем таймер «ещё N дней»</span>
           </div>
         </div>
       )}
@@ -828,7 +822,7 @@ function SettingsTab() {
   const sortedRules = [...rules].sort((a, b) => a.minUsd - b.minUsd);
 
   return (
-    <div className="page-section" style={{ maxWidth: 760 }}>
+    <div className="page-section sa-settings-wrap">
       <div className="section-title"><div><h2>Настройки магазина</h2></div></div>
 
       <div className="mv-form-section">
@@ -859,10 +853,10 @@ function SettingsTab() {
           <div className="mv-field">
             <label>Коэффициент наценки (по умолчанию)</label>
             <div className="mv-form-inline">
-              <input type="number" step="0.05" min="0.5" max="20" value={form.markup ?? 2.2} onChange={setF("markup")} style={{ width: 110 }} />
-              <span style={{ color: "var(--muted)", fontSize: 12 }}>× (USD × курс)</span>
+              <input type="number" step="0.05" min="0.5" max="20" value={form.markup ?? 2.2} onChange={setF("markup")} className="sa-w-110" />
+              <span className="sa-muted-12">× (USD × курс)</span>
             </div>
-            <span style={{ color: "var(--muted)", fontSize: 11, marginTop: 4 }}>
+            <span className="sa-note-11-mt4">
               Применяется, если ни одно гибкое правило не совпало
             </span>
           </div>
@@ -877,63 +871,63 @@ function SettingsTab() {
         </div>
 
         {/* VIP club */}
-        <div className="mv-field" style={{ marginTop: 12 }}>
+        <div className="mv-field sa-field-mt12">
           <label>VIP-клуб — ссылка на Telegram-группу</label>
           <input value={(form as ShopSettings).vipTelegramLink ?? ""} onChange={setF("vipTelegramLink")} placeholder="https://t.me/+..." />
-          <p style={{ color: "var(--muted)", fontSize: 11, marginTop: 4 }}>
+          <p className="sa-note-11-mt4">
             Ссылка отображается в кабинете покупателей с 3+ завершёнными заказами.
           </p>
         </div>
 
         {/* Аромат месяца */}
-        <div className="mv-form-section" style={{ marginTop: 24, paddingTop: 20, borderTop: "1px solid var(--border)" }}>
-          <h3 style={{ marginBottom: 12 }}>🌸 Аромат месяца</h3>
-          <p style={{ color: "var(--muted)", fontSize: 12, marginBottom: 14, lineHeight: 1.6 }}>
+        <div className="mv-form-section sa-section-sep">
+          <h3 className="sa-h3-mb12">🌸 Аромат месяца</h3>
+          <p className="sa-desc-p">
             Выделенный аромат отображается на главной странице magicvibes.ru в отдельной секции. Обновляйте ежемесячно для создания повода возвращаться на сайт.
           </p>
           <AromaMesyatsaEditor value={(form as ShopSettings).aromaMesyatsa ?? null} onChange={(am) => setForm((f) => ({ ...f, aromaMesyatsa: am }))} />
         </div>
 
         {/* Flexible markup rules */}
-        <div className="mv-field" style={{ marginTop: 20 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-            <label style={{ margin: 0 }}>Гибкие правила наценки</label>
-            <button type="button" className="btn-outline" style={{ fontSize: 12, padding: "4px 10px", display: "flex", alignItems: "center", gap: 4 }} onClick={addRule}>
+        <div className="mv-field sa-field-mt20">
+          <div className="sa-rule-head">
+            <label className="sa-label-nm">Гибкие правила наценки</label>
+            <button type="button" className="btn-outline sa-add-rule-btn" onClick={addRule}>
               <Plus size={13} /> Добавить правило
             </button>
           </div>
-          <p style={{ color: "var(--muted)", fontSize: 11, marginBottom: 10 }}>
+          <p className="sa-hint-p">
             Правило применяется, если цена закупки ≥ minUSD. При нескольких совпадениях побеждает наибольший порог.
           </p>
 
           {sortedRules.length === 0 ? (
-            <div style={{ color: "var(--muted)", fontSize: 12, padding: "10px 0" }}>
+            <div className="sa-no-rules">
               Гибких правил нет — используется коэффициент по умолчанию
             </div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div className="sa-flex-col-8">
               {sortedRules.map((rule, i) => {
                 const origIdx = rules.indexOf(rule);
                 return (
-                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "var(--surface)", borderRadius: 8, border: "1px solid var(--border)" }}>
-                    <span style={{ color: "var(--muted)", fontSize: 12, flexShrink: 0 }}>Цена от</span>
+                  <div key={i} className="sa-rule-row">
+                    <span className="sa-rule-label">Цена от</span>
                     <input
                       type="number" min="0" step="1"
                       value={rule.minUsd}
                       onChange={e => updateRule(origIdx, "minUsd", e.target.value)}
-                      style={{ width: 80, fontSize: 13 }}
+                      className="sa-w-80-13"
                     />
-                    <span style={{ color: "var(--muted)", fontSize: 12, flexShrink: 0 }}>USD → коэф.</span>
+                    <span className="sa-rule-label">USD → коэф.</span>
                     <input
                       type="number" min="0.5" max="20" step="0.05"
                       value={rule.coefficient}
                       onChange={e => updateRule(origIdx, "coefficient", e.target.value)}
-                      style={{ width: 90, fontSize: 13 }}
+                      className="sa-w-90-13"
                     />
-                    <span style={{ color: "var(--muted)", fontSize: 11, flex: 1 }}>
+                    <span className="sa-rule-note">
                       ≈ {(rule.coefficient * 100 - 100).toFixed(0)}% наценка
                     </span>
-                    <button type="button" onClick={() => removeRule(origIdx)} style={{ color: "var(--danger)", background: "none", border: "none", cursor: "pointer", padding: 4 }}>
+                    <button type="button" onClick={() => removeRule(origIdx)} className="sa-del-rule-btn">
                       <Trash2 size={14} />
                     </button>
                   </div>
@@ -945,7 +939,7 @@ function SettingsTab() {
       </div>
 
       {saved && (
-        <div className="success-strip" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div className="success-strip sa-flex-center-8">
           <Check size={16} /> Настройки сохранены
         </div>
       )}
@@ -986,8 +980,8 @@ function NewsTab() {
   return (
     <div className="page-section">
       <div className="section-title">
-        <div><h2>Новости из Telegram</h2><p style={{ color: "var(--muted)", fontSize: 13, marginTop: 4 }}>Посты с хэштегом #новости из канала @magicvibes_ru</p></div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div><h2>Новости из Telegram</h2><p className="sa-muted-13-mt4">Посты с хэштегом #новости из канала @magicvibes_ru</p></div>
+        <div className="sa-flex-8">
           <button onClick={() => void importMut.mutate()} disabled={importMut.isPending} className="secondary-action" type="button">
             <RefreshCw size={14} className={importMut.isPending ? "spin" : ""} /> Импортировать
           </button>
@@ -998,7 +992,7 @@ function NewsTab() {
       </div>
 
       {importMut.isSuccess && (
-        <div style={{ padding: "10px 14px", borderRadius: 8, background: "rgba(74,222,128,0.1)", border: "1px solid rgba(74,222,128,0.2)", fontSize: 13, color: "var(--success)", marginBottom: 12 }}>
+        <div className="sa-import-ok">
           Импорт запущен. Новые посты появятся через несколько секунд.
         </div>
       )}
@@ -1009,19 +1003,19 @@ function NewsTab() {
         <div className="soft-empty"><Newspaper size={18} /> Новостей нет. Нажмите «Импортировать» чтобы загрузить посты из Telegram.</div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14 }}>
+      <div className="sa-news-grid">
         {data?.posts.map((post) => (
           <div key={post.id} className="card-panel" style={{ opacity: post.active ? 1 : 0.5 }}>
             {post.photoUrl && (
-              <img src={post.photoUrl} alt="" style={{ width: "100%", aspectRatio: "16/9", objectFit: "cover", borderRadius: 8, marginBottom: 10 }} />
+              <img src={post.photoUrl} alt="" className="sa-news-img" />
             )}
-            <p style={{ fontSize: 11, color: "var(--muted)", marginBottom: 6 }}>
+            <p className="sa-news-date">
               {new Date(post.publishedAt).toLocaleString("ru-RU")}
             </p>
-            <p style={{ fontSize: 13, color: "var(--text)", lineHeight: 1.55, marginBottom: 12 }}>
+            <p className="sa-news-text">
               {post.text.slice(0, 200)}{post.text.length > 200 && "…"}
             </p>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div className="sa-flex-between">
               <span className={`pill ${post.active ? "success" : ""}`}>{post.active ? "Показывается" : "Скрыт"}</span>
               <button
                 onClick={() => void toggleMut.mutate({ id: post.id, active: !post.active })}
@@ -1080,22 +1074,22 @@ function ReviewsTab() {
       <div className="sa-scroll-x">
       <div className="table-panel sa-table-560">
         {data?.reviews.map((r) => (
-          <div key={r.id} className="table-row" style={{ display: "grid", gridTemplateColumns: "minmax(120px,.8fr) minmax(80px,.5fr) minmax(200px,2fr) minmax(120px,.7fr) auto", gap: 12, alignItems: "center" }}>
+          <div key={r.id} className="table-row sa-grid-reviews">
             <span>
-              <div style={{ fontSize: 12, fontWeight: 600 }}>{r.customer?.email ?? "—"}</div>
+              <div className="sa-bold-12">{r.customer?.email ?? "—"}</div>
               <div className="sa-sub-date">{fmtDate(r.createdAt)}</div>
             </span>
-            <span style={{ display: "flex", gap: 2 }}>
+            <span className="sa-flex-2">
               {Array.from({ length: 5 }).map((_, i) => (
                 <Star key={i} size={11} fill={i < r.rating ? "gold" : "none"} stroke={i < r.rating ? "gold" : "var(--border-md)"} />
               ))}
             </span>
             <span>
-              {r.productName && <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>{r.productName}</div>}
-              <div style={{ fontSize: 13 }}>{r.text.slice(0, 120)}{r.text.length > 120 && "…"}</div>
+              {r.productName && <div className="sa-product-hint">{r.productName}</div>}
+              <div className="sa-text-13">{r.text.slice(0, 120)}{r.text.length > 120 && "…"}</div>
             </span>
             <span><span className={`pill ${r.approved ? "success" : "warn"}`}>{r.approved ? "Показывается" : "Скрыт"}</span></span>
-            <span style={{ display: "flex", gap: 6 }}>
+            <span className="sa-flex-6">
               <button
                 onClick={() => void toggleMut.mutate({ id: r.id, approved: !r.approved })}
                 disabled={toggleMut.isPending}
@@ -1151,20 +1145,20 @@ function UnboxingsTab() {
   const unboxings = data?.unboxings ?? [];
 
   return (
-    <div className="page-section" style={{ marginTop: 0 }}>
+    <div className="page-section sa-mt-0">
       <p className="section-title">Распаковки покупателей</p>
-      {isLoading && <p style={{ color: "var(--text-muted)", fontSize: 13 }}>Загрузка…</p>}
+      {isLoading && <p className="sa-muted-text-13">Загрузка…</p>}
       {!isLoading && !unboxings.length && (
-        <p style={{ color: "var(--text-muted)", fontSize: 13 }}>Нет распаковок</p>
+        <p className="sa-muted-text-13">Нет распаковок</p>
       )}
-      <div className="table-panel" style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+      <div className="table-panel sa-col-0">
         {unboxings.map((u) => (
-          <div key={u.id} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto auto auto", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: "1px solid var(--border)" }}>
-            <span style={{ fontSize: 13, color: "var(--text)" }}>{u.name}</span>
-            <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+          <div key={u.id} className="sa-unboxing-row">
+            <span className="sa-text-on-13">{u.name}</span>
+            <span className="sa-muted-text-12">
               {new Date(u.createdAt).toLocaleDateString("ru-RU", { day: "numeric", month: "short", year: "numeric" })}
             </span>
-            <span style={{ fontSize: 12, color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <span className="sa-muted-text-12-ellipsis">
               {u.text ? u.text.slice(0, 80) + (u.text.length > 80 ? "…" : "") : "—"}
             </span>
             {u.mediaUrl ? (
@@ -1172,10 +1166,10 @@ function UnboxingsTab() {
                 Ссылка
               </a>
             ) : (
-              <span style={{ fontSize: 12, color: "var(--text-muted)" }}>—</span>
+              <span className="sa-muted-text-12">—</span>
             )}
             <span><span className={`pill ${u.approved ? "success" : "warn"}`}>{u.approved ? "Показывается" : "На проверке"}</span></span>
-            <span style={{ display: "flex", gap: 6 }}>
+            <span className="sa-flex-6">
               <button
                 onClick={() => void toggleMut.mutate({ id: u.id, approved: !u.approved })}
                 disabled={toggleMut.isPending}
@@ -1265,7 +1259,7 @@ function BlogTab() {
           </div>
           <div>
             <label className="sa-form-label">Краткое описание</label>
-            <textarea className="input-base" value={editing.excerpt ?? ""} onChange={e => setEditing(s => ({ ...s!, excerpt: e.target.value }))} rows={2} maxLength={500} style={{ resize: "vertical" }} />
+            <textarea className="input-base sa-resize-v" value={editing.excerpt ?? ""} onChange={e => setEditing(s => ({ ...s!, excerpt: e.target.value }))} rows={2} maxLength={500} />
           </div>
           <div>
             <label className="sa-form-label">Теги (через запятую)</label>
@@ -1291,7 +1285,7 @@ function BlogTab() {
             <label className="sa-form-label">Содержание (HTML)</label>
             <textarea className="input-base" value={editing.content ?? ""} onChange={e => setEditing(s => ({ ...s!, content: e.target.value }))} rows={12} style={{ resize: "vertical", fontFamily: "monospace", fontSize: 12 }} placeholder="<h2>Заголовок</h2><p>Текст статьи...</p>" />
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div className="sa-flex-center-10">
             <label style={{ fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
               <input type="checkbox" checked={editing.published ?? false} onChange={e => setEditing(s => ({ ...s!, published: e.target.checked }))} />
               Опубликовать
@@ -1302,16 +1296,15 @@ function BlogTab() {
             <p style={{ fontSize: 12, color: "#f87171" }}>{(saveMut.error as Error).message}</p>
           )}
 
-          <div style={{ display: "flex", gap: 8 }}>
+          <div className="sa-flex-8">
             <button
               type="button"
-              className="secondary-action"
+              className="secondary-action sa-inline-flex-6"
               onClick={() => {
                 if (!editing.title?.trim()) return;
                 void saveMut.mutate(editing);
               }}
               disabled={saveMut.isPending || !editing.title?.trim()}
-              className="sa-inline-flex-6"
             >
               {saveMut.isPending ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
               Сохранить
@@ -1329,20 +1322,19 @@ function BlogTab() {
         <h3 className="sa-h3">Блог «Мир ароматов»</h3>
         <button
           type="button"
-          className="secondary-action"
+          className="secondary-action sa-inline-flex-6"
           onClick={() => { setEditing({ ...EMPTY_POST }); setTagInput(""); }}
-          className="sa-inline-flex-6"
         >
           <Plus size={14} /> Новая статья
         </button>
       </div>
 
-      {isLoading && <p style={{ color: "var(--text-muted)", fontSize: 13 }}>Загрузка…</p>}
+      {isLoading && <p className="sa-muted-text-13">Загрузка…</p>}
       {!isLoading && posts.length === 0 && (
-        <p style={{ color: "var(--text-muted)", fontSize: 13 }}>Статей нет. Создайте первую!</p>
+        <p className="sa-muted-text-13">Статей нет. Создайте первую!</p>
       )}
 
-      <div className="table-panel" style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+      <div className="table-panel sa-col-0">
         {posts.map((p) => (
           <div key={p.id} style={{ display: "grid", gridTemplateColumns: "1fr auto auto auto auto", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: "1px solid var(--border)" }}>
             <div>
@@ -1411,10 +1403,9 @@ function EmailSequencesTab() {
         <h3 className="sa-h3">Email-цепочки после покупки</h3>
         <button
           type="button"
-          className="secondary-action"
+          className="secondary-action sa-inline-flex-6"
           onClick={() => void runMut.mutate()}
           disabled={runMut.isPending}
-          className="sa-inline-flex-6"
         >
           {runMut.isPending ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
           Запустить сканер
@@ -1422,9 +1413,9 @@ function EmailSequencesTab() {
       </div>
 
       {runMut.isSuccess && runMut.data && (
-        <div style={{ background: "rgba(34,197,94,.08)", border: "1px solid rgba(34,197,94,.25)", borderRadius: 4, padding: "8px 12px", marginBottom: 12, fontSize: 12, color: "#22c55e" }}>
+        <div className="sa-success-banner">
           Готово: День&nbsp;7 — {runMut.data.result.sent7 ?? 0} шт., День&nbsp;30 — {runMut.data.result.sent30 ?? 0} шт.
-          {(runMut.data.result.errors ?? 0) > 0 && <span style={{ color: "#f87171", marginLeft: 8 }}>ошибок: {runMut.data.result.errors}</span>}
+          {(runMut.data.result.errors ?? 0) > 0 && <span className="sa-err-inline">ошибок: {runMut.data.result.errors}</span>}
         </div>
       )}
 
@@ -1440,7 +1431,7 @@ function EmailSequencesTab() {
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                   <div>
                     <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 3 }}>{meta.label}</div>
-                    <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{meta.desc}</div>
+                    <div className="sa-muted-text-12">{meta.desc}</div>
                   </div>
                   <div style={{ textAlign: "right", flexShrink: 0, marginLeft: 16 }}>
                     <div style={{ fontSize: 22, fontWeight: 700, color: "var(--accent)" }}>{stat?.count ?? 0}</div>
@@ -1517,11 +1508,11 @@ function PromocodesTab() {
       <div className="section-title">
         <div>
           <h2>Промокоды</h2>
-          <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 3 }}>
-            Активных: <strong style={{ color: "var(--success)" }}>{activeCodes.length}</strong> из {codes.length}
+          <p className="sa-note-p">
+            Активных: <strong className="sa-success-text">{activeCodes.length}</strong> из {codes.length}
           </p>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div className="sa-flex-8">
           <button onClick={() => void refetch()} disabled={isLoading} className="secondary-action" type="button">
             <RefreshCw size={14} className={isLoading ? "spin" : ""} />
           </button>
@@ -1597,19 +1588,19 @@ function PromocodesTab() {
             </div>
             {codes.map((c) => (
               <div key={c.id} className="table-row" style={{ display: "grid", gridTemplateColumns: "minmax(120px,.8fr) minmax(60px,.35fr) minmax(180px,1.5fr) minmax(80px,.5fr) minmax(80px,.5fr) 80px 60px", gap: 10, alignItems: "center" }}>
-                <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span className="sa-flex-center-8">
                   <code style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, letterSpacing: "0.08em", color: c.active ? "var(--accent)" : "var(--muted)", background: "rgba(0,0,0,0.3)", padding: "2px 8px", borderRadius: 4 }}>
                     {c.code}
                   </code>
                   {c.builtin && <span style={{ fontSize: 9, letterSpacing: "0.1em", color: "var(--muted)", background: "rgba(255,255,255,0.06)", border: "1px solid var(--border)", borderRadius: 2, padding: "1px 5px" }}>ВСТРОЕН</span>}
                   <button type="button" onClick={() => copyCode(c.code)} title="Скопировать" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--muted)", padding: 2 }}>
-                    {copied === c.code ? <Check size={12} style={{ color: "var(--success)" }} /> : <Copy size={12} />}
+                    {copied === c.code ? <Check size={12} className="sa-success-text" /> : <Copy size={12} />}
                   </button>
                 </span>
                 <span style={{ fontWeight: 700, color: "var(--accent)", fontSize: 14 }}>
                   <Percent size={11} style={{ verticalAlign: "middle", marginRight: 1 }} />{c.discountPct}
                 </span>
-                <span style={{ fontSize: 12, color: "var(--muted)" }}>{c.note || "—"}</span>
+                <span className="sa-muted-12">{c.note || "—"}</span>
                 <span style={{ fontSize: 12 }}>
                   {c.usageCount}
                   {c.usageLimit !== null && <span style={{ color: "var(--muted)" }}> / {c.usageLimit}</span>}
@@ -1637,7 +1628,7 @@ function PromocodesTab() {
                     {c.active ? <><ToggleRight size={13} /> Вкл</> : <><ToggleLeft size={13} /> Выкл</>}
                   </button>
                 </span>
-                <span style={{ display: "flex", gap: 4 }}>
+                <span className="sa-flex-4">
                   {!c.builtin && (
                     <button
                       type="button"
@@ -1694,13 +1685,12 @@ function EmailSubscribersTab() {
       <div className="section-title" style={{ flexWrap: "wrap", gap: 10 }}>
         <div>
           <h2>Email-подписчики</h2>
-          <p style={{ fontSize: 12, color: "var(--muted)", marginTop: 3 }}>Всего: {data?.total ?? "…"}</p>
+          <p className="sa-note-p">Всего: {data?.total ?? "…"}</p>
         </div>
-        <div style={{ display: "flex", gap: 6 }}>
+        <div className="sa-flex-6">
           {["", "popup", "quiz"].map(s => (
             <button key={s} onClick={() => { setSourceFilter(s); setPage(1); }}
-              className={`secondary-action${sourceFilter === s ? " is-active" : ""}`}
-              style={{ minHeight: 32, padding: "5px 10px", fontSize: 12 }}>
+              className={`secondary-action sa-filter-btn${sourceFilter === s ? " is-active" : ""}`}>
               {s === "" ? "Все" : s === "popup" ? "Попап" : "Квиз"}
             </button>
           ))}
@@ -1723,11 +1713,11 @@ function EmailSubscribersTab() {
                 <span>
                   <span className={`pill ${s.source === "popup" ? "info" : ""}`}>{s.source}</span>
                 </span>
-                <span style={{ fontSize: 12, color: "var(--muted)" }}>{s.quizCategory || "—"}</span>
+                <span className="sa-muted-12">{s.quizCategory || "—"}</span>
                 <span>
                   <span className={`pill ${s.promoSent ? "success" : "warn"}`}>{s.promoSent ? "Отправлен" : "Не отправлен"}</span>
                 </span>
-                <span style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(s.createdAt)}</span>
+                <span className="sa-muted-12">{fmtDate(s.createdAt)}</span>
               </div>
             ))}
             <Pagination page={page} total={data.total} pageSize={50} onChange={setPage} />
@@ -1778,15 +1768,15 @@ function PushTab() {
       )}
 
       {sendMut.isSuccess && sendMut.data && (
-        <div style={{ background: "rgba(34,197,94,.08)", border: "1px solid rgba(34,197,94,.25)", borderRadius: 4, padding: "8px 12px", marginBottom: 12, fontSize: 12, color: "#22c55e" }}>
+        <div className="sa-success-banner">
           Отправлено: {sendMut.data.sent} / {sendMut.data.total}
-          {sendMut.data.failed > 0 && <span style={{ color: "#f87171", marginLeft: 8 }}>ошибок: {sendMut.data.failed} (истёкшие подписки удалены)</span>}
+          {sendMut.data.failed > 0 && <span className="sa-err-inline">ошибок: {sendMut.data.failed} (истёкшие подписки удалены)</span>}
         </div>
       )}
 
       <div style={{ display: "grid", gap: 10, maxWidth: 540 }}>
         <div>
-          <label style={{ fontSize: 11, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>Заголовок</label>
+          <label className="sa-form-label">Заголовок</label>
           <input
             className="input-base"
             value={form.title}
@@ -1796,19 +1786,18 @@ function PushTab() {
           />
         </div>
         <div>
-          <label style={{ fontSize: 11, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>Текст уведомления</label>
+          <label className="sa-form-label">Текст уведомления</label>
           <textarea
-            className="input-base"
+            className="input-base sa-resize-v"
             value={form.body}
             onChange={e => setForm(f => ({ ...f, body: e.target.value }))}
             placeholder="Поступили долгожданные ароматы. Успей выбрать!"
             rows={2}
             maxLength={200}
-            style={{ resize: "vertical" }}
           />
         </div>
         <div>
-          <label style={{ fontSize: 11, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>URL (куда ведёт клик)</label>
+          <label className="sa-form-label">URL (куда ведёт клик)</label>
           <input
             className="input-base"
             value={form.url}
