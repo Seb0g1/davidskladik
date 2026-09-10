@@ -214,17 +214,13 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
           );
           const partnerEmail = cleanText(emailRows?.[0]?.Email || "");
           if (partnerEmail) {
-            const marketplaceLabel = { ozon: "Ozon", yandex: "Яндекс Маркет", wb: "Wildberries" }[nextRow.marketplace] || nextRow.marketplace || "маркетплейс";
             const escH = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-            const orderId = escH(nextRow.postingNumber || nextRow.orderId || "");
             const cancelEmailHtml = `<html><body style="font-family:Arial,sans-serif;font-size:14px;color:#333;line-height:1.6">
 <p>Здравствуйте!</p>
-<p>Заказ на маркетплейсе <strong>${escH(marketplaceLabel)}</strong> был отменён.</p>
-<p>Пожалуйста, <strong>не собирайте и не отправляйте</strong> следующую позицию:</p>
+<p>Отмена товара:</p>
 <table style="border-collapse:collapse;margin:12px 0">
   <tr><td style="padding:4px 12px 4px 0;color:#666">Товар:</td><td style="padding:4px 0"><strong>${escH(nextRow.productName || nextRow.offerId || "Неизвестный товар")}</strong></td></tr>
   <tr><td style="padding:4px 12px 4px 0;color:#666">Количество:</td><td style="padding:4px 0">${escH(nextRow.quantity || 1)} шт.</td></tr>
-  ${orderId ? `<tr><td style="padding:4px 12px 4px 0;color:#666">Номер заказа:</td><td style="padding:4px 0">${orderId}</td></tr>` : ""}
 </table>
 <p>Заявка аннулирована оператором в системе Magic Vibes Склад.</p>
 <p>Если у вас возникли вопросы, свяжитесь с нами.</p>

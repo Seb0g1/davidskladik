@@ -23,17 +23,13 @@ function escHtml(str) {
 function cancellationEmailHtml(row) {
   const productName = escHtml(row.productName || row.offerId || "Неизвестный товар");
   const quantity = escHtml(row.quantity || 1);
-  const marketplaceLabel = escHtml({ ozon: "Ozon", yandex: "Яндекс Маркет", wb: "Wildberries" }[row.marketplace] || row.marketplace || "маркетплейс");
-  const orderId = escHtml(row.postingNumber || row.orderId || "");
   return `
 <html><body style="font-family:Arial,sans-serif;font-size:14px;color:#333;line-height:1.6">
 <p>Здравствуйте!</p>
-<p>Покупатель отменил заказ на маркетплейсе <strong>${marketplaceLabel}</strong>.</p>
-<p>Пожалуйста, <strong>не собирайте и не отправляйте</strong> следующую позицию:</p>
+<p>Отмена товара:</p>
 <table style="border-collapse:collapse;margin:12px 0">
   <tr><td style="padding:4px 12px 4px 0;color:#666">Товар:</td><td style="padding:4px 0"><strong>${productName}</strong></td></tr>
   <tr><td style="padding:4px 12px 4px 0;color:#666">Количество:</td><td style="padding:4px 0">${quantity} шт.</td></tr>
-  ${orderId ? `<tr><td style="padding:4px 12px 4px 0;color:#666">Номер заказа:</td><td style="padding:4px 0">${orderId}</td></tr>` : ""}
 </table>
 <p>Заявка автоматически аннулирована в системе сборки Magic Vibes.</p>
 <p>Если у вас возникли вопросы, свяжитесь с нами.</p>
@@ -189,21 +185,35 @@ async function checkAndHandleCancelledOrders() {
 
   for (const row of unique) {
     try {
-      let notifiedEmail = "";
+      // Mark as cancelled FIRST — prevents double-send if the server restarts or the
+      // email call throws after the message is queued but before the state write lands.
+      // markPickingRowCancelledBySystem returns null when the row is already cancelled,
+      // which means a previous tick or a manual cancel already handled it — skip.
+      const markedRow = await markPickingRowCancelledBySystem(row.key, { cancelledBy: "system:marketplace_poll", notifiedEmail: "" });
+      if (!markedRow) continue;
+
       if (row.partnerId) {
         const partnerEmail = await getPickingRowPartnerEmail(row.partnerId);
         if (partnerEmail) {
-          notifiedEmail = partnerEmail;
           await shopSendEmail({
             to: partnerEmail,
             subject: `Отмена заказа: ${row.productName || row.offerId || ""}`,
             html: cancellationEmailHtml(row),
           });
           logger.info("cancellation email sent", { key: row.key, to: partnerEmail, offerId: row.offerId });
+          // Best-effort: record the notified email on the already-cancelled row.
+          try {
+            const s = await readSupplierPickingState();
+            if (s.rows[row.key]) {
+              s.rows[row.key] = normalizeSupplierPickingRow({ ...s.rows[row.key], cancelledNotifiedEmail: partnerEmail });
+              await writeSupplierPickingState(s);
+            }
+          } catch (updateErr) {
+            logger.warn("cancellation watcher: failed to update notifiedEmail", { key: row.key, detail: updateErr?.message || String(updateErr) });
+          }
         }
       }
-      await markPickingRowCancelledBySystem(row.key, { cancelledBy: "system:marketplace_poll", notifiedEmail });
-      logger.info("picking row auto-cancelled by marketplace poll", { key: row.key, marketplace: row.marketplace, emailSent: Boolean(notifiedEmail) });
+      logger.info("picking row auto-cancelled by marketplace poll", { key: row.key, marketplace: row.marketplace, emailSent: Boolean(row.partnerId) });
     } catch (e) {
       logger.warn("cancellation watcher: failed to process row cancellation", { key: row.key, detail: e?.message || String(e) });
     }
