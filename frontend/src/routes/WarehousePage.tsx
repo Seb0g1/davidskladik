@@ -5,6 +5,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { AlertTriangle, BarChart2, Bot, Check, Clock, Copy, EyeOff, ImagePlus, Link2, Loader2, Package, PackageCheck, Pencil, RefreshCw, Save, Search, SearchX, SlidersHorizontal, Sparkles, Star, Trash2, Users, X } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { AiAssistantResponseSchema, AiImageJobResponseSchema, BrandIndexStatusSchema, DiagnosticsSchema, Filters, GroupDetailSchema, isProductGroupPageItem, isProductPageItem, LiveRefreshSchema, MutationProductResponseSchema, OperationCreateSchema, PriceHistorySchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductGroupPageItem, ProductLink, ProductRepairSchema, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
+import { MarketplaceBadge } from "../components/MarketplaceBadge";
 import { PageHeader } from "../components/PageHeader";
 import { PmChipInput } from "../components/PmChipInput";
 import { getPmSearchStore } from "../lib/pmSearchStore";
@@ -256,7 +257,7 @@ function ProductGroupRow({ group, selected, onSelect, bulkChecked, onBulkToggle 
       </div>
       <span className="warehouse-sku">{offer}</span>
       <div className="warehouse-marketplaces" aria-label="marketplaces">
-        {group.marketplaces.map((marketplace) => <span className="market-badge" key={marketplace}>{marketplace}</span>)}
+        {group.marketplaces.map((marketplace) => <MarketplaceBadge key={marketplace} marketplace={marketplace} />)}
       </div>
       <span className={`warehouse-stock ${Number(stock || 0) <= 0 ? "is-empty" : ""}`}>{stock ?? "—"}{stock === undefined || stock === null ? "" : " шт"}</span>
       <span className="warehouse-supplier">
@@ -1812,7 +1813,7 @@ function MarketplaceRows({ products, breakdown = [], canEdit = false, withExtern
       </div>
       {marketplaceBadges.length ? (
         <div className="market-badges compact" aria-label="marketplaces-summary">
-          {marketplaceBadges.map((marketplace) => <span className="market-badge" key={marketplace}>{marketplace}</span>)}
+          {marketplaceBadges.map((marketplace) => <MarketplaceBadge key={marketplace} marketplace={marketplace} />)}
         </div>
       ) : null}
       <div className="marketplace-rows">
@@ -2593,7 +2594,7 @@ function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin
           <h2>{primary.name || primary.offerId}</h2>
           <p>{primary.offerId} · {primary.brand || "без бренда"}</p>
           <div className="market-badges compact" aria-label="marketplaces">
-            {groupMarketplaceLabels(products).map((marketplace) => <span className="market-badge" key={marketplace}>{marketplace}</span>)}
+            {groupMarketplaceLabels(products).map((marketplace) => <MarketplaceBadge key={marketplace} marketplace={marketplace} />)}
           </div>
           <CopyActions product={primary} />
         </div>

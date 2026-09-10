@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CalendarClock, ChevronDown, ChevronUp, Clock3, Database, ListChecks, Loader2, Package, PackageOpen, RefreshCw, Repeat2, RotateCcw, Search, Settings2, Trash2, X } from "lucide-react";
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
+import { MarketplaceBadge } from "../components/MarketplaceBadge";
 import { PageHeader } from "../components/PageHeader";
 import { PmChipInput } from "../components/PmChipInput";
 import { SupplierAltPicker, type SupplierAltOption } from "../components/SupplierAltPicker";
@@ -384,7 +385,7 @@ function ReadyToShipPanel() {
                     return next;
                   })}
                 />
-                <span className={`market-badge market-${line.marketplace}`}>{marketplaceBadge(line.marketplace)}</span>
+                <MarketplaceBadge marketplace={line.marketplace} />
                 {line.isExpress ? <span className="pill warn">Экспресс</span> : null}
                 <span>{line.orderId || line.postingNumber || "-"} · {line.offerId}</span>
               </span>
