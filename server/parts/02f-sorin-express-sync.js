@@ -197,6 +197,15 @@ async function syncSorinExpressStocks() {
     const allShops = getYandexShops({ includeSyncDisabled: true });
     // Ищем shop с нужным campaignId — у него уже правильный apiKey.
     const matchedShop = allShops.find((s) => String(s.campaignId) === String(sorinExpressYandexCampaignId));
+    // If the campaignId is not in YANDEX_SHOPS_JSON and no explicit API key is configured,
+    // using another shop's key will always return 403 — skip to avoid API spam.
+    if (!matchedShop && !sorinExpressYandexApiKey) {
+      logger.warn("sorin_express_sync: Yandex Express campaign not in YANDEX_SHOPS_JSON and no SORIN_EXPRESS_YANDEX_API_KEY — skipping Yandex. Fix: remove SORIN_EXPRESS_YANDEX_CAMPAIGN_ID from .env or set it to a campaign that IS in YANDEX_SHOPS_JSON.", {
+        campaign: sorinExpressYandexCampaignId,
+        configuredCampaigns: allShops.map((s) => s.campaignId),
+      });
+      results.yandexFailed += yandexActive.length + yandexInactive.length;
+    } else {
     const baseShop = matchedShop || allShops[0];
     if (baseShop) {
       const expressShop = {
@@ -249,6 +258,7 @@ async function syncSorinExpressStocks() {
     } else {
       logger.warn("sorin_express_sync: no Yandex shop configured, skipping Yandex express stock");
     }
+    } // end else (matchedShop || sorinExpressYandexApiKey)
   }
 
   logger.info("sorin_express_sync_complete", {
