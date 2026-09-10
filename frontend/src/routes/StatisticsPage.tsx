@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { BarChart3, RefreshCw, Users } from "lucide-react";
+import { BarChart3, EyeOff, RefreshCw, Users } from "lucide-react";
 import { fetchJson } from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
@@ -18,6 +18,7 @@ const warehouseUrl = "/api/warehouse/products/page?page=1&pageSize=1&q=&marketpl
 
 export function StatisticsPage() {
   const [period, setPeriod] = useState("30d");
+  const [showDeleted, setShowDeleted] = useState(false);
   const users = useQuery({
     queryKey: ["statistics", "users", period],
     queryFn: () => fetchJson(`/api/users/stats?period=${encodeURIComponent(period)}&includeInactive=1&includeDeleted=1`, UsersStatsResponseSchema),
@@ -39,8 +40,10 @@ export function StatisticsPage() {
   const financeSummary = asRecord(finance.data?.summary);
   const rows = users.data?.users || [];
   const sortedRows = useMemo(
-    () => [...rows].sort((a, b) => numberValue(b.actionsTotal, 0) - numberValue(a.actionsTotal, 0)),
-    [rows],
+    () => [...rows]
+      .filter((r) => showDeleted || !r.deletedAt)
+      .sort((a, b) => numberValue(b.actionsTotal, 0) - numberValue(a.actionsTotal, 0)),
+    [rows, showDeleted],
   );
   const error = users.error;
   const refresh = () => {
@@ -68,6 +71,15 @@ export function StatisticsPage() {
                 { value: "all", label: "Все" },
               ]}
             />
+            {rows.some((r) => r.deletedAt) && (
+              <button
+                className={`secondary-action${showDeleted ? " active" : ""}`}
+                type="button"
+                onClick={() => setShowDeleted((v) => !v)}
+              >
+                <EyeOff size={16} /> Удалённые
+              </button>
+            )}
             <button className="secondary-action" type="button" onClick={refresh}><RefreshCw size={16} /> Обновить</button>
           </div>
         )}
@@ -84,7 +96,7 @@ export function StatisticsPage() {
         <div className="table-panel statistics-table">
           <div className="section-title">
             <div><span>Сотрудники</span><h3>Активность за период</h3></div>
-            <span className="pill info">{rows.length} сотрудников</span>
+            <span className="pill info">{sortedRows.length} сотрудников</span>
           </div>
           <div className="table-head">
             <span>Сотрудник</span>

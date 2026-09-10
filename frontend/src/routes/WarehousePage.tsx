@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { AlertTriangle, BarChart2, Bot, Check, Clock, Copy, EyeOff, ImagePlus, Link2, Loader2, Package, PackageCheck, RefreshCw, Save, Search, SearchX, SlidersHorizontal, Sparkles, Star, Trash2, Users, X } from "lucide-react";
+import { AlertTriangle, BarChart2, Bot, Check, Clock, Copy, EyeOff, ImagePlus, Link2, Loader2, Package, PackageCheck, Pencil, RefreshCw, Save, Search, SearchX, SlidersHorizontal, Sparkles, Star, Trash2, Users, X } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { AiAssistantResponseSchema, AiImageJobResponseSchema, BrandIndexStatusSchema, DiagnosticsSchema, Filters, GroupDetailSchema, isProductGroupPageItem, isProductPageItem, LiveRefreshSchema, MutationProductResponseSchema, OperationCreateSchema, PriceHistorySchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductGroupPageItem, ProductLink, ProductRepairSchema, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
@@ -2511,6 +2511,8 @@ function QuickActions({ primary, products, onDone }: { primary: Product; product
 
 function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin, filteredOut = false, loading = false, refreshing = false, demoMode = false }: { selectedGroup: string; products: Product[]; breakdown?: MarketplaceBreakdownRow[]; onClose: () => void; isAdmin: boolean; filteredOut?: boolean; loading?: boolean; refreshing?: boolean; demoMode?: boolean }) {
   const primary = products.length ? preferredGroupPrimary(products) : undefined;
+  const [editMode, setEditMode] = useState(false);
+  useEffect(() => { setEditMode(false); }, [selectedGroup]);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const queryClient = useQueryClient();
   const diagnostics = useQuery({
@@ -2597,6 +2599,16 @@ function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin
         </div>
         <div className="detail-head-actions">
           {refreshing ? <Loader2 className="spin" size={16} aria-label="Обновляю карточку" /> : null}
+          {isAdmin && !demoMode && (
+            <button
+              className={`icon-action${editMode ? " active" : ""}`}
+              type="button"
+              onClick={() => setEditMode((v) => !v)}
+              title={editMode ? "Режим просмотра" : "Режим редактирования"}
+            >
+              <Pencil size={14} />
+            </button>
+          )}
           <button className="mobile-close" type="button" onClick={onClose}><X size={18} /></button>
         </div>
       </div>
@@ -2649,13 +2661,13 @@ function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin
           )}
         </small>
       ) : null}
-      <LinksPanel key={products.map((item) => item.id).sort().join("|")} products={products} onSaved={refreshDetail} readOnly={demoMode} />
-      <MarketplaceRows products={products} breakdown={breakdown} canEdit={isAdmin && !demoMode} withExternal={!demoMode} />
-      {isAdmin && !demoMode ? <QuickActions primary={primary} products={products} onDone={refreshDetail} /> : null}
-      {isAdmin && !demoMode ? <FragranceNotesPanel product={primary} onSaved={refreshDetail} /> : null}
-      {isAdmin && !demoMode ? <AvitoImagesPanel product={primary} onSaved={refreshDetail} /> : null}
-      {isAdmin && !demoMode ? <AiCardImagePanel product={primary} onSaved={refreshDetail} /> : null}
-      {isAdmin && !demoMode ? <section className="detail-section">
+      {(!isAdmin || demoMode || editMode) && <LinksPanel key={products.map((item) => item.id).sort().join("|")} products={products} onSaved={refreshDetail} readOnly={demoMode || (isAdmin && !editMode)} />}
+      <MarketplaceRows products={products} breakdown={breakdown} canEdit={isAdmin && !demoMode && editMode} withExternal={!demoMode} />
+      {editMode && isAdmin && !demoMode ? <QuickActions primary={primary} products={products} onDone={refreshDetail} /> : null}
+      {editMode && isAdmin && !demoMode ? <FragranceNotesPanel product={primary} onSaved={refreshDetail} /> : null}
+      {editMode && isAdmin && !demoMode ? <AvitoImagesPanel product={primary} onSaved={refreshDetail} /> : null}
+      {editMode && isAdmin && !demoMode ? <AiCardImagePanel product={primary} onSaved={refreshDetail} /> : null}
+      {editMode && isAdmin && !demoMode ? <section className="detail-section">
         <div className="section-title">
           <div>
             <span>Диагностика</span>

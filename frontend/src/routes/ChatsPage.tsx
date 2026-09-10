@@ -305,6 +305,13 @@ export function ChatsPage() {
     if (selected?.chatId) draftRef.current.set(selected.chatId, text);
   }, [text, selected?.chatId]);
 
+  useEffect(() => {
+    if (!text.trim() && !pendingImages.length) return;
+    const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [text, pendingImages]);
+
   return (
     <section className="page-section chats-page">
       <PageHeader

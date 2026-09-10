@@ -422,6 +422,13 @@ export function PickingListPage() {
     setOpenActionMenu(null);
   }, [status, supplier]);
 
+  useEffect(() => {
+    if (!Object.values(paymentDrafts).some((v) => v !== "")) return;
+    const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [paymentDrafts]);
+
   const filteredRows = useMemo(() => {
     const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
     if (!words.length) return rows;
