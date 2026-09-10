@@ -334,8 +334,8 @@ async function buildAvitoFeedXml() {
   // название = одно объявление, даже если в файле листингов остались дубли.
   const seenSourceProductIds = new Set();
   const seenTitleKeys = new Set();
-  let xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
-  xml += "<Ads formatVersion=\"3\" target=\"Avito.ru\">\n";
+  // Собираем части в массив и join'им в конце — O(n) вместо O(n²) строкового +=.
+  const parts = ["<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n", "<Ads formatVersion=\"3\" target=\"Avito.ru\">\n"];
   let count = 0;
   for (const item of enabled) {
     // Без живых данных (Postgres недоступен) полагаемся на сохранённый флаг
@@ -361,7 +361,7 @@ async function buildAvitoFeedXml() {
     }
     if (sourceProductId) seenSourceProductIds.add(sourceProductId);
     if (titleKey) seenTitleKeys.add(titleKey);
-    xml += buildAvitoAdXml(listing, rules.feedDefaults);
+    parts.push(buildAvitoAdXml(listing, rules.feedDefaults));
     count += 1;
   }
   // Включаем старые adId (формат oz-XXXX-r1) с Status=Удалено — Avito удалит
@@ -372,10 +372,11 @@ async function buildAvitoFeedXml() {
   for (const oldAdId of oldAdIds) {
     if (!oldAdId || activeAdIds.has(oldAdId)) continue; // не удаляем активные
     const safeId = oldAdId.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    xml += `<Ad><Id>${safeId}</Id><Status>Удалено</Status></Ad>\n`;
+    parts.push(`<Ad><Id>${safeId}</Id><Status>Удалено</Status></Ad>\n`);
     deletedCount += 1;
   }
-  xml += "</Ads>\n";
+  parts.push("</Ads>\n");
+  const xml = parts.join("");
   return {
     xml,
     count,
