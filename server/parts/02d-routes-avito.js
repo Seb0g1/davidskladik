@@ -785,6 +785,56 @@ app.post("/api/avito/restore-expired", requireAdmin, async (request, response, n
 
 // --- Архивация старых дублирующих объявлений ---
 
+// Собирает Avito-ID просроченных объявлений («Истёк срок размещения») через
+// core Items API и сохраняет в data/avito-archive-queue.json для последующей
+// архивации через POST /api/avito/archive-old-duplicates.
+// Причина: когда код убрал суффикс -r1 из adId, Авито начал трактовать новые
+// adId как дубли старых просроченных → ошибка «Повторное размещение». Архивация
+// просроченных снимает блокировку, и новые объявления публикуются.
+app.post("/api/avito/collect-expired-for-archive", requireAdmin, async (request, response, next) => {
+  try {
+    const account = resolveAvitoAccountOr404(request, response);
+    if (!account) return;
+    const userId = await getAvitoUserId(account);
+    const statuses = ["expired", "not_active"];
+    const allIds = [];
+    for (const status of statuses) {
+      let page = 1;
+      const perPage = 100;
+      while (true) {
+        const data = await getAvitoItemsByStatus(account, userId, status, { perPage, page });
+        const items = Array.isArray(data?.resources) ? data.resources : [];
+        for (const item of items) {
+          if (item.id) allIds.push(Number(item.id));
+        }
+        const total = Number(data?.meta?.total || 0);
+        const pages = Math.ceil(total / perPage) || 1;
+        if (page >= pages || !items.length) break;
+        page++;
+        await sleep(150);
+      }
+    }
+    const queuePath = path.join(dataDir, "avito-archive-queue.json");
+    let existing = [];
+    try {
+      const raw = await fs.readFile(queuePath, "utf8");
+      existing = JSON.parse(raw);
+      if (!Array.isArray(existing)) existing = [];
+    } catch {}
+    const merged = [...new Set([...existing, ...allIds])];
+    await fs.writeFile(queuePath, JSON.stringify(merged), "utf8");
+    await appendAudit(request, "avito.collect_expired_for_archive", { collected: allIds.length, queueTotal: merged.length });
+    response.json({
+      ok: true,
+      collected: allIds.length,
+      queueTotal: merged.length,
+      message: `Найдено ${allIds.length} просроченных объявлений. Запустите POST /api/avito/archive-old-duplicates (батчами по 200) для архивации.`,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Читает очередь дублей из data/avito-archive-queue.json (сформированную из
 // отчёта автозагрузки: Avito-ID объявлений, вызвавших «Повторное размещение»).
 // Архивирует до limit штук за вызов, удаляя обработанные из файла.

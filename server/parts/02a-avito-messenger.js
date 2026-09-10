@@ -193,6 +193,14 @@ async function archiveAvitoItemById(account, userId, avitoId) {
   });
 }
 
+// Возвращает страницу объявлений по статусу: expired, not_active, blocked, active, archived.
+async function getAvitoItemsByStatus(account, userId, status, { perPage = 100, page = 1 } = {}) {
+  return avitoRequest(`/core/v1/accounts/${userId}/items`, {
+    account,
+    query: { status, per_page: perPage, page },
+  });
+}
+
 async function getAvitoItemStats(account, itemIds, { dateFrom = "", dateTo = "" } = {}) {
   if (!itemIds?.length) return [];
   const userId = await getAvitoUserId(account);
