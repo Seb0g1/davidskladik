@@ -78,7 +78,7 @@ function buildAvitoAdXml(listing, feedDefaults = {}) {
     if (tag) emitted.add(name);
     xml += tag;
   };
-  emit("Id", listing.adId);
+  emit("Id", listing.adId + "-r1");
   emit("Title", listing.title);
   xml += avitoXmlCdataTag("Description", description);
   emitted.add("Description");
@@ -365,7 +365,7 @@ async function buildAvitoFeedXml() {
   // Включаем старые adId (формат oz-XXXX-r1) с Status=Удалено — Avito удалит
   // их из системы, что снимет блокировку «Повторное размещение» для новых
   // объявлений с теми же товарами. После обработки Avito'м файл можно очистить.
-  const activeAdIds = new Set(state.items.map((item) => cleanText(item.adId)).filter(Boolean));
+  const activeAdIds = new Set(state.items.map((item) => cleanText(item.adId) + "-r1").filter(Boolean));
   let deletedCount = 0;
   for (const oldAdId of oldAdIds) {
     if (!oldAdId || activeAdIds.has(oldAdId)) continue; // не удаляем активные
