@@ -23,6 +23,10 @@ const sorinExpressYandexCampaignIdEnv = cleanText(
 const sorinExpressYandexApiKey = cleanText(process.env.SORIN_EXPRESS_YANDEX_API_KEY || "");
 const sorinExpressStockEnv = Math.max(1, Number(process.env.SORIN_EXPRESS_STOCK || 2) || 2);
 const sorinExpressSyncEnabled = process.env.SORIN_EXPRESS_SYNC_ENABLED !== "false";
+// Per-campaign FORBIDDEN circuit breaker: after a 403 on Yandex Express, back off for 1 hour
+// before retrying — avoids spamming 566 failed API calls per sync cycle.
+const sorinYandexForbiddenAt = new Map(); // campaignId -> ms
+const SORIN_YANDEX_FORBIDDEN_BACKOFF_MS = 60 * 60 * 1000; // 1 hour
 
 function productHasSorinLink(product = {}) {
   if (!product) return false;
@@ -222,29 +226,41 @@ async function syncSorinExpressStocks() {
         ...yandexInactive.map((r) => ({ offerId: r.offerId, stock: 0 })),
       ];
 
-      let yandexForbidden = false;
-      for (const chunk of chunkArray(stockRows, 100)) {
-        if (yandexForbidden) { results.yandexFailed += chunk.length; continue; }
-        try {
-          await sendYandexStockChunk(expressShop, chunk);
-          const zeroed = chunk.filter((s) => s.stock === 0).length;
-          results.yandexSent += chunk.length - zeroed;
-          results.yandexZeroed += zeroed;
-        } catch (error) {
-          results.yandexFailed += chunk.length;
-          const isForbidden = /403|forbidden/i.test(error?.message || "") || error?.statusCode === 403 || error?.status === 403;
-          if (isForbidden) {
-            yandexForbidden = true;
-            logger.warn("sorin_express_yandex_forbidden_circuit_break", {
-              campaign: sorinExpressYandexCampaignId,
-              detail: error?.message || String(error),
-            });
-          } else {
-            logger.warn("sorin_express_yandex_stock_failed", {
-              campaign: sorinExpressYandexCampaignId,
-              items: chunk.length,
-              detail: error?.message || String(error),
-            });
+      // Module-level circuit breaker: skip for 1 hour after a FORBIDDEN to avoid
+      // flooding logs with 566 failed API calls every sync cycle.
+      const forbiddenAt = sorinYandexForbiddenAt.get(sorinExpressYandexCampaignId) || 0;
+      const stillCoolingDown = forbiddenAt && Date.now() - forbiddenAt < SORIN_YANDEX_FORBIDDEN_BACKOFF_MS;
+      if (stillCoolingDown) {
+        results.yandexFailed += stockRows.length;
+      } else {
+        let yandexForbidden = false;
+        for (const chunk of chunkArray(stockRows, 100)) {
+          if (yandexForbidden) { results.yandexFailed += chunk.length; continue; }
+          try {
+            await sendYandexStockChunk(expressShop, chunk);
+            const zeroed = chunk.filter((s) => s.stock === 0).length;
+            results.yandexSent += chunk.length - zeroed;
+            results.yandexZeroed += zeroed;
+            // Successful send — clear the FORBIDDEN circuit breaker for this campaign.
+            sorinYandexForbiddenAt.delete(sorinExpressYandexCampaignId);
+          } catch (error) {
+            results.yandexFailed += chunk.length;
+            const isForbidden = /403|forbidden/i.test(error?.message || "") || error?.statusCode === 403 || error?.status === 403;
+            if (isForbidden) {
+              yandexForbidden = true;
+              sorinYandexForbiddenAt.set(sorinExpressYandexCampaignId, Date.now());
+              logger.warn("sorin_express_yandex_forbidden_circuit_break", {
+                campaign: sorinExpressYandexCampaignId,
+                detail: error?.message || String(error),
+                backoffMs: SORIN_YANDEX_FORBIDDEN_BACKOFF_MS,
+              });
+            } else {
+              logger.warn("sorin_express_yandex_stock_failed", {
+                campaign: sorinExpressYandexCampaignId,
+                items: chunk.length,
+                detail: error?.message || String(error),
+              });
+            }
           }
         }
       }
