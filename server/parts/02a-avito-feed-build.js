@@ -301,8 +301,27 @@ async function buildAvitoStockCsv() {
   };
 }
 
+// Читает список старых adId (формат oz-XXXX-r1) для включения в фид как
+// Status=Удалено — это единственный способ удалить autoupload-объявления из
+// Avito: core API /archive на них не работает, нужен явный тег в XML.
+// Файл data/avito-old-adids.json формируется скриптом сбора adId через API.
+async function loadAvitoOldAdIdsForDeletion() {
+  const deletionPath = path.join(dataDir, "avito-old-adids.json");
+  try {
+    const raw = await fs.readFile(deletionPath, "utf8");
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
 async function buildAvitoFeedXml() {
-  const [state, rules] = await Promise.all([readAvitoListingsFile(), readAvitoImportRules()]);
+  const [state, rules, oldAdIds] = await Promise.all([
+    readAvitoListingsFile(),
+    readAvitoImportRules(),
+    loadAvitoOldAdIdsForDeletion(),
+  ]);
   const enabled = state.items.filter((item) => item.enabled !== false && item.title);
   const liveStates = rules.autoUpdatePrices || rules.hideOutOfStock
     ? await loadAvitoLiveProductStates(enabled)
@@ -345,6 +364,16 @@ async function buildAvitoFeedXml() {
     xml += buildAvitoAdXml(listing, rules.feedDefaults);
     count += 1;
   }
+  // Включаем старые adId (формат oz-XXXX-r1) с Status=Удалено — Avito удалит
+  // их из системы, что снимет блокировку «Повторное размещение» для новых
+  // объявлений с теми же товарами. После обработки Avito'м файл можно очистить.
+  const activeAdIds = new Set(state.items.map((item) => cleanText(item.adId)).filter(Boolean));
+  let deletedCount = 0;
+  for (const oldAdId of oldAdIds) {
+    if (!oldAdId || activeAdIds.has(oldAdId)) continue; // не удаляем активные
+    xml += `<Ad><Id>${oldAdId}</Id><Status>Удалено</Status></Ad>\n`;
+    deletedCount += 1;
+  }
   xml += "</Ads>\n";
   return {
     xml,
@@ -353,6 +382,7 @@ async function buildAvitoFeedXml() {
     hiddenOutOfStock,
     hiddenNoImages,
     hiddenDuplicates,
+    deletedOldIds: deletedCount,
     liveSource: liveStates === null ? "stored" : "postgres",
   };
 }
