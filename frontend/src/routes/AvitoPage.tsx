@@ -116,6 +116,7 @@ type FeedInfoResponse = {
   hiddenOutOfStock?: number;
   hiddenNoImages?: number;
   hiddenDuplicates?: number;
+  deletedOldIds?: number;
   liveSource?: string;
   autoRefresh?: {
     enabled: boolean;
@@ -678,7 +679,8 @@ export function AvitoPage() {
                 В фиде: {feedInfoQuery.data.enabledCount} активных из {feedInfoQuery.data.totalListings} объявлений
                 {feedInfoQuery.data.hiddenOutOfStock ? ` · скрыто без остатков: ${feedInfoQuery.data.hiddenOutOfStock}` : ""}
                 {feedInfoQuery.data.hiddenNoImages ? ` · скрыто без фото: ${feedInfoQuery.data.hiddenNoImages}` : ""}
-                {feedInfoQuery.data.hiddenDuplicates ? ` · скрыто дублей: ${feedInfoQuery.data.hiddenDuplicates}` : ""}.
+                {feedInfoQuery.data.hiddenDuplicates ? ` · скрыто дублей: ${feedInfoQuery.data.hiddenDuplicates}` : ""}
+                {feedInfoQuery.data.deletedOldIds ? ` · в удалении старых: ${feedInfoQuery.data.deletedOldIds}` : ""}.
                 {" "}<a href="/api/avito/feed.xml" target="_blank" rel="noopener">Открыть XML</a>
               </p>
               {feedInfoQuery.data.stockFeedUrl ? (

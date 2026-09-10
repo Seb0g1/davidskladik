@@ -467,7 +467,7 @@ app.post("/api/avito/product-status", async (request, response, next) => {
 app.get("/api/avito/feed-info", async (request, response, next) => {
   try {
     const token = await ensureAvitoFeedToken();
-    const { count, total, hiddenOutOfStock, hiddenNoImages, hiddenDuplicates, liveSource } = await buildAvitoFeedXml();
+    const { count, total, hiddenOutOfStock, hiddenNoImages, hiddenDuplicates, deletedOldIds, liveSource } = await buildAvitoFeedXml();
     const baseUrl = cleanText(process.env.PUBLIC_BASE_URL) || `${request.protocol}://${request.get("host")}`;
     response.json({
       feedUrl: `${baseUrl}/public/avito-feed/${token}.xml`,
@@ -477,6 +477,7 @@ app.get("/api/avito/feed-info", async (request, response, next) => {
       hiddenOutOfStock,
       hiddenNoImages,
       hiddenDuplicates,
+      deletedOldIds,
       liveSource,
       autoRefresh: {
         enabled: avitoFeedRefreshEnabled,
