@@ -141,17 +141,17 @@ function BrandTnvedTypesTable({ entries }: { entries: BrandTnvedEntry[] }) {
         <table className="bt-data-table">
           <thead>
             <tr>
-              <th style={{ width: "28%" }}>Бренд</th>
-              <th style={{ width: "20%" }}>Код ТН ВЭД</th>
+              <th className="bt-col-brand">Бренд</th>
+              <th className="bt-col-tnved">Код ТН ВЭД</th>
               <th>Тип товара</th>
-              <th className="right" style={{ width: "8%" }}>SKU</th>
+              <th className="right bt-col-sku">SKU</th>
             </tr>
           </thead>
           <tbody>
             {filtered.slice(0, 300).map((entry) =>
               entry.tnvedCodes.map((tc, i) => (
                 <tr key={`${entry.brand}:${tc.code}`}>
-                  <td className={`bt-td-dense${i !== 0 ? " bt-td-ghost" : ""}`} style={i === 0 ? { fontWeight: 500 } : undefined}>
+                  <td className={`bt-td-dense${i !== 0 ? " bt-td-ghost" : ""}${i === 0 ? " bt-td-bold" : ""}`}>
                     {i === 0 ? entry.brand : ""}
                   </td>
                   <td className="bt-td-dense bt-td-mono bt-td-muted">{tc.code}</td>

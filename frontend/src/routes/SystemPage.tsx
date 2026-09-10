@@ -7,6 +7,19 @@ import { Stat } from "../components/Stat";
 import { SystemStatusSchema } from "../types";
 
 const asRecord = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+
+const STATE_WARNING_DESCRIPTIONS: Record<string, string> = {
+  pg_upsert_call: "Upsert товаров в PostgreSQL — запись состояния склада",
+  pg_upsert_prepare: "Подготовка данных перед upsert в PostgreSQL",
+  pricemaster_snapshot_parse: "Парсинг JSON-снапшота PriceMaster с диска",
+  pricemaster_snapshot_stringify: "Сериализация снапшота PriceMaster в JSON",
+  pricemaster_snapshot_index_build: "Построение индексов снапшота PriceMaster",
+  reconciler_build_prices: "Reconciler: расчёт цен по всем товарам",
+  reconciler_state_refresh: "Reconciler: обновление состояния склада",
+  reconciler_recovery: "Reconciler: восстановление после ошибки",
+  warehouse_postgres_write: "Запись состояния склада в PostgreSQL",
+  event_loop_blocked: "Блокировка event loop (порог 200 мс)",
+};
 const text = (value: unknown) => String(value ?? "").trim();
 const list = (value: unknown): Array<Record<string, unknown>> => Array.isArray(value) ? value.filter((item) => item && typeof item === "object") as Array<Record<string, unknown>> : [];
 const dateText = (value: unknown) => {
@@ -122,7 +135,7 @@ export function SystemPage() {
         <div className="table-head"><span>State warning</span><span>Когда</span><span>Детали</span></div>
         {stateWarnings.slice().reverse().map((row, index) => (
           <div className="table-row" key={`${text(row.source)}-${index}`}>
-            <span data-label="Источник">{text(row.source)}</span>
+            <span data-label="Источник" title={STATE_WARNING_DESCRIPTIONS[text(row.source)] || text(row.source)}>{text(row.source)}</span>
             <span data-label="Когда">{dateText(row.at)}</span>
             <span data-label="Детали">{text(row.detail) || "-"}</span>
           </div>

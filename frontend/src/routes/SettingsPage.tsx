@@ -1081,10 +1081,10 @@ export function SettingsPage() {
         <div className="settings-panel">
           <div className="section-title"><div><span>Цены</span><h3>Базовые цены</h3></div></div>
           <label>Курс USD/RUB<input type="number" min="0.0001" step="0.0001" value={String(draft.fixedUsdRate ?? settings.fixedUsdRate ?? "")} onChange={(event) => update({ fixedUsdRate: numberValue(event.target.value) })} /></label>
-          <label>Базовая наценка Ozon<input type="number" min="0.0001" step="0.0001" value={String(draftMarkups.ozon ?? markups.ozon ?? "")} onChange={(event) => updateMarkups({ ozon: numberValue(event.target.value) })} /></label>
-          <label>Базовая наценка Yandex Market<input type="number" min="0.0001" step="0.0001" value={String(draftMarkups.yandex ?? markups.yandex ?? "")} onChange={(event) => updateMarkups({ yandex: numberValue(event.target.value) })} /></label>
-          <label>Базовая наценка Avito<input type="number" min="0.0001" step="0.0001" value={String(draftMarkups.avito ?? markups.avito ?? "")} onChange={(event) => updateMarkups({ avito: numberValue(event.target.value) })} /></label>
-          <label>Базовая наценка Wildberries<input type="number" min="0.0001" step="0.0001" value={String(draftMarkups.wb ?? markups.wb ?? "")} onChange={(event) => updateMarkups({ wb: numberValue(event.target.value) })} /></label>
+          <label>Базовая наценка Ozon <span className="settings-field-unit">×</span><input type="number" min="0.0001" step="0.0001" value={String(draftMarkups.ozon ?? markups.ozon ?? "")} onChange={(event) => updateMarkups({ ozon: numberValue(event.target.value) })} /></label>
+          <label>Базовая наценка Yandex Market <span className="settings-field-unit">×</span><input type="number" min="0.0001" step="0.0001" value={String(draftMarkups.yandex ?? markups.yandex ?? "")} onChange={(event) => updateMarkups({ yandex: numberValue(event.target.value) })} /></label>
+          <label>Базовая наценка Avito <span className="settings-field-unit">×</span><input type="number" min="0.0001" step="0.0001" value={String(draftMarkups.avito ?? markups.avito ?? "")} onChange={(event) => updateMarkups({ avito: numberValue(event.target.value) })} /></label>
+          <label>Базовая наценка Wildberries <span className="settings-field-unit">×</span><input type="number" min="0.0001" step="0.0001" value={String(draftMarkups.wb ?? markups.wb ?? "")} onChange={(event) => updateMarkups({ wb: numberValue(event.target.value) })} /></label>
           <div className="soft-empty compact">После изменения курса или наценки backend ставит пересчет цен в очередь.</div>
         </div>
 

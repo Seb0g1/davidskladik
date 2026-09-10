@@ -120,7 +120,7 @@ function OfferIdsPanel({ ban, onUpdated }: { ban: BrandBan; onUpdated: () => voi
                 </button>
               </span>
             ))}
-            {currentIds.length === 0 && <span className="muted-note" style={{ fontSize: 12 }}>Нет запрещённых артикулов</span>}
+            {currentIds.length === 0 && <span className="muted-note text-xs">Нет запрещённых артикулов</span>}
           </div>
           <div className="brand-offer-add">
             <input
@@ -136,7 +136,7 @@ function OfferIdsPanel({ ban, onUpdated }: { ban: BrandBan; onUpdated: () => voi
             </button>
           </div>
           {updateMutation.isError && (
-            <div className="inline-error" style={{ fontSize: 12 }}>
+            <div className="inline-error text-xs">
               {String((updateMutation.error as Error)?.message || "Ошибка")}
             </div>
           )}

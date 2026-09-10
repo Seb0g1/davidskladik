@@ -2267,6 +2267,14 @@ button:disabled {
   gap: 7px;
 }
 
+.settings-field-unit {
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--text-soft);
+  text-transform: none;
+  margin-left: 2px;
+}
+
 .control-grid input,
 .control-grid select,
 .settings-panel input,
@@ -11010,8 +11018,13 @@ textarea:focus-visible,
 .bt-td-muted { color: var(--muted); }
 .bt-td-mono { font-family: monospace; white-space: nowrap; }
 .bt-td-sm { font-size: 12px; }
+.bt-td-bold { font-weight: 500; }
 .bt-td-ellipsis { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bt-td-ghost { color: transparent; }
+.bt-col-brand { width: 28%; }
+.bt-col-tnved { width: 20%; }
+.bt-col-sku { width: 8%; }
+.text-xs { font-size: 12px; }
 
 .bt-type-chip {
   display: inline-block;
