@@ -40,6 +40,10 @@ app.get("/api/supplier-picking-list", requireStaff, async (request, response, ne
         rows = rows.filter((row) => row.status === "cancelled" || !row.deferredUntil || new Date(row.deferredUntil) <= now);
       }
     }
+    // Snapshot rows after status+deferred filter but BEFORE supplier/q filter — used for the
+    // supplier dropdown. If we used the post-supplier-filter snapshot, the dropdown would
+    // disappear when the user has filtered to a specific supplier and all their items are done.
+    const rowsForSupplierDropdown = rows;
     if (supplier) rows = rows.filter((row) => cleanText(row.supplierName).toLowerCase().includes(supplier));
     if (q) {
       const qWords = q.split(/\s+/).filter(Boolean);
@@ -51,9 +55,12 @@ app.get("/api/supplier-picking-list", requireStaff, async (request, response, ne
     }
     rows.sort(compareSupplierPickingRows);
     const allRows = Object.values(state.rows || {}).map(normalizeSupplierPickingRow);
-    // Supplier dropdown: only show suppliers that still have rows in the active filtered view
+    // Supplier dropdown: only show suppliers that still have rows in the active filtered view.
+    // Use the pre-supplier/q snapshot so the dropdown stays visible when a supplier filter is
+    // active — otherwise marking all their items done empties the dropdown and the filter can
+    // no longer be changed without a page refresh.
     const supplierSourceRows = (status === "open" || !status)
-      ? rows  // use status-filtered rows so fully-assembled suppliers disappear
+      ? rowsForSupplierDropdown
       : allRows;
     const suppliers = Array.from(new Set(supplierSourceRows.map((row) => row.supplierName).filter(Boolean))).sort((a, b) => a.localeCompare(b, "ru", { sensitivity: "base" }));
     const supplierLedgerMap = await supplierLedgerSummaryMapForSuppliers(suppliers.map((name) => ({ id: name, name })));

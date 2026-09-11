@@ -9928,8 +9928,9 @@ textarea:focus-visible,
     flex-direction: row;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
+    gap: 6px 12px;
     align-self: stretch;
+    flex-wrap: wrap;
   }
   /* Group header right: smaller button on phones */
   .picking-group-header-right { gap: 4px; }
@@ -10468,18 +10469,11 @@ textarea:focus-visible,
 @media (max-width: 640px) {
   .picking-secondary-actions {
     display: none;
-    position: absolute;
-    right: 8px;
-    bottom: calc(100% + 4px);
-    background: var(--surface2);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    z-index: 200;
-    padding: 6px;
+    grid-column: 1 / -1;
+    order: 99;
     flex-direction: column;
-    min-width: 150px;
     gap: 4px;
-    box-shadow: 0 4px 20px rgba(0,0,0,.4);
+    padding-top: 2px;
   }
   .picking-secondary-actions.is-open {
     display: flex;
@@ -10488,6 +10482,8 @@ textarea:focus-visible,
     width: 100%;
     justify-content: flex-start;
     min-height: 40px;
+    white-space: normal;
+    overflow: hidden;
   }
   .picking-more-btn {
     display: flex !important;

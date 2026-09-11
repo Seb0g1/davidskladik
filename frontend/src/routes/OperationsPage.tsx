@@ -563,6 +563,34 @@ export function SupplierCartPanel() {
               {(commitMutation.data.pmBlocked!.length ?? 0) > 3 ? ` и ещё ${commitMutation.data.pmBlocked!.length - 3}` : ""}.
             </div>
           )}
+          {(() => {
+            const skipped = (commitMutation.data.skippedDetails ?? []).filter((d) => d.skipReason && d.skipReason !== "already_committed" && d.skipReason !== "not_ready");
+            if (!skipped.length) return null;
+            const byReason = skipped.reduce<Record<string, typeof skipped>>((acc, d) => {
+              const r = d.skipReason || "unknown";
+              if (!acc[r]) acc[r] = [];
+              acc[r].push(d);
+              return acc;
+            }, {});
+            const reasonLabel = (r: string) => {
+              if (r === "already_in_state") return "уже в заявке (из предыдущей корзины)";
+              if (r === "supplier_inactive_live") return "поставщик неактивен в PM (Active=0 или NativePrice=0)";
+              if (r === "no_offer_row_id") return "нет строки в PM";
+              if (r === "no_partner_id") return "нет ID поставщика";
+              return r;
+            };
+            return (
+              <div className="inline-warning op-warning-my">
+                <strong>Пропущено при отправке ({skipped.length} шт.):</strong>
+                {Object.entries(byReason).map(([reason, items]) => (
+                  <div key={reason} style={{ marginTop: 2 }}>
+                    · {reasonLabel(reason)}: {items.slice(0, 3).map((d) => d.productName || d.offerId).filter(Boolean).join(", ")}
+                    {items.length > 3 ? ` и ещё ${items.length - 3}` : ""}
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
         </>
       ) : null}
       <div className="op-actions-row">

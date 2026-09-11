@@ -232,6 +232,7 @@ export function PickingListPage() {
   const [deferredDateFilter, setDeferredDateFilter] = useState<string | null>(null);
   const balancePanelRef = useRef<HTMLDivElement>(null);
   const currentSupplierRef = useRef<string | null>(null);
+  const [allKnownSuppliers, setAllKnownSuppliers] = useState<string[]>([]);
 
   const updateMutation = useMutation({
     mutationFn: ({ key, nextStatus, snoozeDays, permanent, pickedQuantity, pricePaidRub }: { key: string; nextStatus: string; snoozeDays?: number; permanent?: boolean; pickedQuantity?: number; pricePaidRub?: number }) => {
@@ -430,6 +431,21 @@ export function PickingListPage() {
     return () => window.removeEventListener("beforeunload", handler);
   }, [paymentDrafts]);
 
+  // Keep a stable full supplier list when no filter is active (so the select
+  // doesn't disappear after all items for a supplier are picked)
+  useEffect(() => {
+    if (supplier) return;
+    const fresh = listQuery.data?.suppliers ?? [];
+    if (fresh.length > 0) setAllKnownSuppliers(fresh);
+  }, [listQuery.data?.suppliers, supplier]);
+
+  // Auto-reset supplier filter when the selected supplier no longer has open items
+  useEffect(() => {
+    if (!supplier || listQuery.isFetching || !listQuery.data) return;
+    const fresh = listQuery.data.suppliers ?? [];
+    if (!fresh.includes(supplier)) setSupplier("");
+  }, [listQuery.data, listQuery.isFetching, supplier]);
+
   const filteredRows = useMemo(() => {
     const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
     if (!words.length) return rows;
@@ -513,6 +529,9 @@ export function PickingListPage() {
 
   const summary = listQuery.data?.summary || {};
   const suppliers = listQuery.data?.suppliers || [];
+  // When a supplier filter is active, the API only returns that supplier in the list,
+  // so use the full snapshot captured during the last unfiltered fetch instead.
+  const displaySuppliers = supplier && allKnownSuppliers.length > 0 ? allKnownSuppliers : suppliers;
   const supplierLedger = listQuery.data?.supplierLedger || {};
   const invoiceRows = invoiceQuery.data?.rows || [];
   const myBalance = myBalanceQuery.data?.total ?? 0;
@@ -967,7 +986,7 @@ export function PickingListPage() {
       </div>
 
       {/* Mobile: supplier filter + search (shown only on mobile, desktop uses picking-filters below) */}
-      {suppliers.length > 0 ? (
+      {displaySuppliers.length > 0 ? (
         <div className="picking-supplier-mobile-filter">
           <select
             className="picking-supplier-mobile-select"
@@ -975,7 +994,7 @@ export function PickingListPage() {
             onChange={(e) => setSupplier(e.target.value)}
           >
             <option value="">Все поставщики</option>
-            {suppliers.map((s) => <option key={String(s)} value={String(s)}>{String(s)}</option>)}
+            {displaySuppliers.map((s) => <option key={String(s)} value={String(s)}>{String(s)}</option>)}
           </select>
         </div>
       ) : null}
@@ -1018,7 +1037,7 @@ export function PickingListPage() {
             onChange={setSupplier}
             options={[
               { value: "", label: "Все поставщики" },
-              ...suppliers.map((item) => ({ value: String(item), label: String(item) })),
+              ...displaySuppliers.map((item) => ({ value: String(item), label: String(item) })),
             ]}
           />
         </label>

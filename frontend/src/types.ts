@@ -740,11 +740,19 @@ export const PmBlockedItemSchema = z.object({
   existingDocDate: z.string().optional().default(""),
 }).passthrough();
 
+export const SupplierCartSkippedDetailSchema = z.object({
+  key: z.string().optional().default(""),
+  offerId: z.string().optional().default(""),
+  productName: z.string().optional().default(""),
+  skipReason: z.string().optional().default(""),
+}).passthrough();
+
 export const SupplierCartCommitSchema = z.object({
   ok: z.boolean().optional(),
   inserted: z.number().optional().default(0),
   skipped: z.number().optional().default(0),
   pmBlocked: z.array(PmBlockedItemSchema).optional().default([]),
+  skippedDetails: z.array(SupplierCartSkippedDetailSchema).optional().default([]),
   pickingCreated: z.number().optional().default(0),
   docIds: z.array(z.union([z.string(), z.number()])).optional().default([]),
   verifiedInPriceMaster: z.boolean().optional().default(false),

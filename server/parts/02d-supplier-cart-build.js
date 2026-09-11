@@ -61,9 +61,19 @@ async function buildSupplierCartPreview(params = {}) {
   // runs, the resulting picking row has key "manual|pm|..." which never matches the
   // marketplace order key — so the cart would create a second PM order to a different
   // supplier. Index by offerId so resolveSupplierCartRow can detect this overlap.
+  //
+  // Only include manual picks created within the last 6 hours (same work session). Older manual
+  // picks (e.g., the morning cart) are for earlier orders that have already been queued to PM;
+  // they should not block new afternoon orders for the same product from being auto-ordered.
+  const manualCoverCutoff = new Date(Date.now() - 6 * 60 * 60 * 1000);
   const manualActiveOfferIds = new Set(
     pickingRows
-      .filter((pr) => pr.marketplace === "manual" && (pr.status === "open" || pr.status === "picked"))
+      .filter((pr) => {
+        if (pr.marketplace !== "manual") return false;
+        if (pr.status !== "open" && pr.status !== "picked") return false;
+        const createdAt = toDateOrNull(pr.createdAt);
+        return createdAt && createdAt >= manualCoverCutoff;
+      })
       .map((pr) => cleanText(pr.offerId).toLowerCase())
       .filter(Boolean),
   );
