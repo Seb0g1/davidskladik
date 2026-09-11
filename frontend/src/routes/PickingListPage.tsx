@@ -10,7 +10,7 @@ import { SelectField } from "../components/SelectField";
 import { ListSkeleton } from "../components/Skeleton";
 import { Stat } from "../components/Stat";
 import { SupplierAltPicker } from "../components/SupplierAltPicker";
-import { DailyCartTotalSchema, PickerBalanceSchema, PickerBalancesSchema, PickerMyDaySchema, PickerReportSchema, SupplierCartCancelSchema, SupplierLedgerPaymentSchema, SupplierPickingInvoiceSchema, SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema, SupplierReplaceResponseSchema } from "../types";
+import { DailyCartTotalSchema, PickerBalanceSchema, PickerBalancesSchema, PickerMyDaySchema, PickerReportSchema, PickerSpendingSchema, SupplierCartCancelSchema, SupplierLedgerPaymentSchema, SupplierPickingInvoiceSchema, SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema, SupplierReplaceResponseSchema } from "../types";
 import { PmSearchPanel } from "./SupplierCartPage";
 import { compactDate, copyPlainText, errorMessage, money, numberValue } from "../lib/common";
 
@@ -213,6 +213,12 @@ export function PickingListPage() {
     queryKey: ["daily-cart-total"],
     queryFn: () => fetchJson("/api/picker-cash/daily-total", DailyCartTotalSchema),
     refetchInterval: 30_000,
+  });
+
+  const pickerSpendingQuery = useQuery({
+    queryKey: ["picker-spending", issuePickerDraft],
+    queryFn: () => fetchJson(`/api/picker-cash/balance/${encodeURIComponent(issuePickerDraft)}/spending`, PickerSpendingSchema),
+    enabled: isAdmin && !!issuePickerDraft,
   });
 
   const resetAllBalancesMutation = useMutation({
@@ -882,6 +888,33 @@ export function PickingListPage() {
                 );
               })()}
 
+              {/* Per-picker supplier spending history */}
+              {issuePickerDraft ? (() => {
+                const spending = pickerSpendingQuery.data;
+                const entries = spending?.entries ?? [];
+                const usdTotal = spending?.usdTotal ?? 0;
+                const rubTotal = spending?.rubTotal ?? 0;
+                const totalLabel = [usdTotal > 0 ? moneyAmount(usdTotal, "USD") : null, rubTotal > 0 ? moneyAmount(rubTotal, "RUB") : null].filter(Boolean).join(" + ");
+                return (
+                  <div className="picker-credit-history">
+                    <div className="picker-credit-history-label">
+                      Выплачено поставщикам — {issuePickerDraft}{totalLabel ? ` · ${totalLabel}` : ""}
+                    </div>
+                    {pickerSpendingQuery.isPending ? (
+                      <p className="picker-balance-empty-hint">Загрузка…</p>
+                    ) : entries.length === 0 ? (
+                      <p className="picker-balance-empty-hint">Выплат ещё не было.</p>
+                    ) : entries.map((e) => (
+                      <div className="picker-credit-row" key={e.id}>
+                        <span className="picker-credit-amount tone-danger">−{moneyAmount(Math.abs(e.amount), e.currency === "USD" ? "USD" : "RUB")}</span>
+                        <span className="muted-note picker-credit-note">{e.supplierName || "—"}{e.note ? ` · ${e.note}` : ""}</span>
+                        <span className="muted-note picker-credit-date">{compactDate(e.occurredAt ?? null)}</span>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })() : null}
+
               {/* Daily order total summary */}
               {(dailyTotal > 0 || dailyItems > 0) ? (
                 <div className="picker-day-summary pl-summary-divider">
@@ -1536,6 +1569,31 @@ export function PickingListPage() {
                 </div>
               );
             })()}
+            {issuePickerDraft ? (() => {
+              const spending = pickerSpendingQuery.data;
+              const entries = spending?.entries ?? [];
+              const usdTotal = spending?.usdTotal ?? 0;
+              const rubTotal = spending?.rubTotal ?? 0;
+              const totalLabel = [usdTotal > 0 ? moneyAmount(usdTotal, "USD") : null, rubTotal > 0 ? moneyAmount(rubTotal, "RUB") : null].filter(Boolean).join(" + ");
+              return (
+                <div className="picker-credit-history">
+                  <div className="picker-credit-history-label">
+                    Выплачено поставщикам — {issuePickerDraft}{totalLabel ? ` · ${totalLabel}` : ""}
+                  </div>
+                  {pickerSpendingQuery.isPending ? (
+                    <p className="picker-balance-empty-hint">Загрузка…</p>
+                  ) : entries.length === 0 ? (
+                    <p className="picker-balance-empty-hint">Выплат ещё не было.</p>
+                  ) : entries.map((e) => (
+                    <div className="picker-credit-row" key={e.id}>
+                      <span className="picker-credit-amount tone-danger">−{moneyAmount(Math.abs(e.amount), e.currency === "USD" ? "USD" : "RUB")}</span>
+                      <span className="muted-note picker-credit-note">{e.supplierName || "—"}{e.note ? ` · ${e.note}` : ""}</span>
+                      <span className="muted-note picker-credit-date">{compactDate(e.occurredAt ?? null)}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })() : null}
             {(dailyTotal > 0 || dailyItems > 0) ? (
               <div className="picker-day-summary pl-summary-divider">
                 <div className="picker-select-label pl-label-flush"><ClipboardList size={13} /> Итог заказа сегодня</div>

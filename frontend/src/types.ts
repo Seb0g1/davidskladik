@@ -666,6 +666,23 @@ export const PickerMyDaySchema = z.object({
   returnAmount: z.number().optional().default(0),
 }).passthrough();
 
+export const PickerSpendingEntrySchema = z.object({
+  id: z.string().optional().default(""),
+  supplierName: z.string().optional().nullable(),
+  amount: z.number().optional().default(0),
+  currency: z.string().optional().default("RUB"),
+  note: z.string().optional().nullable(),
+  occurredAt: z.string().optional().nullable(),
+}).passthrough();
+
+export const PickerSpendingSchema = z.object({
+  ok: z.boolean().optional(),
+  username: z.coerce.string().optional().default(""),
+  usdTotal: z.number().optional().default(0),
+  rubTotal: z.number().optional().default(0),
+  entries: z.array(PickerSpendingEntrySchema).optional().default([]),
+}).passthrough();
+
 export const DailyCartTotalSchema = z.object({
   ok: z.boolean().optional(),
   date: z.coerce.string().optional().default(""),

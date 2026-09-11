@@ -281,6 +281,31 @@ app.delete("/api/picker-cash/balance/:username/:id", requireAdmin, async (reques
   }
 });
 
+// Returns supplier payments recorded by a specific picker (by createdBy field)
+app.get("/api/picker-cash/balance/:username/spending", requireAdmin, async (request, response, next) => {
+  try {
+    const username = cleanText(request.params.username || "");
+    if (!username) return response.status(400).json({ error: "Укажите имя пользователя." });
+    if (!shouldUsePostgresStorage()) return response.json({ ok: true, username, entries: [], usdTotal: 0, rubTotal: 0 });
+    const entries = await getPrisma().supplierLedgerEntry.findMany({
+      where: { entryType: "payment", status: "active", createdBy: username },
+      orderBy: { occurredAt: "desc" },
+      take: 50,
+    });
+    let usdTotal = 0;
+    let rubTotal = 0;
+    const mapped = entries.map((e) => {
+      const amt = Math.abs(Number(e.amount || 0));
+      const cur = String(e.currency || "RUB").toUpperCase();
+      if (cur === "USD") usdTotal += amt; else rubTotal += amt;
+      return supplierLedgerEntryFromPostgres(e);
+    });
+    response.json({ ok: true, username, entries: mapped, usdTotal: Math.round(usdTotal), rubTotal: Math.round(rubTotal) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ─── Daily committed cart total ───────────────────────────────────────────────
 
 async function loadDailyCartTotal(dateStr) {
