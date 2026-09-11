@@ -39,7 +39,7 @@ function productToPostgresData(product = {}) {
     marketplaceState: stripNullBytesDeep(normalized.marketplaceState || {}),
     currentPrice: roundPrice(normalized.marketplacePrice || 0) || null,
     targetPrice: roundPrice(normalized.nextPrice || normalized.targetPrice || normalized.calculatedPrice || 0) || null,
-    targetStock: (normalized.targetStock != null && Number.isFinite(Number(normalized.targetStock))) ? Number(normalized.targetStock) : null,
+    targetStock: (normalized.targetStock != null && Number.isFinite(Number(normalized.targetStock)) && Number(normalized.targetStock) > 0) ? Number(normalized.targetStock) : null,
     status: stripNullBytes(normalized.marketplaceState?.code || normalized.marketplaceState?.state || normalized.status || null),
     archived: Boolean(normalized.marketplaceState?.archived || normalized.archived),
     everHadLinks: Boolean(normalized.everHadLinks),
