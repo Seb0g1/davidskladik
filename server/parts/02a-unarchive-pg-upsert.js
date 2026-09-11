@@ -124,7 +124,7 @@ async function upsertWarehouseProductPostgres(client, product) {
          marketplace_state = EXCLUDED.marketplace_state,
          current_price    = EXCLUDED.current_price,
          target_price     = EXCLUDED.target_price,
-         target_stock     = EXCLUDED.target_stock,
+         target_stock     = COALESCE(EXCLUDED.target_stock, warehouse_products.target_stock),
          status           = EXCLUDED.status,
          archived         = EXCLUDED.archived,
          ever_had_links   = EXCLUDED.ever_had_links,
