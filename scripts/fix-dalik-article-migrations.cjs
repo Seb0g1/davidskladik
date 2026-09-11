@@ -93,7 +93,7 @@ async function main() {
 
     // 2. Query live PM for current NativeID and NativeName at this RowID
     const [pmRows] = await pool.query(
-      `SELECT r.NativeID, r.NativeName, r.Active, r.Ignored, r.Price
+      `SELECT r.NativeID, r.NativeName, r.Active, r.Ignored
        FROM OfferRows r WHERE r.RowID = ? LIMIT 1`,
       [rowId],
     );
