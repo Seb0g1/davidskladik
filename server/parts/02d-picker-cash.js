@@ -191,9 +191,11 @@ app.post("/api/picker-cash/balance", requireAdmin, async (request, response, nex
     if (amount === null || amount === 0) return response.status(400).json({ error: "Укажите ненулевую сумму." });
     const result = await withPickerBalanceLock(pickerUsername, async () => {
       const balance = await loadPickerBalance(pickerUsername);
+      const originalUsd = normalizeFinanceMoney(request.body?.originalUsd, null);
       balance.credits.push({
         id: crypto.randomUUID(),
         amount,
+        ...(originalUsd !== null ? { originalUsd } : {}),
         note: cleanText(request.body?.note || ""),
         createdAt: new Date().toISOString(),
         createdBy: requestUsername(request),

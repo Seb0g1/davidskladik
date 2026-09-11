@@ -156,8 +156,8 @@ export function PickingListPage() {
   const [pmSearchOpen, setPmSearchOpen] = useState(false);
 
   const issueBalanceMutation = useMutation({
-    mutationFn: ({ pickerUsername, amount, note }: { pickerUsername: string; amount: number; note: string }) =>
-      fetchJson("/api/picker-cash/balance", PickerBalanceSchema, mutationBody({ pickerUsername, amount, note })),
+    mutationFn: ({ pickerUsername, amount, originalUsd, note }: { pickerUsername: string; amount: number; originalUsd: number; note: string }) =>
+      fetchJson("/api/picker-cash/balance", PickerBalanceSchema, mutationBody({ pickerUsername, amount, originalUsd, note })),
     onSuccess: () => {
       setIssueAmountDraft("");
       setIssueNoteDraft("");
@@ -753,7 +753,7 @@ export function PickingListPage() {
                   className="primary-action picker-issue-submit"
                   type="button"
                   disabled={issueBalanceMutation.isPending || !issuePickerDraft.trim() || !(Number(issueAmountDraft) > 0)}
-                  onClick={() => issueBalanceMutation.mutate({ pickerUsername: issuePickerDraft.trim(), amount: Math.round(Number(issueAmountDraft) * usdRate), note: issueNoteDraft })}
+                  onClick={() => issueBalanceMutation.mutate({ pickerUsername: issuePickerDraft.trim(), amount: Math.round(Number(issueAmountDraft) * usdRate), originalUsd: Number(issueAmountDraft), note: issueNoteDraft })}
                 >
                   {issueBalanceMutation.isPending
                     ? <><Loader2 className="spin" size={15} /> Выдаю…</>
@@ -860,7 +860,7 @@ export function PickingListPage() {
                       }
                       return (
                         <div className="picker-credit-row" key={c.id}>
-                          <span className={`picker-credit-amount${Number(c.amount) >= 0 ? " tone-success" : " tone-danger"}`}>{Number(c.amount) >= 0 ? "+" : "−"}{balanceStr(Math.abs(Number(c.amount)))}</span>
+                          <span className={`picker-credit-amount${Number(c.amount) >= 0 ? " tone-success" : " tone-danger"}`}>{Number(c.amount) >= 0 ? "+" : "−"}{(c as Record<string, unknown>).originalUsd != null ? `${Math.abs(Number((c as Record<string, unknown>).originalUsd)).toLocaleString("ru-RU")} $` : balanceStr(Math.abs(Number(c.amount)))}</span>
                           <span className="muted-note picker-credit-note">{c.note || "—"}</span>
                           <span className="muted-note picker-credit-date">{compactDate(c.createdAt ?? null)}</span>
                           <button
@@ -1442,7 +1442,7 @@ export function PickingListPage() {
                 className="primary-action picker-issue-submit"
                 type="button"
                 disabled={issueBalanceMutation.isPending || !issuePickerDraft.trim() || !(Number(issueAmountDraft) > 0)}
-                onClick={() => issueBalanceMutation.mutate({ pickerUsername: issuePickerDraft.trim(), amount: Math.round(Number(issueAmountDraft) * usdRate), note: issueNoteDraft })}
+                onClick={() => issueBalanceMutation.mutate({ pickerUsername: issuePickerDraft.trim(), amount: Math.round(Number(issueAmountDraft) * usdRate), originalUsd: Number(issueAmountDraft), note: issueNoteDraft })}
               >
                 {issueBalanceMutation.isPending
                   ? <><Loader2 className="spin" size={15} /> Выдаю…</>

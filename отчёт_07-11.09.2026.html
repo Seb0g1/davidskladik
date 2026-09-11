@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Отчёт 07–11.09.2026 — Magic Vibes Склад</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0f1117;
+    color: #e1e4e8;
+    padding: 32px 20px;
+    max-width: 860px;
+    margin: 0 auto;
+    font-size: 15px;
+    line-height: 1.65;
+  }
+  .header {
+    text-align: center;
+    padding: 28px 24px;
+    background: linear-gradient(135deg, #1a2035 0%, #1c2840 100%);
+    border-radius: 16px;
+    margin-bottom: 28px;
+    border: 1px solid #2d3748;
+  }
+  .header h1 { font-size: 1.6rem; font-weight: 700; color: #fff; margin-bottom: 6px; }
+  .header .subtitle { color: #8892a4; font-size: 0.95rem; }
+  .stats-row {
+    display: flex; gap: 12px; margin-bottom: 28px; flex-wrap: wrap;
+  }
+  .stat-chip {
+    flex: 1; min-width: 140px; padding: 14px 18px;
+    background: #1a2035; border: 1px solid #2d3748; border-radius: 12px;
+    text-align: center;
+  }
+  .stat-chip .num { font-size: 1.8rem; font-weight: 700; color: #58a6ff; }
+  .stat-chip .lbl { font-size: 0.8rem; color: #8892a4; margin-top: 2px; }
+  .section {
+    margin-bottom: 24px;
+    background: #161b27;
+    border: 1px solid #2d3748;
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .section-header {
+    padding: 14px 20px;
+    font-weight: 700;
+    font-size: 1.05rem;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid #2d3748;
+    background: #1a2035;
+  }
+  .item {
+    padding: 10px 20px;
+    border-bottom: 1px solid #1e2537;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .item:last-child { border-bottom: none; }
+  .item-num {
+    color: #484f5e;
+    font-size: 0.82rem;
+    min-width: 24px;
+    margin-top: 2px;
+    font-weight: 600;
+  }
+  .item-text { flex: 1; }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 9px;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    white-space: nowrap;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+  .badge-fixed { background: #1a3a2a; color: #4ade80; border: 1px solid #166534; }
+  .badge-feat  { background: #1a2f4a; color: #60a5fa; border: 1px solid #1d4ed8; }
+  .badge-perf  { background: #2d2a1a; color: #facc15; border: 1px solid #854d0e; }
+  .date-tag {
+    font-size: 0.75rem; color: #58a6ff; background: #1a2540;
+    border: 1px solid #2d3f6a; border-radius: 4px;
+    padding: 1px 7px; margin-right: 4px; vertical-align: middle;
+  }
+  .footer {
+    text-align: center;
+    margin-top: 32px;
+    padding: 20px;
+    color: #4a5568;
+    font-size: 0.85rem;
+  }
+  hr.divider {
+    border: none;
+    border-top: 2px dashed #2d3748;
+    margin: 28px 0;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>✅ Итог с 07.09.2026 — 11.09.2026 ✅</h1>
+  <div class="subtitle">Magic Vibes — Склад (davidsklad.ru) · автоматический отчёт по git-коммитам</div>
+</div>
+
+<div class="stats-row">
+  <div class="stat-chip"><div class="num">98</div><div class="lbl">коммитов</div></div>
+  <div class="stat-chip"><div class="num">54</div><div class="lbl">исправлений</div></div>
+  <div class="stat-chip"><div class="num">28</div><div class="lbl">новых функций</div></div>
+  <div class="stat-chip"><div class="num">5</div><div class="lbl">дней</div></div>
+</div>
+
+<!-- АВТОКОРЗИНА / СБОРКА / ПОСТАВЩИКИ -->
+<div class="section">
+  <div class="section-header">📦 Автокорзина / Сборка / Поставщики</div>
+
+  <div class="item">
+    <div class="item-num">1.</div>
+    <div class="item-text">
+      <span class="date-tag">07.09</span>
+      Автокорзина молча не отправляла один товар в PM — <em>fallback на live-запрос PM при пустом пакетном ответе</em>
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">2.</div>
+    <div class="item-text">
+      <span class="date-tag">07–08.09</span>
+      Автокорзина — ложное срабатывание «уже в заявке» для утренней корзины при добавлении новых товаров
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">3.</div>
+    <div class="item-text">
+      <span class="date-tag">08.09</span>
+      Дублирование строк в корзине поставщика при повторном коммите после сбоя (dedup по NativeID)
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">4.</div>
+    <div class="item-text">
+      <span class="date-tag">08.09</span>
+      Слияние строк по NativeID когда OfferRowID разные (Далик — один артикул на разные товары)
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">5.</div>
+    <div class="item-text">
+      <span class="date-tag">10.09</span>
+      Далик: неправильный выбор строки PM при совпадении артикулов → путаница между разными товарами
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">6.</div>
+    <div class="item-text">
+      <span class="date-tag">10.09</span>
+      Далик: сброс расходящихся пинов и устаревших target_price при массовом ремонте цен
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">7.</div>
+    <div class="item-text">
+      <span class="date-tag">11.09</span>
+      Страница сборки на мобильном: информация съезжала вправо за экран; кнопка выбора поставщика пропадала после отметки всех товаров; причины пропуска автокорзиной не показывались
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">8.</div>
+    <div class="item-text">
+      <span class="date-tag">07–08.09</span>
+      PM snapshot — защита от пустого результата, транзакционная атомарность, алерт при потере поставщика
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">9.</div>
+    <div class="item-text">
+      <span class="date-tag">08.09</span>
+      Все OfferRows-запросы к PM теперь фильтруют r.Active ≠ 0 — неактивные позиции больше не попадают в корзину
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">10.</div>
+    <div class="item-text">
+      <span class="date-tag">07–08.09</span>
+      Добавлены: возврат товара от поставщика, кнопка «Собрал всё», отчёт сборщика по поставщикам, баланс в рублях
+      <span class="badge badge-feat">🆕 Реализовано</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">11.</div>
+    <div class="item-text">
+      <span class="date-tag">08.09</span>
+      Отчёт платежей: отображение в нужной валюте, видимость отменённых заказов, детализация pricePaidRub
+      <span class="badge badge-feat">🆕 Реализовано</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">12.</div>
+    <div class="item-text">
+      <span class="date-tag">10.09</span>
+      Отмены заказов — теперь видны в списке сборки с бейджем; письмо поставщику упрощено (только название товара)
+      <span class="badge badge-feat">🆕 Реализовано</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">13.</div>
+    <div class="item-text">
+      <span class="date-tag">11.09</span>
+      Панель баланса сборщика: добавлен раздел «Выплачено поставщикам» — видно сколько каждый сборщик потратил из выданного кэша
+      <span class="badge badge-feat">🆕 Реализовано</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">14.</div>
+    <div class="item-text">
+      <span class="date-tag">09.09</span>
+      Исправлено автосписание с баланса сборщика при отметке «Собрал» — деньги больше не списываются автоматически без ведома
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+</div>
+
+<!-- СКЛАД / МАРКЕТПЛЕЙСЫ -->
+<div class="section">
+  <div class="section-header">🏪 Склад / Маркетплейсы</div>
+
+  <div class="item">
+    <div class="item-num">1.</div>
+    <div class="item-text">
+      <span class="date-tag">11.09</span>
+      Импорт Ozon ронял target_stock в 0 при обновлении — потеря складских остатков
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">2.</div>
+    <div class="item-text">
+      <span class="date-tag">11.09</span>
+      Массовая запись склада (bulk) обнуляла target_stock у товаров которые не обновлялись
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">3.</div>
+    <div class="item-text">
+      <span class="date-tag">10.09</span>
+      В списке склада показывался 0 вместо реального остатка Ozon когда targetStock = null
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">4.</div>
+    <div class="item-text">
+      <span class="date-tag">07.09</span>
+      Sorin Express: исправлены SQL-join в PM, конфигурация Ozon/Яндекс Экспресс, фильтр r.Ignored=0
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">5.</div>
+    <div class="item-text">
+      <span class="date-tag">07.09</span>
+      Яндекс Экспресс — поиск магазина по campaignId вместо первого в списке; пропуск при отсутствии в YANDEX_SHOPS_JSON
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">6.</div>
+    <div class="item-text">
+      <span class="date-tag">10.09</span>
+      Яндекс Экспресс — автоотключение на 1 час при ошибке 403 FORBIDDEN; предотвращение спама запросов
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">7.</div>
+    <div class="item-text">
+      <span class="date-tag">09–10.09</span>
+      ЯМ карантин цен: API v2 мигрировал с GET → POST; переключён на campaign-level endpoint
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">8.</div>
+    <div class="item-text">
+      <span class="date-tag">09.09</span>
+      repair-yandex-content загружал весь каталог Ozon — теперь только кандидаты (снижение потребления памяти, устранение OOM)
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">9.</div>
+    <div class="item-text">
+      <span class="date-tag">09.09</span>
+      Sorin Express — обнуление остатков для товаров с неактивным PM-поставщиком; настройки через UI
+      <span class="badge badge-feat">🆕 Реализовано</span>
+    </div>
+  </div>
+</div>
+
+<!-- АВИТО -->
+<div class="section">
+  <div class="section-header">🟡 Авито</div>
+
+  <div class="item">
+    <div class="item-num">1.</div>
+    <div class="item-text">
+      <span class="date-tag">10.09</span>
+      Фид: добавлен суффикс -r1 ко всем adId для корректной идентификации объявлений
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">2.</div>
+    <div class="item-text">
+      <span class="date-tag">10.09</span>
+      Тип товара: регулярка PerfumeType + новый тип CosmeticsType для косметики и макияжа
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">3.</div>
+    <div class="item-text">
+      <span class="date-tag">10.09</span>
+      Генерация XML фида: O(n²) конкатенация строк → O(n) через array join (резкое ускорение на больших фидах)
+      <span class="badge badge-perf">⚡ Оптимизация</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">4.</div>
+    <div class="item-text">
+      <span class="date-tag">10.09</span>
+      XML-экранирование спецсимволов в старых объявлениях Status=Удалено
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">5.</div>
+    <div class="item-text">
+      <span class="date-tag">10.09</span>
+      Сбор истёкших объявлений через Items API + восстановление через activate (не archive)
+      <span class="badge badge-feat">🆕 Реализовано</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">6.</div>
+    <div class="item-text">
+      <span class="date-tag">10.09</span>
+      Восстановление истёкших объявлений через фид (флаг outOfStock + принудительная загрузка)
+      <span class="badge badge-feat">🆕 Реализовано</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">7.</div>
+    <div class="item-text">
+      <span class="date-tag">10.09</span>
+      Эндпоинт архивации дублирующихся объявлений (archive-old-duplicates)
+      <span class="badge badge-feat">🆕 Реализовано</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">8.</div>
+    <div class="item-text">
+      <span class="date-tag">09.09</span>
+      Блокировка образцов (samples block) в Авито фиде — образцы не уходят на площадку
+      <span class="badge badge-feat">🆕 Реализовано</span>
+    </div>
+  </div>
+</div>
+
+<!-- ТН ВЭД -->
+<div class="section">
+  <div class="section-header">📋 ТН ВЭД / Отчётность</div>
+
+  <div class="item">
+    <div class="item-num">1.</div>
+    <div class="item-text">
+      <span class="date-tag">08.09</span>
+      Отчёт брендов/ТН ВЭД: фильтрация мусорных брендов (типы товаров, no-brand-маркеры)
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">2.</div>
+    <div class="item-text">
+      <span class="date-tag">08.09</span>
+      Нормализация суббрендов: «Dr.Vranjes Aria» → «Dr.Vranjes» в отчёте Ozon ТН ВЭД
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">3.</div>
+    <div class="item-text">
+      <span class="date-tag">08–09.09</span>
+      topTypes в отчёте — корректный API (v3/product/info/list вместо устаревшего v4)
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">4.</div>
+    <div class="item-text">
+      <span class="date-tag">09.09</span>
+      Расширение косметических брендов по субкоду 3304 в Excel-отчёте ЕАЭС
+      <span class="badge badge-feat">🆕 Реализовано</span>
+    </div>
+  </div>
+</div>
+
+<!-- UI / ИНТЕРФЕЙС -->
+<div class="section">
+  <div class="section-header">🎨 UI / Интерфейс</div>
+
+  <div class="item">
+    <div class="item-num">1.</div>
+    <div class="item-text">
+      <span class="date-tag">07.09</span>
+      Лимиты UI: лог ошибок 80→500 строк; лимит цен 500→2 000 товаров; график продаж не деформируется
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">2.</div>
+    <div class="item-text">
+      <span class="date-tag">07.09</span>
+      Мобильная адаптация: модальные окна, сетка доступов, сетка брендов
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">3.</div>
+    <div class="item-text">
+      <span class="date-tag">09–10.09</span>
+      Большой UI-аудит (13 батчей): перенос всех inline-стилей в CSS-классы по всем страницам (PickingListPage, SuppliersPage, SettingsPage, OperationsPage, ImportPage, TnvedPage и др.)
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">4.</div>
+    <div class="item-text">
+      <span class="date-tag">10.09</span>
+      Иконки маркетплейсов (Ozon, Яндекс, WB, Авито) добавлены на страницы Склада и Автокорзины
+      <span class="badge badge-feat">🆕 Реализовано</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">5.</div>
+    <div class="item-text">
+      <span class="date-tag">10.09</span>
+      Страницы Отзывы и Вопросы объединены в одну — FeedbackPage с фильтрами по маркетплейсу
+      <span class="badge badge-feat">🆕 Реализовано</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">6.</div>
+    <div class="item-text">
+      <span class="date-tag">10.09</span>
+      Предупреждение при уходе со страницы с несохранёнными изменениями (beforeunload guard)
+      <span class="badge badge-feat">🆕 Реализовано</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">7.</div>
+    <div class="item-text">
+      <span class="date-tag">10.09</span>
+      Страница склада: режимы просмотр/редактирование; статистика — переключатель удалённых сотрудников
+      <span class="badge badge-feat">🆕 Реализовано</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">8.</div>
+    <div class="item-text">
+      <span class="date-tag">10.09</span>
+      Пресет «Саппорт» в модальном окне доступов — один клик для выдачи прав на чаты+отзывы+вопросы
+      <span class="badge badge-feat">🆕 Реализовано</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">9.</div>
+    <div class="item-text">
+      <span class="date-tag">09.09</span>
+      ui-audit батч 1–4: реорганизация сайдбара, виртуализация PricesPage, фильтры WB-карточек, вкладки поставщиков
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+</div>
+
+<!-- СТАБИЛЬНОСТЬ / БЭКЕНД -->
+<div class="section">
+  <div class="section-header">⚙️ Стабильность / Бэкенд</div>
+
+  <div class="item">
+    <div class="item-num">1.</div>
+    <div class="item-text">
+      <span class="date-tag">11.09</span>
+      Auto-sync отключён в API-процессе — устранены регулярные блокировки event loop которые роняли сайт
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">2.</div>
+    <div class="item-text">
+      <span class="date-tag">10.09</span>
+      GC: устранён лишний проход reconciler rebuild — давление на сборщик мусора снижено вдвое
+      <span class="badge badge-perf">⚡ Оптимизация</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">3.</div>
+    <div class="item-text">
+      <span class="date-tag">08.09</span>
+      Деплой переведён с SFTP-копирования файлов на git pull — надёжнее и быстрее
+      <span class="badge badge-feat">🆕 Реализовано</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">4.</div>
+    <div class="item-text">
+      <span class="date-tag">10.09</span>
+      fix: POSTING_ALREADY_SHIPPED обрабатывается как успех (не ошибка) при подтверждении отправки Ozon FBS
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+</div>
+
+<!-- MAGICVIBES.RU -->
+<div class="section">
+  <div class="section-header">🌐 MAGICVIBES.RU — Сайт</div>
+
+  <div class="item">
+    <div class="item-num">1.</div>
+    <div class="item-text">
+      <span class="date-tag">09.09</span>
+      Баннеры на главной странице — не отображались вообще; баннер перемещён выше hero-блока
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">2.</div>
+    <div class="item-text">
+      <span class="date-tag">09.09</span>
+      Праздничные баннеры: переключатели в настройках теперь сохраняются (не сбрасываются при следующем нормализации)
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">3.</div>
+    <div class="item-text">
+      <span class="date-tag">09.09</span>
+      Система промокодов — генерация, хранение, применение в заказе (VIBES10, UNBOX7 и др.)
+      <span class="badge badge-feat">🆕 Реализовано</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">4.</div>
+    <div class="item-text">
+      <span class="date-tag">09.09</span>
+      Задержка обновления баннеров уменьшена с 5 мин до 30 сек — изменения в панели видны сразу
+      <span class="badge badge-fixed">✅ Исправлено</span>
+    </div>
+  </div>
+
+  <div class="item">
+    <div class="item-num">5.</div>
+    <div class="item-text">
+      <span class="date-tag">07.09</span>
+      Страницы блога /find /world-map, ароматические ноты, ТН ВЭД свип, shop-bot, улучшения мобильного склада
+      <span class="badge badge-feat">🆕 Реализовано</span>
+    </div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<div class="footer">
+  ⚙️ Сгенерировано автоматически · Magic Vibes Dev · 11.09.2026 · 98 коммитов
+</div>
+
+</body>
+</html>
