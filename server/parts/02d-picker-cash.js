@@ -252,6 +252,10 @@ app.patch("/api/picker-cash/balance/:username/:id", requireAdmin, async (request
         if (!(amount > 0)) throw Object.assign(new Error("Сумма должна быть больше нуля."), { statusCode: 400 });
         credit.amount = amount;
       }
+      if (request.body?.originalUsd !== undefined) {
+        const originalUsd = normalizeFinanceMoney(request.body.originalUsd, null);
+        if (originalUsd !== null) credit.originalUsd = originalUsd;
+      }
       if (request.body?.note !== undefined) credit.note = cleanText(request.body.note || "");
       credit.updatedAt = new Date().toISOString();
       credit.updatedBy = requestUsername(request);

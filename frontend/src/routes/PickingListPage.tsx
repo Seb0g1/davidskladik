@@ -151,7 +151,7 @@ export function PickingListPage() {
   });
 
   const [replaceKey, setReplaceKey] = useState<string | null>(null);
-  const [editCredit, setEditCredit] = useState<{ username: string; id: string; amount: string; note: string } | null>(null);
+  const [editCredit, setEditCredit] = useState<{ username: string; id: string; amount: string; note: string; originalUsd: number } | null>(null);
   const [missingRow, setMissingRow] = useState<PickingRow | null>(null);
   const [pmSearchOpen, setPmSearchOpen] = useState(false);
 
@@ -174,8 +174,8 @@ export function PickingListPage() {
     },
   });
   const editBalanceCreditMutation = useMutation({
-    mutationFn: ({ username, id, amount, note }: { username: string; id: string; amount: number; note: string }) =>
-      fetchJson(`/api/picker-cash/balance/${encodeURIComponent(username)}/${encodeURIComponent(id)}`, PickerBalanceSchema, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ amount, note }) }),
+    mutationFn: ({ username, id, amount, originalUsd, note }: { username: string; id: string; amount: number; originalUsd: number; note: string }) =>
+      fetchJson(`/api/picker-cash/balance/${encodeURIComponent(username)}/${encodeURIComponent(id)}`, PickerBalanceSchema, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ amount, originalUsd, note }) }),
     onSuccess: () => {
       setEditCredit(null);
       void queryClient.invalidateQueries({ queryKey: ["picker-balances"] });
@@ -848,7 +848,7 @@ export function PickingListPage() {
                               type="button"
                               title="Сохранить"
                               disabled={editBalanceCreditMutation.isPending || !(Number(editCredit.amount) > 0)}
-                              onClick={() => editBalanceCreditMutation.mutate({ username: issuePickerDraft, id: c.id, amount: Number(editCredit.amount), note: editCredit.note })}
+                              onClick={() => editBalanceCreditMutation.mutate({ username: issuePickerDraft, id: c.id, amount: Math.round(Number(editCredit.amount) * usdRate), originalUsd: Number(editCredit.amount), note: editCredit.note })}
                             >
                               {editBalanceCreditMutation.isPending ? <Loader2 className="spin" size={12} /> : <Check size={12} />}
                             </button>
@@ -867,7 +867,7 @@ export function PickingListPage() {
                             className="icon-action"
                             type="button"
                             title="Редактировать"
-                            onClick={() => setEditCredit({ username: issuePickerDraft, id: c.id, amount: String(c.amount ?? ""), note: c.note ?? "" })}
+                            onClick={() => { const origUsd = Number((c as Record<string, unknown>).originalUsd ?? Math.round(c.amount / usdRate)); setEditCredit({ username: issuePickerDraft, id: c.id, amount: String(origUsd), note: c.note ?? "", originalUsd: origUsd }); }}
                           >
                             <Pencil size={11} />
                           </button>
@@ -1530,7 +1530,7 @@ export function PickingListPage() {
                             type="button"
                             title="Сохранить"
                             disabled={editBalanceCreditMutation.isPending || !(Number(editCredit.amount) > 0)}
-                            onClick={() => editBalanceCreditMutation.mutate({ username: issuePickerDraft, id: c.id, amount: Number(editCredit.amount), note: editCredit.note })}
+                            onClick={() => editBalanceCreditMutation.mutate({ username: issuePickerDraft, id: c.id, amount: Math.round(Number(editCredit.amount) * usdRate), originalUsd: Number(editCredit.amount), note: editCredit.note })}
                           >
                             {editBalanceCreditMutation.isPending ? <Loader2 className="spin" size={12} /> : <Check size={12} />}
                           </button>
@@ -1549,7 +1549,7 @@ export function PickingListPage() {
                           className="icon-action"
                           type="button"
                           title="Редактировать"
-                          onClick={() => setEditCredit({ username: issuePickerDraft, id: c.id, amount: String(c.amount ?? ""), note: c.note ?? "" })}
+                          onClick={() => { const origUsd = Number((c as Record<string, unknown>).originalUsd ?? Math.round(c.amount / usdRate)); setEditCredit({ username: issuePickerDraft, id: c.id, amount: String(origUsd), note: c.note ?? "", originalUsd: origUsd }); }}
                         >
                           <Pencil size={11} />
                         </button>
