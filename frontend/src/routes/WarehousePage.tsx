@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { AlertTriangle, BarChart2, Bot, Check, Clock, Copy, EyeOff, ImagePlus, Link2, Loader2, Package, PackageCheck, Pencil, RefreshCw, Save, Search, SearchX, SlidersHorizontal, Sparkles, Star, Trash2, Users, X } from "lucide-react";
+import { AlertTriangle, BarChart2, Bot, Check, Clock, Copy, EyeOff, ImagePlus, Link2, Loader2, Package, PackageCheck, PauseCircle, Pencil, RefreshCw, Save, Search, SearchX, SlidersHorizontal, Sparkles, Star, Trash2, Users, X } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { AiAssistantResponseSchema, AiImageJobResponseSchema, BrandIndexStatusSchema, DiagnosticsSchema, Filters, GroupDetailSchema, isProductGroupPageItem, isProductPageItem, LiveRefreshSchema, MutationProductResponseSchema, OperationCreateSchema, PriceHistorySchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductGroupPageItem, ProductLink, ProductRepairSchema, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
 import { MarketplaceBadge } from "../components/MarketplaceBadge";
@@ -604,6 +604,24 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
     onSuccess: () => refreshAfterMutation(),
   });
 
+  // Snooze all links at once ("take off sale") — zeroes marketplace stock immediately.
+  // Uses primary product id; sibling products (Ozon/Yandex variants) are handled server-side.
+  const allLinksSnoozed = uniqueGroupLinks.length > 0 && uniqueGroupLinks.every((link) => Boolean(link.snooze?.snoozedUntil));
+  const snoozeAllMutation = useMutation({
+    mutationFn: () => {
+      const id = encodeURIComponent(primaryProduct?.id || productIds[0] || "");
+      if (allLinksSnoozed) {
+        return fetchJson(`/api/warehouse/products/${id}/snooze-all-links`, MutationProductResponseSchema, { method: "DELETE" });
+      }
+      return fetchJson(`/api/warehouse/products/${id}/snooze-all-links`, MutationProductResponseSchema, {
+        method: "POST",
+        body: JSON.stringify({ days: 5 }),
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+    onSuccess: (payload) => { refreshAfterMutation(payload); snoozeAllMutation.reset(); },
+  });
+
   useEffect(() => {
     setLinksListOpen(uniqueGroupLinks.length === 0);
     setDrafts([]);
@@ -618,6 +636,7 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
     bulkDeleteMutation.reset();
     syncMutation.reset();
     manualPricesMutation.reset();
+    snoozeAllMutation.reset();
     getPmSearchStore("global").clear();
   }, [draftScopeKey]);
 
@@ -723,9 +742,32 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
                 {linksListOpen ? "Свернуть" : `Привязки (${uniqueGroupLinks.length}) ↓`}
               </button>
             )}
+            {!readOnly && uniqueGroupLinks.length > 0 && (
+              <button
+                className={`secondary-action compact${allLinksSnoozed ? " snooze-active-btn" : ""}`}
+                type="button"
+                disabled={snoozeAllMutation.isPending}
+                title={allLinksSnoozed
+                  ? "Все привязки отложены — товар снят с продажи. Нажмите чтобы возобновить продажи."
+                  : "Снять с продажи на 5 дней: обнулит остаток на маркетплейсе и исключит поставщиков. Через 5 дней система снова проверит наличие."}
+                onClick={() => snoozeAllMutation.mutate()}
+              >
+                {snoozeAllMutation.isPending ? <Loader2 className="spin" size={14} /> : <PauseCircle size={14} />}
+                {allLinksSnoozed ? "Возобновить" : "Снять с продажи"}
+              </button>
+            )}
           </>);
         })()}
       </div>
+      {snoozeAllMutation.error && (
+        <div className="inline-error wh-error-xs">{errorMessage(snoozeAllMutation.error)}</div>
+      )}
+      {allLinksSnoozed && (
+        <div className="warning-strip compact">
+          <PauseCircle size={14} />
+          <span>Товар снят с продажи вручную — все привязки отложены, остаток на маркетплейсе обнулён. Нажмите «Возобновить» выше чтобы вернуть в продажу.</span>
+        </div>
+      )}
 
       {linksListOpen ? (<>
         {priceLimitProducts.length > 0 ? (

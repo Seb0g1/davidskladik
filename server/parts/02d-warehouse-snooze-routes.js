@@ -210,3 +210,150 @@ app.delete("/api/warehouse/products/:id/links/:linkId/snooze", requireAdmin, asy
     next(error);
   }
 });
+
+// Snooze ALL links on a product at once — one-click "take off sale".
+// POST  /api/warehouse/products/:id/snooze-all-links  { days }
+// DELETE /api/warehouse/products/:id/snooze-all-links  — cancel all
+const SNOOZE_ALL_GROUP_MARKER = "__all__";
+
+async function applyWarehouseAllLinksSnooze(productId, days) {
+  return await withWarehouseProductMutationLock([productId], async () => {
+    const [product] = await readWarehouseProductsFromPostgresByIds([productId]);
+    if (!product) {
+      const error = new Error("Товар склада не найден.");
+      error.statusCode = 404;
+      throw error;
+    }
+    if (!(Array.isArray(product.links) && product.links.length)) {
+      return { product, snoozedUntil: null, days, count: 0 };
+    }
+    const now = new Date().toISOString();
+    const snoozedUntil = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
+    const snoozeData = { snoozedAt: now, snoozedUntil, days };
+
+    const updatedLinks = product.links.map((link) => ({ ...link, snooze: snoozeData }));
+    const updatedProduct = { ...product, links: updatedLinks, targetStock: 0, updatedAt: now, userUpdatedAt: now };
+
+    const groupProducts = await hydrateWarehouseProductsForIds([productId], { expandGroups: true });
+    const siblingsToZero = groupProducts
+      .filter((p) => String(p.id) !== String(productId))
+      .map((p) => ({
+        ...p,
+        targetStock: 0,
+        links: (p.links || []).map((link) => {
+          if (link.snooze && !link.snooze.groupSnoozedByLinkId) return link;
+          return { ...link, snooze: { ...snoozeData, groupSnoozedByLinkId: SNOOZE_ALL_GROUP_MARKER } };
+        }),
+      }));
+
+    const allToWrite = [updatedProduct, ...siblingsToZero];
+    await writeWarehouseProductPatch(allToWrite, { reason: "snooze_all_links", writeLinks: true });
+
+    sendZeroStocksToMarketplace(allToWrite).catch((error) => {
+      logger.warn("snooze all links zero-stock send failed", { productId, detail: error?.message || String(error) });
+    });
+
+    return { product: updatedProduct, snoozedUntil, days, count: updatedLinks.length };
+  });
+}
+
+async function cancelWarehouseAllLinksSnooze(productId, request) {
+  return await withWarehouseProductMutationLock([productId], async () => {
+    const [product] = await readWarehouseProductsFromPostgresByIds([productId]);
+    if (!product) {
+      const error = new Error("Товар склада не найден.");
+      error.statusCode = 404;
+      throw error;
+    }
+    const defaultStock = Math.max(1, Number(process.env.LINKED_DEFAULT_TARGET_STOCK || 5) || 5);
+    const now = new Date().toISOString();
+
+    // Remove all snoozes from own links
+    const updatedLinks = (product.links || []).map((link) => {
+      if (!link.snooze) return link;
+      const { snooze: _removed, ...rest } = link;
+      return rest;
+    });
+    const updatedProduct = {
+      ...product,
+      links: updatedLinks,
+      updatedAt: now,
+      userUpdatedAt: now,
+      targetStock: defaultStock,
+      noSupplierAutomation: product.noSupplierAutomation
+        ? { ...product.noSupplierAutomation, stockZeroAt: null, archivedAt: null }
+        : null,
+    };
+    await writeWarehouseProductPatch([updatedProduct], { reason: "snooze_all_cancel", writeLinks: true });
+
+    const siblingGroupProducts = await hydrateWarehouseProductsForIds([productId], { expandGroups: true });
+    const siblingsToUnsnooze = siblingGroupProducts
+      .filter((p) => String(p.id) !== String(productId))
+      .map((p) => {
+        let removedSnooze = false;
+        const newLinks = (p.links || []).map((link) => {
+          if (!link.snooze?.snoozedUntil) return link;
+          if (link.snooze.groupSnoozedByLinkId && link.snooze.groupSnoozedByLinkId !== SNOOZE_ALL_GROUP_MARKER) return link;
+          removedSnooze = true;
+          const { snooze: _removed, ...rest } = link;
+          return rest;
+        });
+        if (!removedSnooze) return null;
+        return {
+          ...p,
+          updatedAt: now,
+          targetStock: defaultStock,
+          links: newLinks,
+          noSupplierAutomation: p.noSupplierAutomation
+            ? { ...p.noSupplierAutomation, stockZeroAt: null, archivedAt: null }
+            : null,
+        };
+      })
+      .filter(Boolean);
+
+    if (siblingsToUnsnooze.length) {
+      await writeWarehouseProductPatch(siblingsToUnsnooze, { reason: "snooze_all_cancel_siblings", writeLinks: true });
+    }
+
+    await appendAudit(request, "warehouse.link.snooze_all_cancel", { productId });
+
+    const directRestoreProducts = [
+      { ...updatedProduct, targetStock: defaultStock },
+      ...siblingsToUnsnooze.map((p) => ({ ...p, targetStock: defaultStock })),
+    ];
+    void restoreStocksOnMarketplaces(directRestoreProducts)
+      .catch((err) => logger.warn("snooze_all_cancel direct stock restore failed", {
+        productId,
+        detail: err?.message || String(err),
+      }));
+
+    queueLinkedProductActivation([productId], "snooze_all_cancel", warehouseLinkActivationRequestMeta([productId], { username: requestUsername(request) }))
+      .catch((error) => logger.warn("snooze all cancel recovery queue failed", { productId, detail: error?.message || String(error) }));
+
+    return { product: updatedProduct };
+  });
+}
+
+app.post("/api/warehouse/products/:id/snooze-all-links", requireAdmin, async (request, response, next) => {
+  try {
+    const productId = cleanText(request.params.id);
+    if (!productId) return response.status(400).json({ error: "Не указан ID товара." });
+    const days = Math.max(1, Math.min(SNOOZE_MAX_DAYS, Number(request.body?.days || SNOOZE_DEFAULT_DAYS) || SNOOZE_DEFAULT_DAYS));
+    const { product, snoozedUntil, count } = await applyWarehouseAllLinksSnooze(productId, days);
+    await appendAudit(request, "warehouse.link.snooze_all", { productId, days, snoozedUntil, count });
+    response.json({ ok: true, product: normalizeWarehouseProduct(product), snoozedUntil, count });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/warehouse/products/:id/snooze-all-links", requireAdmin, async (request, response, next) => {
+  try {
+    const productId = cleanText(request.params.id);
+    if (!productId) return response.status(400).json({ error: "Не указан ID товара." });
+    const { product } = await cancelWarehouseAllLinksSnooze(productId, request);
+    response.json({ ok: true, product: normalizeWarehouseProduct(product) });
+  } catch (error) {
+    next(error);
+  }
+});
