@@ -502,8 +502,7 @@ export function SuppliersPage() {
             <div className="supplier-table-head">
               <span>Поставщик</span>
               <span>Валюта</span>
-              <span>Долг / Баланс</span>
-              <span>Оплачено</span>
+              <span>Баланс</span>
               <span>Последняя оплата</span>
               <span></span>
             </div>
@@ -521,14 +520,10 @@ export function SuppliersPage() {
               const ledger = asRecord(raw.ledger);
               const balance = Number(ledger.balance || 0);
               const supplierCurrency = String(raw.priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD";
-              const paidTotal = Number(ledger.paidTotal || 0);
               const debtTotalUsdList = Number((ledger as Record<string, unknown>).debtTotalUsd || 0);
               const creditTotalUsdList = Number((ledger as Record<string, unknown>).creditTotalUsd || 0);
               const creditTotalRubList = Number((ledger as Record<string, unknown>).creditTotalRub || 0);
-              const paidTotalUsdList = Number((ledger as Record<string, unknown>).paidTotalUsd || 0);
-              const paidTotalRubList = Number((ledger as Record<string, unknown>).paidTotalRubOnly || paidTotal);
               const balanceDisplay = supplierCurrency === "USD" ? -debtTotalUsdList + creditTotalUsdList + creditTotalRubList / usdRate : balance;
-              const paidDisplay = supplierCurrency === "USD" ? paidTotalUsdList + paidTotalRubList / usdRate : paidTotalRubList;
               const active = supplierIsActive(supplier);
               const isOpen = drawerSupplier && supplierId(drawerSupplier) === id;
               return (
@@ -548,9 +543,6 @@ export function SuppliersPage() {
                   <div>{supplierCurrency}</div>
                   <div className={`${balanceDisplay < 0 ? "danger-text" : balanceDisplay > 0 ? "success-text" : ""} sp-tabular`}>
                     {moneySigned(balanceDisplay, supplierCurrency)}
-                  </div>
-                  <div className="sp-tabular" style={{ color: paidDisplay > 0 ? "var(--success, #4ed39a)" : "var(--text-muted)" }}>
-                    {paidDisplay > 0 ? moneyAmount(paidDisplay, supplierCurrency) : "—"}
                   </div>
                   <div className="muted-note">
                     {ledger.lastPaymentAt ? compactDate(String(ledger.lastPaymentAt)) : "—"}

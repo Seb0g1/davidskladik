@@ -3275,7 +3275,7 @@ button:disabled {
 
 .supplier-table-head {
   display: grid;
-  grid-template-columns: minmax(160px, 2fr) 60px minmax(100px, 1fr) minmax(100px, 1fr) 100px 32px;
+  grid-template-columns: minmax(160px, 2fr) 60px minmax(100px, 1fr) 100px 32px;
   gap: 8px;
   padding: 6px 10px;
   font-size: 0.75rem;
@@ -3288,7 +3288,7 @@ button:disabled {
 
 .supplier-table-row {
   display: grid;
-  grid-template-columns: minmax(160px, 2fr) 60px minmax(100px, 1fr) minmax(100px, 1fr) 100px 32px;
+  grid-template-columns: minmax(160px, 2fr) 60px minmax(100px, 1fr) 100px 32px;
   gap: 8px;
   align-items: center;
   padding: 9px 10px;
@@ -9852,7 +9852,7 @@ textarea:focus-visible,
 @media (max-width: 640px) {
   /* Supplier table: ensure rows keep min-width inside the scrollable container */
   .supplier-table-head,
-  .supplier-table-row { min-width: 552px; }
+  .supplier-table-row { min-width: 440px; }
 
   /* Prevent any element inside the picking page from causing horizontal scroll */
   .picking-page { overflow-x: hidden; }
