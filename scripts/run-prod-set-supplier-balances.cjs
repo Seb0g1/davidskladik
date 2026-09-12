@@ -38,18 +38,19 @@ function run(cmd) {
 }
 
 try {
-  // 1. Копируем скрипт на сервер
+  // 1. Копируем скрипт в scripts/ чтобы __dirname/../.env указывал на корень проекта
+  const REMOTE_SCRIPT = `${REMOTE_APP}/scripts/_set-supplier-balances-tmp.cjs`;
   console.log(`\n▶ Копируем скрипт на сервер...`);
-  run(`scp ${SSH_OPTS} "${LOCAL_SCRIPT}" ${SSH_HOST}:/tmp/_set-supplier-balances.cjs`);
+  run(`scp ${SSH_OPTS} "${LOCAL_SCRIPT}" ${SSH_HOST}:${REMOTE_SCRIPT}`);
   console.log("✓ Скрипт загружен\n");
 
-  // 2. Запускаем
-  const cmd = `cd ${REMOTE_APP} && node /tmp/_set-supplier-balances.cjs ${applyFlag} ${skipZeroFlag}`.trim();
+  // 2. Запускаем из директории проекта (чтобы node_modules было доступно)
+  const cmd = `cd ${REMOTE_APP} && node scripts/_set-supplier-balances-tmp.cjs ${applyFlag} ${skipZeroFlag}`.trim();
   console.log(`▶ Запускаем на сервере: ${cmd}\n`);
   run(`ssh ${SSH_OPTS} ${SSH_HOST} "${cmd.replace(/"/g, '\\"')}"`);
 
   // 3. Чистим
-  run(`ssh ${SSH_OPTS} ${SSH_HOST} "rm -f /tmp/_set-supplier-balances.cjs"`);
+  try { run(`ssh ${SSH_OPTS} ${SSH_HOST} "rm -f ${REMOTE_SCRIPT}"`); } catch (_) {}
 } catch (err) {
   console.error("\n❌ Ошибка:", err.message || err);
   process.exit(1);

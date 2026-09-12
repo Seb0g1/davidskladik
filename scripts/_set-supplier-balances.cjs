@@ -30,7 +30,7 @@ const SUPPLIER_TARGETS = [
   { name: "Клео",             balance:      0    },
   { name: "Гор",              balance:      0    },
   { name: "Слава",            balance:      0    },
-  { name: "Вазген",           balance:     -2.45 },
+  { name: "Вазген",           balance:      2.45 },
   { name: "Хачаиурян",        balance:      1.44 },
   { name: "Тимур",            balance:      3.5  },
   { name: "Сергей 2216",      balance:      4    },

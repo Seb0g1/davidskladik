@@ -372,10 +372,7 @@ export function SuppliersPage() {
     const creditTotalRubDrawer = Number((ledger as Record<string, unknown>).creditTotalRub || 0);
     const paidTotalUsdDrawer = Number((ledger as Record<string, unknown>).paidTotalUsd || 0);
     const paidTotalRubOnlyDrawer = Number((ledger as Record<string, unknown>).paidTotalRubOnly || paidTotalRubDrawer);
-    // Balance: debtUsd − (creditsUsd + creditsRub/rate). No rate-drift because each amount is in its native currency.
-    const balanceUsd = supplierCurrency === "USD"
-      ? -debtTotalUsdDrawer + creditTotalUsdDrawer + creditTotalRubDrawer / usdRate
-      : balance / usdRate;
+    const balanceUsd = supplierCurrency === "USD" ? balance : balance / usdRate;
     const paymentAmount = paymentDrafts[id] || "";
     const paymentNote = paymentNotes[id] || "";
     const active = supplierIsActive(supplier);
@@ -520,10 +517,7 @@ export function SuppliersPage() {
               const ledger = asRecord(raw.ledger);
               const balance = Number(ledger.balance || 0);
               const supplierCurrency = String(raw.priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD";
-              const debtTotalUsdList = Number((ledger as Record<string, unknown>).debtTotalUsd || 0);
-              const creditTotalUsdList = Number((ledger as Record<string, unknown>).creditTotalUsd || 0);
-              const creditTotalRubList = Number((ledger as Record<string, unknown>).creditTotalRub || 0);
-              const balanceDisplay = supplierCurrency === "USD" ? -debtTotalUsdList + creditTotalUsdList + creditTotalRubList / usdRate : balance;
+              const balanceDisplay = balance;
               const active = supplierIsActive(supplier);
               const isOpen = drawerSupplier && supplierId(drawerSupplier) === id;
               return (
