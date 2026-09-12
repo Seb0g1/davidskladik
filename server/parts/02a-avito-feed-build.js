@@ -66,11 +66,113 @@ function avitoXmlCdataTag(name, value) {
   return `    <${name}><![CDATA[${text.replace(/\]\]>/g, "]]]]><![CDATA[>")}]]></${name}>\n`;
 }
 
+// Генерирует уникальное описание по атрибутам товара когда Ozon-описание
+// отсутствует. Включает артикул поставщика как гарантию уникальности.
+// Шесть вариантов фраз выбираются по хешу adId — соседние товары получают
+// разные формулировки даже при одинаковых атрибутах.
+function buildUniqueAvitoDescription(listing, feedDefaults = {}) {
+  const title = cleanText(listing.title) || "";
+  const brand = cleanText(listing.brand) || "";
+  const categoryKey = cleanText(listing.categoryKey) || "";
+  const extraFields = listing.extraFields || {};
+  const gender = cleanText(extraFields.Gender) || "";
+  const perfumeType = cleanText(extraFields.PerfumeType) || "";
+  const volumeTag = cleanText(extraFields.Volume) || (listing.volumeMl > 0 ? `${listing.volumeMl} мл` : "");
+  const rawArticle = cleanText(listing.sourceOfferId || listing.adId?.replace(/^oz-/, "") || "").replace(/#/g, "").trim();
+  const articleLine = rawArticle ? `Артикул: ${rawArticle}.` : "";
+
+  const adId = cleanText(listing.adId) || "";
+  let h = 0;
+  for (let i = 0; i < adId.length; i++) h = ((h << 5) - h + adId.charCodeAt(i)) | 0;
+  const v = Math.abs(h) % 6;
+
+  const isParfum = categoryKey.startsWith("parfum");
+  const isMakeup = categoryKey.startsWith("makeup");
+  const isHair = categoryKey === "hair";
+  const isBody = categoryKey.startsWith("body");
+  const isFace = categoryKey.startsWith("face");
+
+  const DELIVERY = [
+    "Доставляем по всей России через Авито Доставку.",
+    "Отправка по России — Авито Доставка.",
+    "Авито Доставка по всей стране.",
+    "Быстрая отправка через Авито Доставку.",
+    "Доставка в любой регион России.",
+    "Работаем с Авито Доставкой по всей России.",
+  ];
+  const CONDITION = [
+    "Товар новый, оригинал, в нераспечатанной упаковке.",
+    "Новый, в фирменной упаковке производителя, подлинность гарантируется.",
+    "Оригинальная продукция, новый товар, упаковка не вскрыта.",
+    "Новый, в заводской упаковке, без признаков вскрытия.",
+    "Товар оригинальный, новый, упаковка целая.",
+    "Подлинный товар, новый, в нераспечатанной коробке.",
+  ];
+  const delivery = DELIVERY[v];
+  const condition = CONDITION[v];
+
+  let parts = [];
+
+  if (isParfum) {
+    // Prepositional gender phrase: "для женщин", "для мужчин", "для всех"
+    // avoids adjective-noun gender agreement issues (женский/женская парфюмерная вода).
+    const genderPrep = { "Женщины": "женщин", "Мужчины": "мужчин", "Унисекс": "всех" }[gender] || "";
+    const typeStr = (perfumeType || "парфюм").toLowerCase();
+    const BRAND_OPENERS = brand ? [
+      `${brand} — парфюмерный дом с репутацией на мировом рынке.`,
+      `Продукция бренда ${brand} — выбор ценителей качества.`,
+      `${brand}: аромат, который говорит сам за себя.`,
+      `Аромат от ${brand} — сочетание стиля и стойкости.`,
+      `${brand} — один из признанных брендов в парфюмерии.`,
+      `${brand}: изысканный вкус в каждом флаконе.`,
+    ] : Array(6).fill("Аромат от известного производителя.");
+    // Title уже содержит объём — не дублируем volumeTag в строке описания.
+    const productLine = genderPrep
+      ? `${title} — ${typeStr} для ${genderPrep}.`
+      : `${title} — ${typeStr}.`;
+    parts = [BRAND_OPENERS[v], productLine, condition, delivery, articleLine].filter(Boolean);
+  } else if (isMakeup) {
+    const BRAND_OPENERS = brand ? [
+      `${brand} — профессиональная косметика высокого класса.`,
+      `Косметика ${brand}: качество для ценителей.`,
+      `${brand}: средства для макияжа от ведущего бренда.`,
+      `Продукция ${brand} — выбор профессионалов и любителей.`,
+      `${brand} — проверенный бренд в мире косметики.`,
+      `${brand}: каждое средство — результат многолетних разработок.`,
+    ] : Array(6).fill("Профессиональная косметика для макияжа.");
+    parts = [BRAND_OPENERS[v], `${title}${volumeTag ? ` (${volumeTag})` : ""}.`, condition, delivery, articleLine].filter(Boolean);
+  } else if (isHair) {
+    const BRAND_OPENERS = brand ? [
+      `${brand} — уход за волосами профессионального качества.`,
+      `Средства ${brand} для волос: профессиональный результат дома.`,
+      `${brand}: линейка по уходу за волосами.`,
+      `Продукция ${brand} для волос — качество без компромиссов.`,
+      `${brand} — надёжный бренд средств для волос.`,
+      `${brand}: уход за волосами от ведущего производителя.`,
+    ] : Array(6).fill("Профессиональное средство по уходу за волосами.");
+    parts = [BRAND_OPENERS[v], `${title}${volumeTag ? ` (${volumeTag})` : ""}.`, condition, delivery, articleLine].filter(Boolean);
+  } else if (isBody || isFace) {
+    const typeStr = isBody ? "уходовое средство для тела" : "средство по уходу за лицом";
+    const BRAND_OPENERS = brand ? [
+      `${brand} — косметика для ухода за кожей.`,
+      `Продукция ${brand}: эффективный уход за кожей.`,
+      `${brand}: линейка уходовой косметики.`,
+      `Средства ${brand} для ухода — качество и результат.`,
+      `${brand} — бренд с репутацией в уходовой косметике.`,
+      `${brand}: профессиональный уход для вашей кожи.`,
+    ] : Array(6).fill(`Уходовая косметика — ${typeStr}.`);
+    parts = [BRAND_OPENERS[v], `${title}${volumeTag ? ` (${volumeTag})` : ""} — ${typeStr}.`, condition, delivery, articleLine].filter(Boolean);
+  } else {
+    const tmpl = cleanText(feedDefaults.description || "");
+    const base = tmpl.replace(/\{title\}/g, title).replace(/\{brand\}/g, brand);
+    return base + (articleLine ? " " + articleLine : "");
+  }
+
+  return parts.join(" ");
+}
+
 function buildAvitoAdXml(listing, feedDefaults = {}) {
-  const description = listing.description
-    || cleanText(feedDefaults.description)
-      .replace(/\{title\}/g, listing.title || "")
-      .replace(/\{brand\}/g, listing.brand || "");
+  const description = listing.description?.trim() || buildUniqueAvitoDescription(listing, feedDefaults);
   const emitted = new Set();
   let xml = "  <Ad>\n";
   const emit = (name, value) => {
