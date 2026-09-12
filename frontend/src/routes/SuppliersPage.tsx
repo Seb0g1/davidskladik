@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Boxes, CheckCircle2, ChevronRight, CreditCard, Edit3, Filter, Loader2, Package, Plus, RefreshCw, RotateCcw, Scale, Search, Trash2, Truck, UserX, X } from "lucide-react";
+import { Boxes, CheckCircle2, ChevronRight, CreditCard, Edit3, Filter, Loader2, Package, PackageX, Plus, RefreshCw, RotateCcw, Scale, Search, Trash2, Truck, UserX, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
@@ -271,6 +271,11 @@ export function SuppliersPage() {
       void queryClient.invalidateQueries({ queryKey: ["supplier-profile"] });
       void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
     },
+  });
+
+  const zeroStockMutation = useMutation({
+    mutationFn: (id: string) => fetchJson(`/api/suppliers/${id}/zero-stock`, z.object({ ok: z.boolean(), zeroed: z.number(), total: z.number() }), { method: "POST" }),
+    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["suppliers"] }); },
   });
 
   const suppliers = suppliersQuery.data?.suppliers || [];
@@ -911,6 +916,20 @@ export function SuppliersPage() {
                 ) : (
                   <button className="secondary-action" type="button" disabled={patchSupplier.isPending} onClick={() => patchSupplier.mutate({ id: drawerData.id, patch: { stopped: false } })}><CheckCircle2 size={16} /> Вернуть</button>
                 )}
+                <button
+                  className="secondary-action danger-action"
+                  type="button"
+                  disabled={zeroStockMutation.isPending}
+                  title="Немедленно обнулить остатки на всех маркетплейсах для товаров этого поставщика"
+                  onClick={() => {
+                    if (!window.confirm(`Обнулить остатки на маркетплейсах для всех товаров поставщика «${drawerData.supplier.name}»?\n\nЭто немедленно скроет товары из продажи.`)) return;
+                    zeroStockMutation.mutate(drawerData.id, {
+                      onSuccess: (res) => window.alert(`Готово: обнулено ${res.zeroed} из ${res.total} товаров.`),
+                    });
+                  }}
+                >
+                  {zeroStockMutation.isPending ? "Обнуляем…" : <><PackageX size={16} /> Обнулить остатки</>}
+                </button>
                 <button
                   className="secondary-action danger-action"
                   type="button"

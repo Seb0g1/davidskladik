@@ -72,7 +72,7 @@ function supplierLedgerSummaryFromEntries(entries = []) {
       return price > 0 ? sum + normalizeFinanceMoney(price * qty, 0) : sum;
     }, 0);
   return {
-    balance: Math.round(balance),
+    balance: normalizeFinanceMoney(balance, 2),
     debtTotal: Math.round(debtTotal),
     paidTotal: Math.round(paidTotal),
     paidTotalUsd: normalizeFinanceMoney(paidTotalUsd, 0),

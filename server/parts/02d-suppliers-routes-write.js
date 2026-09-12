@@ -162,6 +162,53 @@ app.patch("/api/suppliers/:id", requireAdmin, async (request, response, next) =>
   }
 });
 
+// Немедленно обнуляет остатки на всех маркетплейсах для всех товаров поставщика.
+app.post("/api/suppliers/:id/zero-stock", requireAdmin, async (request, response, next) => {
+  try {
+    const warehouse = await readWarehouse();
+    const supplier = warehouse.suppliers.find((s) => s.id === request.params.id);
+    if (!supplier) return response.status(404).json({ error: "Поставщик не найден." });
+
+    const prisma = getPrisma();
+    const conditions = [];
+    const supplierNameNorm = normalizeSupplierName(supplier.name);
+    const partnerId = cleanText(supplier.partnerId);
+    if (supplierNameNorm) conditions.push({ supplierName: { equals: supplierNameNorm, mode: "insensitive" } });
+    if (partnerId) conditions.push({ partnerId });
+
+    let productIds = [];
+    if (conditions.length && prisma) {
+      const links = await prisma.productLink.findMany({ where: { OR: conditions }, select: { productId: true } });
+      productIds = [...new Set(links.map((l) => l.productId))];
+    }
+
+    if (!productIds.length) return response.json({ ok: true, zeroed: 0, total: 0 });
+
+    const built = await buildFreshWarehouseProducts(productIds.slice(0, 500), { livePriceMaster: false, persistMutations: false });
+    const toZero = built.filter((p) => p.id && p.offerId && p.target);
+    const actions = toZero.length ? await sendZeroStocksToMarketplace(toZero) : [];
+
+    const now = new Date().toISOString();
+    if (toZero.length) {
+      const patched = toZero.map((p) => ({
+        ...p,
+        targetStock: 0,
+        noSupplierAutomation: { ...(p.noSupplierAutomation || {}), stockZeroAt: now },
+        updatedAt: now,
+      }));
+      writeWarehouseProductPatch(patched, { reason: "supplier_zero_stock" }).catch((err) =>
+        logger.warn("supplier zero stock patch failed", { detail: err?.message }),
+      );
+    }
+
+    const zeroed = actions.filter((a) => a.ok).length;
+    await appendAudit(request, "supplier.zero_stock", { supplierId: supplier.id, supplierName: supplier.name, productCount: productIds.length, zeroed });
+    response.json({ ok: true, zeroed, total: toZero.length });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.delete("/api/suppliers/:id", requireAdmin, async (request, response, next) => {
   try {
     const warehouse = await readWarehouse();

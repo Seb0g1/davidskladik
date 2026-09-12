@@ -507,7 +507,7 @@ app.post("/api/supplier-ledger/adjust", requireAdmin, async (request, response, 
     if (!supplierName && !partnerId) return response.status(400).json({ error: "supplierName or partnerId is required.", code: "supplier_ledger_identity_required" });
     if (targetBalance === null || !Number.isFinite(targetBalance)) return response.status(400).json({ error: "targetBalance is required.", code: "target_balance_required" });
     const current = await listSupplierLedgerEntries({ supplierName, partnerId, status: "active", limit: 1000, period: "all" });
-    const currentBalance = normalizeFinanceMoney(current.summary.balance, 0);
+    const currentBalance = normalizeFinanceMoney(current.summary.balance, 2);
     const delta = targetBalance - currentBalance;
     if (Math.abs(delta) < 0.005) {
       return response.json({ ok: true, skipped: true, currentBalance, targetBalance, delta: 0, message: "Баланс уже совпадает, корректировка не нужна." });
