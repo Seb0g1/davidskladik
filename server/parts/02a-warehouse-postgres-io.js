@@ -303,6 +303,7 @@ async function writeWarehouseProductPatch(products = [], { reason = "warehouse_p
       const chunkSize = Math.max(25, Math.min(250, Number(process.env.WAREHOUSE_POSTGRES_WRITE_CHUNK_SIZE || 100) || 100));
       const writeConcurrency = warehousePostgresWriteConcurrency();
       for (const productChunk of chunkArray(normalizedProducts, chunkSize)) {
+        await new Promise((r) => setImmediate(r));
         await runWithLimitedConcurrency(productChunk, writeConcurrency, async (product) => {
           await upsertWarehouseProductPostgres(getPrisma(), product);
         });
@@ -322,6 +323,7 @@ async function writeWarehouseProductPatch(products = [], { reason = "warehouse_p
       const chunkSize = Math.max(25, Math.min(250, Number(process.env.WAREHOUSE_POSTGRES_WRITE_CHUNK_SIZE || 100) || 100));
       const writeConcurrency = warehousePostgresWriteConcurrency();
       for (const productChunk of chunkArray(normalizedProducts, chunkSize)) {
+        await new Promise((r) => setImmediate(r));
         await runWithLimitedConcurrency(productChunk, writeConcurrency, async (product) => {
           await upsertWarehouseProductPostgres(getPrisma(), product);
         });

@@ -400,7 +400,7 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
   const statusList = (Array.isArray(statuses) && statuses.length ? statuses : ["PROCESSING"])
     .map((item) => cleanText(item).toUpperCase())
     .filter(Boolean);
-  const substatusList = (Array.isArray(substatuses) && substatuses.length ? substatuses : ["STARTED"])
+  const substatusList = (Array.isArray(substatuses) && substatuses.length ? substatuses : ["STARTED", "READY_TO_SHIP"])
     .map((item) => cleanText(item).toUpperCase())
     .filter(Boolean);
   for (const { shop, campaignIds } of byBusiness.values()) {
