@@ -183,7 +183,7 @@ async function syncYandexFinanceOrders() {
           if (["CANCELLED", "RETURNED", "UNPAID"].includes(status)) continue;
           for (const item of order.items || []) {
             const quantity = Math.max(1, Number(item.count || 1) || 1);
-            const unitPrice = Number(item.price ?? item.buyerPrice ?? item.priceBeforeDiscount ?? 0) || 0;
+            const unitPrice = Number(item.price ?? item.buyerPrice ?? 0) || 0;
             const saleAmount = normalizeFinanceMoney(unitPrice * quantity, 0);
             const subsidyTotal = (item.subsidies || []).reduce((sum, subsidy) => sum + (Number(subsidy.amount || 0) || 0), 0);
             // Distribute the order-level commission across items by sale share.
