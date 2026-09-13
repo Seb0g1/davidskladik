@@ -4385,9 +4385,14 @@ button:disabled {
 .price-history-mini { display: flex; flex-direction: column; gap: 2px; margin: 6px 0 10px; font-size: 12px; }
 .price-history-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
 .price-history-header .section-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #7f92bd; }
-.price-history-item { display: flex; gap: 10px; align-items: baseline; padding: 3px 0; border-bottom: 1px solid rgba(127,146,189,.1); }
+.price-history-item { display: flex; flex-direction: column; gap: 2px; padding: 4px 0; border-bottom: 1px solid rgba(127,146,189,.1); }
 .price-history-item:last-child { border-bottom: none; }
-.price-history-item .muted-note { color: #7f92bd; font-size: 11px; flex: 1; display: flex; align-items: center; gap: 4px; }
+.price-history-main { display: flex; gap: 10px; align-items: baseline; }
+.price-history-main .muted-note { color: #7f92bd; font-size: 11px; }
+.price-history-meta { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; color: #7f92bd; font-size: 11px; padding-left: 2px; }
+.price-history-meta span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; }
+.price-history-meta .mp-badge { max-width: none; }
+.price-history-reason { color: #7f92bd; font-style: italic; }
 .price-history-item .price-up { color: #4ade80; font-weight: 600; }
 .price-history-item .price-down { color: #f87171; font-weight: 600; }
 .price-history-item .price-delta { font-size: 10px; margin-left: 4px; opacity: 0.8; }
@@ -5140,12 +5145,24 @@ textarea {
   height: 40px;
   border-radius: 8px;
   background: rgba(var(--accent-rgb), 0.13);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border: 1px solid rgba(var(--accent-rgb), 0.25);
+}
+
+/* Bug 4: reserve two-line height so sparklines stay aligned across all cards */
+.stat-body {
+  min-height: 54px;
+  justify-content: center;
 }
 
 .stat-body small {
   color: var(--accent-strong);
   font-size: 11px;
   font-weight: 700;
+  min-height: 15px;
 }
 
 .stat-card strong {

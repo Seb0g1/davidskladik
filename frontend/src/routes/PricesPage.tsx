@@ -111,7 +111,7 @@ export function PricesPage() {
     { label: "PM timeout", reason: "pm_live_timeout", status: "all" },
     { label: "нет поставщика", reason: "no_supplier", status: "all" },
     { label: "нет PM-привязки", reason: "no_pricemaster_link", status: "all" },
-    { label: "verified", reason: "all", status: "verified" },
+    { label: "верифицировано", reason: "all", status: "verified" },
   ];
   const rawItems = itemsQuery.data?.items || [];
   const okReasons = ["ok", "unchanged", "unchanged_verified", "verified"];
@@ -162,7 +162,7 @@ export function PricesPage() {
         </div>
         <div className="price-automation-badge">
           <CheckCircle2 size={22} />
-          <strong>{summary.data?.autoEnabled ? "auto on" : "auto off"}</strong>
+          <strong>{summary.data?.autoEnabled ? "авто вкл" : "авто выкл"}</strong>
           <span>последний расчет: {formatDate(summary.data?.updatedAt)}</span>
         </div>
       </div>
@@ -170,7 +170,7 @@ export function PricesPage() {
       <section className="dashboard-metrics">
         <Stat label="SKU под контролем" value={summary.data?.total ?? 0} tone="accent" icon={<BadgeDollarSign size={18} />} />
         <Stat label="Retry цен" value={summary.data?.retryTotal ?? 0} tone={summary.data?.retryTotal ? "warn" : "success"} icon={<AlertTriangle size={18} />} />
-        <Stat label="Ozon autoarchive" value={summary.data?.ozonUnarchiveQueued ?? 0} tone={summary.data?.ozonUnarchiveQueued ? "warn" : "success"} icon={<Zap size={18} />} />
+        <Stat label="Ozon авто-архив" value={summary.data?.ozonUnarchiveQueued ?? 0} tone={summary.data?.ozonUnarchiveQueued ? "warn" : "success"} icon={<Zap size={18} />} />
         <Stat label="Проблем Ozon / Yandex" value={`${ozonIssues} / ${yandexIssues}`} tone={ozonIssues || yandexIssues ? "warn" : "success"} icon={<AlertTriangle size={18} />} />
       </section>
 
@@ -210,8 +210,8 @@ export function PricesPage() {
               { value: "all", label: "Все статусы" },
               { value: "queued", label: "В очереди" },
               { value: "verification_pending", label: "Ждем проверку" },
-              { value: "verified", label: "Verified Ozon" },
-              { value: "api_accepted", label: "API accepted" },
+              { value: "verified", label: "Подтверждено Ozon" },
+              { value: "api_accepted", label: "API принял" },
               { value: "ozon_price_not_applied", label: "Ozon не применил" },
               { value: "ozon_price_delayed", label: "Ozon отложил" },
             ]}
@@ -285,7 +285,7 @@ export function PricesPage() {
 
       <div className="table-panel price-table price-status-table price-table--virtual" ref={tableRef}>
         <div className="table-head">
-          <span>Маркет</span><span>Артикул</span><span>Поставщик</span><span>Закупка</span><span>Расчет</span><span>Запрос</span><span>Verified</span><span>Apply</span><span>Intent</span><span>Ошибка</span><span>Проверено</span>
+          <span>Маркет</span><span>Артикул</span><span>Поставщик</span><span>Закупка</span><span>Расчет</span><span>Запрос</span><span>Подтверждено</span><span>Статус</span><span>Интент</span><span>Ошибка</span><span>Проверено</span>
         </div>
         {itemsQuery.isLoading && !items.length ? <ListSkeleton rows={8} /> : null}
         {!items.length && !itemsQuery.isLoading ? <div className="empty-state">Сейчас нет строк по выбранному фильтру. Автоматизация продолжает работать в фоне.</div> : null}
@@ -305,9 +305,9 @@ export function PricesPage() {
                   <span data-label="Закупка">{money(itemValue(item, "supplierPurchasePrice"))}</span>
                   <span data-label="Расчет"><strong>{money(item.targetPrice ?? item.price)}</strong></span>
                   <span data-label="Запрос">{money(itemValue(item, "lastRequestedPrice"))}</span>
-                  <span data-label="Verified">{money(itemValue(item, "lastVerifiedPrice"))}</span>
-                  <span data-label="Apply">{reasonLabel(itemValue(item, "priceApplyStatus"))}</span>
-                  <span data-label="Intent">{text(itemValue(item, "priceIntentId")).slice(0, 8) || "-"}</span>
+                  <span data-label="Подтверждено">{money(itemValue(item, "lastVerifiedPrice"))}</span>
+                  <span data-label="Статус">{reasonLabel(itemValue(item, "priceApplyStatus"))}</span>
+                  <span data-label="Интент">{text(itemValue(item, "priceIntentId")).slice(0, 8) || "-"}</span>
                   <span data-label="Ошибка">{text(item.lastError) || reasonLabel(item.reason)}</span>
                   <span data-label="Проверено">{formatDate(itemValue(item, "lastPriceVerifiedAt") || item.updatedAt || item.lastCalculatedAt)}</span>
                 </div>

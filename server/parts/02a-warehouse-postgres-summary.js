@@ -87,7 +87,7 @@ async function getWarehousePostgresSummaryLight(prisma, rate) {
   if (existingInflightLight) return existingInflightLight;
   const fetchPromiseLight = (async () => {
     try {
-      const [totalAll, ozonStateCounts, yandexStateCounts, linkedProducts, linkedArchived, normalizedSuppliers] = await Promise.all([
+      const [totalAll, ozonStateCounts, yandexStateCounts, linkedProducts, linkedArchived, normalizedSuppliers, readyCount] = await Promise.all([
         prisma.warehouseProduct.count({ where: enabledWarehouseTargetWhere() }),
         getOzonStateCountsFromPostgres(prisma),
         getMarketplaceStateCountsFromPostgres(prisma, "yandex"),
@@ -102,6 +102,9 @@ async function getWarehousePostgresSummaryLight(prisma, rate) {
           },
         }).catch(() => 0),
         getWarehousePostgresSuppliers(prisma),
+        prisma.warehouseProduct.count({
+          where: { AND: [enabledWarehouseTargetWhere(), { links: { some: {} } }, { status: { in: ["ok", "price_changed"] } }] },
+        }).catch(() => 0),
       ]);
       const value = {
         totalAll,
@@ -109,11 +112,11 @@ async function getWarehousePostgresSummaryLight(prisma, rate) {
         yandexStateCounts,
         normalizedSuppliers,
         counterStats: {
-          ready: 0,
+          ready: readyCount,
           changed: 0,
-          withoutSupplier: 0,
+          withoutSupplier: Math.max(0, totalAll - readyCount),
           linkedProducts,
-          linkedNotReady: 0,
+          linkedNotReady: Math.max(0, linkedProducts - readyCount),
         },
         linkedArchived,
         lightweight: true,

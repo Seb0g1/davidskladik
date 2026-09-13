@@ -2682,14 +2682,18 @@ function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin
             const reason = String(raw.reason || raw.status || raw.source || "").slice(0, 32);
             return (
               <div key={i} className="price-history-item">
-                <span className="muted-note">{compactDate(String(raw.createdAt || raw.at || ""))}</span>
-                <span className={delta > 0 ? "price-up" : delta < 0 ? "price-down" : ""}>{money(price)}{delta !== 0 && <span className="price-delta">{delta > 0 ? `+${money(delta)}` : money(delta)}</span>}</span>
-                <span className="muted-note">
-                  {mpLabel && <span className="mp-badge">{mpLabel}</span>}
-                  {pmUsd != null && <span className="muted-note" title={usdRate != null ? `Курс ${usdRate}${markup != null ? `, наценка ×${markup}` : ""}` : undefined}> ${pmUsd.toFixed(2)}</span>}
-                  {supplier && <span className="muted-note"> · {supplier}</span>}
-                  {reason && <span> {reason}</span>}
-                </span>
+                <div className="price-history-main">
+                  <span className="muted-note">{compactDate(String(raw.createdAt || raw.at || ""))}</span>
+                  <span className={delta > 0 ? "price-up" : delta < 0 ? "price-down" : ""}>{money(price)}{delta !== 0 && <span className="price-delta">{delta > 0 ? `+${money(delta)}` : money(delta)}</span>}</span>
+                </div>
+                {(mpLabel || pmUsd != null || supplier || reason) ? (
+                  <div className="price-history-meta">
+                    {mpLabel && <span className="mp-badge">{mpLabel}</span>}
+                    {pmUsd != null && <span title={usdRate != null ? `Курс ${usdRate}${markup != null ? `, наценка ×${markup}` : ""}` : undefined}>${pmUsd.toFixed(2)}</span>}
+                    {supplier && <span>{supplier}</span>}
+                    {reason && <span className="price-history-reason">{reason}</span>}
+                  </div>
+                ) : null}
               </div>
             );
           })}

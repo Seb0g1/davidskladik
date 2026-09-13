@@ -55,6 +55,33 @@ const statusText = (value: unknown) => ({
   failed: "Ошибка",
 }[String(value || "")] || String(value || "-"));
 
+const JOB_TITLES: Record<string, string> = {
+  "yandex-import-send": "Импорт Ozon → Яндекс",
+  "yandex-stock-sync": "Синхронизация остатков Яндекс",
+  "yandex-price-push": "Отправка цен Яндекс",
+  "linked-supplier-recovery": "Восстановление карточек маркетплейсов",
+  "ozon-linked-unarchive": "Восстановление из автоархива Ozon",
+  "restore-archived-stock": "Восстановление остатков из архива",
+  "initialize-linked-ozon-stock": "Инициализация FBS-остатков Ozon",
+  "scan-and-fix-zero-stock": "Исправление нулевых остатков",
+  "yandex-card-quality-ai-drafts": "AI-черновики качества карточек Яндекс",
+  "repair-dalik-disambiguation-links": "Ремонт привязок Далик",
+  "repair-pricemaster-group-links": "Ремонт привязок Ozon/Яндекс",
+  "marketplace-supplier-cart-preview": "Предпросмотр корзины поставщика",
+  "marketplace-supplier-cart-commit": "Подтверждение корзины поставщика",
+  "ozon-unarchive-queue-process": "Очередь разархивации Ozon",
+  "sales-automation-run": "Запуск автоматизации продаж",
+  "problem-products-repair": "Ремонт проблемных товаров",
+  "brand-index-rebuild": "Перестройка индекса брендов",
+  "health-deep": "Глубокая диагностика системы",
+  "restore-yandex-markups": "Восстановление наценок Яндекс",
+  "bulk-stale-recovery": "Массовый ремонт привязок PM",
+};
+
+function localizeJobTitle(title: string, type: string): string {
+  return JOB_TITLES[type] || JOB_TITLES[title] || title || "Операция";
+}
+
 function supplierActive(supplier: { active?: boolean; stopped?: boolean }) {
   return supplier.active !== false && supplier.stopped !== true;
 }
@@ -144,7 +171,7 @@ export function DashboardPage() {
       <section className="dashboard-metrics">
         <Stat label="Активных товаров" value={warehouse.data?.groupTotal || warehouse.data?.total || 0} tone="accent" icon={<PackageCheck size={18} />} trend={<MiniTrend />} />
         <Stat label="Готовы к продаже" value={warehouse.data?.ready || 0} tone="success" icon={<CheckCircle2 size={18} />} trend={<MiniTrend tone="success" />} />
-        <Stat label="Продажи сегодня" value={money(salesToday.income)} tone="success" icon={<TrendingUp size={18} />} trend={<MiniTrend tone="success" />} delta={`${salesToday.orders} заказ(ов), прибыль ${money(salesToday.profit)}`} />
+        <Stat label="Продажи сегодня" value={salesToday.income ? money(salesToday.income) : "0 ₽"} tone="success" icon={<TrendingUp size={18} />} trend={<MiniTrend tone="success" />} delta={`${salesToday.orders} заказ(ов), прибыль ${salesToday.profit ? money(salesToday.profit) : "0 ₽"}`} />
         <Stat label="Очередь сборки" value={picking.data?.total || rows.length || 0} icon={<ClipboardList size={18} />} trend={<MiniTrend />} delta="в работе" />
         <Stat label="Нужны действия" value={warehouse.data?.withoutSupplier || sales.data?.retryTotal || 0} tone="warn" icon={<AlertTriangle size={18} />} trend={<MiniTrend tone="warn" />} delta="проверить" />
       </section>
@@ -185,7 +212,7 @@ export function DashboardPage() {
             {jobs.slice(0, 5).map((job) => (
               <article className="dashboard-job-row" key={String(job.id)}>
                 <div>
-                  <strong>{String(job.title || job.type || "Операция")}</strong>
+                  <strong>{localizeJobTitle(String(job.title || ""), String(job.type || ""))}</strong>
                   <span>{statusText(job.status)} · {compactDate(String(job.createdAt || ""))}</span>
                 </div>
                 <div className="progress-pill">{Math.round(numberValue(job.progress, 0))}%</div>

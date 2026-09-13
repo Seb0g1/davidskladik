@@ -4,7 +4,7 @@ import { BarChart3, EyeOff, RefreshCw, Users } from "lucide-react";
 import { fetchJson } from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
-import { ListSkeleton } from "../components/Skeleton";
+import { ListSkeleton, Skeleton } from "../components/Skeleton";
 import { Stat } from "../components/Stat";
 import { FinanceSummarySchema, SupplierPickingListSchema, UsersStatsResponseSchema, WarehousePageSchema } from "../types";
 import { asRecord, compactDate, errorMessage, numberValue } from "../lib/common";
@@ -86,10 +86,24 @@ export function StatisticsPage() {
       />
 
       <section className="dashboard-metrics">
-        <Stat label="Действий" value={summary.actionsTotal || 0} tone="accent" icon={<BarChart3 size={18} />} />
-        <Stat label="Привязок добавлено" value={summary.linksAdded || 0} icon={<RefreshCw size={18} />} />
-        <Stat label="Товаров затронуто" value={summary.affectedProducts || 0} icon={<Users size={18} />} />
-        <Stat label="Прибыль" value={money(financeSummary.netProfit)} tone="success" icon={<BarChart3 size={18} />} />
+        {users.isLoading ? (
+          <>
+            <div className="stat stat-card stat-accent"><span className="stat-icon"><BarChart3 size={18} /></span><div className="stat-body"><Skeleton width={80} height={11} /><Skeleton width={48} height={22} /></div></div>
+            <div className="stat stat-card"><span className="stat-icon"><RefreshCw size={18} /></span><div className="stat-body"><Skeleton width={100} height={11} /><Skeleton width={40} height={22} /></div></div>
+            <div className="stat stat-card"><span className="stat-icon"><Users size={18} /></span><div className="stat-body"><Skeleton width={90} height={11} /><Skeleton width={40} height={22} /></div></div>
+          </>
+        ) : (
+          <>
+            <Stat label="Действий" value={summary.actionsTotal || 0} tone="accent" icon={<BarChart3 size={18} />} />
+            <Stat label="Привязок добавлено" value={summary.linksAdded || 0} icon={<RefreshCw size={18} />} />
+            <Stat label="Товаров затронуто" value={summary.affectedProducts || 0} icon={<Users size={18} />} />
+          </>
+        )}
+        {finance.isLoading ? (
+          <div className="stat stat-card stat-success"><span className="stat-icon"><BarChart3 size={18} /></span><div className="stat-body"><Skeleton width={60} height={11} /><Skeleton width={80} height={22} /></div></div>
+        ) : (
+          <Stat label="Прибыль" value={money(financeSummary.netProfit)} tone="success" icon={<BarChart3 size={18} />} />
+        )}
       </section>
 
       <section className="dashboard-layout statistics-layout">

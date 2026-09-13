@@ -771,16 +771,16 @@ function SystemSettingsPanel() {
   return (
     <section className="settings-grid pricing-settings-grid">
       <div className="settings-panel">
-        <div className="section-title"><div><span>Sync</span><h3>Синхронизация</h3></div></div>
-        <DiagnosticValue label="Warehouse sync" value={String(syncQuery.data?.status || syncQuery.data?.running || "-")} />
-        <DiagnosticValue label="Daily sync" value={String(dailyQuery.data?.status || dailyQuery.data?.running || "-")} />
+        <div className="section-title"><div><span>Синхронизация</span><h3>Синхронизация</h3></div></div>
+        <DiagnosticValue label="Синхронизация склада" value={String(syncQuery.data?.status || syncQuery.data?.running || "-")} />
+        <DiagnosticValue label="Ежедневный синхр." value={String(dailyQuery.data?.status || dailyQuery.data?.running || "-")} />
         <div className="row-actions">
           <button className="primary-action" type="button" disabled={runSync.isPending} onClick={() => runSync.mutate()}>Запустить warehouse sync</button>
           <button className="secondary-action" type="button" disabled={runDaily.isPending} onClick={() => runDaily.mutate()}>Запустить daily sync</button>
         </div>
       </div>
       <div className="settings-panel">
-        <div className="section-title"><div><span>Цены</span><h3>Retry queue</h3></div></div>
+        <div className="section-title"><div><span>Цены</span><h3>Очередь повторов</h3></div></div>
         <DiagnosticValue label="В очереди" value={retryQuery.data?.total || retryItems.length} tone={retryItems.length ? "warn" : ""} />
         <div className="row-actions">
           <button className="primary-action" type="button" disabled={!retryItems.length || retryPrices.isPending} onClick={() => retryPrices.mutate()}>Повторить цены</button>
@@ -914,7 +914,7 @@ function ToolsSettingsPanel() {
     { href: "/app/recovery-queue", title: "Восстановление", text: "Очередь Ozon autoarchive и дневной лимит разархива." },
     { href: "/app/no-supplier", title: "Ошибки наличия", text: "Товары без доступного поставщика и риски остатков." },
     { href: "/app/problem-products", title: "Проблемные товары", text: "Единая диагностика SKU, фото, цен, остатков и связей." },
-    { href: "/app/ai-drafts", title: "AI drafts", text: "Черновики карточек и генерация контента." },
+    { href: "/app/ai-drafts", title: "AI-черновики", text: "Черновики карточек и генерация контента." },
     { href: "/app/system", title: "Система", text: "Health, очереди, кэши и технический статус." },
   ];
   return (
@@ -1265,11 +1265,11 @@ export function SettingsPage() {
               <button className="secondary-action" onClick={() => testAi.mutate()} disabled={testAi.isPending}>Тест</button>
             </div>
           </div>
-          <label>Provider ID<input value={String(draftAi.providerId ?? ai.providerId ?? "")} onChange={(event) => updateAi({ providerId: event.target.value })} /></label>
-          <label>Base URL<input value={String(draftAi.baseUrl ?? ai.baseUrl ?? "")} onChange={(event) => updateAi({ baseUrl: event.target.value })} /></label>
-          <label>Text model<input value={String(draftAi.textModel ?? ai.textModel ?? "")} onChange={(event) => updateAi({ textModel: event.target.value })} /></label>
-          <label>Image model<input value={String(draftAi.imageModel ?? ai.imageModel ?? "gpt-image-2")} onChange={(event) => updateAi({ imageModel: event.target.value })} /></label>
-          <label>API key<input type="password" placeholder={ai.apiKeySet ? "ключ сохранен" : "вставьте ключ"} onChange={(event) => updateAi({ apiKey: event.target.value })} /></label>
+          <label>Провайдер<input value={String(draftAi.providerId ?? ai.providerId ?? "")} onChange={(event) => updateAi({ providerId: event.target.value })} /></label>
+          <label>Базовый URL<input value={String(draftAi.baseUrl ?? ai.baseUrl ?? "")} onChange={(event) => updateAi({ baseUrl: event.target.value })} /></label>
+          <label>Текстовая модель<input value={String(draftAi.textModel ?? ai.textModel ?? "")} onChange={(event) => updateAi({ textModel: event.target.value })} /></label>
+          <label>Модель изображений<input value={String(draftAi.imageModel ?? ai.imageModel ?? "gpt-image-2")} onChange={(event) => updateAi({ imageModel: event.target.value })} /></label>
+          <label>API-ключ<input type="password" placeholder={ai.apiKeySet ? "ключ сохранен" : "вставьте ключ"} onChange={(event) => updateAi({ apiKey: event.target.value })} /></label>
           {testAi.error && <div className="inline-error">{errorMessage(testAi.error)}</div>}
           {testAi.isSuccess && <div className="success-strip">AI подключен.</div>}
         </div>

@@ -1076,7 +1076,7 @@ export function SupplierCartPage() {
             </div>
             <div className="summary-grid">
               <div><span>PM база</span><strong>{pmStatus.data?.db || String(pmStatus.data?.config?.database || "-")}</strong></div>
-              <div><span>RequestDocs</span><strong>{pmStatus.data?.tables?.requestDocs ? "ok" : "нет"}</strong></div>
+              <div><span>RequestDocs</span><strong>{pmStatus.data?.tables?.requestDocs ? "да" : "нет"}</strong></div>
               <div><span>Документы ДавидСклад</span><strong>{pmStatus.data?.davidskladDocs?.length || 0}</strong></div>
               <div><span>Строки PM</span><strong>{pmStatus.data?.latestRows?.length || 0}</strong></div>
             </div>
@@ -1098,10 +1098,10 @@ export function SupplierCartPage() {
             </div>
             {dryRun ? (
               <div className="inline-warning sc-warning-mt8">
-                Будет очищено: processed {dryRun.cartProcessed}, черновик {dryRun.draftRows}, сборка {dryRun.pickingRows}, блокировки {dryRun.supplierBlocks}, PM rows {countArray(pm.rowIds)}, PM docs {countArray(pm.docIds)}.
+                Будет очищено: в обработке {dryRun.cartProcessed}, черновик {dryRun.draftRows}, сборка {dryRun.pickingRows}, блокировки {dryRun.supplierBlocks}, строк PM {countArray(pm.rowIds)}, документов PM {countArray(pm.docIds)}.
               </div>
             ) : null}
-            {rollbackApply.data ? <div className="success-strip">Откат выполнен. Осталось строк сборки: {rollbackApply.data.after?.pickingRows || 0}, PM rows: {countArray(rollbackApply.data.after?.pm?.rowIds)}.</div> : null}
+            {rollbackApply.data ? <div className="success-strip">Откат выполнен. Осталось строк сборки: {rollbackApply.data.after?.pickingRows || 0}, строк PM: {countArray(rollbackApply.data.after?.pm?.rowIds)}.</div> : null}
             {rollbackDryRun.error ? <div className="inline-error">{errorMessage(rollbackDryRun.error)}</div> : null}
             {rollbackApply.error ? <div className="inline-error">{errorMessage(rollbackApply.error)}</div> : null}
           </section>
