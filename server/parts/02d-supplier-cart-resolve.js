@@ -305,24 +305,8 @@ function normalizeYandexSupplierCartOrders(data = {}, shop = {}) {
       || cleanText(order.delivery?.partnerType || order.delivery?.partnerInfo?.type || "").toUpperCase().includes("EXPRESS")
       || cleanText(order.delivery?.deliveryPartnerType || "").toUpperCase().includes("EXPRESS")
       || (Array.isArray(order.delivery?.specificFeatures) && order.delivery.specificFeatures.some((f) => cleanText(f).toUpperCase().includes("EXPRESS")));
-    // Skip orders already confirmed ready-to-ship or further along — the Yandex API
-    // substatus filter is best-effort and sometimes returns READY_TO_SHIP orders anyway.
-    // Exception: express orders arrive with READY_TO_SHIP as the initial working substatus —
-    // the operator must still physically pick and hand off to the courier, so do not skip them.
     const orderSubstatus = cleanText(order.substatus || order.subStatus || "").toUpperCase();
     if (orderSubstatus === "SHIPPED" || orderSubstatus === "DELIVERY") continue;
-    if (orderSubstatus === "READY_TO_SHIP" && !isExpress) {
-      logger.warn("yandex_cart_skip_ready_to_ship", {
-        orderId: order.id,
-        substatus: orderSubstatus,
-        deliveryType: order.delivery?.type,
-        deliveryPartnerType: order.delivery?.deliveryPartnerType,
-        partnerType: order.delivery?.partnerType,
-        specificFeatures: order.delivery?.specificFeatures,
-        isExpressField: order.isExpress,
-      });
-      continue;
-    }
     const orderCampaignId = cleanText(order.campaignId || shop.campaignId || "");
     for (const item of items) {
       const itemStatus = cleanText(item.itemStatus || item.status).toUpperCase();
