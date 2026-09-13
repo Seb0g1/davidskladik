@@ -11,6 +11,7 @@
 // does not zero a product — we only feed it candidates.
 
 const zeroStockSweepEnabled = process.env.ZERO_STOCK_SWEEP_ENABLED !== "false";
+const zeroStockSweepLivePm = process.env.ZERO_STOCK_SWEEP_LIVE_PM !== "false";
 const zeroStockSweepIntervalMs = Math.max(60_000, Number(process.env.ZERO_STOCK_SWEEP_INTERVAL_SECONDS || 180) * 1000 || 180_000);
 const zeroStockSweepBatchLimit = Math.max(50, Math.min(2000, Number(process.env.ZERO_STOCK_SWEEP_BATCH_LIMIT || 500) || 500));
 let zeroStockSweepTimer = null;
@@ -69,7 +70,7 @@ async function runZeroStockSweep({ source = "schedule" } = {}) {
     }
     if (!candidateIds.length) return { status: "ok", candidates: rows.length, zeroed: 0, cooldown: true };
 
-    const products = await buildFreshWarehouseProducts(candidateIds, { livePriceMaster: false })
+    const products = await buildFreshWarehouseProducts(candidateIds, { livePriceMaster: zeroStockSweepLivePm, batchPriceMaster: zeroStockSweepLivePm })
       .catch((error) => {
         logger.warn("zero stock sweep build failed", { detail: error?.message || String(error) });
         return [];
