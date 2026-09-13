@@ -305,6 +305,7 @@ async function writeWarehouseProductPatch(products = [], { reason = "warehouse_p
       for (const productChunk of chunkArray(normalizedProducts, chunkSize)) {
         await new Promise((r) => setImmediate(r));
         await runWithLimitedConcurrency(productChunk, writeConcurrency, async (product) => {
+          await new Promise((r) => setImmediate(r));
           await upsertWarehouseProductPostgres(getPrisma(), product);
         });
         markWarehousePostgresProductsWritten(productChunk);
@@ -325,6 +326,7 @@ async function writeWarehouseProductPatch(products = [], { reason = "warehouse_p
       for (const productChunk of chunkArray(normalizedProducts, chunkSize)) {
         await new Promise((r) => setImmediate(r));
         await runWithLimitedConcurrency(productChunk, writeConcurrency, async (product) => {
+          await new Promise((r) => setImmediate(r));
           await upsertWarehouseProductPostgres(getPrisma(), product);
         });
         markWarehousePostgresProductsWritten(productChunk);
