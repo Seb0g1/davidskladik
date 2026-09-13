@@ -436,8 +436,31 @@ export default function ProductPage() {
                   </Suspense>
                 ) : (
                   activeValidImg
-                    ? <img src={activeValidImg} alt={product.name} style={{ width: "100%", height: "100%", objectFit: "contain", padding: 24 }}
-                        onError={() => setImgErrors((s) => new Set(s).add(activeImg))} />
+                    ? <>
+                        <img src={activeValidImg} alt={product.name} style={{ width: "100%", height: "100%", objectFit: "contain", padding: 24 }}
+                          onError={() => setImgErrors((s) => new Set(s).add(activeImg))} />
+                        {/* Logo watermark — bottom-right, semi-transparent */}
+                        <div style={{
+                          position: "absolute", bottom: 14, right: 16,
+                          display: "flex", alignItems: "center", gap: 6,
+                          pointerEvents: "none", userSelect: "none",
+                          opacity: 0.18,
+                          filter: "grayscale(1) brightness(2)",
+                        }}>
+                          <img src="/favicon.svg" alt="" width={18} height={18} style={{ display: "block" }} />
+                          <span style={{
+                            fontFamily: "'Cormorant Garamond', Georgia, serif",
+                            fontStyle: "italic",
+                            fontWeight: 500,
+                            fontSize: 15,
+                            letterSpacing: "0.04em",
+                            color: "#fff",
+                            lineHeight: 1,
+                          }}>
+                            Magic Vibes
+                          </span>
+                        </div>
+                      </>
                     : <span style={{ fontSize: 80, fontWeight: 800, color: S.subtle, opacity: 0.2 }}>{product.brand?.[0] ?? "?"}</span>
                 )}
               </div>

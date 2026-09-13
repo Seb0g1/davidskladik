@@ -261,23 +261,31 @@ function FilterSidebar({
       {/* Brand */}
       {brands.length > 0 && (
         <div className="sidebar-section">
-          <p style={{ margin: "0 0 12px", fontSize: 9.5, letterSpacing: "0.28em", textTransform: "uppercase", color: "#6f6c66" }}>Бренд</p>
-          <div style={{ position: "relative" }}>
-            <select
-              value={brand}
-              onChange={(e) => setParam("brand", e.target.value || null)}
-              style={{ width: "100%", appearance: "none", padding: "9px 28px 9px 12px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 2, fontSize: 13, color: brand ? "#e9d2a0" : "rgba(245,244,240,0.52)", cursor: "pointer", fontFamily: "inherit", outline: "none" }}
-            >
-              <option value="">Все бренды</option>
-              {brands.map((b) => <option key={b} value={b}>{b}</option>)}
-            </select>
-            <ChevronDown size={12} style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", color: "rgba(245,244,240,0.28)", pointerEvents: "none" }} />
-          </div>
+          <p style={{ margin: "0 0 8px", fontSize: 9.5, letterSpacing: "0.28em", textTransform: "uppercase", color: "#6f6c66" }}>Бренд</p>
           {brand && (
-            <button onClick={() => setParam("brand", null)} style={{ marginTop: 8, fontSize: 11, color: "#c9a25e", background: "none", border: "none", cursor: "pointer", padding: 0, letterSpacing: "0.06em", fontFamily: "inherit" }}>
+            <button onClick={() => setParam("brand", null)} style={{ marginBottom: 8, fontSize: 11, color: "#c9a25e", background: "none", border: "none", cursor: "pointer", padding: 0, letterSpacing: "0.06em", fontFamily: "inherit" }}>
               × Сбросить
             </button>
           )}
+          <div style={{ maxHeight: 220, overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(201,162,94,0.2) transparent" }}>
+            <button
+              onClick={() => setParam("brand", null)}
+              className={clsx("dd-chip", !brand && "active")}
+            >
+              <span className="dot" />
+              Все бренды
+            </button>
+            {brands.map((b) => (
+              <button
+                key={b}
+                onClick={() => setParam("brand", b === brand ? null : b)}
+                className={clsx("dd-chip", brand === b && "active")}
+              >
+                <span className="dot" />
+                {b}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
@@ -775,13 +783,24 @@ export default function CatalogPage() {
               {brands.length > 0 && (
                 <div>
                   <p style={{ fontSize: 9.5, letterSpacing: "0.28em", textTransform: "uppercase", color: "#6f6c66", marginBottom: 10 }}>Бренд</p>
-                  <div style={{ position: "relative" }}>
-                    <select value={brand} onChange={(e) => setParam("brand", e.target.value || null)}
-                      style={{ width: "100%", appearance: "none", padding: "11px 28px 11px 12px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 2, fontSize: 13, color: brand ? "#e9d2a0" : "rgba(245,244,240,0.52)", fontFamily: "inherit", outline: "none" }}>
-                      <option value="">Все бренды</option>
-                      {brands.map((b) => <option key={b} value={b}>{b}</option>)}
-                    </select>
-                    <ChevronDown size={12} style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", color: "rgba(245,244,240,0.28)", pointerEvents: "none" }} />
+                  <div style={{ maxHeight: 180, overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: "rgba(201,162,94,0.2) transparent", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 3, padding: "4px 0" }}>
+                    <button
+                      onClick={() => setParam("brand", null)}
+                      className={clsx("dd-chip", !brand && "active")}
+                    >
+                      <span className="dot" />
+                      Все бренды
+                    </button>
+                    {brands.map((b) => (
+                      <button
+                        key={b}
+                        onClick={() => setParam("brand", b === brand ? null : b)}
+                        className={clsx("dd-chip", brand === b && "active")}
+                      >
+                        <span className="dot" />
+                        {b}
+                      </button>
+                    ))}
                   </div>
                 </div>
               )}
