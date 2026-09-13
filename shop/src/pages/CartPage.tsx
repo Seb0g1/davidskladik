@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { Trash2, Plus, Minus, ShoppingBag, ArrowRight, Package } from "lucide-react";
 import { useCart } from "../CartContext";
+import { ruPlural } from "../utils";
 
 const S = {
   bg:      "#0E0D0B",
@@ -47,7 +48,7 @@ export default function CartPage() {
         <h1 style={{ fontSize: "clamp(22px,3vw,30px)", fontWeight: 700, color: S.text, letterSpacing: "-0.04em", marginBottom: 32 }}>
           Корзина
           <span style={{ fontSize: 16, fontWeight: 500, color: S.muted, marginLeft: 12 }}>
-            · {items.reduce((s, i) => s + i.quantity, 0)} товара
+            {(() => { const n = items.reduce((s, i) => s + i.quantity, 0); return `· ${n} ${ruPlural(n, "товар", "товара", "товаров")}`; })()}
           </span>
         </h1>
 

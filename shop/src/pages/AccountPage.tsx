@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Package, User, Loader2, CheckCircle, Clock, Truck, LogOut, Save, ChevronRight, Star } from "lucide-react";
 import { useAuth } from "../AuthContext";
+import { ruPlural } from "../utils";
 import { api } from "../api";
 import type { ShopOrder } from "../types";
 
@@ -66,7 +67,7 @@ function OrderCard({ order }: { order: ShopOrder }) {
             </div>
           ))}
           {items.length > 3 && (
-            <div style={{ fontSize: 11, color: S.subtle }}>+ещё {items.length - 3} товара</div>
+            <div style={{ fontSize: 11, color: S.subtle }}>+ещё {items.length - 3} {ruPlural(items.length - 3, "товар", "товара", "товаров")}</div>
           )}
         </div>
       )}

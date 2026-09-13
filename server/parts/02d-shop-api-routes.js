@@ -455,15 +455,19 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
     const images = extractImages(p);
     const link = p.links[0];
     const snap = link ? pmMap.get(cleanText(link.supplierArticle)) : null;
-    const priceUsd = snap ? Number(snap.price || 0) : 0;
+    const snapPrice = snap ? Number(snap.price || 0) : 0;
+    // currency field is fetched — must honour it, otherwise RUB-priced items get inflated by ~usdRate×markup
+    const snapCurrency = snap ? String(snap.currency || "USD").toUpperCase() : "USD";
     const currentPriceNum = Number(p.currentPrice || 0);
-    const markup = resolveShopMarkup(priceUsd, defaultMarkup, shopMarkupRules);
-    const priceRub = priceUsd > 0
-      ? Math.round(priceUsd * usdRate * markup)
+    const markup = resolveShopMarkup(snapPrice, defaultMarkup, shopMarkupRules);
+    const priceRub = snapPrice > 0
+      ? snapCurrency === "RUB"
+        ? Math.round(snapPrice * markup)
+        : Math.round(snapPrice * usdRate * markup)
       : currentPriceNum > 0 ? currentPriceNum : 0;
 
     const stockQty = p.targetStock ?? 0;
-    const name = cleanText(p.name || "");
+    const name = normalizeProductName(cleanText(p.name || ""));
     const _cat = extractProductCategory(name);
 
     // Rating: prefer Ozon sync data (stored in marketplaceState), then our own ShopReview aggregate
@@ -482,7 +486,7 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
       priceRub,
       inStock: stockQty > 0 || (p.status !== "archived" && currentPriceNum > 0),
       stockQty: Math.max(0, stockQty),
-      volume: extractVolume(p.name || ""),
+      volume: extractVolume(name || p.name || ""),
       category: _cat.slug,
       categoryLabel: _cat.label,
       tags: [],
@@ -526,6 +530,23 @@ function extractProductCategory(name = "") {
   return { slug: "parfumery", label: "Парфюмерия" };
 }
 
+// Normalize product display name: strip leading punctuation, ensure space before volume, unify ml→мл
+function normalizeProductName(name) {
+  if (!name) return name;
+  let s = String(name);
+  // Strip leading punctuation chars that sneak in from marketplace imports
+  s = s.replace(/^[\s)\]([{\-/\\|,;:!?@#$%^&*~`'"«»‘’“”]+/, "");
+  // Ensure space between word chars and volume: "Chronic100 мл" → "Chronic 100 мл"
+  s = s.replace(/([a-zA-Zа-яёА-ЯЁ])(\d+\s*(?:мл|ml|г|g|oz)\b)/gi, "$1 $2");
+  // Unify "100ml" / "100 ml" → "100 мл"
+  s = s.replace(/(\d+)\s*ml\b/gi, "$1 мл");
+  // Ensure space between digit and Cyrillic unit: "100мл" → "100 мл", "50г" → "50 г"
+  s = s.replace(/(\d)(мл|г)(?=\s|$|[,.)\/])/gi, "$1 $2");
+  // Collapse multiple spaces
+  s = s.replace(/\s+/g, " ").trim();
+  return s;
+}
+
 async function findShopProductByOfferId(offerId) {
   const prisma = getPrisma();
   if (!prisma) return null;
@@ -565,23 +586,30 @@ async function findShopProductByOfferId(offerId) {
   } catch (_) {}
 
   const articles = p.links.map((l) => cleanText(l.supplierArticle)).filter(Boolean);
-  let priceUsd = 0;
+  let snapPriceSingle = 0;
+  let snapCurrencySingle = "USD";
   if (articles.length) {
     const snaps = await prisma.priceMasterSnapshotItem.findMany({
       where: { article: { in: articles }, active: true },
-      select: { price: true },
+      select: { price: true, currency: true },
       orderBy: { price: "asc" },
       take: 1,
     });
-    if (snaps[0]) priceUsd = Number(snaps[0].price || 0);
+    if (snaps[0]) {
+      snapPriceSingle = Number(snaps[0].price || 0);
+      snapCurrencySingle = String(snaps[0].currency || "USD").toUpperCase();
+    }
   }
 
   const currentPriceNum = Number(p.currentPrice || 0);
-  const resolvedMarkup = resolveShopMarkup(priceUsd, defaultMarkupSingle, shopMarkupRulesSingle);
-  const priceRub = priceUsd > 0
-    ? Math.round(priceUsd * usdRate * resolvedMarkup)
+  const resolvedMarkup = resolveShopMarkup(snapPriceSingle, defaultMarkupSingle, shopMarkupRulesSingle);
+  const priceRub = snapPriceSingle > 0
+    ? snapCurrencySingle === "RUB"
+      ? Math.round(snapPriceSingle * resolvedMarkup)
+      : Math.round(snapPriceSingle * usdRate * resolvedMarkup)
     : currentPriceNum > 0 ? currentPriceNum : 0;
-  const _pCat = extractProductCategory(cleanText(p.name || ""));
+  const normalizedName = normalizeProductName(cleanText(p.name || ""));
+  const _pCat = extractProductCategory(normalizedName);
 
   // Rating: Ozon sync data from marketplaceState, or aggregate from ShopReview
   const ms2 = p.marketplaceState && typeof p.marketplaceState === "object" ? p.marketplaceState : {};
@@ -600,14 +628,14 @@ async function findShopProductByOfferId(offerId) {
   return {
     id: p.id,
     offerId: p.offerId,
-    name: cleanText(p.name || p.offerId),
+    name: normalizedName || cleanText(p.offerId),
     brand: cleanText(p.brand || ""),
     description,
     images,
     priceRub,
     inStock: (p.targetStock ?? 0) > 0 || (p.status !== "archived" && currentPriceNum > 0),
     stockQty: Math.max(0, p.targetStock ?? 0),
-    volume: extractVolume(p.name || ""),
+    volume: extractVolume(normalizedName || p.name || ""),
     category: _pCat.slug,
     categoryLabel: _pCat.label,
     tags: [],
@@ -674,7 +702,7 @@ app.post("/api/shop/ai-search", shopCors, async (request, response, next) => {
   "gender": "male|female|unisex|any",
   "label": "..."
 }
-- terms: 3-5 поисковых фраз (бренды, названия, характер) на русском/латинице
+- terms: 3-6 слов/фраз, которые реально встречаются в названиях парфюмов в каталоге: названия брендов (например "Tom Ford", "Dior", "Mugler", "Montale", "Byredo"), ключевые слова названий ("Noir", "Oud", "Rose", "Aqua", "Sport", "Intense", "Neroli", "Vanilla"), типы ("eau de cologne", "eau de toilette", "туалетная вода", "парфюмерная вода"). Не используй описательные прилагательные (свежий, тёплый) — только то, что есть в реальных названиях.
 - notes: 3-6 конкретных нот аромата на английском (e.g. "Vanilla","Amber","Musk","Bergamot","Sandalwood")
 - accords: 2-4 общих аккорда на английском (e.g. "Oriental","Woody","Aromatic","Floral")
 - gender: если явно указан пол — "male"/"female", иначе "any"
@@ -766,17 +794,19 @@ app.post("/api/shop/ai-search", shopCors, async (request, response, next) => {
       } catch (_dbErr) { /* non-fatal */ }
     }
 
-    // Step 2b: Keyword search in product name/description (original behaviour, fills remaining slots)
-    for (const term of terms) {
-      if (results.length >= 12) break;
+    // Step 2b: Keyword search in product name/brand — uses terms + note names (many appear in product titles)
+    // inStock:false to maximise coverage; note names like "Rose", "Oud", "Vanilla" appear in actual product names
+    const keywordsToSearch = [...new Set([...terms, ...notes.slice(0, 5)])];
+    for (const term of keywordsToSearch) {
+      if (results.length >= 10) break;
       const { products } = await buildShopProductsFromDb({
-        q: term, page: 1, pageSize: 6, inStock: true, sort: "rating",
+        q: term, page: 1, pageSize: 8, inStock: false, sort: "name",
       });
       for (const p of products) {
         if (!seenIds.has(p.id)) {
           seenIds.add(p.id);
           results.push({ ...p, _matchTerm: term });
-          if (results.length >= 12) break;
+          if (results.length >= 10) break;
         }
       }
     }

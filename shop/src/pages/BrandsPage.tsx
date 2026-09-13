@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Search, ArrowRight, X } from "lucide-react";
 import { api } from "../api";
+import { ruPlural } from "../utils";
 
 const S = {
   bg:      "#0E0D0B",
@@ -61,7 +62,7 @@ function BrandCard({ name, count }: { name: string; count: number }) {
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: S.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name}</div>
-        <div style={{ fontSize: 11, color: S.muted, marginTop: 1 }}>{count} товаров</div>
+        <div style={{ fontSize: 11, color: S.muted, marginTop: 1 }}>{count} {ruPlural(count, "товар", "товара", "товаров")}</div>
       </div>
       <ArrowRight size={13} style={{ color: S.subtle, flexShrink: 0, transition: "color 0.15s, transform 0.15s" }} />
     </Link>
@@ -98,7 +99,7 @@ export default function BrandsPage() {
             Бренды
           </h1>
           <p style={{ fontSize: 13, color: S.muted, marginBottom: 24 }}>
-            {brands.length} брендов · {brands.reduce((s, b) => s + b.count, 0).toLocaleString("ru-RU")} товаров
+            {brands.length} {ruPlural(brands.length, "бренд", "бренда", "брендов")} · {brands.reduce((s, b) => s + b.count, 0).toLocaleString("ru-RU")} {ruPlural(brands.reduce((s, b) => s + b.count, 0), "товар", "товара", "товаров")}
           </p>
           <div style={{ position: "relative", maxWidth: 380 }}>
             <Search size={14} style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: S.subtle, pointerEvents: "none" }} />

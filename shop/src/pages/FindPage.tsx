@@ -103,6 +103,7 @@ export default function FindPage() {
             ref={textareaRef}
             value={query}
             onChange={e => setQuery(e.target.value)}
+            onFocus={results !== null ? e => e.currentTarget.select() : undefined}
             onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) search(); }}
             placeholder='Например: "Тёплый восточный аромат, немного ванили, стойкий, для зимних вечеров"'
             rows={3}

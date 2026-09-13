@@ -6,6 +6,7 @@ import clsx from "clsx";
 import { api } from "../api";
 import type { AutoCategory } from "../types";
 import ProductCard from "../components/ProductCard";
+import { ruPlural } from "../utils";
 
 const CAT_LABELS: Record<string, string> = {
   testers: "Тестеры и отливанты",
@@ -19,6 +20,39 @@ const CAT_LABELS: Record<string, string> = {
   body:    "Уход за телом",
 };
 
+// Quick gender/type chips shown above the filter bar
+const QUICK_CHIPS = [
+  { label: "Женская",   q: "женская",    cat: "" },
+  { label: "Мужская",   q: "мужская",    cat: "" },
+  { label: "Унисекс",   q: "унисекс",    cat: "" },
+  { label: "Нишевая",   q: "нишевая",    cat: "" },
+  { label: "Элитная",   q: "элитная",    cat: "" },
+  { label: "Арабская",  q: "арабская",   cat: "" },
+  { label: "Пробники",  q: "",           cat: "testers" },
+  { label: "Наборы",    q: "",           cat: "sets" },
+];
+
+// Concentration chips (maps to category)
+const CONCENTRATION_CHIPS = [
+  { label: "Парфюмерная вода", cat: "edp" },
+  { label: "Туалетная вода",   cat: "edt" },
+  { label: "Духи",             cat: "parfum" },
+  { label: "Одеколон",         cat: "edc" },
+  { label: "Дезодоранты",      cat: "deo" },
+];
+
+// Fragrance group chips
+const GROUP_CHIPS = [
+  { label: "Цветочные",   q: "цветочный" },
+  { label: "Древесные",   q: "древесный" },
+  { label: "Цитрусовые",  q: "цитрусовый" },
+  { label: "Мускусные",   q: "мускусный" },
+  { label: "Восточные",   q: "восточный" },
+  { label: "Свежие",      q: "свежий" },
+  { label: "Фужерные",    q: "фужерный" },
+  { label: "Шипровые",    q: "шипровый" },
+];
+
 const PAGE_SIZE = 24;
 
 const CATALOG_STYLE = `
@@ -27,19 +61,35 @@ const CATALOG_STYLE = `
   .cat-filter-btn { display: flex; }
   @media (min-width: 900px) {
     .cat-layout { display: grid; grid-template-columns: 240px 1fr; align-items: start; }
-    .cat-sidebar { display: flex; flex-direction: column; gap: 1px; position: sticky; top: 120px; }
+    .cat-sidebar { display: flex; flex-direction: column; gap: 1px; position: sticky; top: 160px; }
     .cat-filter-btn { display: none !important; }
   }
   .cat-chip {
     display: inline-flex; align-items: center; gap: 6px;
-    padding: 7px 16px; border-radius: 2px; white-space: nowrap;
-    font-size: 12.5px; letter-spacing: 0.06em; cursor: pointer;
+    padding: 6px 14px; border-radius: 20px; white-space: nowrap;
+    font-size: 12.5px; letter-spacing: 0.04em; cursor: pointer;
     border: 1px solid rgba(255,255,255,0.09); color: rgba(245,244,240,0.52);
     background: transparent; text-decoration: none;
     transition: border-color 0.25s, color 0.25s, background 0.25s;
   }
   .cat-chip:hover { border-color: rgba(201,162,94,0.4); color: #f5f4f0; }
   .cat-chip.active { border-color: rgba(201,162,94,0.7); background: rgba(201,162,94,0.08); color: #e9d2a0; }
+  .filter-pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 7px 14px; border-radius: 2px; white-space: nowrap;
+    font-size: 12.5px; letter-spacing: 0.06em; cursor: pointer;
+    border: 1px solid rgba(255,255,255,0.09); color: rgba(245,244,240,0.52);
+    background: transparent; font-family: inherit;
+    transition: border-color 0.25s, color 0.25s, background 0.25s;
+  }
+  .filter-pill:hover { border-color: rgba(201,162,94,0.4); color: #f5f4f0; }
+  .filter-pill.active { border-color: rgba(201,162,94,0.65); background: rgba(201,162,94,0.08); color: #e9d2a0; }
+  .filter-dropdown {
+    position: absolute; top: calc(100% + 6px); left: 0; z-index: 30;
+    background: #141414; border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 3px; box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    padding: 14px; min-width: 200px; animation: scaleIn 0.18s cubic-bezier(0.34,1.56,0.64,1) both;
+  }
   .sidebar-section { padding: 22px 24px; border-bottom: 1px solid rgba(255,255,255,0.06); }
   .sidebar-section:last-child { border-bottom: none; }
   .sort-opt {
@@ -62,6 +112,17 @@ const CATALOG_STYLE = `
   .pg-btn:hover:not(:disabled) { border-color: rgba(201,162,94,0.5); color: #f5f4f0; }
   .pg-btn.current { border-color: rgba(201,162,94,0.7); background: rgba(201,162,94,0.08); color: #e9d2a0; }
   .pg-btn:disabled { opacity: 0.3; cursor: default; }
+  .dd-chip {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px; border-radius: 2px; border: none; cursor: pointer;
+    background: transparent; font-family: inherit; font-size: 13px;
+    color: rgba(245,244,240,0.52); letter-spacing: 0.03em; text-align: left; width: 100%;
+    transition: background 0.15s, color 0.15s;
+  }
+  .dd-chip:hover { background: rgba(255,255,255,0.05); color: #f5f4f0; }
+  .dd-chip.active { color: #e9d2a0; background: rgba(201,162,94,0.07); }
+  .dd-chip .dot { width: 6px; height: 6px; border-radius: 50%; border: 1px solid rgba(201,162,94,0.4); flex-shrink: 0; }
+  .dd-chip.active .dot { background: #c9a25e; border-color: #c9a25e; }
 `;
 
 function CardSkeleton() {
@@ -102,7 +163,7 @@ function CategoryCarouselRow({ cat, index }: { cat: AutoCategory; index: number 
             {CAT_LABELS[cat.slug] || cat.label}
           </h2>
           <p style={{ margin: "4px 0 0", fontSize: 11.5, color: "#7d7a73", letterSpacing: "0.04em" }}>
-            {cat.count.toLocaleString("ru-RU")} ароматов
+            {cat.count.toLocaleString("ru-RU")} {ruPlural(cat.count, "аромат", "аромата", "ароматов")}
           </p>
         </div>
         <Link
@@ -205,12 +266,7 @@ function FilterSidebar({
             <select
               value={brand}
               onChange={(e) => setParam("brand", e.target.value || null)}
-              style={{
-                width: "100%", appearance: "none", padding: "9px 28px 9px 12px",
-                background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)",
-                borderRadius: 2, fontSize: 13, color: brand ? "#e9d2a0" : "rgba(245,244,240,0.52)",
-                cursor: "pointer", fontFamily: "inherit", outline: "none",
-              }}
+              style={{ width: "100%", appearance: "none", padding: "9px 28px 9px 12px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 2, fontSize: 13, color: brand ? "#e9d2a0" : "rgba(245,244,240,0.52)", cursor: "pointer", fontFamily: "inherit", outline: "none" }}
             >
               <option value="">Все бренды</option>
               {brands.map((b) => <option key={b} value={b}>{b}</option>)}
@@ -224,6 +280,23 @@ function FilterSidebar({
           )}
         </div>
       )}
+
+      {/* Concentration in sidebar */}
+      <div className="sidebar-section">
+        <p style={{ margin: "0 0 12px", fontSize: 9.5, letterSpacing: "0.28em", textTransform: "uppercase", color: "#6f6c66" }}>Концентрация</p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          {CONCENTRATION_CHIPS.map(c => (
+            <button
+              key={c.cat}
+              onClick={() => setParam("category", category === c.cat ? null : c.cat)}
+              className={clsx("dd-chip", category === c.cat && "active")}
+            >
+              <span className="dot" />
+              {c.label}
+            </button>
+          ))}
+        </div>
+      </div>
 
       {/* Reset all */}
       {(brand || inStock || sort !== "name") && (
@@ -239,6 +312,54 @@ function FilterSidebar({
         </div>
       )}
     </aside>
+  );
+}
+
+// Dropdown filter pill component
+function FilterPill({
+  label, active, children, onClear,
+}: {
+  label: string;
+  active?: boolean;
+  children: React.ReactNode;
+  onClear?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  // Close on outside click
+  useCallback(() => {
+    if (!open) return;
+    const fn = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", fn);
+    return () => document.removeEventListener("mousedown", fn);
+  }, [open]);
+
+  return (
+    <div ref={ref} style={{ position: "relative", flexShrink: 0 }}>
+      <button
+        onClick={() => setOpen(s => !s)}
+        className={clsx("filter-pill", active && "active")}
+      >
+        {label}
+        {active && onClear && (
+          <span
+            onClick={(e) => { e.stopPropagation(); onClear(); setOpen(false); }}
+            style={{ display: "inline-flex", alignItems: "center", marginLeft: 2, opacity: 0.7 }}
+          >
+            <X size={10} />
+          </span>
+        )}
+        {!active && <ChevronDown size={10} style={{ transition: "transform 0.2s", transform: open ? "rotate(180deg)" : "none" }} />}
+      </button>
+      {open && (
+        <div className="filter-dropdown">
+          {children}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -277,6 +398,15 @@ export default function CatalogPage() {
     });
   }
 
+  function applyQuickChip(chip: typeof QUICK_CHIPS[0]) {
+    setSearchParams(() => {
+      const next = new URLSearchParams();
+      if (chip.q) next.set("q", chip.q);
+      if (chip.cat) next.set("category", chip.cat);
+      return next;
+    });
+  }
+
   const totalPages = data ? Math.ceil(data.total / PAGE_SIZE) : 0;
   const hasActiveFilters = !!(brand || q || inStock);
   const activeFilterCount = [brand, q, inStock].filter(Boolean).length;
@@ -288,12 +418,22 @@ export default function CatalogPage() {
     : brand ? brand
     : "Весь каталог";
 
+  // Check which quick chip is active
+  const activeQuickChip = QUICK_CHIPS.find(c =>
+    (c.q && q === c.q && !category) || (c.cat && category === c.cat && !q)
+  );
+  // Active concentration
+  const activeConc = CONCENTRATION_CHIPS.find(c => c.cat === category);
+  // Active group
+  const activeGroup = GROUP_CHIPS.find(c => c.q === q);
+
   return (
     <div style={{ background: "#0b0b0b", minHeight: "100vh" }}>
       <style>{CATALOG_STYLE}</style>
 
       {/* ── Sticky top bar ── */}
-      <div style={{ position: "sticky", top: 60, zIndex: 30, background: "rgba(11,11,11,0.92)", backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+      <div style={{ position: "sticky", top: 60, zIndex: 30, background: "rgba(11,11,11,0.95)", backdropFilter: "blur(16px)", WebkitBackdropFilter: "blur(16px)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+
         {/* Search row */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px clamp(18px,4vw,32px)" }}>
           <div style={{ position: "relative", flex: 1 }}>
@@ -323,7 +463,6 @@ export default function CatalogPage() {
               textTransform: "uppercase", border: "none", cursor: "pointer",
               background: activeFilterCount ? "rgba(201,162,94,0.12)" : "rgba(255,255,255,0.06)",
               color: activeFilterCount ? "#e9d2a0" : "rgba(245,244,240,0.52)",
-              borderColor: activeFilterCount ? "rgba(201,162,94,0.4)" : "rgba(255,255,255,0.09)",
               transition: "all 0.2s",
             }}
           >
@@ -332,8 +471,143 @@ export default function CatalogPage() {
           </button>
         </div>
 
-        {/* Category chips */}
-        <div className="scroll-x" style={{ display: "flex", gap: 8, padding: "0 clamp(18px,4vw,32px) 10px" }}>
+        {/* ── Quick chips: Gender / Type ── */}
+        <div className="scroll-x" style={{ display: "flex", gap: 6, padding: "0 clamp(18px,4vw,32px) 8px", alignItems: "center" }}>
+          <span style={{ fontSize: 10.5, letterSpacing: "0.18em", textTransform: "uppercase", color: "#5d5a54", flexShrink: 0, marginRight: 4 }}>Тип:</span>
+          <Link
+            to="/catalog"
+            className={clsx("cat-chip", !showGrid && "active")}
+            style={{ flexShrink: 0 }}
+          >
+            Все
+          </Link>
+          {QUICK_CHIPS.map(chip => (
+            <button
+              key={chip.label}
+              onClick={() => activeQuickChip?.label === chip.label
+                ? setSearchParams(new URLSearchParams())
+                : applyQuickChip(chip)
+              }
+              className={clsx("cat-chip", activeQuickChip?.label === chip.label && "active")}
+              style={{ flexShrink: 0 }}
+            >
+              {chip.label}
+            </button>
+          ))}
+        </div>
+
+        {/* ── Extended filter pills row (desktop) ── */}
+        <div className="hidden md:flex scroll-x" style={{ gap: 6, padding: "0 clamp(18px,4vw,32px) 10px", alignItems: "center", flexWrap: "nowrap" }}>
+          <span style={{ fontSize: 10.5, letterSpacing: "0.18em", textTransform: "uppercase", color: "#5d5a54", flexShrink: 0, marginRight: 4 }}>Фильтр:</span>
+
+          {/* Бренд */}
+          {brands.length > 0 && (
+            <FilterPill
+              label={brand ? `Бренд: ${brand}` : "Бренд"}
+              active={!!brand}
+              onClear={() => setParam("brand", null)}
+            >
+              <p style={{ margin: "0 0 10px", fontSize: 9.5, letterSpacing: "0.22em", textTransform: "uppercase", color: "#6f6c66" }}>Бренд</p>
+              <div style={{ maxHeight: 280, overflowY: "auto", scrollbarWidth: "thin" }}>
+                {brands.map(b => (
+                  <button
+                    key={b}
+                    onClick={() => { setParam("brand", b === brand ? null : b); }}
+                    className={clsx("dd-chip", brand === b && "active")}
+                  >
+                    <span className="dot" />
+                    {b}
+                  </button>
+                ))}
+              </div>
+            </FilterPill>
+          )}
+
+          {/* Концентрация */}
+          <FilterPill
+            label={activeConc ? `Концентрация: ${activeConc.label}` : "Концентрация"}
+            active={!!activeConc}
+            onClear={() => setParam("category", null)}
+          >
+            <p style={{ margin: "0 0 10px", fontSize: 9.5, letterSpacing: "0.22em", textTransform: "uppercase", color: "#6f6c66" }}>Концентрация</p>
+            {CONCENTRATION_CHIPS.map(c => (
+              <button
+                key={c.cat}
+                onClick={() => setParam("category", category === c.cat ? null : c.cat)}
+                className={clsx("dd-chip", category === c.cat && "active")}
+              >
+                <span className="dot" />
+                {c.label}
+              </button>
+            ))}
+          </FilterPill>
+
+          {/* Группы аромата */}
+          <FilterPill
+            label={activeGroup ? `Группа: ${activeGroup.label}` : "Группы"}
+            active={!!activeGroup}
+            onClear={() => setParam("q", null)}
+          >
+            <p style={{ margin: "0 0 10px", fontSize: 9.5, letterSpacing: "0.22em", textTransform: "uppercase", color: "#6f6c66" }}>Группы аромата</p>
+            {GROUP_CHIPS.map(c => (
+              <button
+                key={c.q}
+                onClick={() => setParam("q", q === c.q ? null : c.q)}
+                className={clsx("dd-chip", q === c.q && "active")}
+              >
+                <span className="dot" />
+                {c.label}
+              </button>
+            ))}
+          </FilterPill>
+
+          {/* В наличии toggle-pill */}
+          <button
+            onClick={() => setParam("inStock", inStock ? null : "true")}
+            className={clsx("filter-pill", inStock && "active")}
+          >
+            В наличии
+            {inStock && <X size={10} style={{ marginLeft: 2 }} onClick={(e) => { e.stopPropagation(); setParam("inStock", null); }} />}
+          </button>
+
+          {/* Сортировка */}
+          <FilterPill
+            label={sort === "name" ? "Сортировка" : sort === "price_asc" ? "↑ Цена" : "↓ Цена"}
+            active={sort !== "name"}
+            onClear={() => setParam("sort", "name")}
+          >
+            <p style={{ margin: "0 0 10px", fontSize: 9.5, letterSpacing: "0.22em", textTransform: "uppercase", color: "#6f6c66" }}>Сортировка</p>
+            {[
+              { value: "name", label: "По названию" },
+              { value: "price_asc", label: "Сначала дешевле" },
+              { value: "price_desc", label: "Сначала дороже" },
+            ].map(o => (
+              <button
+                key={o.value}
+                onClick={() => setParam("sort", o.value)}
+                className={clsx("dd-chip", sort === o.value && "active")}
+              >
+                <span className="dot" />
+                {o.label}
+              </button>
+            ))}
+          </FilterPill>
+
+          {/* Сбросить всё */}
+          {(hasActiveFilters || sort !== "name" || activeConc) && (
+            <button
+              onClick={() => setSearchParams(new URLSearchParams())}
+              style={{ flexShrink: 0, fontSize: 11.5, letterSpacing: "0.06em", color: "rgba(245,244,240,0.28)", background: "none", border: "none", cursor: "pointer", padding: "7px 4px", fontFamily: "inherit", transition: "color 0.2s" }}
+              onMouseEnter={e => (e.currentTarget.style.color = "#f87171")}
+              onMouseLeave={e => (e.currentTarget.style.color = "rgba(245,244,240,0.28)")}
+            >
+              × Сбросить всё
+            </button>
+          )}
+        </div>
+
+        {/* Mobile: category chips (existing) */}
+        <div className="flex md:hidden scroll-x" style={{ gap: 8, padding: "0 clamp(18px,4vw,32px) 10px" }}>
           <Link to="/catalog" className={clsx("cat-chip", !category && !showGrid && "active")} style={{ flexShrink: 0 }}>Все</Link>
           {autoCategories?.map((cat) => (
             <Link
@@ -381,17 +655,7 @@ export default function CatalogPage() {
               <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginBottom: 20, gap: 16, flexWrap: "wrap" }}>
                 <div>
                   <h1 className="serif" style={{ margin: 0, fontStyle: "italic", fontWeight: 400, fontSize: "clamp(26px,3vw,38px)", lineHeight: 1, color: "#f5f4f0" }}>{pageTitle}</h1>
-                  {data && <p style={{ margin: "6px 0 0", fontSize: 12, color: "#7d7a73", letterSpacing: "0.04em" }}>{data.total.toLocaleString("ru-RU")} ароматов</p>}
-                </div>
-                {/* Desktop sort (hidden on md — sidebar handles it) */}
-                <div style={{ position: "relative" }}>
-                  <select value={sort} onChange={(e) => setParam("sort", e.target.value)}
-                    style={{ appearance: "none", padding: "8px 28px 8px 12px", background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 2, fontSize: 12, color: "rgba(245,244,240,0.52)", cursor: "pointer", fontFamily: "inherit", letterSpacing: "0.04em" }}>
-                    <option value="name">По названию</option>
-                    <option value="price_asc">Сначала дешевле</option>
-                    <option value="price_desc">Сначала дороже</option>
-                  </select>
-                  <ChevronDown size={11} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", color: "rgba(245,244,240,0.28)", pointerEvents: "none" }} />
+                  {data && <p style={{ margin: "6px 0 0", fontSize: 12, color: "#7d7a73", letterSpacing: "0.04em" }}>{data.total.toLocaleString("ru-RU")} {ruPlural(data.total, "аромат", "аромата", "ароматов")}</p>}
                 </div>
               </div>
 
@@ -447,10 +711,7 @@ export default function CatalogPage() {
                   <div style={{ fontSize: 44, marginBottom: 20 }}>🔍</div>
                   <h2 className="serif" style={{ margin: "0 0 10px", fontStyle: "italic", fontWeight: 400, fontSize: 28, color: "#f5f4f0" }}>Ничего не найдено</h2>
                   <p style={{ margin: "0 0 28px", fontSize: 14, color: "#7d7a73", lineHeight: 1.6 }}>Попробуйте изменить фильтры или поисковый запрос</p>
-                  <button
-                    onClick={() => setSearchParams(new URLSearchParams(category ? { category } : {}))}
-                    className="btn-primary"
-                  >
+                  <button onClick={() => setSearchParams(new URLSearchParams(category ? { category } : {}))} className="btn-primary">
                     Сбросить фильтры
                   </button>
                 </div>
@@ -494,7 +755,23 @@ export default function CatalogPage() {
                 </div>
               </div>
 
-              {/* Brand */}
+              {/* Концентрация mobile */}
+              <div>
+                <p style={{ fontSize: 9.5, letterSpacing: "0.28em", textTransform: "uppercase", color: "#6f6c66", marginBottom: 10 }}>Концентрация</p>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {CONCENTRATION_CHIPS.map(c => (
+                    <button
+                      key={c.cat}
+                      onClick={() => setParam("category", category === c.cat ? null : c.cat)}
+                      style={{ padding: "8px 14px", borderRadius: 20, fontSize: 12.5, fontFamily: "inherit", cursor: "pointer", background: category === c.cat ? "rgba(201,162,94,0.1)" : "rgba(255,255,255,0.04)", border: `1px solid ${category === c.cat ? "rgba(201,162,94,0.5)" : "rgba(255,255,255,0.09)"}`, color: category === c.cat ? "#e9d2a0" : "rgba(245,244,240,0.52)", transition: "all 0.15s" }}
+                    >
+                      {c.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Brand mobile */}
               {brands.length > 0 && (
                 <div>
                   <p style={{ fontSize: 9.5, letterSpacing: "0.28em", textTransform: "uppercase", color: "#6f6c66", marginBottom: 10 }}>Бренд</p>
@@ -509,7 +786,7 @@ export default function CatalogPage() {
                 </div>
               )}
 
-              {/* In stock */}
+              {/* In stock mobile */}
               <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}>
                 <span style={{ fontSize: 14, color: "#f5f4f0", letterSpacing: "0.02em" }}>Только в наличии</span>
                 <div style={{ position: "relative" }}>

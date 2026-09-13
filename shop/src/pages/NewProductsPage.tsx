@@ -3,6 +3,7 @@ import { api } from "../api";
 import ProductCard from "../components/ProductCard";
 import { Link } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
+import { ruPlural } from "../utils";
 
 function CardSkeleton() {
   return (
@@ -49,7 +50,7 @@ export default function NewProductsPage() {
           </h1>
           {!isLoading && products.length > 0 && (
             <p style={{ fontSize: 13, color: "var(--muted)", marginTop: 12 }}>
-              {products.length} товаров за последние 14 дней
+              {products.length} {ruPlural(products.length, "товар", "товара", "товаров")} за последние 14 дней
             </p>
           )}
         </div>
