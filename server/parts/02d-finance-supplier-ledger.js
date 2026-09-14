@@ -61,8 +61,8 @@ function supplierLedgerSummaryFromEntries(entries = []) {
     .sort((left, right) => String(right.occurredAt).localeCompare(String(left.occurredAt)))[0] || null;
   // For USD-priced suppliers: compute native-currency debt total from raw picking data.
   // This lets the UI show debt in USD without RUB conversion.
-  const debtTotalUsd = active
-    .filter((entry) => entry.amount < 0 && entry.entryType === "purchase_debt")
+  const debtEntries = active.filter((entry) => entry.amount < 0 && entry.entryType === "purchase_debt");
+  const debtTotalUsd = debtEntries
     .reduce((sum, entry) => {
       const picking = entry.raw?.picking || {};
       const currency = String(picking.priceCurrency || picking.currency || "").toUpperCase();
@@ -71,6 +71,11 @@ function supplierLedgerSummaryFromEntries(entries = []) {
       const qty = Math.max(1, Math.round(Number(picking.quantity || 1)));
       return price > 0 ? sum + normalizeFinanceMoney(price * qty, 0) : sum;
     }, 0);
+  // True when debt entries are stored in RUB (new format) — UI should use debtTotalUsd for USD balance.
+  // Old format stored amounts in USD directly; in that case balance is already USD-denominated.
+  const debtStoredInRub = debtEntries.some(
+    (e) => String(e.currency || "RUB").toUpperCase() !== "USD",
+  );
   return {
     balance: normalizeFinanceMoney(balance, 2),
     debtTotal: Math.round(debtTotal),
@@ -81,6 +86,7 @@ function supplierLedgerSummaryFromEntries(entries = []) {
     creditTotalUsd: normalizeFinanceMoney(creditTotalUsd, 0),
     creditTotalRub: Math.round(creditTotalRub),
     debtTotalUsd: normalizeFinanceMoney(debtTotalUsd, 0),
+    debtStoredInRub,
     entries: active.length,
     lastPaymentAt: lastPayment?.occurredAt || null,
     lastDebtAt: lastDebt?.occurredAt || null,

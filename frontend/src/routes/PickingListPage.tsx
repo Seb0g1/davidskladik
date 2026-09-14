@@ -1760,8 +1760,12 @@ export function PickingListPage() {
               const supplierCurrency = String(supplierRows[0]?.priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD";
               const totalQtyAll = supplierRows.reduce((s, r) => s + (r.quantity || 1), 0);
               const hasReseller = supplierRows.some(r => r.reseller);
-              const isOverpaid = balance > 0;
-              const isInDebt = balance < 0;
+              const debtStoredInRub = Boolean((ledger as Record<string, unknown>).debtStoredInRub);
+              const balanceUsd = supplierCurrency === "USD"
+                ? (debtStoredInRub ? paidTotalUsdPick + paidTotalRubOnlyPick / usdRate - debtTotalUsd : balance)
+                : balance;
+              const isOverpaid = balanceUsd > 0;
+              const isInDebt = balanceUsd < 0;
               return (
                 <article className="picking-supplier-card" key={supplierName}>
                   <div className="picking-supplier-toolbar">
@@ -1782,8 +1786,8 @@ export function PickingListPage() {
                         {(isInDebt || isOverpaid) ? (
                           <a href="/suppliers" className={`picking-supplier-balance-badge${isOverpaid ? " overpaid" : " in-debt"}`}>
                             {isOverpaid
-                              ? `Аванс ${moneyAmount(Math.abs(balance), supplierCurrency, supplierCurrency === "USD" ? 2 : 0)}`
-                              : `Долг ${moneyAmount(Math.abs(balance), supplierCurrency, supplierCurrency === "USD" ? 2 : 0)}`}
+                              ? `Аванс ${moneyAmount(Math.abs(balanceUsd), supplierCurrency, supplierCurrency === "USD" ? 2 : 0)}`
+                              : `Долг ${moneyAmount(Math.abs(balanceUsd), supplierCurrency, supplierCurrency === "USD" ? 2 : 0)}`}
                           </a>
                         ) : null}
                         {(() => {

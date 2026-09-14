@@ -377,7 +377,12 @@ export function SuppliersPage() {
     const creditTotalRubDrawer = Number((ledger as Record<string, unknown>).creditTotalRub || 0);
     const paidTotalUsdDrawer = Number((ledger as Record<string, unknown>).paidTotalUsd || 0);
     const paidTotalRubOnlyDrawer = Number((ledger as Record<string, unknown>).paidTotalRubOnly || paidTotalRubDrawer);
-    const balanceUsd = supplierCurrency === "USD" ? balance : balance / usdRate;
+    const debtStoredInRub = Boolean((ledger as Record<string, unknown>).debtStoredInRub);
+    // New-format suppliers store debts in RUB — balance is RUB, must convert via debtTotalUsd.
+    // Old-format suppliers stored debts in USD — balance is already USD-denominated.
+    const balanceUsd = supplierCurrency === "USD"
+      ? (debtStoredInRub ? paidTotalUsdDrawer + paidTotalRubOnlyDrawer / usdRate - debtTotalUsdDrawer : balance)
+      : balance / usdRate;
     const paymentAmount = paymentDrafts[id] || "";
     const paymentNote = paymentNotes[id] || "";
     const active = supplierIsActive(supplier);
@@ -522,7 +527,13 @@ export function SuppliersPage() {
               const ledger = asRecord(raw.ledger);
               const balance = Number(ledger.balance || 0);
               const supplierCurrency = String(raw.priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD";
-              const balanceDisplay = balance;
+              const listDebtStoredInRub = Boolean((ledger as Record<string, unknown>).debtStoredInRub);
+              const listDebtTotalUsd = Number((ledger as Record<string, unknown>).debtTotalUsd || 0);
+              const listPaidTotalUsd = Number((ledger as Record<string, unknown>).paidTotalUsd || 0);
+              const listPaidTotalRubOnly = Number((ledger as Record<string, unknown>).paidTotalRubOnly || 0);
+              const balanceDisplay = supplierCurrency === "USD" && listDebtStoredInRub
+                ? listPaidTotalUsd + listPaidTotalRubOnly / usdRate - listDebtTotalUsd
+                : balance;
               const active = supplierIsActive(supplier);
               const isOpen = drawerSupplier && supplierId(drawerSupplier) === id;
               return (
