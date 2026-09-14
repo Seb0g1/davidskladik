@@ -7,6 +7,7 @@ import type { ShopProduct } from "../types";
 import ProductCard from "../components/ProductCard";
 import HeroShader from "../components/HeroShader";
 import BannerSlider from "../components/BannerSlider";
+import { PageSeo } from "../seo";
 
 /* ── Hero parallax ──────────────────────────────────────────────── */
 function useHeroParallax() {
@@ -618,6 +619,26 @@ export default function HomePage() {
 
   return (
     <div style={{ background: "#0b0b0b", color: "var(--text)", minHeight: "100vh" }}>
+      <PageSeo
+        title="Magic Vibes — Оригинальный парфюм с доставкой по России"
+        description="Купить оригинальную парфюмерию в Magic Vibes. 22 000+ ароматов: Chanel, Dior, Tom Ford, Montale, Creed, Byredo. Нишевая, арабская, женская и мужская парфюмерия. Доставка по России 1–5 дней. Рейтинг 4.9 на Ozon."
+        canonical="/"
+        keywords="Magic Vibes парфюм, купить духи онлайн, оригинальная парфюмерия, интернет-магазин духов, нишевая парфюмерия, Chanel купить, Dior духи, Tom Ford парфюм"
+        jsonLd={{
+          "@context": "https://schema.org",
+          "@type": "Store",
+          name: "Magic Vibes",
+          url: "https://magicvibes.ru",
+          description: "Оригинальная парфюмерия мировых брендов с доставкой по России",
+          image: "https://magicvibes.ru/og-image.jpg",
+          priceRange: "₽₽₽",
+          currenciesAccepted: "RUB",
+          paymentAccepted: "Карты, СБП, наличные",
+          openingHours: "Mo-Su 09:00-21:00",
+          aggregateRating: { "@type": "AggregateRating", ratingValue: "4.9", reviewCount: "1240" },
+          sameAs: ["https://t.me/magicvibes_ru", "https://www.ozon.ru/seller/magic-vibes"],
+        }}
+      />
 
       {/* ── Cursor aura ─────────────────────────────────────────── */}
       <div ref={auraRef} aria-hidden="true" className="cursor-aura" />

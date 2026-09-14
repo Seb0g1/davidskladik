@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import type { BlogPost } from "../types";
+import { PageSeo } from "../seo";
 
 const S = {
   bg:      "#09090b",
@@ -101,6 +102,12 @@ export default function BlogPage() {
 
   return (
     <div style={{ background: S.bg, minHeight: "100vh", padding: "48px 0 80px" }}>
+      <PageSeo
+        title="Блог о парфюмерии — советы и обзоры ароматов | Magic Vibes"
+        description="Блог Magic Vibes: обзоры новых ароматов, советы по выбору парфюма, гайды по нанесению, рейтинги лучших духов. Всё о парфюмерии от экспертов."
+        canonical="/blog"
+        keywords="блог парфюмерия, обзоры духов, выбор парфюма, лучшие ароматы, парфюмерия гайд"
+      />
       <div style={{ maxWidth: 1080, margin: "0 auto", padding: "0 clamp(18px,5vw,60px)" }}>
 
         {/* Header */}

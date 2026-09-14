@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Search, ArrowRight, X } from "lucide-react";
 import { api } from "../api";
 import { ruPlural } from "../utils";
+import { PageSeo } from "../seo";
 
 const S = {
   bg:      "#0E0D0B",
@@ -92,6 +93,12 @@ export default function BrandsPage() {
 
   return (
     <div style={{ background: S.bg, minHeight: "100vh" }}>
+      <PageSeo
+        title="Бренды парфюмерии — все марки в Magic Vibes"
+        description="Каталог брендов парфюмерии в Magic Vibes: Chanel, Dior, Tom Ford, Montale, Creed, Byredo, Amouage, Initio и сотни других. Оригинальные ароматы с доставкой по России."
+        canonical="/brands"
+        keywords="бренды парфюмерии, марки духов, Chanel парфюм, Dior ароматы, Tom Ford духи, Montale купить, Creed оригинал, нишевые бренды"
+      />
       {/* Header */}
       <div style={{ borderBottom: `1px solid ${S.border}`, background: S.surface }}>
         <div style={{ maxWidth: 900, margin: "0 auto", padding: "clamp(24px,4vw,48px) clamp(16px,4vw,32px)" }}>

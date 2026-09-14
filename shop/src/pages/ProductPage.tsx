@@ -6,6 +6,7 @@ import { api } from "../api";
 import { useCart } from "../CartContext";
 import { useAuth } from "../AuthContext";
 import type { ShopReview, MarketplaceReview, ProductQAItem, FragranceNotes } from "../types";
+import { PageSeo, productJsonLd, breadcrumbJsonLd } from "../seo";
 
 const BottleViewer = lazy(() => import("../components/BottleViewer"));
 
@@ -174,6 +175,12 @@ export default function ProductPage() {
     enabled: !!offerId,
   });
 
+  const { data: shopSettings } = useQuery({
+    queryKey: ["shop-settings"],
+    queryFn: () => api.settings(),
+    staleTime: 10 * 60 * 1000,
+  });
+
   const { data: related } = useQuery({
     queryKey: ["shop-related", product?.brand],
     queryFn: () => api.catalog({ brand: product!.brand!, pageSize: 8, inStock: true }),
@@ -241,42 +248,7 @@ export default function ProductPage() {
     onSuccess: () => { setReviewSent(true); setReviewOpen(false); setReviewPhotoUrl(""); reviewsQuery.refetch(); },
   });
 
-  useEffect(() => {
-    if (!product) return;
-    const ld: Record<string, unknown> = {
-      "@context": "https://schema.org/",
-      "@type": "Product",
-      name: product.name,
-      brand: { "@type": "Brand", name: product.brand },
-      description: product.description ? product.description.slice(0, 200) : undefined,
-      image: product.images,
-      offers: {
-        "@type": "Offer",
-        priceCurrency: "RUB",
-        price: product.priceRub,
-        availability: product.inStock
-          ? "https://schema.org/InStock"
-          : "https://schema.org/OutOfStock",
-        url: `https://magicvibes.ru/product/${product.offerId}`,
-      },
-    };
-    if (product.rating && product.reviewCount) {
-      ld.aggregateRating = {
-        "@type": "AggregateRating",
-        ratingValue: product.rating,
-        reviewCount: product.reviewCount,
-      };
-    }
-    const script = document.createElement("script");
-    script.type = "application/ld+json";
-    script.id = "product-ld-json";
-    script.textContent = JSON.stringify(ld);
-    document.head.appendChild(script);
-    return () => {
-      const existing = document.getElementById("product-ld-json");
-      if (existing) existing.remove();
-    };
-  }, [product]);
+  // JSON-LD and meta injected via <PageSeo> in render
 
   useEffect(() => {
     if (!shareOpen) return;
@@ -364,8 +336,58 @@ export default function ProductPage() {
     });
   }
 
+  const productUrl = `/product/${encodeURIComponent(product.offerId)}`;
+  const seoTitle = product.brand
+    ? `${product.name} — ${product.brand} купить в Magic Vibes`
+    : `${product.name} купить в Magic Vibes`;
+  const seoDesc = [
+    `Купить ${product.name}${product.brand ? ` ${product.brand}` : ""}`,
+    product.priceRub ? ` за ${product.priceRub.toLocaleString("ru-RU")} ₽` : "",
+    " в интернет-магазине Magic Vibes.",
+    product.description ? ` ${product.description.slice(0, 120).replace(/\n/g, " ")}` : "",
+    " Быстрая доставка по России. Гарантия подлинности.",
+  ].join("").trim();
+  const seoKeywords = [product.name, product.brand, "купить", "цена", "оригинал", "доставка"].filter(Boolean).join(", ");
+
+  const ld = productJsonLd({
+    name: product.name,
+    brand: product.brand,
+    description: product.description?.slice(0, 300),
+    image: product.images[0],
+    sku: product.offerId,
+    url: productUrl,
+    priceRub: product.priceRub,
+    inStock: product.inStock,
+    deliveryPriceRub: shopSettings?.deliveryPriceRub,
+    deliveryDaysMin: shopSettings?.deliveryDaysMin,
+    deliveryDaysMax: shopSettings?.deliveryDays,
+    freeDeliveryFrom: shopSettings?.freeDeliveryFrom,
+  });
+  if (product.rating && product.reviewCount) {
+    (ld as Record<string, unknown>).aggregateRating = {
+      "@type": "AggregateRating",
+      ratingValue: product.rating,
+      reviewCount: product.reviewCount,
+      bestRating: "5",
+    };
+  }
+
   return (
     <div style={{ background: S.bg, minHeight: "100vh" }}>
+      <PageSeo
+        title={seoTitle}
+        description={seoDesc}
+        canonical={productUrl}
+        image={product.images[0]}
+        type="product"
+        keywords={seoKeywords}
+        jsonLd={[ld, breadcrumbJsonLd([
+          { name: "Главная", url: "/" },
+          { name: "Каталог", url: "/catalog" },
+          ...(product.brand ? [{ name: product.brand, url: `/catalog?brand=${encodeURIComponent(product.brand)}` }] : []),
+          { name: product.name, url: productUrl },
+        ])]}
+      />
       <div style={{ maxWidth: 1100, margin: "0 auto", padding: "clamp(20px,3vw,48px) clamp(16px,4vw,32px)" }}>
 
         {/* Breadcrumb */}
@@ -419,7 +441,9 @@ export default function ProductPage() {
 
               {/* Main viewer */}
               <div style={{
-                aspectRatio: "1", borderRadius: 18, overflow: "hidden", background: S.bg,
+                aspectRatio: "1", borderRadius: 18, overflow: "hidden",
+                /* White center → dark edges: multiply blend removes white img bg, product floats */
+                background: `radial-gradient(ellipse 82% 82% at 50% 46%, #ffffff 0%, #d8cfc4 52%, ${S.bg} 84%)`,
                 display: "flex", alignItems: "center", justifyContent: "center",
                 border: `1px solid ${view3d ? S.accent + "44" : S.border}`,
                 transition: "border-color 0.3s",
@@ -437,25 +461,24 @@ export default function ProductPage() {
                 ) : (
                   activeValidImg
                     ? <>
-                        <img src={activeValidImg} alt={product.name} style={{ width: "100%", height: "100%", objectFit: "contain", padding: 24 }}
+                        <img src={activeValidImg} alt={product.name}
+                          style={{ width: "100%", height: "100%", objectFit: "contain", padding: 8, mixBlendMode: "multiply" }}
                           onError={() => setImgErrors((s) => new Set(s).add(activeImg))} />
-                        {/* Logo watermark — bottom-right, semi-transparent */}
+
+                        {/* Logo watermark */}
                         <div style={{
-                          position: "absolute", bottom: 14, right: 16,
-                          display: "flex", alignItems: "center", gap: 6,
+                          position: "absolute", bottom: 16, right: 18, zIndex: 3,
+                          display: "flex", alignItems: "center", gap: 5,
                           pointerEvents: "none", userSelect: "none",
-                          opacity: 0.18,
-                          filter: "grayscale(1) brightness(2)",
+                          opacity: 0.28,
+                          mixBlendMode: "multiply",
                         }}>
-                          <img src="/favicon.svg" alt="" width={18} height={18} style={{ display: "block" }} />
+                          <img src="/favicon.svg" alt="" width={16} height={16} style={{ display: "block" }} />
                           <span style={{
                             fontFamily: "'Cormorant Garamond', Georgia, serif",
-                            fontStyle: "italic",
-                            fontWeight: 500,
-                            fontSize: 15,
-                            letterSpacing: "0.04em",
-                            color: "#fff",
-                            lineHeight: 1,
+                            fontStyle: "italic", fontWeight: 600,
+                            fontSize: 14, letterSpacing: "0.05em",
+                            color: "#6b5a3e", lineHeight: 1,
                           }}>
                             Magic Vibes
                           </span>
@@ -478,11 +501,12 @@ export default function ProductPage() {
                   {product.images.map((img, i) => !imgErrors.has(i) && (
                     <button key={i} onClick={() => setActiveImg(i)} style={{
                       flexShrink: 0, width: 56, height: 56, borderRadius: 12, overflow: "hidden",
-                      background: S.bg, border: `2px solid ${i === activeImg ? S.accent : S.border}`,
+                      background: `radial-gradient(ellipse 85% 85% at center, #ffffff 0%, #ccc4b8 55%, ${S.bg} 88%)`,
+                      border: `2px solid ${i === activeImg ? S.accent : S.border}`,
                       cursor: "pointer", transition: "border-color 0.15s ease",
                       boxShadow: i === activeImg ? "0 0 16px rgba(201,169,110,0.25)" : "none",
                     }}>
-                      <img src={img} alt="" style={{ width: "100%", height: "100%", objectFit: "contain", padding: 4 }}
+                      <img src={img} alt="" style={{ width: "100%", height: "100%", objectFit: "contain", padding: 4, mixBlendMode: "multiply" }}
                         onError={() => setImgErrors((s) => new Set(s).add(i))} />
                     </button>
                   ))}

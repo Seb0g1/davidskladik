@@ -54,6 +54,8 @@ export interface ShopSettings {
   contactEmail?: string;
   contactPhone?: string;
   deliveryDays?: number;
+  deliveryDaysMin?: number;
+  deliveryPriceRub?: number;
   freeDeliveryFrom?: number;
 }
 

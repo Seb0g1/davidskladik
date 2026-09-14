@@ -1,4 +1,5 @@
 import { Truck, CreditCard, RotateCcw, MapPin, Clock, Shield } from "lucide-react";
+import { PageSeo } from "../seo";
 
 const S = {
   bg:      "#0E0D0B",
@@ -41,6 +42,12 @@ function Row({ label, value }: { label: string; value: string }) {
 export default function DeliveryPage() {
   return (
     <div style={{ background: S.bg, minHeight: "100vh" }}>
+      <PageSeo
+        title="Доставка и оплата — Magic Vibes"
+        description="Доставка парфюмерии Magic Vibes по всей России. Курьер, СДЭК, Ozon-ПВЗ, Почта России. Оплата картой, СБП, наличными. Доставка 1–5 дней."
+        canonical="/delivery"
+        keywords="доставка парфюмерии, доставка духов по России, СДЭК парфюм, оплата картой парфюм"
+      />
       <div style={{ maxWidth: 800, margin: "0 auto", padding: "64px 24px 96px" }}>
 
         {/* Header */}

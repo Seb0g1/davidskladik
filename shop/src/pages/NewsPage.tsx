@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import { Newspaper, Calendar } from "lucide-react";
+import { PageSeo } from "../seo";
 
 const S = {
   bg:      "#0E0D0B",
@@ -43,6 +44,12 @@ export default function NewsPage() {
 
   return (
     <div style={{ background: S.bg, minHeight: "100vh" }}>
+      <PageSeo
+        title="Новости Magic Vibes — новинки парфюмерии и акции"
+        description="Последние новости Magic Vibes: новинки парфюмерии, специальные предложения, скидки и акции. Будьте в курсе лучших ароматов сезона."
+        canonical="/news"
+        keywords="новости парфюмерия, новинки духов, скидки парфюм, акции интернет-магазин"
+      />
       <div style={{ maxWidth: 800, margin: "0 auto", padding: "64px 24px 96px" }}>
 
         {/* Header */}

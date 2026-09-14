@@ -69,6 +69,12 @@ const mkUserIcon = () =>
   });
 
 const MAP_CSS = `
+.pvz-map-wrap .leaflet-container {
+  background: #1a1814 !important;
+}
+.pvz-map-wrap .leaflet-tile-pane {
+  filter: invert(100%) hue-rotate(180deg) brightness(90%) contrast(90%) !important;
+}
 .pvz-map-wrap .leaflet-control-zoom a {
   background: rgba(20,18,16,0.95) !important;
   color: rgba(244,239,230,0.75) !important;
@@ -215,9 +221,10 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
         zoomControl: false,
         attributionControl: false,
       });
-      // Stadia Alidade Smooth Dark — clean dark tiles, no API key for low traffic
-      L.tileLayer("https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png", {
-        maxZoom: 20,
+      // OpenStreetMap — truly free, no API key; tile pane inverted via CSS to dark
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        subdomains: "abc",
         attribution: "",
       }).addTo(map);
       L.control.zoom({ position: "topright" }).addTo(map);
@@ -514,7 +521,7 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
           display: isMobile && mobileView !== "map" ? "none" : "flex",
           flexDirection: "column",
         }}>
-          <div ref={mapDivRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
+          <div ref={mapDivRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", background: "#0E0D0B" }} />
 
           {/* Loading overlay */}
           {loading && (

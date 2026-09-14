@@ -32,7 +32,7 @@ interface ShopMarkupRule { minUsd: number; coefficient: number }
 interface ShopSettings {
   markup: number; markupRules: ShopMarkupRule[];
   shopName: string; shopDescription: string;
-  contactEmail?: string; contactPhone?: string; deliveryDays?: number; freeDeliveryFrom?: number;
+  contactEmail?: string; contactPhone?: string; deliveryDays?: number; deliveryDaysMin?: number; deliveryPriceRub?: number; freeDeliveryFrom?: number;
   vipTelegramLink?: string;
   aromaMesyatsa?: { offerId: string; note: string; validUntil?: string } | null;
 }
@@ -808,7 +808,7 @@ function SettingsTab() {
   });
 
   const setF = (k: keyof ShopSettings) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
-    setForm((f) => ({ ...f, [k]: ["markup", "deliveryDays", "freeDeliveryFrom"].includes(k) ? Number(e.target.value) : e.target.value }));
+    setForm((f) => ({ ...f, [k]: ["markup", "deliveryDays", "deliveryDaysMin", "deliveryPriceRub", "freeDeliveryFrom"].includes(k) ? Number(e.target.value) : e.target.value }));
 
   const addRule = () => setRules(r => [...r, { minUsd: 0, coefficient: form.markup ?? 2.2 }]);
   const removeRule = (i: number) => setRules(r => r.filter((_, idx) => idx !== i));
@@ -861,12 +861,20 @@ function SettingsTab() {
             </span>
           </div>
           <div className="mv-field">
+            <label>Стоимость доставки (₽)</label>
+            <input type="number" min="0" value={form.deliveryPriceRub ?? 350} onChange={setF("deliveryPriceRub")} />
+          </div>
+          <div className="mv-field">
             <label>Бесплатная доставка от (₽)</label>
             <input type="number" min="0" value={form.freeDeliveryFrom ?? 3000} onChange={setF("freeDeliveryFrom")} />
           </div>
           <div className="mv-field">
-            <label>Срок доставки (дней)</label>
-            <input type="number" min="1" max="30" value={form.deliveryDays ?? 3} onChange={setF("deliveryDays")} />
+            <label>Срок доставки мин (дней)</label>
+            <input type="number" min="1" max="30" value={form.deliveryDaysMin ?? 1} onChange={setF("deliveryDaysMin")} />
+          </div>
+          <div className="mv-field">
+            <label>Срок доставки макс (дней)</label>
+            <input type="number" min="1" max="30" value={form.deliveryDays ?? 5} onChange={setF("deliveryDays")} />
           </div>
         </div>
 

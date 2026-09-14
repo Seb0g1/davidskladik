@@ -258,7 +258,9 @@ function defaultShopSettings() {
     shopDescription: "Оригинальная парфюмерия и косметика с доставкой по России",
     contactEmail: process.env.SHOP_CONTACT_EMAIL || "",
     contactPhone: process.env.SHOP_CONTACT_PHONE || "",
-    deliveryDays: 3,
+    deliveryDays: 5,
+    deliveryDaysMin: 1,
+    deliveryPriceRub: 350,
     freeDeliveryFrom: 3000,
     vipTelegramLink: "",
   };
@@ -1319,8 +1321,8 @@ app.get("/api/shop/settings", shopCors, async (_request, response, next) => {
   try {
     const settings = await readShopSettings();
     // Don't expose sensitive fields
-    const { shopName, shopDescription, contactEmail, contactPhone, deliveryDays, freeDeliveryFrom } = settings;
-    response.json({ shopName, shopDescription, contactEmail, contactPhone, deliveryDays, freeDeliveryFrom });
+    const { shopName, shopDescription, contactEmail, contactPhone, deliveryDays, deliveryDaysMin, deliveryPriceRub, freeDeliveryFrom } = settings;
+    response.json({ shopName, shopDescription, contactEmail, contactPhone, deliveryDays, deliveryDaysMin, deliveryPriceRub, freeDeliveryFrom });
   } catch (error) {
     next(error);
   }
@@ -2452,7 +2454,7 @@ app.get("/api/shop/admin/settings", requireAdmin, async (_request, response, nex
 app.patch("/api/shop/admin/settings", requireAdmin, async (request, response, next) => {
   try {
     const current = await readShopSettings();
-    const allowed = ["markup", "markupRules", "shopName", "shopDescription", "contactEmail", "contactPhone", "deliveryDays", "freeDeliveryFrom", "vipTelegramLink", "aromaMesyatsa", "contest"];
+    const allowed = ["markup", "markupRules", "shopName", "shopDescription", "contactEmail", "contactPhone", "deliveryDays", "deliveryDaysMin", "deliveryPriceRub", "freeDeliveryFrom", "vipTelegramLink", "aromaMesyatsa", "contest"];
     const updates = {};
     for (const k of allowed) {
       if (request.body[k] !== undefined) updates[k] = request.body[k];

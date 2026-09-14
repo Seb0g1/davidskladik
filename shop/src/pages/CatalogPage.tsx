@@ -7,6 +7,7 @@ import { api } from "../api";
 import type { AutoCategory } from "../types";
 import ProductCard from "../components/ProductCard";
 import { ruPlural } from "../utils";
+import { PageSeo } from "../seo";
 
 const CAT_LABELS: Record<string, string> = {
   testers: "Тестеры и отливанты",
@@ -435,8 +436,20 @@ export default function CatalogPage() {
   // Active group
   const activeGroup = GROUP_CHIPS.find(c => c.q === q);
 
+  // Dynamic SEO based on active filters
+  const catLabel = category ? (CAT_LABELS[category] ?? category) : "";
+  const seoTitle = brand
+    ? (catLabel ? `${brand} — ${catLabel} купить` : `${brand} — парфюмерия купить`)
+    : (q ? `${q.charAt(0).toUpperCase() + q.slice(1)} парфюмерия — каталог`
+      : (catLabel ? `${catLabel} купить онлайн` : "Каталог парфюмерии — купить духи"));
+  const seoDesc = brand
+    ? `Купить парфюмерию ${brand} в Magic Vibes. Оригинальные ароматы${catLabel ? ` — ${catLabel.toLowerCase()}` : ""}. Быстрая доставка по России. Гарантия подлинности.`
+    : `Каталог оригинальной парфюмерии в Magic Vibes${q ? ` — ${q}` : ""}${catLabel ? `, ${catLabel.toLowerCase()}` : ""}. Chanel, Dior, Tom Ford, Montale и тысячи других брендов. Доставка по России.`;
+  const seoKw = [brand, catLabel, q, "купить парфюм", "духи онлайн"].filter(Boolean).join(", ");
+
   return (
     <div style={{ background: "#0b0b0b", minHeight: "100vh" }}>
+      <PageSeo title={seoTitle} description={seoDesc} canonical="/catalog" keywords={seoKw} />
       <style>{CATALOG_STYLE}</style>
 
       {/* ── Sticky top bar ── */}

@@ -613,6 +613,7 @@ model ShopOrder {
   totalRub   Int           @map("total_rub")
   comment    String?
   refCode    String?       @map("ref_code")
+  promoCode  String?       @map("promo_code")
   createdAt  DateTime      @default(now()) @map("created_at")
 
   customer ShopCustomer? @relation(fields: [customerId], references: [id], onDelete: SetNull)

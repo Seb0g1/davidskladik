@@ -44,7 +44,9 @@ export default function ProductCard({ product, showBrand = true }: Props) {
         className={hasFlip ? "card-flip-scene" : undefined}
         style={{
           aspectRatio: "4/5",
-          background: img ? "#141414" : placeholder(product.brand || product.name),
+          background: img
+            ? "radial-gradient(ellipse 85% 85% at 50% 46%, #ffffff 0%, #d5ccc0 50%, #0E0D0B 85%)"
+            : placeholder(product.brand || product.name),
           position: "relative",
           overflow: hasFlip ? undefined : "hidden",
         }}
@@ -56,17 +58,17 @@ export default function ProductCard({ product, showBrand = true }: Props) {
               <img
                 src={img2}
                 alt=""
-                style={{ width: "100%", height: "100%", objectFit: "contain", padding: 12 }}
+                style={{ width: "100%", height: "100%", objectFit: "contain", padding: 12, mixBlendMode: "multiply" }}
                 loading="lazy"
                 onError={() => setImg2Error(true)}
               />
             </div>
             {/* Front image (first photo) — flips on hover */}
-            <div className="card-page-front" style={{ background: "#141414" }}>
+            <div className="card-page-front" style={{ background: "radial-gradient(ellipse 85% 85% at 50% 46%, #ffffff 0%, #d5ccc0 50%, #0E0D0B 85%)" }}>
               <img
                 src={img}
                 alt={product.name}
-                style={{ width: "100%", height: "100%", objectFit: "contain", padding: 12 }}
+                style={{ width: "100%", height: "100%", objectFit: "contain", padding: 12, mixBlendMode: "multiply" }}
                 loading="lazy"
                 onError={() => setImg1Error(true)}
               />
@@ -76,7 +78,7 @@ export default function ProductCard({ product, showBrand = true }: Props) {
           <img
             src={img}
             alt={product.name}
-            style={{ width: "100%", height: "100%", objectFit: "contain", padding: 12, transition: "transform 0.5s cubic-bezier(0.16,1,0.3,1)" }}
+            style={{ width: "100%", height: "100%", objectFit: "contain", padding: 12, mixBlendMode: "multiply", transition: "transform 0.5s cubic-bezier(0.16,1,0.3,1)" }}
             loading="lazy"
             onError={() => setImg1Error(true)}
           />
