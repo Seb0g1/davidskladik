@@ -5,10 +5,13 @@ async function getPickingRowPartnerEmail(partnerId) {
   try {
     const numericId = Number(partnerId);
     const [rows] = await pool.query(
-      "SELECT Email FROM Partners WHERE PartnerID = ? LIMIT 1",
+      "SELECT Email, PartnerName FROM Partners WHERE PartnerID = ? LIMIT 1",
       [Number.isFinite(numericId) && numericId > 0 ? numericId : partnerId],
     );
     const email = cleanText(rows?.[0]?.Email || "");
+    const name = cleanText(rows?.[0]?.PartnerName || "");
+    // Инна не отменяет позиции — ей отмены не отправляем
+    if (/инна/i.test(name)) return null;
     return email || null;
   } catch (e) {
     logger.warn("cancellation watcher: partner email lookup failed", { partnerId, detail: e?.message || String(e) });

@@ -216,11 +216,13 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
         try {
           const numericPartnerId = Number(current.partnerId);
           const [emailRows] = await pool.query(
-            "SELECT Email FROM Partners WHERE PartnerID = ? LIMIT 1",
+            "SELECT Email, PartnerName FROM Partners WHERE PartnerID = ? LIMIT 1",
             [Number.isFinite(numericPartnerId) && numericPartnerId > 0 ? numericPartnerId : current.partnerId],
           );
           const partnerEmail = cleanText(emailRows?.[0]?.Email || "");
-          if (partnerEmail) {
+          const partnerName = cleanText(emailRows?.[0]?.PartnerName || "");
+          // Инна не отменяет позиции — ей отмены не отправляем
+          if (partnerEmail && !/инна/i.test(partnerName)) {
             const escH = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
             const cancelEmailHtml = `<html><body style="font-family:Arial,sans-serif;font-size:14px;color:#333;line-height:1.6">
 <p>Здравствуйте!</p>
