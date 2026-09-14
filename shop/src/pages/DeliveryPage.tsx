@@ -47,6 +47,20 @@ export default function DeliveryPage() {
         description="Доставка парфюмерии Magic Vibes по всей России. Курьер, СДЭК, Ozon-ПВЗ, Почта России. Оплата картой, СБП, наличными. Доставка 1–5 дней."
         canonical="/delivery"
         keywords="доставка парфюмерии, доставка духов по России, СДЭК парфюм, оплата картой парфюм"
+        jsonLd={{
+          "@context": "https://schema.org",
+          "@type": "WebPage",
+          name: "Доставка и оплата",
+          description: "Условия доставки и оплаты заказов в магазине Magic Vibes",
+          url: "https://magicvibes.ru/delivery",
+          breadcrumb: {
+            "@type": "BreadcrumbList",
+            itemListElement: [
+              { "@type": "ListItem", position: 1, name: "Главная", item: "https://magicvibes.ru/" },
+              { "@type": "ListItem", position: 2, name: "Доставка и оплата", item: "https://magicvibes.ru/delivery" },
+            ],
+          },
+        }}
       />
       <div style={{ maxWidth: 800, margin: "0 auto", padding: "64px 24px 96px" }}>
 

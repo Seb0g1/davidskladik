@@ -461,7 +461,7 @@ export default function ProductPage() {
                 ) : (
                   activeValidImg
                     ? <>
-                        <img src={activeValidImg} alt={product.name}
+                        <img src={activeValidImg} alt={product.brand ? `${product.name} ${product.brand} купить` : `${product.name} купить`}
                           style={{ width: "100%", height: "100%", objectFit: "contain", padding: 8, mixBlendMode: "multiply" }}
                           onError={() => setImgErrors((s) => new Set(s).add(activeImg))} />
 
@@ -506,7 +506,7 @@ export default function ProductPage() {
                       cursor: "pointer", transition: "border-color 0.15s ease",
                       boxShadow: i === activeImg ? "0 0 16px rgba(201,169,110,0.25)" : "none",
                     }}>
-                      <img src={img} alt="" style={{ width: "100%", height: "100%", objectFit: "contain", padding: 4, mixBlendMode: "multiply" }}
+                      <img src={img} alt={`${product.name} фото ${i + 1}`} style={{ width: "100%", height: "100%", objectFit: "contain", padding: 4, mixBlendMode: "multiply" }}
                         onError={() => setImgErrors((s) => new Set(s).add(i))} />
                     </button>
                   ))}

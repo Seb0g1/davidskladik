@@ -446,10 +446,17 @@ export default function CatalogPage() {
     ? `Купить парфюмерию ${brand} в Magic Vibes. Оригинальные ароматы${catLabel ? ` — ${catLabel.toLowerCase()}` : ""}. Быстрая доставка по России. Гарантия подлинности.`
     : `Каталог оригинальной парфюмерии в Magic Vibes${q ? ` — ${q}` : ""}${catLabel ? `, ${catLabel.toLowerCase()}` : ""}. Chanel, Dior, Tom Ford, Montale и тысячи других брендов. Доставка по России.`;
   const seoKw = [brand, catLabel, q, "купить парфюм", "духи онлайн"].filter(Boolean).join(", ");
+  // Brand/category pages are indexable with their own canonical; free-text search is noindex
+  const seoCanonical = brand
+    ? `/catalog?brand=${encodeURIComponent(brand)}`
+    : category
+    ? `/catalog?category=${encodeURIComponent(category)}`
+    : "/catalog";
+  const seoNoindex = Boolean(q && !brand && !category);
 
   return (
     <div style={{ background: "#0b0b0b", minHeight: "100vh" }}>
-      <PageSeo title={seoTitle} description={seoDesc} canonical="/catalog" keywords={seoKw} />
+      <PageSeo title={seoTitle} description={seoDesc} canonical={seoCanonical} keywords={seoKw} noindex={seoNoindex} />
       <style>{CATALOG_STYLE}</style>
 
       {/* ── Sticky top bar ── */}

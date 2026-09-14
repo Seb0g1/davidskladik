@@ -91,6 +91,20 @@ export default function BrandsPage() {
   }
   const letters = Object.keys(grouped).sort();
 
+  const brandsJsonLd = brands.length > 0 ? {
+    "@context": "https://schema.org",
+    "@type": "ItemList",
+    name: "Бренды парфюмерии в Magic Vibes",
+    url: "https://magicvibes.ru/brands",
+    numberOfItems: brands.length,
+    itemListElement: brands.slice(0, 100).map((b, i) => ({
+      "@type": "ListItem",
+      position: i + 1,
+      name: b.name,
+      url: `https://magicvibes.ru/catalog?brand=${encodeURIComponent(b.name)}`,
+    })),
+  } : null;
+
   return (
     <div style={{ background: S.bg, minHeight: "100vh" }}>
       <PageSeo
@@ -98,6 +112,7 @@ export default function BrandsPage() {
         description="Каталог брендов парфюмерии в Magic Vibes: Chanel, Dior, Tom Ford, Montale, Creed, Byredo, Amouage, Initio и сотни других. Оригинальные ароматы с доставкой по России."
         canonical="/brands"
         keywords="бренды парфюмерии, марки духов, Chanel парфюм, Dior ароматы, Tom Ford духи, Montale купить, Creed оригинал, нишевые бренды"
+        jsonLd={brandsJsonLd ?? undefined}
       />
       {/* Header */}
       <div style={{ borderBottom: `1px solid ${S.border}`, background: S.surface }}>

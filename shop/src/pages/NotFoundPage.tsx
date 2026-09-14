@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Link } from "react-router-dom";
+import { PageSeo } from "../seo";
 
 export default function NotFoundPage() {
   const auraRef = useRef<HTMLDivElement>(null);
@@ -23,6 +24,8 @@ export default function NotFoundPage() {
   }, []);
 
   return (
+    <>
+    <PageSeo title="Страница не найдена — Magic Vibes" noindex />
     <div style={{
       background: "#09090b",
       minHeight: "100vh",
@@ -285,5 +288,6 @@ export default function NotFoundPage() {
 
       </div>
     </div>
+    </>
   );
 }

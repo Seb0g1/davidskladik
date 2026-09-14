@@ -150,12 +150,7 @@ export function productJsonLd(p: {
         },
       },
     },
-    aggregateRating: {
-      "@type": "AggregateRating",
-      ratingValue: "4.9",
-      reviewCount: "1240",
-      bestRating: "5",
-    },
+    // aggregateRating is omitted here — ProductPage injects real data when available
   };
 }
 
