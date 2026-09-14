@@ -40,10 +40,13 @@ const rowSearchText = (row: PickingRow) => [
 
 const currencySymbol = (currency: string) => (String(currency || "USD").toUpperCase() === "RUB" ? "₽" : "$");
 
-const moneyAmount = (value: unknown, currency = "USD") => {
+const moneyAmount = (value: unknown, currency = "USD", fractionDigits?: number) => {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return "-";
-  return `${Math.round(n).toLocaleString("ru-RU")} ${currencySymbol(currency)}`;
+  const formatted = fractionDigits !== undefined
+    ? n.toLocaleString("ru-RU", { minimumFractionDigits: fractionDigits, maximumFractionDigits: fractionDigits })
+    : Math.round(n).toLocaleString("ru-RU");
+  return `${formatted} ${currencySymbol(currency)}`;
 };
 
 const moneySigned = (value: unknown, currency = "USD") => {
@@ -1779,8 +1782,8 @@ export function PickingListPage() {
                         {(isInDebt || isOverpaid) ? (
                           <a href="/suppliers" className={`picking-supplier-balance-badge${isOverpaid ? " overpaid" : " in-debt"}`}>
                             {isOverpaid
-                              ? `Аванс ${moneyAmount(Math.abs(balance), supplierCurrency)}`
-                              : `Долг ${moneyAmount(Math.abs(balance), supplierCurrency)}`}
+                              ? `Аванс ${moneyAmount(Math.abs(balance), supplierCurrency, supplierCurrency === "USD" ? 2 : 0)}`
+                              : `Долг ${moneyAmount(Math.abs(balance), supplierCurrency, supplierCurrency === "USD" ? 2 : 0)}`}
                           </a>
                         ) : null}
                         {(() => {
