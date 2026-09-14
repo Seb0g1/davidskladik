@@ -1758,7 +1758,7 @@ export function PickingListPage() {
               const totalQtyAll = supplierRows.reduce((s, r) => s + (r.quantity || 1), 0);
               const hasReseller = supplierRows.some(r => r.reseller);
               const balanceUsd = supplierCurrency === "USD"
-                ? -debtTotalUsd + creditTotalUsdPick + creditTotalRubPick / usdRate
+                ? paidTotalUsdPick + paidTotalRubOnlyPick / usdRate - debtTotalUsd
                 : balance;
               const isOverpaid = balanceUsd > 0;
               const isInDebt = balanceUsd < 0;
@@ -1780,11 +1780,11 @@ export function PickingListPage() {
                       <div className="picking-supplier-head-meta">
                         <span className="picking-supplier-count">{supplierRows.length} поз.{totalQtyAll !== supplierRows.length ? ` · ${totalQtyAll} шт.` : ""}</span>
                         {(isInDebt || isOverpaid) ? (
-                          <span className={`picking-supplier-balance-badge${isOverpaid ? " overpaid" : " in-debt"}`}>
+                          <a href="/suppliers" className={`picking-supplier-balance-badge${isOverpaid ? " overpaid" : " in-debt"}`}>
                             {isOverpaid
                               ? `Аванс ${supplierCurrency === "USD" ? moneyAmount(Math.abs(balanceUsd), "USD") : moneyAmount(Math.abs(balance), "RUB")}`
                               : `Долг ${supplierCurrency === "USD" ? moneyAmount(Math.abs(balanceUsd), "USD") : moneyAmount(Math.abs(balance), "RUB")}`}
-                          </span>
+                          </a>
                         ) : null}
                         {(() => {
                           const here = (viewersQuery.data?.viewers ?? []).filter(v => v.currentSupplier === supplierName && v.username !== myUsername);
