@@ -9876,8 +9876,8 @@ textarea:focus-visible,
   .picking-supplier-card { max-width: 100%; overflow: clip; border-radius: 10px; }
   .pm-search-panel { width: 100vw; }
   .picker-balance-chip { font-size: 0.78rem; padding: 5px 9px; }
-  /* Supplier head: tighter on mobile */
-  .picking-supplier-head { padding: 12px 14px 8px; }
+  /* Supplier head: stack name above meta on mobile */
+  .picking-supplier-head { padding: 10px 12px 6px; flex-direction: column; align-items: stretch; gap: 6px; }
   .picking-supplier-head h3 { font-size: 1.05rem; }
   /* Ledger 2-col on mobile */
   .supplier-ledger-row { grid-template-columns: repeat(2, 1fr); }
@@ -9934,8 +9934,7 @@ textarea:focus-visible,
   .supplier-cart-actions > button { justify-content: center; min-height: 44px; }
   /* Compact supplier card on mobile: tighter padding, hide ledger details */
   .picking-supplier-card { padding: 8px; gap: 6px; }
-  .picking-supplier-toolbar { gap: 6px; padding-bottom: 6px; }
-  .picking-supplier-head { gap: 6px; }
+  .picking-supplier-toolbar { gap: 6px; padding-bottom: 6px; max-width: 100%; }
   .picking-supplier-name-block h3 { font-size: 1rem; }
   /* Supplier ledger: 2×2 grid on mobile (show all 4 values) */
   .supplier-ledger-row { grid-template-columns: repeat(2, 1fr); padding: 0; }
@@ -9944,10 +9943,12 @@ textarea:focus-visible,
   .picking-supplier-head-meta {
     flex-direction: row;
     align-items: center;
-    justify-content: space-between;
-    gap: 6px 12px;
-    align-self: stretch;
+    justify-content: flex-start;
+    flex-shrink: 1;
+    align-self: auto;
     flex-wrap: wrap;
+    gap: 4px 10px;
+    text-align: left;
   }
   /* Group header right: smaller button on phones */
   .picking-group-header-right { gap: 4px; }

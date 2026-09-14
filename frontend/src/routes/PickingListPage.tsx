@@ -1760,8 +1760,8 @@ export function PickingListPage() {
               const balanceUsd = supplierCurrency === "USD"
                 ? -debtTotalUsd + creditTotalUsdPick + creditTotalRubPick / usdRate
                 : balance;
-              const isOverpaid = balanceUsd < 0;
-              const isInDebt = balanceUsd > 0;
+              const isOverpaid = balanceUsd > 0;
+              const isInDebt = balanceUsd < 0;
               return (
                 <article className="picking-supplier-card" key={supplierName}>
                   <div className="picking-supplier-toolbar">
@@ -1783,7 +1783,7 @@ export function PickingListPage() {
                           <span className={`picking-supplier-balance-badge${isOverpaid ? " overpaid" : " in-debt"}`}>
                             {isOverpaid
                               ? `Аванс ${supplierCurrency === "USD" ? moneyAmount(Math.abs(balanceUsd), "USD") : moneyAmount(Math.abs(balance), "RUB")}`
-                              : `Долг ${supplierCurrency === "USD" ? moneyAmount(balanceUsd, "USD") : moneyAmount(balance, "RUB")}`}
+                              : `Долг ${supplierCurrency === "USD" ? moneyAmount(Math.abs(balanceUsd), "USD") : moneyAmount(Math.abs(balance), "RUB")}`}
                           </span>
                         ) : null}
                         {(() => {
