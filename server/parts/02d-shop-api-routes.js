@@ -1271,6 +1271,26 @@ app.get("/api/shop/product-qa", shopCors, async (request, response, next) => {
   } catch (error) { next(error); }
 });
 
+// Sitemap-only endpoint: returns all published product slugs + dates without count limit
+app.get("/api/shop/sitemap-products", shopCors, async (_request, response, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return response.json({ products: [] });
+    const rows = await prisma.warehouseProduct.findMany({
+      where: { archived: false, NOT: { status: "deleted" }, currentPrice: { gt: 0 } },
+      select: { offerId: true, updatedAt: true },
+      orderBy: { updatedAt: "desc" },
+    });
+    const products = rows
+      .filter((r) => r.offerId && r.offerId.trim())
+      .map((r) => ({
+        offerId: r.offerId.trim(),
+        lastmod: r.updatedAt ? r.updatedAt.toISOString().slice(0, 10) : null,
+      }));
+    response.json({ products });
+  } catch (error) { next(error); }
+});
+
 app.get("/api/shop/brands", shopCors, async (_request, response, next) => {
   try {
     const prisma = getPrisma();
