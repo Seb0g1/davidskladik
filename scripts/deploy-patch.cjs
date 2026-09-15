@@ -38,8 +38,9 @@ async function uploadDir(sftp, conn, localDir, remoteDir) {
   }
 }
 const SERVER_FILES = [
-  "server/parts/02f-supplier-picking-routes.js",
-  "server/parts/02d-routes-catalog-report.js",
+  "server/parts/02d-suppliers-routes-read.js",
+  "server/parts/02f-marketplace-automation-pickers.js",
+  "server/parts/02f-zero-stock-sweep.js",
 ];
 
 async function main() {
@@ -60,8 +61,8 @@ async function main() {
       await uploadFile(sftp, path.join(ROOT, rel), `${REMOTE_ROOT}/${rel}`);
       console.log("OK");
     }
-    const r = await exec(conn, `cd ${REMOTE_ROOT} && pm2 reload ecosystem.config.cjs --only davidsklad-api 2>&1 | tail -3`);
-    console.log("API reload:", r.out.trim() || r.errOut.trim() || "done");
+    const r = await exec(conn, `cd ${REMOTE_ROOT} && pm2 reload ecosystem.config.cjs --only davidsklad-api,davidsklad-worker 2>&1 | tail -3`);
+    console.log("API+Worker reload:", r.out.trim() || r.errOut.trim() || "done");
     console.log("Deployed.");
     const st = await exec(conn, "pm2 jlist 2>/dev/null");
     let procs = []; try { procs = JSON.parse(st.out); } catch {}
