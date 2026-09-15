@@ -423,10 +423,16 @@ function filterSelectedRowMatchesToBestPin(link, matches) {
     }
   }
 
-  // The pinned row is gone (completely absent from snapshot), no name match, no name-similar
-  // active row. Return the pinned row (inactive/zero-price) if it is still in snapshot so
-  // upstream shows supplier_not_available. When byRowId is also empty, return [] — routing
-  // to matches.slice(0,1) would order a random unrelated product that shares the article code.
+  // No name anchor available: both name-match blocks above were skipped entirely.
+  // This happens for links created before resolvedPriceMasterRow.name storage was added.
+  // Without a name anchor we cannot discriminate rows — return all matches so that
+  // disambiguateSupplierCartMatchesByOrderName can use the marketplace order name instead.
+  // Returning [] here would permanently break cart resolution for these older links.
+  if (!fallbackName) return matches;
+
+  // fallbackName was present but no matching/token-similar active row was found — the
+  // article-matching rows are likely unrelated products. Return the inactive pinned row
+  // so upstream shows supplier_not_available rather than routing to the wrong product.
   return byRowId.length ? byRowId : [];
 }
 

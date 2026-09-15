@@ -80,9 +80,13 @@ async function findPriceMasterRowsForLink(linkInput, usdRate, managedSuppliers =
   const conditions = ["r.Ignored = 0", "r.Active != 0"];
   if (offerDocsActiveColumn) conditions.push(`d.${offerDocsActiveColumn}${offerDocsActiveFilterSuffix}`);
   const params = [];
-  if (link.matchType === "selected_row" && link.article) {
+  if (link.matchType === "selected_row" && link.article
+      && !(link.sourceRowId && link.article === String(link.sourceRowId))) {
     // Self-heal pinned links: match the supplier's current rows for this article (scoped to
     // partner below) instead of the pinned RowID, which the supplier's re-upload deactivated.
+    // Skip when article === sourceRowId: that means the PM row had no NativeID and the RowID
+    // was stored as the supplierArticle fallback — querying NativeID with a RowID value returns
+    // nothing; fall through to the RowID query below instead.
     conditions.push("BINARY TRIM(r.NativeID) = BINARY ?");
     params.push(link.article);
   } else if (link.matchType === "selected_row" && link.sourceRowId) {
