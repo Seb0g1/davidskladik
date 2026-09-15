@@ -17,6 +17,7 @@
     "prop-types": "^15.8.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-helmet-async": "^3.0.0",
     "react-router-dom": "^7.0.0",
     "react-simple-maps": "^3.0.0",
     "three": "^0.185.1"

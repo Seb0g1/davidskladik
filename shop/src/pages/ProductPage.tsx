@@ -411,7 +411,10 @@ export default function ProductPage() {
           <span style={{ color: S.text, maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{product.name}</span>
         </nav>
 
-        <div style={{ background: S.surface, borderRadius: 24, overflow: "hidden", border: `1px solid ${S.border}` }}>
+        <div itemScope itemType="https://schema.org/Product" style={{ background: S.surface, borderRadius: 24, overflow: "hidden", border: `1px solid ${S.border}` }}>
+          {/* Hidden microdata for crawlers that don't execute JS */}
+          <meta itemProp="sku" content={product.offerId} />
+          {product.images[0] && <link itemProp="image" href={product.images[0]} />}
           <style>{`@media(min-width:768px){.product-layout{grid-template-columns:1fr 1fr!important;}}`}</style>
           <div className="product-layout" style={{ display: "grid", gridTemplateColumns: "1fr" }}>
 
@@ -462,6 +465,7 @@ export default function ProductPage() {
                   activeValidImg
                     ? <>
                         <img src={activeValidImg} alt={product.brand ? `${product.name} ${product.brand} купить` : `${product.name} купить`}
+                          itemProp="image"
                           style={{ width: "100%", height: "100%", objectFit: "contain", padding: 8, mixBlendMode: "multiply" }}
                           onError={() => setImgErrors((s) => new Set(s).add(activeImg))} />
 
@@ -526,11 +530,11 @@ export default function ProductPage() {
               </Link>
 
               {product.brand && (
-                <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: S.accent3, marginBottom: 10 }}>
-                  {product.brand}
+                <div itemProp="brand" itemScope itemType="https://schema.org/Brand" style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: S.accent3, marginBottom: 10 }}>
+                  <span itemProp="name">{product.brand}</span>
                 </div>
               )}
-              <h1 style={{ fontSize: "clamp(20px,2.5vw,28px)", fontWeight: 700, color: S.text, letterSpacing: "-0.035em", lineHeight: 1.2, marginBottom: 12 }}>
+              <h1 itemProp="name" style={{ fontSize: "clamp(20px,2.5vw,28px)", fontWeight: 700, color: S.text, letterSpacing: "-0.035em", lineHeight: 1.2, marginBottom: 12 }}>
                 {product.name}
               </h1>
 
@@ -558,6 +562,12 @@ export default function ProductPage() {
               ) : null}
 
               {/* Price */}
+              <div itemProp="offers" itemScope itemType="https://schema.org/Offer">
+                <meta itemProp="priceCurrency" content="RUB" />
+                <meta itemProp="price" content={String(product.priceRub)} />
+                <link itemProp="availability" href={product.inStock ? "https://schema.org/InStock" : "https://schema.org/OutOfStock"} />
+                {product.description && <meta itemProp="description" content={product.description.slice(0, 300)} />}
+              </div>
               <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 8 }}>
                 <span style={{ fontSize: "clamp(28px,3vw,40px)", fontWeight: 700, color: S.text, letterSpacing: "-0.04em" }}>
                   {product.priceRub.toLocaleString("ru-RU")} ₽
@@ -765,7 +775,7 @@ export default function ProductPage() {
               {product.description && (
                 <div style={{ borderTop: `1px solid ${S.border}`, paddingTop: 20 }}>
                   <h3 style={{ fontSize: 13, fontWeight: 600, color: S.text, marginBottom: 10 }}>Описание</h3>
-                  <p style={{ fontSize: 13, color: S.muted, lineHeight: 1.7 }}>{product.description}</p>
+                  <p itemProp="description" style={{ fontSize: 13, color: S.muted, lineHeight: 1.7 }}>{product.description}</p>
                 </div>
               )}
 
