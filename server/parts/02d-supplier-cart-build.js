@@ -128,6 +128,8 @@ async function buildSupplierCartPreview(params = {}) {
 
 async function generateSupplierCartDraft(params = {}, request = null) {
   const preview = await buildSupplierCartPreview(params);
+  // Re-read state immediately before write so we don't overwrite processed entries
+  // committed while buildSupplierCartPreview was running (API calls take seconds).
   const state = await readSupplierCartState();
   const draft = {
     id: crypto.randomUUID(),

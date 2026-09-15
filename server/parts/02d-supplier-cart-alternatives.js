@@ -265,12 +265,15 @@ app.post("/api/supplier-picking-list/:key/replace-supplier", requireStaff, async
     await writeSupplierCartState(cartState);
 
     // 2) Убираем старую PM-строку (одна на все unit-ряды).
+    // Abort if deletion fails — continuing would create a second PM row for the same order.
     let priceMasterCleanup = null;
     if (current.requestRowId) {
-      priceMasterCleanup = await deleteSupplierCartPriceMasterRow(current).catch((error) => {
-        logger.warn("replace supplier PM cleanup failed", { key, detail: error?.message || String(error) });
-        return { error: error?.message || String(error) };
-      });
+      try {
+        priceMasterCleanup = await deleteSupplierCartPriceMasterRow(current);
+      } catch (error) {
+        logger.warn("replace supplier PM cleanup failed — aborting replace to prevent duplicate PM row", { key, detail: error?.message || String(error) });
+        throw Object.assign(new Error(`Failed to remove old PM row before replace: ${error?.message || String(error)}`), { statusCode: 502 });
+      }
     }
 
     // 3) Новая заявка новому поставщику — ОДНА строка с суммарным quantity всех unit-рядов.

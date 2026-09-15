@@ -221,6 +221,11 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
   }
   skippedDetails.push(...liveInactiveSkipped);
 
+  if (!pool) {
+    const err = new Error("PriceMaster pool not available — PM_DB_* not configured");
+    err.statusCode = 503;
+    throw err;
+  }
   const byPartner = new Map();
   for (const row of validatedPmRows) {
     const partnerId = cleanText(row.partnerId);
@@ -501,6 +506,29 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
       ready: rows.filter((row) => row.ready && !row.alreadyCommitted).length,
       alreadyCommitted: rows.filter((row) => row.alreadyCommitted).length,
       skipped: rows.filter((row) => !row.ready && !row.alreadyCommitted).length,
+    };
+  }
+  // Mark return-covered rows as processed so the next auto-cart run doesn't
+  // re-order them. These rows used existing stock from the return pool and never
+  // got a PM row — without this they appear uncommitted on the next pass.
+  const committedAtReturn = new Date().toISOString();
+  for (const row of returnCoveredRows) {
+    if (!row.key || nextState.processed?.[row.key]) continue;
+    nextState.processed[row.key] = {
+      key: row.key,
+      marketplace: row.marketplace,
+      orderId: row.orderId,
+      postingNumber: row.postingNumber,
+      offerId: row.offerId,
+      quantity: row.quantity,
+      warehouseProductId: row.warehouseProductId,
+      supplierName: row.supplierName,
+      partnerId: row.partnerId,
+      offerRowId: row.offerRowId,
+      requestDocId: "return_pool",
+      requestRowId: "",
+      committedAt: committedAtReturn,
+      committedBy: requestUsername(request),
     };
   }
   nextState.history = [
