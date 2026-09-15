@@ -313,6 +313,15 @@ async function writeShopPromoCodes(codes) {
   await writeShopData(SHOP_PROMO_CODES_KEY, codes);
 }
 
+// Single-entry lock for promo code mutations: prevents lost usageCount increments
+// when two orders with the same promo code arrive simultaneously.
+let _shopPromoLockPromise = Promise.resolve();
+async function withShopPromoLock(worker) {
+  const run = _shopPromoLockPromise.then(() => worker());
+  _shopPromoLockPromise = run.catch(() => {});
+  return run;
+}
+
 async function validatePromoCode(code) {
   if (!code) return null;
   const upper = String(code).toUpperCase().trim();
@@ -1652,12 +1661,21 @@ app.post("/api/shop/orders", shopCors, async (request, response, next) => {
       return response.status(400).json({ error: "Заполните обязательные поля" });
     }
 
+    // Server-side price sanity: each item must have a positive price above floor.
+    // Prevents client-side price tampering (e.g., changing priceRub in localStorage to 1).
+    const SHOP_MIN_ITEM_PRICE_RUB = 50;
+    for (const i of items) {
+      const price = Number(i.priceRub);
+      if (!Number.isFinite(price) || price < SHOP_MIN_ITEM_PRICE_RUB) {
+        return response.status(400).json({ error: "Некорректная цена товара в корзине" });
+      }
+    }
     const baseTotal = items.reduce((s, i) => {
       const price = Number(i.priceRub);
       const qty = Math.max(1, Number(i.quantity) || 1);
       return s + (Number.isFinite(price) && price >= 0 ? price * qty : 0);
     }, 0);
-    if (!Number.isFinite(baseTotal)) {
+    if (!Number.isFinite(baseTotal) || baseTotal <= 0) {
       return response.status(400).json({ error: "Некорректная сумма корзины" });
     }
     const orderId = `MV-${Date.now().toString(36).toUpperCase()}`;
@@ -1695,13 +1713,15 @@ app.post("/api/shop/orders", shopCors, async (request, response, next) => {
         promoDiscountApplied = true;
         promoDiscountPct = promo.discountPct;
         appliedPromoCode = promo.code;
-        // Increment usage count
-        const codes = await readShopPromoCodes();
-        const idx = codes.findIndex(c => c.id === promo.id);
-        if (idx >= 0) {
-          codes[idx] = { ...codes[idx], usageCount: (codes[idx].usageCount || 0) + 1 };
-          await writeShopPromoCodes(codes);
-        }
+        // Increment usage count — wrapped in lock to prevent lost updates on concurrent orders
+        await withShopPromoLock(async () => {
+          const codes = await readShopPromoCodes();
+          const idx = codes.findIndex(c => c.id === promo.id);
+          if (idx >= 0) {
+            codes[idx] = { ...codes[idx], usageCount: (codes[idx].usageCount || 0) + 1 };
+            await writeShopPromoCodes(codes);
+          }
+        });
       }
     }
 

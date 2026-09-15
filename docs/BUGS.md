@@ -25,7 +25,7 @@ prisma.shopCustomer.update({ ... data: { loyaltyPoints: { increment: N } } }).ca
 
 ## Высокие (HIGH)
 
-### BUG-002 · shop: race condition применения промокода
+### [x] BUG-002 · shop: race condition применения промокода
 **Файл:** `server/parts/02d-shop-api-routes.js:1692-1696`  
 **Тип:** race-condition  
 
@@ -80,7 +80,7 @@ for (const [target, items] of groupByTarget(toUnarchive).entries()) {
 
 ---
 
-### BUG-006 · shop: расчёт цены при null currency
+### ~~BUG-006~~ · shop: currency null — FALSE POSITIVE
 **Файл:** `server/parts/02d-shop-api-routes.js:~465`  
 **Тип:** wrong-logic  
 
@@ -154,6 +154,35 @@ if (!payload.stocks.length) continue;  // crash если stocks === null/undefin
 `Number(item.targetStock || "0")` — если `item.targetStock` равен числу `0` (falsy), выражение `0 || "0"` → `"0"` → `Number("0")` = 0, что правильно. Однако если targetStock — невалидная строка типа `"none"`, то `Number("none")` = `NaN`, и `NaN` пишется в остатки на ЯМ (API принимает числа).
 
 **Фикс:** `const stock = Number.isFinite(Number(item.targetStock)) ? Number(item.targetStock) : 0;`
+
+---
+
+---
+
+## Второй раунд аудита
+
+### [x] BUG-013 · shop: манипуляция ценой через клиентский priceRub
+**Файл:** `server/parts/02d-shop-api-routes.js:1655-1659`  
+**Тип:** security  
+
+Сервер принимает `priceRub` из тела запроса без какой-либо валидации против реальной цены в БД. Клиент может изменить `priceRub` в localStorage/DevTools с 1 000 ₽ до 1 ₽ и заказ будет создан с поддельной суммой. `_ozonPayCreateOrder` получит `totalRub = 1`, что фактически позволяет оплатить заказ за 1 рубль.
+
+**Фикс:** добавить минимальную цену на товар + проверку против `currentPrice` из БД.
+
+---
+
+### BUG-014 · shop: price currency null в buildShopProductsFromDb
+~~FALSE POSITIVE~~ — строка 462 имеет `String(snap.currency || "USD")`, null уже защищён.
+
+---
+
+### BUG-015 · price-history: записывается исходная цена, а не фактически отправленная
+**Файл:** `server/parts/02d-prices-queue-inline.js` или `02f-price-retry.js:~86-101`  
+**Тип:** wrong-logic  
+
+В `historyRows` новая цена записывается из `item.price` (исходный targetItems), тогда как на ЯМ отправляется `roundPrice(item.price)` из yandexItems. Если цена округляется, история содержит неокруглённое значение — несоответствие в аудит-логе.
+
+**Фикс:** использовать фактически отправленное значение `y.price.value` при записи в historyRows.
 
 ---
 
