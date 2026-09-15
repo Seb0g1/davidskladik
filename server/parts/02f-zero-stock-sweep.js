@@ -89,7 +89,9 @@ async function runZeroStockSweep({ source = "schedule" } = {}) {
       const neverZeroed = !product.noSupplierAutomation?.stockZeroAt;
       if (!neverZeroed && !marketplaceHasPositiveStock(product) && Number(product.targetStock || 0) <= 0) return false;
       const manualAt = product.noSupplierAutomation?.manualSellableAt;
-      if (manualAt && nowMs - new Date(manualAt).getTime() < manualSellableTtlMs) return false;
+      if (manualAt && nowMs - new Date(manualAt).getTime() < manualSellableTtlMs) {
+        if (!marketplaceHasPositiveStock(product) && Number(product.targetStock || 0) <= 0) return false;
+      }
       return true;
     });
     if (!noSupplierWithStock.length) {

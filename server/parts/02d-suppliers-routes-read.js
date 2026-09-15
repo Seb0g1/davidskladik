@@ -214,6 +214,25 @@ app.post("/api/supplier-ledger/payments", requireStaff, async (request, response
       entityId: saved.id,
       newValue: saved,
     }).catch((error) => logger.warn("supplier ledger payment audit failed", { detail: error?.message || String(error) }));
+    // Deduct from the picker's cash balance: convert USD→RUB so the balance stays in RUB.
+    const pickerUsername = requestUsername(request);
+    if (pickerUsername && amount > 0) {
+      const usdRate = Number((await getUsdRate().catch(() => ({ rate: process.env.DEFAULT_USD_RATE || 95 }))).rate || process.env.DEFAULT_USD_RATE || 95);
+      const currency = cleanText(request.body?.currency || "RUB").toUpperCase() || "RUB";
+      const deductRub = currency === "USD" ? Math.round(amount * usdRate) : Math.round(amount);
+      withPickerBalanceLock(pickerUsername, async () => {
+        const balance = await loadPickerBalance(pickerUsername);
+        balance.credits.push({
+          id: `payment:${saved.id}`,
+          amount: -deductRub,
+          currency: "RUB",
+          note: cleanText(supplierName || partnerId),
+          createdAt: new Date().toISOString(),
+          createdBy: pickerUsername,
+        });
+        await savePickerBalance(pickerUsername, balance);
+      }).catch((err) => logger.warn("picker balance deduct (payment) failed", { detail: err?.message || String(err) }));
+    }
     const summary = await listSupplierLedgerEntries({ supplierName, partnerId, status: "active", limit: 100, period: "all" });
     response.status(201).json({ ok: true, entry: saved, summary: summary.summary });
   } catch (error) {
