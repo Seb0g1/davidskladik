@@ -367,6 +367,28 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
             }
           }
         }
+        // Belt-and-suspenders: check for (OfferRowID, DocID) duplicate immediately before
+        // inserting — catches the case where the broader partner-level dedup (above) ran
+        // inside a REPEATABLE READ snapshot that didn't yet see a concurrent commit.
+        const [[perDocDup]] = await connection.query(
+          "SELECT RowID, RequestQuant FROM RequestRows WHERE OfferRowID = ? AND DocID = ? LIMIT 1 FOR UPDATE",
+          [Number(entry.offerRowId), docId],
+        );
+        if (perDocDup?.RowID) {
+          await connection.query(
+            "UPDATE RequestRows SET RequestQuant = RequestQuant + ? WHERE RowID = ?",
+            [entry.totalQuantity, Number(perDocDup.RowID)],
+          );
+          logger.warn("supplier_cart_insert_same_doc_dedup", {
+            offerRowId: entry.offerRowId, docId, partnerId,
+            existingRowId: perDocDup.RowID, addedQty: entry.totalQuantity,
+          });
+          const committedAt = new Date().toISOString();
+          for (const sourceRow of entry.sourceRows) {
+            inserted.push({ ...sourceRow, requestDocId: String(docId), requestRowId: String(perDocDup.RowID), committedAt });
+          }
+          continue;
+        }
         const requestRowId = nextRowId++;
         const manualNote = cleanText(entry.manualNote || "");
         const rowComment = manualNote.slice(0, 250);
