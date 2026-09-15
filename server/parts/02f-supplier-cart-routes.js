@@ -1,3 +1,12 @@
+// Serialize all commit operations so concurrent HTTP requests cannot both read
+// the same state.processed snapshot and double-commit the same rows.
+let _cartCommitLock = Promise.resolve();
+function withCartCommitLock(worker) {
+  const next = _cartCommitLock.then(() => worker(), () => worker());
+  _cartCommitLock = next.catch(() => {});
+  return next;
+}
+
 app.get("/api/supplier-cart/preview", requireAdmin, async (request, response, next) => {
   try {
     const preview = await buildSupplierCartPreview({
@@ -148,15 +157,17 @@ app.post("/api/supplier-cart/generate", requireAdmin, async (request, response, 
 
 app.post("/api/supplier-cart/commit", requireAdmin, async (request, response, next) => {
   try {
-    const rows = Array.isArray(request.body?.rows) ? request.body.rows : [];
-    const keys = Array.isArray(request.body?.keys) ? request.body.keys : [];
-    const state = await readSupplierCartState();
-    const sourceRows = rows.length
-      ? rows
-      : (state.draft?.rows?.length ? state.draft.rows : (await buildSupplierCartPreview(request.body || {})).rows);
-    const selectedKeys = new Set(keys.map(cleanText).filter(Boolean));
-    const selectedRows = selectedKeys.size ? sourceRows.filter((row) => selectedKeys.has(cleanText(row.key))) : sourceRows;
-    const result = await insertSupplierCartRowsIntoPriceMaster(selectedRows, request);
+    const result = await withCartCommitLock(async () => {
+      const rows = Array.isArray(request.body?.rows) ? request.body.rows : [];
+      const keys = Array.isArray(request.body?.keys) ? request.body.keys : [];
+      const state = await readSupplierCartState();
+      const sourceRows = rows.length
+        ? rows
+        : (state.draft?.rows?.length ? state.draft.rows : (await buildSupplierCartPreview(request.body || {})).rows);
+      const selectedKeys = new Set(keys.map(cleanText).filter(Boolean));
+      const selectedRows = selectedKeys.size ? sourceRows.filter((row) => selectedKeys.has(cleanText(row.key))) : sourceRows;
+      return insertSupplierCartRowsIntoPriceMaster(selectedRows, request);
+    });
     response.json({
       ok: true,
       inserted: result.inserted.length,
