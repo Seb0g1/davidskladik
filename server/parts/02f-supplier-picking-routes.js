@@ -266,6 +266,22 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
     if (status === "picked") {
       financeOrder = await upsertFinanceOrderFromPickingRow(nextRow, request);
       supplierLedgerEntry = await upsertSupplierLedgerDebtFromPickingRow(nextRow, financeOrder, request);
+      // Deduct from picker's cash balance when they paid a supplier in cash (pricePaidRub entered).
+      // Balance is stored in RUB; balanceStr on frontend divides by usdRate to show $.
+      if (pricePaidRub && pricePaidRub > 0 && username) {
+        withPickerBalanceLock(username, async () => {
+          const balance = await loadPickerBalance(username);
+          balance.credits.push({
+            id: `picking:${key}`,
+            amount: -Math.abs(pricePaidRub),
+            currency: "RUB",
+            note: cleanText(nextRow.supplierName || nextRow.productName || ""),
+            createdAt: now.toISOString(),
+            createdBy: username,
+          });
+          await savePickerBalance(username, balance);
+        }).catch((err) => logger.warn("picker balance deduct failed", { key, detail: err?.message || String(err) }));
+      }
       // PM MySQL: отметить заказ «Получен» когда все строки документа собраны
       if (nextRow.requestDocId) {
         const pmDocId = cleanText(nextRow.requestDocId);
@@ -288,6 +304,14 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
       // Keep finance order when item returns from ПВЗ — the sale will be re-attempted
       await removeFinanceOrderForPickingRow(current);
       supplierLedgerEntry = await voidSupplierLedgerDebtForPickingRow(current, request);
+      // Restore picker balance: remove the deduction entry created when this row was picked.
+      if (current.pickedBy) {
+        withPickerBalanceLock(current.pickedBy, async () => {
+          const balance = await loadPickerBalance(current.pickedBy);
+          balance.credits = balance.credits.filter((c) => String(c.id) !== `picking:${key}`);
+          await savePickerBalance(current.pickedBy, balance);
+        }).catch((err) => logger.warn("picker balance restore failed", { key, detail: err?.message || String(err) }));
+      }
     }
 
     await appendAudit(request, `supplier_picking.${status === "picked" ? "picked" : status === "missing" ? "missing" : status === "returned" ? "returned" : status === "cancelled" ? "cancelled" : "status_update"}`, {
