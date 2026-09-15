@@ -303,9 +303,10 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
         if (nid && !existingByNativeId.has(nid)) existingByNativeId.set(nid, pr);
       }
       // Pre-fetch 2: NativeIDs for all OfferRowIDs in this commit batch (one query, not N).
+      // Always fetch — needed for same-batch NativeID dedup even when existingByNativeId is empty.
       const batchOfferRowIds = [...mergedByOfferId.values()].map((e) => Number(e.offerRowId)).filter((id) => id > 0);
       const nativeIdByOfferRowId = new Map();
-      if (batchOfferRowIds.length && existingByNativeId.size) {
+      if (batchOfferRowIds.length) {
         const [nativeRows] = await connection.query(
           "SELECT RowID, NativeID FROM OfferRows WHERE RowID IN (?) AND NativeID != ''",
           [batchOfferRowIds],
@@ -315,6 +316,9 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
           if (nid) nativeIdByOfferRowId.set(Number(nr.RowID), nid);
         }
       }
+
+      // Track rows inserted in THIS batch by NativeID to catch same-batch duplicates.
+      const newlyInsertedByNativeId = new Map(); // nativeId → { RowID, DocID, offerId }
 
       for (const entry of mergedByOfferId.values()) {
         // Dedup: check if this OfferRowID already has an undelivered (Recieved=0) RequestRows entry.
@@ -343,32 +347,79 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
           logger.info("supplier_cart_insert_new_despite_transit", { offerRowId: entry.offerRowId, partnerId, existingRowId: existingRow.RowID, existingDocId: existingRow.DocID });
         }
         // Secondary dedup by NativeID (article): catches the case where the same product
-        // resolved to a different OfferRowID in a previous commit (e.g., after a crash).
-        // Guard: only merge when the existing row points to the SAME OfferRowID. If they
-        // differ, the supplier reuses the same article for distinct products (e.g. Далик),
-        // and merging would add quantity to the wrong PM row — the wrong product gets ordered.
+        // resolved to a different OfferRowID (e.g. after a crash, or when supplier has
+        // multiple PM rows for the same article). Two sub-cases:
+        //   A) same-batch: a row with this NativeID was already inserted in this commit
+        //   B) cross-batch: an open row for this NativeID exists from a previous commit
+        // Exception: Далик reuses one article for genuinely different products, so merging
+        // by NativeID across different OfferRowIDs there would mix up product quantities.
         if (!existingRow?.RowID) {
           const entryNativeId = nativeIdByOfferRowId.get(Number(entry.offerRowId));
-          if (entryNativeId && existingByNativeId.has(entryNativeId)) {
-            const dup = existingByNativeId.get(entryNativeId);
-            if (Number(dup.existingOfferRowId) !== Number(entry.offerRowId)) {
-              // Different OfferRowIDs sharing the same NativeID means different products
-              // under one supplier article — do not merge, fall through to insert a fresh row.
-              logger.info("supplier_cart_insert_skip_native_id_dedup_different_offer_row", { offerRowId: entry.offerRowId, existingOfferRowId: dup.existingOfferRowId, partnerId, nativeId: entryNativeId });
-            } else if (Number(dup.Sended) === 0) {
+          if (entryNativeId) {
+            // A) Same-batch dedup: check rows inserted in this commit
+            const batchDup = newlyInsertedByNativeId.get(entryNativeId);
+            if (batchDup && batchDup.offerId === cleanText(entry.offerId || "").toLowerCase()) {
+              // Same product (same offerId) inserted earlier in this batch under a different
+              // PM row — merge quantity rather than creating a second PM line.
               await connection.query(
                 "UPDATE RequestRows SET RequestQuant = RequestQuant + ? WHERE RowID = ?",
-                [entry.totalQuantity, Number(dup.RowID)],
+                [entry.totalQuantity, Number(batchDup.RowID)],
               );
-              logger.warn("supplier_cart_insert_dedup_by_native_id", { offerRowId: entry.offerRowId, existingOfferRowId: dup.existingOfferRowId, partnerId, nativeId: entryNativeId, existingRowId: dup.RowID, existingDocId: dup.DocID, addedQty: entry.totalQuantity });
+              logger.warn("supplier_cart_insert_dedup_same_batch_native_id", { offerRowId: entry.offerRowId, batchDupOfferRowId: batchDup.offerRowId, partnerId, nativeId: entryNativeId, existingRowId: batchDup.RowID, existingDocId: batchDup.DocID, addedQty: entry.totalQuantity });
               const committedAt = new Date().toISOString();
               for (const sourceRow of entry.sourceRows) {
-                inserted.push({ ...sourceRow, requestDocId: String(dup.DocID), requestRowId: String(dup.RowID), committedAt });
+                inserted.push({ ...sourceRow, requestDocId: String(batchDup.DocID), requestRowId: String(batchDup.RowID), committedAt });
               }
               continue;
-            } else {
-              // Sended=1: in transit by NativeID — log but still insert (genuinely new order).
-              logger.info("supplier_cart_insert_new_despite_transit_native_id", { offerRowId: entry.offerRowId, partnerId, nativeId: entryNativeId, existingRowId: dup.RowID });
+            }
+
+            // B) Cross-batch dedup: check rows from earlier commits
+            if (existingByNativeId.has(entryNativeId)) {
+              const dup = existingByNativeId.get(entryNativeId);
+              if (Number(dup.existingOfferRowId) !== Number(entry.offerRowId)) {
+                // Different OfferRowIDs for the same article. Далик specifically reuses one
+                // NativeID for distinct products — skip merge to avoid ordering the wrong item.
+                // For all other suppliers, same article = same product in a different PM row,
+                // so merge quantities to prevent duplicate PM lines.
+                const supplierName = cleanText(entry.supplierName || "").toLowerCase();
+                const isDalikStyleSupplier = supplierName.includes("далик") || supplierName.includes("dalik");
+                if (isDalikStyleSupplier) {
+                  logger.info("supplier_cart_insert_skip_native_id_dedup_different_offer_row", { offerRowId: entry.offerRowId, existingOfferRowId: dup.existingOfferRowId, partnerId, nativeId: entryNativeId, reason: "dalik_article_reuse" });
+                  // fall through to INSERT (different products share the same article)
+                } else if (Number(dup.Sended) === 0) {
+                  // Non-Dalik: same article → same product, just a different PM row (e.g. new
+                  // stock batch) — merge to avoid a duplicate line in the supplier document.
+                  await connection.query(
+                    "UPDATE RequestRows SET RequestQuant = RequestQuant + ? WHERE RowID = ?",
+                    [entry.totalQuantity, Number(dup.RowID)],
+                  );
+                  logger.warn("supplier_cart_insert_dedup_by_native_id_cross_row", { offerRowId: entry.offerRowId, existingOfferRowId: dup.existingOfferRowId, partnerId, nativeId: entryNativeId, existingRowId: dup.RowID, existingDocId: dup.DocID, addedQty: entry.totalQuantity });
+                  const committedAt = new Date().toISOString();
+                  for (const sourceRow of entry.sourceRows) {
+                    inserted.push({ ...sourceRow, requestDocId: String(dup.DocID), requestRowId: String(dup.RowID), committedAt });
+                  }
+                  continue;
+                } else {
+                  // Sended=1 (in transit) with different OfferRowID: new marketplace order
+                  // arrived after the first shipment — insert a fresh PM row.
+                  logger.info("supplier_cart_insert_new_despite_transit_native_id", { offerRowId: entry.offerRowId, partnerId, nativeId: entryNativeId, existingRowId: dup.RowID, reason: "sended_different_offer_row" });
+                }
+              } else if (Number(dup.Sended) === 0) {
+                // Same OfferRowID, open (Sended=0) — merge quantities.
+                await connection.query(
+                  "UPDATE RequestRows SET RequestQuant = RequestQuant + ? WHERE RowID = ?",
+                  [entry.totalQuantity, Number(dup.RowID)],
+                );
+                logger.warn("supplier_cart_insert_dedup_by_native_id", { offerRowId: entry.offerRowId, existingOfferRowId: dup.existingOfferRowId, partnerId, nativeId: entryNativeId, existingRowId: dup.RowID, existingDocId: dup.DocID, addedQty: entry.totalQuantity });
+                const committedAt = new Date().toISOString();
+                for (const sourceRow of entry.sourceRows) {
+                  inserted.push({ ...sourceRow, requestDocId: String(dup.DocID), requestRowId: String(dup.RowID), committedAt });
+                }
+                continue;
+              } else {
+                // Sended=1: in transit by NativeID — log but still insert (genuinely new order).
+                logger.info("supplier_cart_insert_new_despite_transit_native_id", { offerRowId: entry.offerRowId, partnerId, nativeId: entryNativeId, existingRowId: dup.RowID });
+              }
             }
           }
         }
@@ -401,6 +452,17 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
           "INSERT INTO RequestRows (RowID, OfferRowID, RequestQuant, RequestPrice, RequestComment, DocID) VALUES (?, ?, ?, 0.00, ?, ?)",
           [requestRowId, Number(entry.offerRowId), entry.totalQuantity, rowComment, docId],
         );
+        // Track this newly-inserted row by NativeID so subsequent entries in the same batch
+        // can dedup against it (prevents duplicate PM lines within a single commit).
+        const insertedNativeId = nativeIdByOfferRowId.get(Number(entry.offerRowId));
+        if (insertedNativeId && !newlyInsertedByNativeId.has(insertedNativeId)) {
+          newlyInsertedByNativeId.set(insertedNativeId, {
+            RowID: requestRowId,
+            DocID: docId,
+            offerId: cleanText(entry.offerId || "").toLowerCase(),
+            offerRowId: Number(entry.offerRowId),
+          });
+        }
         // Include every source order as a separate inserted entry sharing the same PM row.
         // This ensures each order key is marked processed and gets its own picking row.
         const committedAt = new Date().toISOString();
