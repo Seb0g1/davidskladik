@@ -46,7 +46,7 @@ function defaultAppSettings() {
     supplierCart: {
       enabled: true,
       autoEnabled: true,
-      scheduleTimes: ["09:30", "12:00", "15:00"],
+      scheduleTimes: ["09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00"],
       timezone: "Europe/Moscow",
       mode: "draft",
       marketplaces: ["ozon", "yandex", "wb"],
@@ -153,7 +153,7 @@ function normalizeSupplierCartSettings(input = {}, fallback = defaultAppSettings
   return {
     enabled: parseBooleanSetting(raw.enabled, fallback.enabled !== false),
     autoEnabled: parseBooleanSetting(raw.autoEnabled ?? raw.auto_enabled, fallback.autoEnabled !== false),
-    scheduleTimes: (Array.isArray(raw.scheduleTimes || raw.schedule_times) ? (raw.scheduleTimes || raw.schedule_times) : fallback.scheduleTimes || ["09:30", "12:00", "15:00"])
+    scheduleTimes: (Array.isArray(raw.scheduleTimes || raw.schedule_times) ? (raw.scheduleTimes || raw.schedule_times) : fallback.scheduleTimes || ["09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00"])
       .map((item) => normalizeSupplierOrderCutoff(item))
       .filter(Boolean)
       .slice(0, 10),

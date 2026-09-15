@@ -396,6 +396,12 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
     const ids = parseYandexCampaignIds(shop.campaignId).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0);
     byBusiness.get(businessId).campaignIds.push(...ids);
   }
+  // Yandex express campaign orders don't carry any "EXPRESS" delivery type flag in the API
+  // response — they look identical to regular FBS orders. Detect them by campaignId so they
+  // get isExpress=true and confirmYandexOrderReadyToShip is called AFTER picking, not at
+  // cart-commit time (premature confirmation causes WAREHOUSE_FAILED_TO_SHIP).
+  const appSettingsForExpress = await readAppSettings().catch(() => null);
+  const expressCampaignId = cleanText(appSettingsForExpress?.sorinExpress?.yandexCampaignId || "149026853");
   const lines = [];
   const statusList = (Array.isArray(statuses) && statuses.length ? statuses : ["PROCESSING"])
     .map((item) => cleanText(item).toUpperCase())
@@ -420,7 +426,12 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
         fake: false,
         sourcePlatforms: ["MARKET"],
       });
-      lines.push(...normalizeYandexSupplierCartOrders(data, shop));
+      const rawLines = normalizeYandexSupplierCartOrders(data, shop);
+      // Override isExpress for orders from the express campaign that Yandex didn't flag
+      const normalizedLines = expressCampaignId
+        ? rawLines.map((line) => (!line.isExpress && cleanText(line.campaignId) === expressCampaignId ? { ...line, isExpress: true } : line))
+        : rawLines;
+      lines.push(...normalizedLines);
       pageToken = cleanText(data?.paging?.nextPageToken || data?.result?.paging?.nextPageToken || data?.nextPageToken);
       if (!pageToken) break;
     }
