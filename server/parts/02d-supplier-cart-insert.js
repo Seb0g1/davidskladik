@@ -639,36 +639,40 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
   // Claim returned items from the return pool (товары вернулись из ПВЗ)
   let returnClaimed = [];
   if (returnCoveredRows.length) {
-    const psReturns = await readSupplierPickingState();
-    for (const row of returnCoveredRows) {
-      const offerKey = cleanText(row.offerId).toLowerCase();
-      const returnedRow = returnedByOfferId.get(offerKey);
-      if (!returnedRow || psReturns.rows[row.key]) continue;
-      const pickingRow = normalizeSupplierPickingRow({
-        ...row,
-        key: row.key,
-        status: "picked",
-        pickedBy: "auto:return",
-        pickedAt: new Date().toISOString(),
-        createdAt: new Date().toISOString(),
-        createdBy: requestUsername(request),
-        replacementFor: returnedRow.key,
-      });
-      psReturns.rows[pickingRow.key] = pickingRow;
-      const currentRet = psReturns.rows[returnedRow.key];
-      if (currentRet) {
-        psReturns.rows[returnedRow.key] = normalizeSupplierPickingRow({
-          ...currentRet,
-          status: "return_used",
-          replacementKey: row.key,
+    returnClaimed = await withPickingStateLock(async () => {
+      const psReturns = await readSupplierPickingState();
+      const claimed = [];
+      for (const row of returnCoveredRows) {
+        const offerKey = cleanText(row.offerId).toLowerCase();
+        const returnedRow = returnedByOfferId.get(offerKey);
+        if (!returnedRow || psReturns.rows[row.key]) continue;
+        const pickingRow = normalizeSupplierPickingRow({
+          ...row,
+          key: row.key,
+          status: "picked",
+          pickedBy: "auto:return",
+          pickedAt: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+          createdBy: requestUsername(request),
+          replacementFor: returnedRow.key,
         });
+        psReturns.rows[pickingRow.key] = pickingRow;
+        const currentRet = psReturns.rows[returnedRow.key];
+        if (currentRet) {
+          psReturns.rows[returnedRow.key] = normalizeSupplierPickingRow({
+            ...currentRet,
+            status: "return_used",
+            replacementKey: row.key,
+          });
+        }
+        claimed.push(pickingRow);
       }
-      returnClaimed.push(pickingRow);
-    }
-    if (returnClaimed.length) {
-      await writeSupplierPickingState(psReturns);
-      logger.info("picking rows claimed from ПВЗ return pool", { count: returnClaimed.length });
-    }
+      if (claimed.length) {
+        await writeSupplierPickingState(psReturns);
+        logger.info("picking rows claimed from ПВЗ return pool", { count: claimed.length });
+      }
+      return claimed;
+    });
   }
 
   // Create picking rows for pmBlocked items (already in PM, state desync recovery).

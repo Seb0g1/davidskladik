@@ -1,3 +1,10 @@
+let _pickingStateLock = Promise.resolve();
+function withPickingStateLock(worker) {
+  const next = _pickingStateLock.then(() => worker(), () => worker());
+  _pickingStateLock = next.catch(() => {});
+  return next;
+}
+
 function normalizeSupplierPickingRow(input = {}) {
   const key = cleanText(input.key || supplierCartItemKey(input));
   const status = ["picked", "missing", "reordered", "returned", "return_used", "cancelled"].includes(cleanText(input.status).toLowerCase())
@@ -260,6 +267,7 @@ async function writeSupplierPickingState(state = {}) {
 async function createSupplierPickingRows(inserted = [], request = null, options = {}) {
   const rows = inserted.map(normalizeSupplierCartPreviewRow).filter((row) => row.key);
   if (!rows.length) return [];
+  return withPickingStateLock(async () => {
   const state = await readSupplierPickingState();
   const created = [];
   const initialStatus = options.initialStatus || "open";
@@ -334,4 +342,5 @@ async function createSupplierPickingRows(inserted = [], request = null, options 
     }).catch((error) => logger.warn("supplier picking audit failed", { detail: error?.message || String(error) }));
   }
   return created;
+  }); // withPickingStateLock
 }

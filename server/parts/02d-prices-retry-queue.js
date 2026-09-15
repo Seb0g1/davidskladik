@@ -92,29 +92,17 @@ async function processPriceRetryQueue({ queueKeys = [], limit = 1000, respectNex
       for (const chunk of chunkArray(yandexItems, 500)) {
         try {
           results.push({ target: shop.id, response: await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/offer-prices/updates`, { offers: chunk }) });
-          historyRows.push(...chunk.map((y) => yandexOfferIdToItem.get(y.offerId)).filter(Boolean).map((item) => ({
-            productId: item.productId || item.id,
-            marketplace: "yandex",
-            target: item.target,
-            offerId: item.offerId,
-            oldPrice: item.oldPrice,
-            newPrice: item.price,
-            status: "success",
-            error: "",
-            at: now.toISOString(),
-          })));
+          historyRows.push(...chunk.map((y) => {
+            const item = yandexOfferIdToItem.get(y.offerId);
+            if (!item) return null;
+            return { productId: item.productId || item.id, marketplace: "yandex", target: item.target, offerId: item.offerId, oldPrice: item.oldPrice, newPrice: y.price.value, status: "success", error: "", at: now.toISOString() };
+          }).filter(Boolean));
         } catch (error) {
-          historyRows.push(...chunk.map((y) => yandexOfferIdToItem.get(y.offerId)).filter(Boolean).map((item) => ({
-            productId: item.productId || item.id,
-            marketplace: "yandex",
-            target: item.target,
-            offerId: item.offerId,
-            oldPrice: item.oldPrice,
-            newPrice: item.price,
-            status: "failed",
-            error: error?.message || "send_failed",
-            at: now.toISOString(),
-          })));
+          historyRows.push(...chunk.map((y) => {
+            const item = yandexOfferIdToItem.get(y.offerId);
+            if (!item) return null;
+            return { productId: item.productId || item.id, marketplace: "yandex", target: item.target, offerId: item.offerId, oldPrice: item.oldPrice, newPrice: y.price.value, status: "failed", error: error?.message || "send_failed", at: now.toISOString() };
+          }).filter(Boolean));
           failed.push(...chunk.map((y) => yandexOfferIdToItem.get(y.offerId)).filter(Boolean).map((item) => buildPriceRetryItem(item, error, now)).filter(Boolean));
         }
       }
