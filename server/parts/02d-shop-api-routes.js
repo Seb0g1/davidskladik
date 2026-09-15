@@ -1652,7 +1652,14 @@ app.post("/api/shop/orders", shopCors, async (request, response, next) => {
       return response.status(400).json({ error: "Заполните обязательные поля" });
     }
 
-    const baseTotal = items.reduce((s, i) => s + Number(i.priceRub || 0) * Number(i.quantity || 1), 0);
+    const baseTotal = items.reduce((s, i) => {
+      const price = Number(i.priceRub);
+      const qty = Math.max(1, Number(i.quantity) || 1);
+      return s + (Number.isFinite(price) && price >= 0 ? price * qty : 0);
+    }, 0);
+    if (!Number.isFinite(baseTotal)) {
+      return response.status(400).json({ error: "Некорректная сумма корзины" });
+    }
     const orderId = `MV-${Date.now().toString(36).toUpperCase()}`;
 
     // Resolve customer from Bearer token (optional — guest checkout also works)
@@ -1718,15 +1725,19 @@ app.post("/api/shop/orders", shopCors, async (request, response, next) => {
           promoCode: promoDiscountApplied ? appliedPromoCode : null,
         },
       });
-      // Award points to referrer
+      // Award points to referrer (both ops must succeed together — use a transaction)
       if (refDiscountApplied && referrerId) {
-        prisma.shopPointTransaction.create({
-          data: { customerId: referrerId, points: _REFERRAL_POINTS_FOR_REFERRER, reason: `Реферальный заказ ${orderId}`, refId: orderId },
-        }).catch(() => {});
-        prisma.shopCustomer.update({
-          where: { id: referrerId },
-          data: { loyaltyPoints: { increment: _REFERRAL_POINTS_FOR_REFERRER } },
-        }).catch(() => {});
+        prisma.$transaction([
+          prisma.shopPointTransaction.create({
+            data: { customerId: referrerId, points: _REFERRAL_POINTS_FOR_REFERRER, reason: `Реферальный заказ ${orderId}`, refId: orderId },
+          }),
+          prisma.shopCustomer.update({
+            where: { id: referrerId },
+            data: { loyaltyPoints: { increment: _REFERRAL_POINTS_FOR_REFERRER } },
+          }),
+        ]).catch((err) => {
+          logger.warn("referral points award failed", { referrerId, orderId, detail: err?.message || String(err) });
+        });
       }
     }
 
@@ -1751,6 +1762,9 @@ app.post("/api/shop/orders", shopCors, async (request, response, next) => {
     const paymentUrl = await _ozonPayCreateOrder({ orderId, totalRub, email: cleanText(delivery.email || ""), paymentMethod });
     if (paymentUrl && prisma) {
       await prisma.shopOrder.update({ where: { id: orderId }, data: { status: "payment_pending" } }).catch(() => {});
+    } else if (!paymentUrl && prisma) {
+      await prisma.shopOrder.update({ where: { id: orderId }, data: { status: "payment_failed" } }).catch(() => {});
+      logger.warn("shop order payment link failed — marked payment_failed", { orderId, totalRub });
     }
 
     response.json({ ok: true, id: orderId, status: paymentUrl ? "payment_pending" : "pending", totalRub, paymentUrl: paymentUrl || null, refDiscountApplied, promoDiscountApplied, promoDiscountPct: promoDiscountApplied ? promoDiscountPct : 0 });

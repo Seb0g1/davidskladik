@@ -125,7 +125,7 @@ async function sendZeroStocksToMarketplace(products = []) {
       }
       for (const chunk of chunkArray(items, 100)) {
         const payload = { stocks: await buildOzonStockPayloadItems(chunk, account, () => 0, { allWarehouses: true }) };
-        if (!payload.stocks.length) continue;
+        if (!payload.stocks?.length) continue;
         try {
           for (const stockChunk of chunkArray(payload.stocks, 100)) {
             await ozonRequest("/v2/products/stocks", { stocks: stockChunk }, account);
@@ -190,7 +190,7 @@ async function sendTargetStocksToMarketplace(products = []) {
       }
       for (const chunk of chunkArray(items, 100)) {
         const payload = { stocks: await buildOzonStockPayloadItems(chunk, account, (item) => item.targetStock) };
-        if (!payload.stocks.length) continue;
+        if (!payload.stocks?.length) continue;
         try {
           for (const stockChunk of chunkArray(payload.stocks, 100)) {
             await ozonRequest("/v2/products/stocks", { stocks: stockChunk }, account);
@@ -347,7 +347,7 @@ async function restoreStocksOnMarketplaces(products = []) {
           (item) => Math.max(1, Math.round(Number(item.targetStock || item.marketplaceState?.stock || 1))),
         ),
       };
-      if (!payload.stocks.length) continue;
+      if (!payload.stocks?.length) continue;
       try {
         for (const stockChunk of chunkArray(payload.stocks, 100)) {
           await ozonRequest("/v2/products/stocks", { stocks: stockChunk }, account);

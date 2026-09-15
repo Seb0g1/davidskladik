@@ -149,7 +149,8 @@ function scheduleOzonUnarchiveQueueAuto(delayMs = ozonUnarchiveQueueAutoInterval
     } catch (error) {
       logger.warn("ozon unarchive queue auto tick failed", { detail: error?.message || String(error) });
     } finally {
-      scheduleOzonUnarchiveQueueAuto(await nextOzonUnarchiveQueueAutoDelayMs());
+      const nextDelay = await nextOzonUnarchiveQueueAutoDelayMs().catch(() => ozonUnarchiveQueueAutoIntervalMinutes * 60 * 1000);
+      scheduleOzonUnarchiveQueueAuto(nextDelay);
     }
   }, normalizedDelay);
 }

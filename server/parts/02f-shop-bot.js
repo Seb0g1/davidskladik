@@ -325,8 +325,14 @@ async function _sbotPoll() {
       allowed_updates: ["message", "callback_query"],
     });
     if (Array.isArray(updates) && updates.length) {
+      for (const upd of updates) {
+        try {
+          await _sbotHandleUpdate(upd);
+        } catch (updErr) {
+          logger.warn("shop-bot handle update error", { updateId: upd?.update_id, detail: updErr?.message });
+        }
+      }
       _sbotOffset = updates[updates.length - 1].update_id + 1;
-      for (const upd of updates) await _sbotHandleUpdate(upd);
     }
   } catch (err) {
     logger.warn("shop-bot poll error", { detail: err?.message });
