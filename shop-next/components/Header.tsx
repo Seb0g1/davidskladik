@@ -5,6 +5,7 @@ import { useRouter, usePathname } from "next/navigation";
 import { Search, X, ShoppingBag, Home, LayoutGrid, Sparkles, LogOut, Package, Settings, Bell, BellOff } from "lucide-react";
 import { useCart } from "./CartContext";
 import { useAuth } from "./AuthContext";
+import MegaMenu from "./MegaMenu";
 
 const NAV_LINKS = [
   { label: "Каталог", href: "/catalog" },
@@ -13,6 +14,44 @@ const NAV_LINKS = [
   { label: "Блог", href: "/blog" },
   { label: "Доставка", href: "/delivery" },
 ];
+
+function usePushNotifications() {
+  const [isSubscribed, setIsSubscribed] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const isSupported = typeof window !== "undefined" && "Notification" in window && "serviceWorker" in navigator;
+  const permission = isSupported ? Notification.permission : "default";
+
+  useEffect(() => {
+    if (!isSupported) return;
+    navigator.serviceWorker.ready.then(reg => reg.pushManager.getSubscription()).then(sub => setIsSubscribed(!!sub)).catch(() => {});
+  }, [isSupported]);
+
+  async function subscribe() {
+    if (!isSupported) return;
+    setIsLoading(true);
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: undefined as unknown as string });
+      await fetch((process.env.NEXT_PUBLIC_API_BASE ?? "") + "/api/shop/push/subscribe", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sub),
+      });
+      setIsSubscribed(true);
+    } catch { /* best-effort */ }
+    setIsLoading(false);
+  }
+
+  async function unsubscribe() {
+    setIsLoading(true);
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) { await sub.unsubscribe(); setIsSubscribed(false); }
+    } catch { /* best-effort */ }
+    setIsLoading(false);
+  }
+
+  return { isSupported, permission, isSubscribed, isLoading, subscribe, unsubscribe };
+}
 
 const BOT_NAV = [
   { label: "Главная", href: "/", icon: Home },
@@ -57,6 +96,7 @@ export default function Header() {
 
   const isActive = (href: string) => href === "/" ? pathname === "/" : pathname.startsWith(href);
   const initial = customer ? (customer.firstName || customer.email || "?")[0]?.toUpperCase() : null;
+  const push = usePushNotifications();
 
   return (
     <>
@@ -74,20 +114,8 @@ export default function Header() {
             Magic Vibes
           </Link>
 
-          {/* Desktop nav */}
-          <nav className="hidden md:flex" style={{ alignItems: "center", gap: 4, flex: 1, justifyContent: "center" }}>
-            {NAV_LINKS.map(({ label, href }) => (
-              <Link key={href} href={href} style={{
-                fontSize: 11, letterSpacing: "0.18em", textTransform: "uppercase",
-                color: isActive(href) ? "#e9d2a0" : "rgba(245,244,240,0.5)",
-                textDecoration: "none", padding: "6px 14px", borderRadius: 2,
-                transition: "color 0.3s",
-              }}
-                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = "#f5f4f0"; }}
-                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = isActive(href) ? "#e9d2a0" : "rgba(245,244,240,0.5)"; }}
-              >{label}</Link>
-            ))}
-          </nav>
+          {/* Flexible spacer */}
+          <div style={{ flex: 1 }} />
 
           {/* Desktop right actions */}
           <div className="hidden md:flex" style={{ alignItems: "center", gap: 8, flexShrink: 0 }}>
@@ -96,6 +124,19 @@ export default function Header() {
               onMouseLeave={e => { const el = e.currentTarget; el.style.borderColor = "rgba(255,255,255,0.1)"; el.style.color = "#cfcbc2"; }}>
               <Search size={13} strokeWidth={1.5} /> Поиск
             </button>
+
+            {push.isSupported && push.permission !== "denied" && (
+              <button
+                onClick={() => push.isSubscribed ? push.unsubscribe() : push.subscribe()}
+                disabled={push.isLoading}
+                title={push.isSubscribed ? "Отключить уведомления" : "Включить уведомления"}
+                style={{ height: 36, width: 36, border: "1px solid rgba(255,255,255,0.1)", borderRadius: 2, background: "transparent", color: push.isSubscribed ? "#c9a25e" : "#6b6760", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "border-color 0.3s,color 0.3s" }}
+                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = "rgba(201,162,94,0.5)"; (e.currentTarget as HTMLElement).style.color = push.isSubscribed ? "#e8d5a3" : "#c9a25e"; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = "rgba(255,255,255,0.1)"; (e.currentTarget as HTMLElement).style.color = push.isSubscribed ? "#c9a25e" : "#6b6760"; }}
+              >
+                {push.isSubscribed ? <Bell size={15} strokeWidth={1.5} /> : <BellOff size={15} strokeWidth={1.5} />}
+              </button>
+            )}
 
             <div ref={userMenuRef} style={{ position: "relative" }}>
               {customer ? (
@@ -166,6 +207,8 @@ export default function Header() {
             </div>
           )}
         </div>
+        {/* MegaMenu row */}
+        <MegaMenu />
       </header>
 
       {/* Mobile bottom nav */}

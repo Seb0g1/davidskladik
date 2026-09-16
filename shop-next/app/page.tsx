@@ -1,13 +1,17 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Quote, Star } from "lucide-react";
-import { fetchPopular, fetchBrands, fetchAromaMesyatsa, fetchReviews, fetchNews, fetchBanners } from "@/lib/api";
+import { fetchPopular, fetchAromaMesyatsa, fetchReviews, fetchNews, fetchBanners } from "@/lib/api";
 import { SITE_URL, SITE_NAME } from "@/lib/seo";
 import ProductCard from "@/components/ProductCard";
 import BannerSlider from "@/components/BannerSlider";
 import BrandGallery from "@/components/BrandGallery";
 import ScentQuiz from "@/components/ScentQuiz";
 import UnboxingSection from "@/components/UnboxingSection";
+import HeroClient from "@/components/HeroClient";
+import CityTopsTicker from "@/components/CityTopsTicker";
+import ContestSection from "@/components/ContestSection";
+import PageEffects from "@/components/PageEffects";
 
 export const revalidate = 300;
 
@@ -51,33 +55,21 @@ export default async function HomePage() {
   return (
     <>
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(STORE_SCHEMA) }} />
+      <PageEffects />
 
       {/* ════════ BANNERS ════════ */}
       <section style={{ padding: "clamp(16px,3vw,32px) clamp(18px,4vw,56px) 0" }}>
         <BannerSlider banners={bannersList} />
       </section>
 
-      {/* ════════ HERO ════════ */}
-      <section style={{ position: "relative", overflow: "hidden", background: "linear-gradient(180deg, #0b0b0b 0%, #0e0d0b 100%)", minHeight: "clamp(420px,65vh,700px)", display: "flex", alignItems: "center" }}>
-        <div style={{ position: "absolute", inset: 0, background: "radial-gradient(ellipse 70% 60% at 50% 0%, rgba(201,162,94,0.08) 0%, transparent 70%)", pointerEvents: "none" }} />
-        <div style={{ maxWidth: 1200, margin: "0 auto", padding: "clamp(64px,10vw,120px) clamp(18px,4vw,56px)", position: "relative", zIndex: 1, textAlign: "center", width: "100%" }}>
-          <p className="eyebrow" style={{ marginBottom: 20 }}>Оригинальная парфюмерия</p>
-          <h1 style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", fontWeight: 300, fontSize: "clamp(60px,13vw,176px)", lineHeight: 0.88, color: "#f5f4f0", margin: "0 0 28px" }}>
-            Magic<br /><span style={{ marginLeft: "clamp(18px,5vw,84px)", display: "block" }}>Vibes</span>
-          </h1>
-          <div style={{ width: "min(400px,60%)", height: 1, background: "linear-gradient(90deg,rgba(201,162,94,0) 0%,rgba(201,162,94,0.8) 50%,rgba(201,162,94,0) 100%)", margin: "0 auto 24px" }} />
-          <p style={{ fontSize: "clamp(14px,1.3vw,17px)", color: "#888888", maxWidth: "30ch", margin: "0 auto 36px", lineHeight: 1.65, fontWeight: 300 }}>
-            Мировые ароматы с доставкой по России через Ozon
-          </p>
-          <div style={{ display: "flex", gap: 14, justifyContent: "center", flexWrap: "wrap" }}>
-            <Link href="/catalog" className="btn-primary">Каталог ароматов</Link>
-            <Link href="/brands" className="btn-ghost">Все бренды →</Link>
-          </div>
-        </div>
-      </section>
+      {/* ════════ HERO (client — WebGL + effects) ════════ */}
+      <HeroClient />
+
+      {/* ════════ CITY TICKER ════════ */}
+      <CityTopsTicker />
 
       {/* ════════ STATS ════════ */}
-      <section style={{ borderTop: "1px solid rgba(255,255,255,0.06)", borderBottom: "1px solid rgba(255,255,255,0.06)", margin: "0 clamp(18px,4vw,56px)" }}>
+      <section className="reveal-section" style={{ borderTop: "1px solid rgba(255,255,255,0.06)", borderBottom: "1px solid rgba(255,255,255,0.06)", margin: "0 clamp(18px,4vw,56px)" }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))" }}>
           {[
             { value: "22 000+", label: "Ароматов в наличии" },
@@ -94,7 +86,7 @@ export default async function HomePage() {
       </section>
 
       {/* ════════ SCENT QUIZ ════════ */}
-      <ScentQuiz />
+      <div className="reveal-section"><ScentQuiz /></div>
 
       {/* ════════ GIFT CTA ════════ */}
       <section style={{ margin: "clamp(40px,6vw,80px) 0", padding: "0 clamp(18px,4vw,56px)" }}>
@@ -140,7 +132,7 @@ export default async function HomePage() {
             <Link href="/catalog" className="btn-ghost">Смотреть всё →</Link>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(200px,1fr))", gap: 18 }}>
-            {popularProducts.map(p => <ProductCard key={p.id} product={p} />)}
+            {popularProducts.map(p => <div key={p.id} data-mv-card="1"><ProductCard product={p} /></div>)}
           </div>
         </section>
       )}
@@ -183,10 +175,13 @@ export default async function HomePage() {
       </section>
 
       {/* ════════ BRAND GALLERY ════════ */}
-      <section style={{ marginTop: "clamp(56px,8vw,104px)", padding: "clamp(32px,4vw,52px) 0", borderTop: "1px solid rgba(255,255,255,0.06)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+      <section className="reveal-section" style={{ marginTop: "clamp(56px,8vw,104px)", padding: "clamp(32px,4vw,52px) 0", borderTop: "1px solid rgba(255,255,255,0.06)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
         <p style={{ margin: "0 0 28px", textAlign: "center", fontSize: 10, letterSpacing: "0.34em", textTransform: "uppercase", color: "#5d5a54" }}>Мировые парфюмерные дома</p>
         <BrandGallery />
       </section>
+
+      {/* ════════ CONTEST ════════ */}
+      <ContestSection />
 
       {/* ════════ AROMA OF THE MONTH ════════ */}
       {aromaProduct && (
