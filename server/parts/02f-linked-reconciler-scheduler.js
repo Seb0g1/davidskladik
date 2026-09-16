@@ -445,11 +445,12 @@ async function runArchivedOzonLinkedRecoveryPass() {
   const prisma = getPrisma();
   if (!prisma) return { status: "no_db" };
   linkedReconcilerRunning = true;
-  const maxBatches = Math.max(1, Number(process.env.OZON_RECOVERY_MAX_BATCHES_PER_TICK || 3) || 3);
+  const maxBatches = Math.max(1, Number(process.env.OZON_RECOVERY_MAX_BATCHES_PER_TICK || 1) || 1);
   const totals = { products: 0, recovered: 0, unarchived: 0, batches: 0 };
   try {
     let lastId = null;
     for (let batch = 0; batch < maxBatches; batch += 1) {
+      if (batch > 0) await new Promise((r) => setImmediate(r));
       const rows = await prisma.warehouseProduct.findMany({
         where: {
           marketplace: "ozon",
@@ -459,7 +460,7 @@ async function runArchivedOzonLinkedRecoveryPass() {
         },
         include: { links: true },
         orderBy: { id: "asc" },
-        take: linkedReconcilerBatchSize * 2,
+        take: linkedReconcilerBatchSize,
       }).catch(() => []);
       if (!rows.length) break;
       lastId = String(rows[rows.length - 1].id);
@@ -469,7 +470,7 @@ async function runArchivedOzonLinkedRecoveryPass() {
       totals.products += result.products || 0;
       totals.recovered += result.recovered || 0;
       totals.unarchived += result.unarchived || 0;
-      if (rows.length < linkedReconcilerBatchSize * 2) break;
+      if (rows.length < linkedReconcilerBatchSize) break;
     }
     if (totals.products > 0) {
       logger.info("ozon_archived_recovery_complete", totals);
@@ -494,11 +495,12 @@ async function runArchivedYandexLinkedRecoveryPass() {
   linkedReconcilerRunning = true;
   // Drain mode: Yandex has no unarchive daily limit, so keep pulling batches until the
   // archived backlog is empty (bounded per tick to keep the event loop responsive).
-  const maxBatches = Math.max(1, Number(process.env.YANDEX_RECOVERY_MAX_BATCHES_PER_TICK || 6) || 6);
+  const maxBatches = Math.max(1, Number(process.env.YANDEX_RECOVERY_MAX_BATCHES_PER_TICK || 2) || 2);
   const totals = { products: 0, recovered: 0, unarchived: 0, batches: 0 };
   try {
     let lastId = null;
     for (let batch = 0; batch < maxBatches; batch += 1) {
+      if (batch > 0) await new Promise((r) => setImmediate(r));
       const rows = await prisma.warehouseProduct.findMany({
         where: {
           marketplace: "yandex",
@@ -508,7 +510,7 @@ async function runArchivedYandexLinkedRecoveryPass() {
         },
         include: { links: true },
         orderBy: { id: "asc" },
-        take: linkedReconcilerBatchSize * 2,
+        take: linkedReconcilerBatchSize,
       }).catch(() => []);
       if (!rows.length) break;
       lastId = String(rows[rows.length - 1].id);
@@ -518,7 +520,7 @@ async function runArchivedYandexLinkedRecoveryPass() {
       totals.products += result.products || 0;
       totals.recovered += result.recovered || 0;
       totals.unarchived += result.unarchived || 0;
-      if (rows.length < linkedReconcilerBatchSize * 2) break;
+      if (rows.length < linkedReconcilerBatchSize) break;
     }
     if (totals.products > 0) {
       logger.info("yandex_archived_recovery_complete", totals);

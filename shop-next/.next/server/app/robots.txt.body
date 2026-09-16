@@ -1,0 +1,9 @@
+User-Agent: *
+Allow: /
+Disallow: /checkout
+Disallow: /account
+Disallow: /orders
+Disallow: /admin
+
+Host: https://magicvibes.ru
+Sitemap: https://magicvibes.ru/sitemap.xml
