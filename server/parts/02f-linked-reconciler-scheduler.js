@@ -342,7 +342,8 @@ async function processLinkedReconcilerBatch(seedProducts = []) {
 async function runLinkedReconcilerBatch(trigger = "rolling") {
   if (linkedReconcilerRunning) return { status: "already_running" };
   if (manualWarehouseSyncPromise) return { status: "manual_sync_running" };
-  if (heavyBackgroundWorkShouldDefer(`linked_reconciler:${trigger}`)) {
+  // Reconciler reads live marketplace state; autoSync reads PM snapshot — they don't conflict.
+  if (heavyBackgroundWorkShouldDefer(`linked_reconciler:${trigger}`, { ignoreAutoSync: true })) {
     return { status: "deferred_under_load" };
   }
   if (!shouldUsePostgresStorage() || !getPrisma()) {

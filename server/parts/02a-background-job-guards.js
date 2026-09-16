@@ -71,7 +71,9 @@ function marketplaceMaintenanceShouldDefer(trigger = "") {
   return { defer: false, status: "ok" };
 }
 
-function heavyBackgroundWorkShouldDefer(reason = "") {
+// opts.ignoreAutoSync = true: caller can safely run in parallel with autoSync
+// (e.g. linked reconciler reads live MP state, not PM snapshot that autoSync writes).
+function heavyBackgroundWorkShouldDefer(reason = "", opts = {}) {
   if (serverUnderMemoryPressure()) {
     logger.warn("heavy background work deferred: memory pressure", {
       reason: cleanText(reason) || "unspecified",
@@ -86,7 +88,8 @@ function heavyBackgroundWorkShouldDefer(reason = "") {
     });
     return true;
   }
-  if (marketplaceMaintenanceRunning || autoSyncRunning || manualWarehouseSyncPromise || dailySyncPromise) {
+  const blockOnAutoSync = !opts.ignoreAutoSync && autoSyncRunning;
+  if (marketplaceMaintenanceRunning || blockOnAutoSync || manualWarehouseSyncPromise || dailySyncPromise) {
     logger.warn("heavy background work deferred: other job running", {
       reason: cleanText(reason) || "unspecified",
       marketplaceMaintenanceRunning,
