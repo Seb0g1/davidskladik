@@ -58,7 +58,7 @@ function defaultAppSettings() {
     sorinExpress: {
       enabled: process.env.SORIN_EXPRESS_SYNC_ENABLED !== "false",
       stock: Math.max(1, Number(process.env.SORIN_EXPRESS_STOCK || 2) || 2),
-      yandexCampaignId: cleanText(process.env.SORIN_EXPRESS_YANDEX_CAMPAIGN_ID || "149026853"),
+      yandexCampaignId: cleanText(process.env.SORIN_EXPRESS_YANDEX_CAMPAIGN_ID || ""),
       ozonWarehouseId: cleanText(process.env.SORIN_EXPRESS_OZON_WAREHOUSE_ID || "1020005000398404"),
     },
   };
@@ -129,12 +129,12 @@ function normalizeBrandingSettings(input = {}, fallback = defaultAppSettings().b
 function normalizeSorinExpressSettings(input = {}, fallback = defaultAppSettings().sorinExpress) {
   const raw = input && typeof input === "object" ? input : {};
   const stock = Number(raw.stock ?? fallback.stock);
-  const yandexCampaignId = cleanText(String(raw.yandexCampaignId || raw.yandex_campaign_id || fallback.yandexCampaignId || "149026853"));
+  const yandexCampaignId = cleanText(String(raw.yandexCampaignId || raw.yandex_campaign_id || fallback.yandexCampaignId || ""));
   const ozonWarehouseId = cleanText(String(raw.ozonWarehouseId || raw.ozon_warehouse_id || fallback.ozonWarehouseId || "1020005000398404"));
   return {
     enabled: parseBooleanSetting(raw.enabled, fallback.enabled !== false),
     stock: Number.isFinite(stock) && stock >= 0 ? Math.round(Math.min(999, stock)) : Number(fallback.stock || 2),
-    yandexCampaignId: yandexCampaignId || "149026853",
+    yandexCampaignId,
     ozonWarehouseId: ozonWarehouseId || "1020005000398404",
   };
 }

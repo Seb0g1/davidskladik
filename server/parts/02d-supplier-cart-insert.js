@@ -322,10 +322,15 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
 
       for (const entry of mergedByOfferId.values()) {
         // Dedup: check if this OfferRowID already has an undelivered (Recieved=0) RequestRows entry.
+        // ORDER BY Sended ASC so open rows (Sended=0) are returned before in-transit (Sended=1).
+        // Without this, MySQL may return the transit row first, causing code to miss the open row
+        // and create a duplicate PM entry that same_doc_dedup later catches with wrong addedQty.
         const [[existingRow]] = await connection.query(
           `SELECT rr.RowID, rd.DocID, rd.Sended, rd.DocDate FROM RequestRows rr
            JOIN RequestDocs rd ON rd.DocID = rr.DocID
-           WHERE rr.OfferRowID = ? AND rd.PartnerID = ? AND rd.Recieved = 0`,
+           WHERE rr.OfferRowID = ? AND rd.PartnerID = ? AND rd.Recieved = 0
+           ORDER BY rd.Sended ASC, rr.RowID DESC
+           LIMIT 1`,
           [Number(entry.offerRowId), Number(partnerId)],
         );
         if (existingRow?.RowID && Number(existingRow.Sended) === 0) {

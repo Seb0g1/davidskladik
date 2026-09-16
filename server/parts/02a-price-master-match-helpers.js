@@ -467,13 +467,12 @@ function disambiguateSupplierCartMatchesByOrderName(matches, productName) {
       if (best.length > 0 && best.length < rows.length) { result.set(linkId, best); continue; }
     } else {
       // maxScore === 0: no token overlap between order name and any PM row name.
-      // When rows carry distinct article codes they represent genuinely different products —
-      // returning all of them would let price-sorting pick the wrong item. Signal ambiguity
-      // with an empty array so the caller can surface "ambiguous_product" instead.
-      // If all rows share the same article code, product identity is unambiguous regardless
-      // of name variation, so fall through and return all rows as usual.
-      const uniqueArticles = new Set(rows.map((r) => cleanText(r.article || "").toLowerCase()).filter(Boolean));
-      if (uniqueArticles.size > 1) { result.set(linkId, []); continue; }
+      // Since rows already have distinct names (checked above), we cannot safely pick one —
+      // return [] to signal "ambiguous_product" upstream regardless of article uniqueness.
+      // The old assumption "same article = same product" doesn't hold for suppliers like Далик
+      // that reuse the same article code for completely different products.
+      result.set(linkId, []);
+      continue;
     }
     result.set(linkId, rows);
   }

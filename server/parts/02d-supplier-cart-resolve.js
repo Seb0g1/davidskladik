@@ -287,7 +287,7 @@ function normalizeOzonSupplierCartPostings(data = {}, account = {}) {
   return Array.from(byKey.values());
 }
 
-function normalizeYandexSupplierCartOrders(data = {}, shop = {}) {
+function normalizeYandexSupplierCartOrders(data = {}, shop = {}, queriedCampaignId = null) {
   const orders = Array.isArray(data?.orders)
     ? data.orders
     : (Array.isArray(data?.result?.orders) ? data.result.orders : []);
@@ -307,7 +307,12 @@ function normalizeYandexSupplierCartOrders(data = {}, shop = {}) {
       || (Array.isArray(order.delivery?.specificFeatures) && order.delivery.specificFeatures.some((f) => cleanText(f).toUpperCase().includes("EXPRESS")));
     const orderSubstatus = cleanText(order.substatus || order.subStatus || "").toUpperCase();
     if (orderSubstatus === "SHIPPED" || orderSubstatus === "DELIVERY") continue;
-    const orderCampaignId = cleanText(order.campaignId || shop.campaignId || "");
+    // Prefer campaignId from the order itself; fall back to the campaign we queried for, then
+    // the shop's configured campaignId. queriedCampaignId gives a cleaner single value than
+    // shop.campaignId which may be a comma-separated list.
+    const orderCampaignId = cleanText(order.campaignId || "")
+      || (queriedCampaignId ? String(queriedCampaignId) : "")
+      || cleanText(shop.campaignId || "");
     for (const item of items) {
       const itemStatus = cleanText(item.itemStatus || item.status).toUpperCase();
       if (itemStatus === "REJECTED" || itemStatus === "RETURNED") continue;
@@ -381,27 +386,40 @@ async function fetchOzonSupplierCartLines({ from, to, limit, statuses } = {}) {
 }
 
 async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substatuses } = {}) {
-  // Group all Yandex shops by businessId and collect all their campaignIds.
-  // uniqueYandexShopsByBusiness() drops all but one shop per businessId, which means
-  // orders from secondary campaigns (e.g. express warehouse) are never fetched.
-  // We use the business API with ALL campaignIds so every campaign's orders are included.
-  // includeSyncDisabled: express campaign has syncEnabled=false to protect its stock,
-  // but its orders must still appear in the supplier cart.
-  const allShops = getYandexShops({ includeSyncDisabled: true });
-  const byBusiness = new Map();
-  for (const shop of allShops) {
+  // Express Yandex campaign orders look identical to regular FBS in the API — no delivery.type=EXPRESS.
+  // Detect express by which campaign the order belongs to, not by order fields.
+  //
+  // Strategy: make ONE API call per campaign (not per business). This avoids relying on
+  // order.campaignId from the batched business endpoint (which Yandex may not populate),
+  // and lets us tag each order's isExpress status unambiguously from the campaign config.
+  //
+  // Express campaigns = Yandex shops with syncEnabled=false (they protect their own stock).
+  // An explicit sorinExpress.yandexCampaignId in app settings is added as an extra override.
+  const regularCampaignIds = new Set(
+    getYandexShops({ includeSyncDisabled: false })
+      .flatMap((s) => parseYandexCampaignIds(s.campaignId))
+      .filter(Boolean),
+  );
+  const appSettingsForExpress = await readAppSettings().catch(() => null);
+  const explicitExpressCampaignId = cleanText(appSettingsForExpress?.sorinExpress?.yandexCampaignId || "");
+
+  // Build deduplicated per-campaign entries (one per unique numeric campaignId)
+  const campaignEntries = [];
+  const seenCampaignIds = new Set();
+  for (const shop of getYandexShops({ includeSyncDisabled: true })) {
     const businessId = cleanText(shop.businessId || "");
     if (!businessId || !shop.apiKey) continue;
-    if (!byBusiness.has(businessId)) byBusiness.set(businessId, { shop, campaignIds: [] });
-    const ids = parseYandexCampaignIds(shop.campaignId).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0);
-    byBusiness.get(businessId).campaignIds.push(...ids);
+    for (const campaignId of parseYandexCampaignIds(shop.campaignId)) {
+      if (!campaignId || seenCampaignIds.has(campaignId)) continue;
+      seenCampaignIds.add(campaignId);
+      const numId = Number(campaignId);
+      if (!Number.isFinite(numId) || numId <= 0) continue;
+      const isExpressCampaign = !regularCampaignIds.has(campaignId)
+        || (explicitExpressCampaignId !== "" && campaignId === explicitExpressCampaignId);
+      campaignEntries.push({ shop, businessId, campaignId: numId, isExpressCampaign });
+    }
   }
-  // Yandex express campaign orders don't carry any "EXPRESS" delivery type flag in the API
-  // response — they look identical to regular FBS orders. Detect them by campaignId so they
-  // get isExpress=true and confirmYandexOrderReadyToShip is called AFTER picking, not at
-  // cart-commit time (premature confirmation causes WAREHOUSE_FAILED_TO_SHIP).
-  const appSettingsForExpress = await readAppSettings().catch(() => null);
-  const expressCampaignId = cleanText(appSettingsForExpress?.sorinExpress?.yandexCampaignId || "149026853");
+
   const lines = [];
   const statusList = (Array.isArray(statuses) && statuses.length ? statuses : ["PROCESSING"])
     .map((item) => cleanText(item).toUpperCase())
@@ -409,14 +427,14 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
   const substatusList = (Array.isArray(substatuses) && substatuses.length ? substatuses : ["STARTED", "READY_TO_SHIP"])
     .map((item) => cleanText(item).toUpperCase())
     .filter(Boolean);
-  for (const { shop, campaignIds } of byBusiness.values()) {
+  for (const { shop, businessId, campaignId, isExpressCampaign } of campaignEntries) {
+    if (lines.length >= limit) break;
     let pageToken = "";
     while (lines.length < limit) {
-      const uniqueCampaignIds = Array.from(new Set(campaignIds));
       const query = new URLSearchParams({ limit: String(Math.min(50, Math.max(1, limit - lines.length))) });
       if (pageToken) query.set("pageToken", pageToken);
-      const data = await yandexRequest(shop, "POST", `/v1/businesses/${shop.businessId}/orders?${query.toString()}`, {
-        ...(uniqueCampaignIds.length ? { campaignIds: uniqueCampaignIds } : {}),
+      const data = await yandexRequest(shop, "POST", `/v1/businesses/${businessId}/orders?${query.toString()}`, {
+        campaignIds: [campaignId],
         statuses: statusList,
         substatuses: substatusList,
         dates: {
@@ -426,17 +444,28 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
         fake: false,
         sourcePlatforms: ["MARKET"],
       });
-      const rawLines = normalizeYandexSupplierCartOrders(data, shop);
-      // Override isExpress for orders from the express campaign that Yandex didn't flag
-      const normalizedLines = expressCampaignId
-        ? rawLines.map((line) => (!line.isExpress && cleanText(line.campaignId) === expressCampaignId ? { ...line, isExpress: true } : line))
+      const rawLines = normalizeYandexSupplierCartOrders(data, shop, campaignId);
+      // All orders from an express campaign get isExpress=true regardless of delivery fields
+      const taggedLines = isExpressCampaign
+        ? rawLines.map((line) => ({ ...line, isExpress: true }))
         : rawLines;
-      lines.push(...normalizedLines);
+      lines.push(...taggedLines);
       pageToken = cleanText(data?.paging?.nextPageToken || data?.result?.paging?.nextPageToken || data?.nextPageToken);
       if (!pageToken) break;
     }
   }
-  return lines.slice(0, limit);
+  // Yandex's business-level orders API may return the same order in every campaign call when
+  // the campaignIds filter is not honoured server-side. Deduplicate by orderId+itemId, keeping
+  // the express-tagged version when there are two hits for the same order item.
+  const finalDedup = new Map();
+  for (const line of lines) {
+    const dedupeKey = `${cleanText(line.orderId)}|${cleanText(line.itemId || line.offerId)}`;
+    const existing = finalDedup.get(dedupeKey);
+    if (!existing || (line.isExpress && !existing.isExpress)) {
+      finalDedup.set(dedupeKey, line);
+    }
+  }
+  return Array.from(finalDedup.values()).slice(0, limit);
 }
 
 function normalizeWbSupplierCartOrders(data = {}, account = {}) {
@@ -617,10 +646,20 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { p
   if (disambigName) {
     const matchesBefore = matches;
     matches = disambiguateSupplierCartMatchesByOrderName(matches, disambigName);
-    // disambiguateSupplierCartMatchesByOrderName returns [] for a linkId when rows carry
-    // distinct article codes but none overlap the order name (score = 0 for all). In that
-    // case every candidate entry in matches becomes empty — picking any row would order the
-    // wrong product. Surface "ambiguous_product" instead of silently ordering at random.
+    // When the order name produces all-empty results but we have a warehouse product name that
+    // differs from it, retry with the warehouse name. Covers cross-language mismatches: Russian
+    // marketplace order names have zero token overlap with English Dalik PM row names, while
+    // the warehouse product name (set manually in the admin UI) is typically transliterated and
+    // aligns with the PM row.
+    const firstPassAllEmpty = matches.size > 0 && [...matches.values()].every((rows) => Array.isArray(rows) && rows.length === 0);
+    const warehouseFallbackName = cleanText(normalizeWarehouseProduct(product).name || "");
+    if (firstPassAllEmpty && orderHasRealName && warehouseFallbackName && warehouseFallbackName !== disambigName) {
+      matches = disambiguateSupplierCartMatchesByOrderName(matchesBefore, warehouseFallbackName);
+    }
+    // disambiguateSupplierCartMatchesByOrderName returns [] for a linkId when rows have distinct
+    // names but none overlap the query name (score = 0 for all). If both the order name and the
+    // warehouse name fail, picking any row would silently order the wrong product — surface
+    // "ambiguous_product" instead.
     const allEmpty = matches.size > 0 && [...matches.values()].every((rows) => Array.isArray(rows) && rows.length === 0);
     const hadCandidates = [...matchesBefore.values()].some((rows) => Array.isArray(rows) && rows.length > 0);
     if (allEmpty && hadCandidates) {
