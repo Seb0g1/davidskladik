@@ -445,10 +445,11 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
         sourcePlatforms: ["MARKET"],
       });
       const rawLines = normalizeYandexSupplierCartOrders(data, shop, campaignId);
-      // All orders from an express campaign get isExpress=true regardless of delivery fields
-      const taggedLines = isExpressCampaign
-        ? rawLines.map((line) => ({ ...line, isExpress: true }))
-        : rawLines;
+      // Campaign identity is authoritative for Express tagging.
+      // Express campaigns: force isExpress=true even if order fields say otherwise.
+      // Regular campaigns: force isExpress=false even if delivery fields say EXPRESS
+      // (e.g. ym-express is a Yandex Express warehouse but we process its orders as regular FBS).
+      const taggedLines = rawLines.map((line) => ({ ...line, isExpress: isExpressCampaign }));
       lines.push(...taggedLines);
       pageToken = cleanText(data?.paging?.nextPageToken || data?.result?.paging?.nextPageToken || data?.nextPageToken);
       if (!pageToken) break;
