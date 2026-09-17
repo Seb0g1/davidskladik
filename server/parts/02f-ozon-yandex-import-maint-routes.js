@@ -153,6 +153,7 @@ const YANDEX_WRONG_CATEGORY_PATTERNS = [
   /автомобильн/i, /диффузор/i, /одежд/i, /обув/i, /плать/i, /футболк/i,
   /брюк/i, /куртк/i, /носк/i, /детск/i, /спортивн/i, /канцеляр/i, /посуд/i,
   /водород/i, /интимн/i, /съедобн/i,
+  /для взрослых/i, /товары для взрослых/i, /эротик/i, /18\+/i,
 ];
 
 function isWrongYandexBeautyCategory(categoryName = "") {
@@ -212,9 +213,19 @@ app.post("/api/ozon-yandex-import/fix-yandex-categories", requireAdmin, async (r
         idsByCategoryName.set(key, counter);
       }
       const majorityCategoryId = (name) => {
-        const counter = idsByCategoryName.get(cleanText(name).toLowerCase());
-        if (!counter || !counter.size) return 0;
-        return [...counter.entries()].sort((a, b) => b[1] - a[1])[0][0];
+        const key = cleanText(name).toLowerCase();
+        const counter = idsByCategoryName.get(key);
+        if (counter?.size) return [...counter.entries()].sort((a, b) => b[1] - a[1])[0][0];
+        // Partial match: aggregate counts from all categories whose name contains the target word.
+        // Handles "Туалетная вода" / "Духи" / "Парфюмерия" being the same Yandex tree node.
+        const merged = new Map();
+        for (const [catName, cnt] of idsByCategoryName.entries()) {
+          if (catName.includes(key) || key.includes(catName)) {
+            for (const [id, count] of cnt) merged.set(id, (merged.get(id) || 0) + count);
+          }
+        }
+        if (!merged.size) return 0;
+        return [...merged.entries()].sort((a, b) => b[1] - a[1])[0][0];
       };
 
       for (const row of rows) {

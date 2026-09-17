@@ -355,25 +355,15 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
     }
 
     if (status === "picked" && nextRow.warehouseProductId) {
-      const bgProductIds = [nextRow.warehouseProductId];
-      const bgQuantity = nextRow.quantity;
-      setImmediate(async () => {
-        try {
-          const freshProducts = await buildFreshWarehouseProducts(bgProductIds, { livePriceMaster: true, batchPriceMaster: true, priceMasterTimeoutMs: autoPricePmTimeoutMs })
-            .catch((bgErr) => { logger.warn("picking stock restore build failed (bg)", { detail: bgErr?.message || String(bgErr), productIds: bgProductIds }); return []; });
-          const restoreProducts = freshProducts.map((product) => ({
-            ...product,
-            targetStock: Math.max(1, Math.round(Number(product.targetStock || 0)), Math.round(Number(bgQuantity || 1) || 1)),
-          }));
-          if (restoreProducts.length) {
-            const bgRecovery = await runSupplierRecoveryAutomation({ products: restoreProducts }, {
-              productIds: bgProductIds, force: true, source: "supplier_picking_picked", sourceEvent: "supplier_picking_stock_restore",
-            }).catch((bgErr) => { logger.warn("picking stock restore failed (bg)", { detail: bgErr?.message || String(bgErr), productIds: bgProductIds }); return null; });
-            if (bgRecovery) logger.info("picking stock restore complete (bg)", { key, productIds: bgProductIds, recovered: bgRecovery.recovered, restoredStocks: bgRecovery.restoredStocks });
-          }
-        } catch (bgErr) {
-          logger.warn("picking stock restore background error", { key, detail: bgErr?.message || String(bgErr) });
-        }
+      queueMarketplaceJob("supplier-recovery-automation", {
+        productIds: [nextRow.warehouseProductId],
+        targetStockAtLeast: Math.max(1, Math.round(Number(nextRow.quantity || 1))),
+        force: true,
+        source: "supplier_picking_picked",
+        sourceEvent: "supplier_picking_stock_restore",
+        livePriceMaster: true,
+      }, { priority: QUEUE_PRIORITY.RECOVERY }).catch((bgErr) => {
+        logger.warn("picking stock restore queue failed", { key, detail: bgErr?.message || String(bgErr) });
       });
     }
   } catch (error) {

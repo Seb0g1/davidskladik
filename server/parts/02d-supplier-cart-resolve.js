@@ -455,13 +455,15 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
     }
   }
   // Yandex's business-level orders API may return the same order in every campaign call when
-  // the campaignIds filter is not honoured server-side. Deduplicate by orderId+itemId, keeping
-  // the express-tagged version when there are two hits for the same order item.
+  // the campaignIds filter is not honoured server-side. Deduplicate by orderId+itemId.
+  // Non-express (regular FBS) result always wins over express-tagged duplicates: an order is
+  // only Express if it appears exclusively from the express campaign — if it also shows up in
+  // a regular campaign call that means the API leaked it, and the real campaign is regular.
   const finalDedup = new Map();
   for (const line of lines) {
     const dedupeKey = `${cleanText(line.orderId)}|${cleanText(line.itemId || line.offerId)}`;
     const existing = finalDedup.get(dedupeKey);
-    if (!existing || (line.isExpress && !existing.isExpress)) {
+    if (!existing || (!line.isExpress && existing.isExpress)) {
       finalDedup.set(dedupeKey, line);
     }
   }
@@ -705,19 +707,51 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { p
     });
   }
   const pmName = cleanText(selected.name || "");
-  // Flag a mismatch when the PM row's product name has zero token overlap with the ordered
-  // product name. This catches cases where a supplier link points to a wrong PM row
-  // (e.g. a shared article code for a completely different product).
-  const pmNameMismatch = Boolean(pmName) && Boolean(disambigName)
-    && priceMasterArticleCandidateScore({ name: pmName }, { name: disambigName }) === 0;
+  // Detect name divergence between the selected PM row and the order/warehouse names.
+  // priceMasterArticleCandidateScore returns an OBJECT with .score; a score ≤ 0 means
+  // the two names have actively diverging tokens — almost certainly a wrong product
+  // (Далик reuses article numbers for completely different products).
+  // We check BOTH the marketplace order name and the warehouse product name so that
+  // Russian marketplace names (with zero English overlap) don't false-positive when
+  // the warehouse name still confirms the PM row is correct.
+  const warehouseProductNameForMismatch = cleanText(normalizeWarehouseProduct(product).name || "");
+  const pmScoreVsDisambig = (Boolean(pmName) && Boolean(disambigName))
+    ? priceMasterArticleCandidateScore({ name: pmName }, { name: disambigName }).score
+    : null;
+  const pmScoreVsWarehouse = (Boolean(pmName) && Boolean(warehouseProductNameForMismatch) && warehouseProductNameForMismatch !== disambigName)
+    ? priceMasterArticleCandidateScore({ name: pmName }, { name: warehouseProductNameForMismatch }).score
+    : null;
+  // Mismatch only when ALL available name scores are ≤ 0.
+  // If either the order name or the warehouse name positively confirms the PM row, trust it.
+  const pmNameMismatch = (pmScoreVsDisambig !== null || pmScoreVsWarehouse !== null)
+    && (pmScoreVsDisambig === null || pmScoreVsDisambig <= 0)
+    && (pmScoreVsWarehouse === null || pmScoreVsWarehouse <= 0);
   if (pmNameMismatch) {
     logger.warn("supplier_cart_pm_name_mismatch", {
       offerId: normalizedLine.offerId,
       orderName: disambigName,
+      warehouseName: warehouseProductNameForMismatch,
       pmName,
+      pmScoreVsDisambig,
+      pmScoreVsWarehouse,
       supplierName: selected.partnerName,
       partnerId: selected.partnerId,
       rowId: selected.rowId,
+    });
+    return normalizeSupplierCartPreviewRow({
+      ...normalizedLine,
+      warehouseProductId: product.id,
+      groupKey: warehouseProductPageGroupKey(product),
+      groupOfferId: product.offerId,
+      ready: false,
+      skipReason: "pm_name_mismatch",
+      saleAmount: computeMarketplaceSaleAmountRub(normalizedLine),
+      soldAt: normalizedLine.orderedAt,
+      alreadyCommitted: Boolean(processed) || alreadyPicked || coveredByManual,
+      requestDocId: processed?.requestDocId,
+      requestRowId: processed?.requestRowId,
+      pmName,
+      pmNameMismatch,
     });
   }
   return normalizeSupplierCartPreviewRow({

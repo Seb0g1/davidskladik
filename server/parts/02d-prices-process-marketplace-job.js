@@ -66,7 +66,11 @@ async function processMarketplaceJob(name, data = {}) {
         logger.info("supplier_recovery_skipped_all_snoozed", { source, count: productIds.length });
         return { recovered: 0, restoredStocks: 0, unarchived: 0, errors: [], source };
       }
-      return runSupplierRecoveryAutomation({ products: eligible }, {
+      const targetStockAtLeast = Number(data.targetStockAtLeast || 0);
+      const eligibleWithStock = targetStockAtLeast > 0
+        ? eligible.map((p) => ({ ...p, targetStock: Math.max(targetStockAtLeast, Math.round(Number(p.targetStock || 0))) }))
+        : eligible;
+      return runSupplierRecoveryAutomation({ products: eligibleWithStock }, {
         productIds,
         source,
         sourceEvent: data.sourceEvent || source,

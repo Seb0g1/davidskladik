@@ -38,9 +38,11 @@ async function uploadDir(sftp, conn, localDir, remoteDir) {
   }
 }
 const SERVER_FILES = [
-  "server/parts/02d-suppliers-routes-read.js",
-  "server/parts/02f-marketplace-automation-pickers.js",
-  "server/parts/02f-zero-stock-sweep.js",
+  "server/parts/02d-prices-process-marketplace-job.js",
+  "server/parts/02d-prices-stats-automation.js",
+  "server/parts/02d-supplier-cart-resolve.js",
+  "server/parts/02f-ozon-yandex-import-maint-routes.js",
+  "server/parts/02f-supplier-picking-routes.js",
 ];
 
 async function main() {

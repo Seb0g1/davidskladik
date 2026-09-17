@@ -59,7 +59,7 @@ async function upsertSalesAutomationSkuStates(rows = []) {
     for (const batch of chunkArray(rows, 250)) {
       const validBatch = batch.filter((row) => cleanText(row.offerId));
       const validProductIds = await resolveSalesAutomationProductIds(prisma, validBatch);
-      await prisma.$transaction(validBatch.map((row) => {
+      for (const row of validBatch) {
         const marketplace = cleanText(row.marketplace).toLowerCase() === "yandex" ? "yandex" : "ozon";
         const target = cleanText(row.target) || "default";
         const offerId = cleanText(row.offerId);
@@ -67,7 +67,7 @@ async function upsertSalesAutomationSkuStates(rows = []) {
         const productId = rawProductId && validProductIds.has(rawProductId) ? rawProductId : null;
         if (rawProductId && !productId) droppedMissingProduct += 1;
         updated += 1;
-        return prisma.salesAutomationSkuState.upsert({
+        await prisma.salesAutomationSkuState.upsert({
           where: { marketplace_target_offerId: { marketplace, target, offerId } },
           create: {
             productId,
@@ -103,7 +103,7 @@ async function upsertSalesAutomationSkuStates(rows = []) {
             raw: row,
           },
         });
-      }));
+      }
     }
     if (droppedMissingProduct) {
       logger.warn("sales automation skipped stale product ids", { droppedMissingProduct });

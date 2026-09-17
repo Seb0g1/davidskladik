@@ -3870,7 +3870,7 @@ button:disabled {
 
   .picking-supplier-toolbar {
     top: 0;
-    margin: -4px -4px 0;
+    margin: 0;
     padding: 10px 4px;
   }
 
@@ -9826,7 +9826,8 @@ textarea:focus-visible,
   font-size: 0.72rem;
   color: var(--fg-muted, #888);
   opacity: 0.8;
-  white-space: nowrap;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .picking-price-input {
@@ -9873,15 +9874,18 @@ textarea:focus-visible,
 
   /* Prevent any element inside the picking page from causing horizontal scroll */
   .picking-page { overflow-x: hidden; }
-  .picking-supplier-card { max-width: 100%; overflow: clip; border-radius: 10px; }
+  /* Don't clip on mobile — overflow: clip was cutting button shadows/borders at right edge */
+  .picking-supplier-card { max-width: 100%; overflow: visible; border-radius: 10px; }
+  /* Clip toolbar corners individually so the card looks rounded */
+  .picking-supplier-toolbar { border-radius: 10px 10px 0 0; overflow: hidden; }
   .pm-search-panel { width: 100vw; }
   .picker-balance-chip { font-size: 0.78rem; padding: 5px 9px; }
   /* Supplier head: stack name above meta on mobile */
   .picking-supplier-head { padding: 10px 12px 6px; flex-direction: column; align-items: stretch; gap: 6px; }
   .picking-supplier-head h3 { font-size: 1.05rem; }
-  /* Ledger 2-col on mobile */
-  .supplier-ledger-row { grid-template-columns: repeat(2, 1fr); }
-  .supplier-ledger-row .diagnostic-value { padding: 7px 10px; }
+  /* Ledger 3-col on mobile (3 items: Долг / Оплачено / Сборка) */
+  .supplier-ledger-row { grid-template-columns: repeat(3, 1fr); }
+  .supplier-ledger-row .diagnostic-value { padding: 7px 8px; }
   /* Hide RUB equivalent on mobile to save space, keep USD price */
   .picking-row-price-rub { display: none; }
   /* Picking row: comfortable touch padding */
@@ -9892,9 +9896,9 @@ textarea:focus-visible,
   .picking-row-header { flex-wrap: nowrap; gap: 4px; align-items: flex-start; overflow: hidden; }
   .picking-row-header-left { min-width: 0; flex: 1 1 0; }
   .picking-row-name { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; display: block; font-size: 0.88rem; line-height: 1.3; font-weight: 600; }
-  .picking-row-header-right { flex-wrap: nowrap; justify-content: flex-end; gap: 3px; flex-shrink: 0; align-items: flex-start; }
-  /* Status badge visible but compact */
-  .picking-row-status-badge { font-size: 0.7rem; padding: 2px 6px; }
+  .picking-row-header-right { flex-wrap: nowrap; justify-content: flex-end; gap: 3px; flex-shrink: 1; max-width: 44%; align-items: flex-start; }
+  /* Status badge hidden on mobile — row color border already shows status */
+  .picking-row-status-badge { display: none; }
   /* Hide sale price on mobile */
   .picking-row-sale { display: none; }
   .picking-qty-input { width: 50px; font-size: 0.85rem; }
@@ -9936,8 +9940,8 @@ textarea:focus-visible,
   .picking-supplier-card { padding: 8px; gap: 6px; }
   .picking-supplier-toolbar { gap: 6px; padding-bottom: 6px; max-width: 100%; }
   .picking-supplier-name-block h3 { font-size: 1rem; }
-  /* Supplier ledger: 2×2 grid on mobile (show all 4 values) */
-  .supplier-ledger-row { grid-template-columns: repeat(2, 1fr); padding: 0; }
+  /* Supplier ledger: 3-col on mobile (Долг / Оплачено / Сборка in one row) */
+  .supplier-ledger-row { grid-template-columns: repeat(3, 1fr); padding: 0; }
   .supplier-ledger-row .diagnostic-value:not(:first-child) { display: grid; }
   /* Supplier head meta: horizontal row under the supplier name */
   .picking-supplier-head-meta {
@@ -9965,7 +9969,7 @@ textarea:focus-visible,
   .hide-xs { display: none; }
   /* Reduce picking row gap */
   .picking-row-list { gap: 4px; }
-  .picking-row { padding: 4px 6px; }
+  .picking-row { padding: 10px 12px; }
 }
 
 /* ═══════════════════════════════════════════════════════
