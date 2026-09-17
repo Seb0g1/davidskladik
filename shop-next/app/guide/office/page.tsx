@@ -1,10 +1,13 @@
 import Link from "next/link";
 import { BookOpen, ChevronRight } from "lucide-react";
 import type { Metadata } from "next";
+import { SITE_NAME, SITE_URL, breadcrumbJsonLd } from "@/lib/seo";
 
 export const metadata: Metadata = {
-  title: "Ароматы для офиса — гид",
+  title: `Парфюм для офиса — гид | ${SITE_NAME}`,
   description: "Гид по парфюму для рабочей среды: правило двух метров, лучшие ноты, количество нанесения и сезонные рекомендации.",
+  alternates: { canonical: "/guide/office" },
+  openGraph: { title: `Парфюм для офиса — гид — ${SITE_NAME}`, url: `${SITE_URL}/guide/office` },
 };
 
 const S = {
@@ -40,7 +43,12 @@ const config = {
 
 export default function OfficeGuidePage() {
   const paragraphs = config.intro.split("\n\n").filter(Boolean);
+  const breadcrumb = breadcrumbJsonLd([{ name: "Главная", url: "/" }, { name: config.headline, url: "/guide/office" }]);
+  const articleLd = { "@context": "https://schema.org", "@type": "Article", headline: config.headline, description: "Гид по парфюму для рабочей среды: правило двух метров, лучшие ноты, количество нанесения и сезонные рекомендации.", url: `${SITE_URL}/guide/office`, publisher: { "@type": "Organization", name: SITE_NAME, logo: `${SITE_URL}/favicon.svg` } };
   return (
+    <>
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumb) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(articleLd) }} />
     <div style={{ background: S.bg, minHeight: "100vh" }}>
       <div style={{ maxWidth: 900, margin: "0 auto", padding: "72px clamp(18px,4vw,56px) 56px", textAlign: "center" }}>
         <div style={{ display: "inline-flex", alignItems: "center", gap: 9, marginBottom: 24, padding: "6px 16px", borderRadius: 999, border: `1px solid ${S.borderMd}`, background: "rgba(201,169,110,0.06)" }}>
@@ -104,5 +112,6 @@ export default function OfficeGuidePage() {
         </div>
       </div>
     </div>
+    </>
   );
 }

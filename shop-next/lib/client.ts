@@ -100,3 +100,24 @@ export async function uploadMedia(file: File): Promise<{ ok: boolean; url: strin
 export async function emailSubscribe(email: string, source = "popup"): Promise<{ ok: boolean }> {
   return req<{ ok: boolean }>("/email-subscribe", { method: "POST", body: JSON.stringify({ email, source }) });
 }
+
+export interface CatalogFetchParams {
+  category?: string; q?: string; brand?: string;
+  page?: number; pageSize?: number; inStock?: boolean; sort?: string;
+}
+
+export async function catalogFetch(params: CatalogFetchParams): Promise<{ products: import("./types").ShopProduct[]; total: number; brands: string[] }> {
+  const qs = new URLSearchParams();
+  if (params.category) qs.set("category", params.category);
+  if (params.q) qs.set("q", params.q);
+  if (params.brand) qs.set("brand", params.brand);
+  if (params.page && params.page > 1) qs.set("page", String(params.page));
+  if (params.pageSize) qs.set("pageSize", String(params.pageSize));
+  if (params.inStock) qs.set("inStock", "true");
+  if (params.sort) qs.set("sort", params.sort);
+  return req(`/catalog?${qs}`);
+}
+
+export async function fetchAutoCategoriesClient(): Promise<import("./types").AutoCategory[]> {
+  return req<import("./types").AutoCategory[]>("/auto-categories");
+}

@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { ChevronLeft, ChevronRight, Copy, Check } from "lucide-react";
 import type { ShopBanner } from "@/lib/types";
 
@@ -126,7 +127,7 @@ export default function BannerSlider({ banners: initialBanners }: { banners?: Sh
   return (
     <div style={{ position: "relative", width: "100%", height: "clamp(200px,40vw,480px)", overflow: "hidden", borderRadius: 16, background: "#0d0d0f" }}>
       <div key={idx} style={{ position: "absolute", inset: 0, animation: "fadeIn 0.4s ease" }}>
-        {banner.imageUrl ? <img src={banner.imageUrl} alt={banner.title ?? ""} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <GradientBanner banner={banner} />}
+        {banner.imageUrl ? <Image src={banner.imageUrl} alt={banner.title ?? ""} fill style={{ objectFit: "cover" }} /> : <GradientBanner banner={banner} />}
       </div>
 
       {banner.holidayKey && (

@@ -119,6 +119,7 @@ export interface MarketplaceReview {
   createdAt: string;
   source: "ozon" | "yandex";
   photos?: string[];
+  videoUrl?: string;
 }
 
 export interface ProductQAItem {
@@ -175,8 +176,7 @@ export interface LoyaltyData {
 }
 
 export interface AutoCategory {
-  id: string;
-  name: string;
   slug: string;
-  query: string;
+  label: string;
+  count: number;
 }

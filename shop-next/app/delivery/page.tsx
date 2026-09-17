@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Truck, CreditCard, RotateCcw, Clock, Shield, MapPin } from "lucide-react";
 import { fetchSettings } from "@/lib/api";
 import { breadcrumbJsonLd, SITE_URL, SITE_NAME } from "@/lib/seo";
 
@@ -7,100 +8,172 @@ export const revalidate = 3600;
 
 export const metadata: Metadata = {
   title: `Доставка и оплата | ${SITE_NAME}`,
-  description: "Условия доставки и оплаты Magic Vibes: курьер, ПВЗ Ozon, Почта России. Доставка по всей России за 1–5 дней. Оригинальная парфюмерия с гарантией.",
+  description: "Доставка парфюмерии Magic Vibes по всей России через Ozon FBS. Оплата картой, СБП. Возврат 14 дней. Реквизиты ИП Шальнев Давид Алиевич.",
   alternates: { canonical: "/delivery" },
   openGraph: { title: "Доставка и оплата — Magic Vibes", url: `${SITE_URL}/delivery` },
+  keywords: "доставка парфюмерии, доставка духов по России, Ozon ПВЗ парфюм, оплата картой парфюм, возврат духов",
 };
+
+const S = {
+  bg:      "#0E0D0B",
+  surface: "#161512",
+  surface2:"#1D1C18",
+  border:  "rgba(255,252,245,0.07)",
+  borderMd:"rgba(255,252,245,0.13)",
+  text:    "#F4EFE6",
+  muted:   "rgba(244,239,230,0.48)",
+  subtle:  "rgba(244,239,230,0.22)",
+  accent:  "#C9A96E",
+  accent2: "#D9BF8F",
+};
+
+function Section({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
+  return (
+    <div style={{ background: S.surface, borderRadius: 20, padding: "28px 28px 24px", border: `1px solid ${S.border}`, marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+        <div style={{ width: 40, height: 40, borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(201,169,110,0.1)", border: "1px solid rgba(201,169,110,0.2)", flexShrink: 0 }}>
+          {icon}
+        </div>
+        <h2 style={{ fontSize: 17, fontWeight: 600, color: S.text, margin: 0 }}>{title}</h2>
+      </div>
+      <div style={{ fontSize: 14, color: S.muted, lineHeight: 1.8 }}>{children}</div>
+    </div>
+  );
+}
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12, padding: "10px 0", borderBottom: `1px solid ${S.border}` }}>
+      <span style={{ color: S.muted, fontSize: 14 }}>{label}</span>
+      <span style={{ color: S.text, fontSize: 14, fontWeight: 500, textAlign: "right" }}>{value}</span>
+    </div>
+  );
+}
 
 export default async function DeliveryPage() {
   let settings = null;
   try { settings = await fetchSettings(); } catch {}
 
-  const deliveryDays = settings?.deliveryDays ?? 5;
-  const deliveryDaysMin = settings?.deliveryDaysMin ?? 1;
-  const deliveryPrice = settings?.deliveryPriceRub ?? 350;
+  const daysMin = settings?.deliveryDaysMin ?? 1;
+  const daysMax = settings?.deliveryDays ?? 5;
+  const price = settings?.deliveryPriceRub ?? 0;
   const freeFrom = settings?.freeDeliveryFrom;
+  const priceStr = price === 0 ? "Бесплатно" : `${price.toLocaleString("ru-RU")} ₽${freeFrom ? ` (от ${freeFrom.toLocaleString("ru-RU")} ₽ — бесплатно)` : ""}`;
 
   const breadcrumb = breadcrumbJsonLd([
     { name: "Главная", url: "/" },
     { name: "Доставка и оплата", url: "/delivery" },
   ]);
 
-  const webPageLd = {
-    "@context": "https://schema.org",
-    "@type": "WebPage",
-    name: "Доставка и оплата — Magic Vibes",
-    url: `${SITE_URL}/delivery`,
-    breadcrumb: breadcrumb,
-    description: "Условия доставки и оплаты в интернет-магазине парфюмерии Magic Vibes",
-  };
-
   return (
     <>
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumb) }} />
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(webPageLd) }} />
 
-      <div style={{ maxWidth: 800, margin: "0 auto", padding: "clamp(24px,3vw,48px) clamp(18px,4vw,56px)" }}>
-        <nav style={{ fontSize: 12, color: "rgba(245,244,240,0.45)", marginBottom: 24 }}>
-          <Link href="/" style={{ color: "rgba(245,244,240,0.45)", textDecoration: "none" }}>Главная</Link>
-          {" / "}<span style={{ color: "#f5f4f0" }}>Доставка и оплата</span>
-        </nav>
+      <div style={{ background: S.bg, minHeight: "100vh" }}>
+        <div style={{ maxWidth: 800, margin: "0 auto", padding: "64px clamp(16px,4vw,24px) 96px" }}>
+          <nav style={{ fontSize: 12, color: S.muted, marginBottom: 40 }}>
+            <Link href="/" style={{ color: S.muted, textDecoration: "none" }}>Главная</Link>
+            {" / "}<span style={{ color: S.text }}>Доставка и оплата</span>
+          </nav>
 
-        <h1 style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", fontWeight: 300, fontSize: "clamp(32px,5vw,56px)", color: "#f5f4f0", margin: "0 0 40px" }}>Доставка и оплата</h1>
+          {/* Header */}
+          <div style={{ textAlign: "center", marginBottom: 56 }}>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 10, marginBottom: 20, padding: "6px 16px", borderRadius: 999, border: `1px solid ${S.borderMd}`, background: "rgba(201,169,110,0.06)" }}>
+              <Truck size={13} style={{ color: S.accent }} />
+              <span style={{ fontSize: 12, letterSpacing: "0.12em", textTransform: "uppercase", color: S.accent }}>Условия</span>
+            </div>
+            <h1 style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", fontWeight: 600, fontSize: "clamp(26px,5vw,40px)", color: S.text, margin: "0 0 16px" }}>
+              Доставка и оплата
+            </h1>
+            <div style={{ width: 48, height: 1, background: S.accent, margin: "0 auto 16px" }} />
+            <p style={{ fontSize: 15, color: S.muted, lineHeight: 1.7, maxWidth: 520, margin: "0 auto" }}>
+              Мы доставляем оригинальную парфюмерию по всей России через инфраструктуру Ozon
+            </p>
+          </div>
 
-        <section style={{ marginBottom: 48 }}>
-          <h2 style={{ fontSize: 13, letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,162,94,0.8)", marginBottom: 20, fontWeight: 500 }}>Доставка</h2>
-
-          <div style={{ display: "grid", gap: 16 }}>
-            {[
-              {
-                icon: "🚚",
-                title: "Курьерская доставка",
-                desc: `Доставляем курьером по всей России за ${deliveryDaysMin}–${deliveryDays} дней. Стоимость — ${deliveryPrice.toLocaleString("ru-RU")} ₽${freeFrom ? `. При заказе от ${freeFrom.toLocaleString("ru-RU")} ₽ — бесплатно.` : "."}`,
-              },
-              { icon: "📦", title: "Пункты выдачи Ozon", desc: "Более 30 000 пунктов выдачи Ozon по всей России. Срок — 1–4 дня после отправки." },
-              { icon: "✉️", title: "Почта России", desc: "Доставка Почтой России в отдалённые регионы. Срок — 3–10 дней." },
-            ].map(m => (
-              <div key={m.title} style={{ padding: "20px 24px", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 12, background: "rgba(255,255,255,0.02)" }}>
-                <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
-                  <span style={{ fontSize: 24, flexShrink: 0 }}>{m.icon}</span>
-                  <div>
-                    <div style={{ fontSize: 14, fontWeight: 500, color: "#f5f4f0", marginBottom: 6 }}>{m.title}</div>
-                    <div style={{ fontSize: 13, color: "rgba(245,244,240,0.5)", lineHeight: 1.7 }}>{m.desc}</div>
-                  </div>
-                </div>
+          {/* Delivery */}
+          <Section icon={<Truck size={18} style={{ color: S.accent }} />} title="Доставка">
+            <div style={{ marginBottom: 20 }}>
+              Все заказы отправляются через логистику <strong style={{ color: S.text }}>Ozon FBS</strong> (Fulfillment by Seller).
+              Вы выбираете удобный пункт выдачи Ozon на карте при оформлении заказа.
+            </div>
+            <Row label="Способ доставки" value="Пункт выдачи Ozon (ПВЗ)" />
+            <Row label="Стоимость" value={priceStr} />
+            <Row label="Срок доставки" value={`${daysMin}–${daysMax} рабочих дней`} />
+            <Row label="По всей" value="России" />
+            <div style={{ marginTop: 16, padding: "14px 16px", borderRadius: 12, background: "rgba(201,169,110,0.06)", border: "1px solid rgba(201,169,110,0.15)" }}>
+              <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                <Clock size={14} style={{ color: S.accent, flexShrink: 0, marginTop: 2 }} />
+                <span style={{ fontSize: 13 }}>
+                  После оформления заказа мы обрабатываем его в течение <strong style={{ color: S.accent2 }}>1 рабочего дня</strong> и передаём в службу доставки Ozon.
+                </span>
               </div>
-            ))}
-          </div>
-        </section>
+            </div>
+          </Section>
 
-        <section style={{ marginBottom: 48 }}>
-          <h2 style={{ fontSize: 13, letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,162,94,0.8)", marginBottom: 20, fontWeight: 500 }}>Способы оплаты</h2>
-          <div style={{ display: "grid", gap: 12 }}>
-            {[
-              { icon: "💳", title: "Банковские карты", desc: "Visa, Mastercard, Мир — онлайн через безопасную форму оплаты." },
-              { icon: "📲", title: "СБП", desc: "Система быстрых платежей — перевод по номеру телефона без комиссии." },
-              { icon: "💰", title: "Наличные при получении", desc: "Оплата курьеру или в пункте выдачи при получении заказа." },
-            ].map(m => (
-              <div key={m.title} style={{ padding: "16px 20px", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 10, display: "flex", gap: 12, alignItems: "center" }}>
-                <span style={{ fontSize: 20 }}>{m.icon}</span>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: "#f5f4f0", marginBottom: 3 }}>{m.title}</div>
-                  <div style={{ fontSize: 12, color: "rgba(245,244,240,0.45)" }}>{m.desc}</div>
-                </div>
+          {/* Payment */}
+          <Section icon={<CreditCard size={18} style={{ color: S.accent }} />} title="Оплата">
+            <div style={{ marginBottom: 20 }}>
+              Оплата производится онлайн через защищённую платёжную систему. Ваши платёжные данные не хранятся на наших серверах.
+            </div>
+            <Row label="Банковские карты" value="Visa, Mastercard, Мир" />
+            <Row label="Онлайн-банкинг" value="СБП (Система быстрых платежей)" />
+            <Row label="Наличные" value="При получении в ПВЗ" />
+            <Row label="Валюта" value="Российский рубль (₽)" />
+            <div style={{ marginTop: 16, padding: "14px 16px", borderRadius: 12, background: "rgba(74,222,128,0.05)", border: "1px solid rgba(74,222,128,0.15)" }}>
+              <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                <Shield size={14} style={{ color: "#4ade80", flexShrink: 0, marginTop: 2 }} />
+                <span style={{ fontSize: 13 }}>
+                  Платёж защищён по протоколу <strong style={{ color: "#4ade80" }}>TLS/SSL</strong>. Данные карты не передаются магазину.
+                </span>
               </div>
-            ))}
-          </div>
-        </section>
+            </div>
+          </Section>
 
-        <section>
-          <h2 style={{ fontSize: 13, letterSpacing: "0.2em", textTransform: "uppercase", color: "rgba(201,162,94,0.8)", marginBottom: 16, fontWeight: 500 }}>Возврат</h2>
-          <div style={{ fontSize: 14, color: "rgba(245,244,240,0.55)", lineHeight: 1.9 }}>
-            <p>Возврат товара возможен в течение <strong style={{ color: "#f5f4f0" }}>14 дней</strong> с момента получения заказа.</p>
-            <p>Для возврата товар должен быть в оригинальной упаковке, без следов использования. Парфюмерия принимается к возврату только в запечатанном виде.</p>
-            <p>Для оформления возврата напишите нам на <a href="mailto:info@magicvibes.ru" style={{ color: "rgba(201,162,94,0.8)", textDecoration: "none" }}>info@magicvibes.ru</a>.</p>
+          {/* Returns */}
+          <Section icon={<RotateCcw size={18} style={{ color: S.accent }} />} title="Возврат и обмен">
+            <div style={{ marginBottom: 20 }}>
+              В соответствии с Законом РФ «О защите прав потребителей» (ст. 26.1, 18) вы имеете право:
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 20 }}>
+              {[
+                { title: "14 дней — возврат товара надлежащего качества", desc: "Товар можно вернуть в течение 14 дней с момента получения, если он не был в употреблении, сохранены оригинальная упаковка, товарный вид и потребительские свойства." },
+                { title: "Возврат некачественного товара", desc: "Если товар имеет дефекты, вы вправе потребовать замены, ремонта, соразмерного снижения цены или полного возврата средств." },
+                { title: "Возврат средств", desc: "Деньги возвращаются на исходный способ оплаты в течение 10 рабочих дней после получения и проверки товара." },
+              ].map(item => (
+                <div key={item.title} style={{ padding: "14px 16px", borderRadius: 12, background: S.surface2, border: `1px solid ${S.border}` }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: S.accent2, marginBottom: 6 }}>{item.title}</div>
+                  <div style={{ fontSize: 13 }}>{item.desc}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ padding: "14px 16px", borderRadius: 12, background: "rgba(201,169,110,0.06)", border: "1px solid rgba(201,169,110,0.15)" }}>
+              <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                <MapPin size={14} style={{ color: S.accent, flexShrink: 0, marginTop: 2 }} />
+                <span style={{ fontSize: 13 }}>
+                  Для оформления возврата напишите на{" "}
+                  <a href="mailto:info@magicvibes.ru" style={{ color: S.accent, textDecoration: "none" }}>info@magicvibes.ru</a>{" "}
+                  с темой «Возврат» и номером заказа. Ответим в течение 1 рабочего дня.
+                </span>
+              </div>
+            </div>
+          </Section>
+
+          {/* Legal details */}
+          <div style={{ background: S.surface, borderRadius: 20, padding: "24px 28px", border: `1px solid ${S.border}` }}>
+            <h2 style={{ fontSize: 14, fontWeight: 700, color: S.muted, textTransform: "uppercase", letterSpacing: "0.1em", marginBottom: 16 }}>Реквизиты продавца</h2>
+            <div style={{ fontSize: 13, color: S.muted, lineHeight: 2 }}>
+              <div><span style={{ color: S.subtle }}>Продавец: </span><span style={{ color: S.text }}>ИП Шальнев Давид Алиевич</span></div>
+              <div><span style={{ color: S.subtle }}>ОГРНИП: </span><span style={{ color: S.text, fontFamily: "monospace" }}>323861700065205</span></div>
+              <div><span style={{ color: S.subtle }}>ИНН: </span><span style={{ color: S.text, fontFamily: "monospace" }}>860203590860</span></div>
+              <div><span style={{ color: S.subtle }}>Email: </span><a href="mailto:info@magicvibes.ru" style={{ color: S.accent, textDecoration: "none" }}>info@magicvibes.ru</a></div>
+            </div>
+            <div style={{ marginTop: 16, fontSize: 12, color: S.subtle, lineHeight: 1.7, borderTop: `1px solid ${S.border}`, paddingTop: 14 }}>
+              Настоящая страница является публичной офертой в части условий доставки и возврата товаров,
+              реализуемых ИП Шальнев Давид Алиевич. Совершая заказ, вы подтверждаете согласие с данными условиями.
+            </div>
           </div>
-        </section>
+        </div>
       </div>
     </>
   );

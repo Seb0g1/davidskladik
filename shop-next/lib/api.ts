@@ -1,7 +1,8 @@
 import type { ShopProduct, ShopBanner, ShopCategory, ShopSettings, CatalogResponse, BlogPost, TelegramNewsPost, ShopReview, MarketplaceReview, ProductQAItem, FragranceNotes } from "./types";
 
 // Server-side API base — not exposed to browser
-const BASE = (process.env.API_BASE ?? "https://davidsklad.ru") + "/api/shop";
+const API_HOST = process.env.API_BASE ?? "https://davidsklad.ru";
+const BASE = API_HOST + "/api/shop";
 
 async function get<T>(path: string, opts?: RequestInit): Promise<T> {
   const res = await fetch(BASE + path, {
@@ -70,7 +71,13 @@ export async function fetchReviews(limit = 8, offerId?: string): Promise<{ revie
 }
 
 export async function fetchNews(limit = 12): Promise<{ posts: TelegramNewsPost[] }> {
-  return get<{ ok: boolean; posts: TelegramNewsPost[] }>(`/news?limit=${limit}`, { next: { revalidate: 300 } });
+  const res = await get<{ ok: boolean; posts: TelegramNewsPost[] }>(`/news?limit=${limit}`, { next: { revalidate: 300 } });
+  // Resolve relative photoUrls to absolute (photos are stored on the API server)
+  res.posts = res.posts.map(p => ({
+    ...p,
+    photoUrl: p.photoUrl?.startsWith("/") ? `${API_HOST}${p.photoUrl}` : p.photoUrl,
+  }));
+  return res;
 }
 
 export async function fetchBlog(params?: { page?: number; pageSize?: number; tag?: string }): Promise<{ posts: BlogPost[]; total: number }> {
@@ -106,4 +113,8 @@ export async function fetchAromaMesyatsa(): Promise<{ product: ShopProduct | nul
 // Sitemap helper — no cache, used only during build
 export async function fetchSitemapProducts(): Promise<{ products: { offerId: string; lastmod?: string }[] }> {
   return get("/sitemap-products", { cache: "no-store" });
+}
+
+export async function fetchAutoCategories(): Promise<import("./types").AutoCategory[]> {
+  return get<import("./types").AutoCategory[]>("/auto-categories", { next: { revalidate: 3600 } });
 }

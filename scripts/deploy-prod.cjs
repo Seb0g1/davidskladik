@@ -23,6 +23,7 @@ const withDedupe = process.argv.includes("--with-dedupe");
 const withRepairLinked = process.argv.includes("--repair-linked");
 const skipLocalChecks = process.argv.includes("--skip-local-checks");
 const skipPush = process.argv.includes("--skip-push");
+const updateNginx = process.argv.includes("--update-nginx");
 
 function run(cmd, opts = {}) {
   execSync(cmd, { cwd: root, stdio: "inherit", ...opts });
@@ -34,6 +35,10 @@ function ssh(remoteCmd) {
   );
 }
 
+function scp(localPath, remotePath) {
+  run(`scp -i "${sshKeyPath}" -o StrictHostKeyChecking=no "${localPath}" ${SSH_HOST}:"${remotePath}"`);
+}
+
 // ── 1. Local checks ───────────────────────────────────────────────────────────
 if (!skipLocalChecks) {
   console.log("\n▶ npm test...");
@@ -42,6 +47,8 @@ if (!skipLocalChecks) {
   run("npm run build");
   console.log("\n▶ npm run build (shop)...");
   run("npm run build", { cwd: path.join(root, "shop") });
+  console.log("\n▶ npm run build (shop-next)...");
+  run("npm run build", { cwd: path.join(root, "shop-next") });
 }
 
 // ── 2. Tag + push to GitHub ───────────────────────────────────────────────────
@@ -63,23 +70,42 @@ const serverCmd = [
   "echo '✓ git pull'",
   "npm ci --omit=dev 2>&1 | tail -5",
   "echo '✓ npm ci'",
+  "cd shop-next && npm ci --omit=dev 2>&1 | tail -3 && npm run build 2>&1 | tail -10 && cd ..",
+  "echo '✓ shop-next built'",
   "node node_modules/prisma/build/index.js generate 2>&1 | tail -3",
   "node node_modules/prisma/build/index.js migrate deploy 2>&1 | tail -5",
   "echo '✓ prisma'",
-  "pm2 reload ecosystem.config.cjs --only davidsklad-api,davidsklad-worker --update-env || pm2 start ecosystem.config.cjs --only davidsklad-api,davidsklad-worker --update-env",
+  "pm2 reload ecosystem.config.cjs --only davidsklad-api,davidsklad-worker,shop-next --update-env || pm2 start ecosystem.config.cjs --only davidsklad-api,davidsklad-worker,shop-next --update-env",
   "pm2 save",
   "echo '✓ pm2 reloaded'",
   "sleep 10",
   "pm2 list",
   "echo '=== api errors (last 15) ==='",
   "pm2 logs davidsklad-api --lines 15 --nostream --err 2>/dev/null || true",
+  "echo '=== shop-next errors (last 10) ==='",
+  "pm2 logs shop-next --lines 10 --nostream --err 2>/dev/null || true",
   "echo '=== post-deploy check ==='",
   "node scripts/prod-post-deploy-check.cjs",
 ].join(" && ");
 
 ssh(serverCmd);
 
-// ── 4. Optional extras ────────────────────────────────────────────────────────
+// ── 4. nginx config (opt-in via --update-nginx) ───────────────────────────────
+if (updateNginx) {
+  console.log("\n▶ Deploying nginx config for magicvibes.ru...");
+  const nginxConf = path.join(__dirname, "magicvibes_nginx.conf");
+  const remoteConf = "/etc/nginx/sites-available/magicvibes";
+  scp(nginxConf, remoteConf);
+  ssh([
+    `ln -sf ${remoteConf} /etc/nginx/sites-enabled/magicvibes`,
+    "nginx -t",
+    "systemctl reload nginx",
+    "echo '✓ nginx reloaded'",
+  ].join(" && "));
+  console.log("✓ nginx config deployed and reloaded");
+}
+
+// ── 5. Optional extras ────────────────────────────────────────────────────────
 if (withRepairLinked) {
   console.log("\n▶ repair-linked-warehouse-catalog...");
   ssh(`cd ${remoteRoot} && node scripts/repair-linked-warehouse-catalog.cjs --apply`);
@@ -96,3 +122,6 @@ if (withDedupe) {
 }
 
 console.log("\n✅ Deploy complete!");
+if (!updateNginx) {
+  console.log("   ℹ  nginx NOT updated — run with --update-nginx to deploy magicvibes_nginx.conf");
+}

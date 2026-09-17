@@ -1,8 +1,9 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { Minus, Plus, Trash2, ShoppingBag } from "lucide-react";
+import { Minus, Plus, Trash2, ShoppingBag, ArrowRight, Package } from "lucide-react";
 import { useCart } from "@/components/CartContext";
 
 const S = {
@@ -48,7 +49,7 @@ export default function CartPage() {
             return (
               <div key={item.product.id} style={{ display: "flex", gap: 16, padding: "16px", border: `1px solid ${S.border}`, borderRadius: 12, background: S.surface2, alignItems: "center" }}>
                 <div style={{ width: 72, height: 72, flexShrink: 0, borderRadius: 8, background: "radial-gradient(ellipse 85% 85% at center, #fff 0%, #ccc4b8 55%, #0E0D0B 88%)", overflow: "hidden" }}>
-                  {img && <img src={img} alt={item.product.name} style={{ width: "100%", height: "100%", objectFit: "contain", padding: 6, mixBlendMode: "multiply" }} />}
+                  {img && <Image src={img} alt={item.product.name} width={72} height={72} style={{ objectFit: "contain", padding: 6, mixBlendMode: "multiply" }} />}
                 </div>
 
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -74,18 +75,27 @@ export default function CartPage() {
         {/* Summary */}
         <div style={{ background: S.surface2, border: `1px solid ${S.border}`, borderRadius: 16, padding: "24px", height: "fit-content", position: "sticky", top: 80 }}>
           <h2 style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", fontWeight: 300, fontSize: 22, color: S.text, margin: "0 0 20px" }}>Итого</h2>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 14, color: S.muted, marginBottom: 10 }}>
-            <span>{totalItems} {totalItems === 1 ? "товар" : totalItems < 5 ? "товара" : "товаров"}</span>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: S.muted }}>
+              <span>Товары · {totalItems} шт.</span>
+              <span style={{ color: S.text, fontWeight: 500 }}>{totalRub.toLocaleString("ru-RU")} ₽</span>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: S.muted }}>
+              <span>Доставка Ozon</span>
+              <span style={{ color: "#4ade80", fontWeight: 600 }}>Бесплатно</span>
+            </div>
+          </div>
+          <div style={{ borderTop: `1px solid ${S.border}`, paddingTop: 16, marginBottom: 16, display: "flex", justifyContent: "space-between", fontSize: 18, fontWeight: 600, color: S.text }}>
+            <span>К оплате</span>
             <span>{totalRub.toLocaleString("ru-RU")} ₽</span>
           </div>
-          <div style={{ borderTop: `1px solid ${S.border}`, margin: "16px 0", paddingTop: 16, display: "flex", justifyContent: "space-between", fontSize: 18, fontWeight: 600, color: S.text }}>
-            <span>Сумма</span>
-            <span>{totalRub.toLocaleString("ru-RU")} ₽</span>
-          </div>
-          <button onClick={() => router.push("/checkout")} style={{ width: "100%", height: 48, background: "#f2efe6", color: "#14120f", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", cursor: "pointer", marginTop: 8 }}>
-            Оформить заказ
+          <button onClick={() => router.push("/checkout")} style={{ width: "100%", height: 48, background: "#f2efe6", color: "#14120f", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+            Оформить заказ <ArrowRight size={15} />
           </button>
-          <Link href="/catalog" style={{ display: "block", textAlign: "center", marginTop: 14, fontSize: 12, color: S.muted, textDecoration: "none" }}>← Продолжить покупки</Link>
+          <div style={{ marginTop: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 11, color: S.muted }}>
+            <Package size={11} />
+            <span>Доставка через Ozon · Оригинал</span>
+          </div>
         </div>
       </div>
     </div>

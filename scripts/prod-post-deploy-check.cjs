@@ -113,9 +113,23 @@ async function fetchUnlinkedGrouped(hdr) {
 async function main() {
   const apiOnline = pm2ProcessOnline("davidsklad-api");
   const workerOnline = pm2ProcessOnline("davidsklad-worker");
+  const shopNextOnline = pm2ProcessOnline("shop-next");
   if (apiOnline === false) fail("davidsklad-api is not online");
   if (workerOnline === false) fail("davidsklad-worker is not online");
+  if (shopNextOnline === false) fail("shop-next is not online");
   if (pm2ProcessOnline("davidsklad") === true) fail("legacy monolith davidsklad is still running");
+
+  // ── shop-next (magicvibes.ru) smoke check ─────────────────────────────────
+  let shopNextHomepage = { status: 0, elapsedMs: 0 };
+  if (shopNextOnline !== false) {
+    try {
+      shopNextHomepage = await timedRequest("GET", "/", null, { port: 3002 });
+      if (shopNextHomepage.status !== 200) fail(`shop-next homepage HTTP ${shopNextHomepage.status}`);
+      if (shopNextHomepage.elapsedMs > 10000) fail(`shop-next homepage slow: ${shopNextHomepage.elapsedMs}ms`);
+    } catch (e) {
+      fail(`shop-next homepage request failed: ${e.message}`);
+    }
+  }
 
   const loginPage = await timedRequest("GET", "/login.html");
   if (loginPage.status !== 200) fail(`login.html HTTP ${loginPage.status}`);
@@ -198,7 +212,8 @@ async function main() {
   }
 
   const report = {
-    pm2: { apiOnline, workerOnline },
+    pm2: { apiOnline, workerOnline, shopNextOnline },
+    shopNext: { status: shopNextHomepage.status, elapsedMs: shopNextHomepage.elapsedMs },
     loginPage: { status: loginPage.status, elapsedMs: loginPage.elapsedMs },
     apiLogin: { status: login.status, elapsedMs: login.elapsedMs },
     workerHealth: {

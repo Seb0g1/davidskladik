@@ -2,34 +2,32 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { fetchBrands } from "@/lib/api";
 import { breadcrumbJsonLd, SITE_URL, SITE_NAME } from "@/lib/seo";
+import BrandsSearch from "./BrandsSearch";
 
 export const revalidate = 3600;
 
 export const metadata: Metadata = {
   title: `Все бренды парфюмерии | ${SITE_NAME}`,
-  description: "Полный список брендов оригинальной парфюмерии в Magic Vibes: Chanel, Dior, Tom Ford, Byredo, Creed, Montale, Kilian и сотни других.",
+  description: "Полный список брендов оригинальной парфюмерии в Magic Vibes: Chanel, Dior, Tom Ford, Byredo, Creed, Montale, Kilian и сотни других. Оригинальные ароматы с доставкой по России.",
   alternates: { canonical: "/brands" },
   openGraph: { title: "Все бренды парфюмерии", url: `${SITE_URL}/brands` },
+  keywords: "бренды парфюмерии, марки духов, Chanel парфюм, Dior ароматы, Tom Ford духи, нишевые бренды парфюмерии",
+};
+
+const S = {
+  bg:     "#0E0D0B",
+  surface:"#161512",
+  border: "rgba(255,252,245,0.07)",
+  text:   "#F4EFE6",
+  muted:  "rgba(244,239,230,0.48)",
 };
 
 export default async function BrandsPage() {
   let brands: { name: string; count: number }[] = [];
   try { brands = await fetchBrands(); } catch {}
 
-  const grouped: Record<string, { name: string; count: number }[]> = {};
-  for (const b of brands) {
-    const key = b.name[0]?.toUpperCase() ?? "#";
-    const letter = /[А-ЯЁA-Z]/.test(key) ? key : "#";
-    (grouped[letter] ??= []).push(b);
-  }
-
-  const sorted = Object.entries(grouped).sort(([a], [b]) => {
-    const isRuA = /[А-ЯЁ]/.test(a), isRuB = /[А-ЯЁ]/.test(b);
-    const isLatA = /[A-Z]/.test(a), isLatB = /[A-Z]/.test(b);
-    if (isLatA && isRuB) return -1;
-    if (isRuA && isLatB) return 1;
-    return a.localeCompare(b, "ru");
-  });
+  const total = brands.length;
+  const totalItems = brands.reduce((s, b) => s + b.count, 0);
 
   const breadcrumb = breadcrumbJsonLd([
     { name: "Главная", url: "/" },
@@ -52,36 +50,22 @@ export default async function BrandsPage() {
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumb) }} />
       {itemListLd && <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(itemListLd) }} />}
 
-      <div style={{ maxWidth: 1200, margin: "0 auto", padding: "clamp(24px,3vw,48px) clamp(18px,4vw,56px)" }}>
-        <nav style={{ fontSize: 12, color: "rgba(245,244,240,0.45)", marginBottom: 24 }}>
-          <Link href="/" style={{ color: "rgba(245,244,240,0.45)", textDecoration: "none" }}>Главная</Link>
-          {" / "}<span style={{ color: "#f5f4f0" }}>Бренды</span>
-        </nav>
-
-        <h1 style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", fontWeight: 300, fontSize: "clamp(32px,5vw,56px)", color: "#f5f4f0", margin: "0 0 8px" }}>Все бренды</h1>
-        <p style={{ fontSize: 13, color: "rgba(245,244,240,0.4)", marginBottom: 40 }}>{brands.length} брендов в каталоге</p>
-
-        {/* Letter navigation */}
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 40, borderBottom: "1px solid rgba(255,255,255,0.07)", paddingBottom: 20 }}>
-          {sorted.map(([letter]) => (
-            <a key={letter} href={`#letter-${letter}`} style={{ padding: "4px 10px", fontSize: 13, color: "rgba(201,162,94,0.7)", textDecoration: "none", border: "1px solid rgba(201,162,94,0.2)", borderRadius: 4 }}>{letter}</a>
-          ))}
+      <div style={{ background: S.bg, minHeight: "100vh" }}>
+        {/* Header — server rendered for SEO */}
+        <div style={{ background: S.surface, borderBottom: `1px solid ${S.border}` }}>
+          <div style={{ maxWidth: 900, margin: "0 auto", padding: "clamp(24px,4vw,48px) clamp(16px,4vw,32px) 0" }}>
+            <nav style={{ fontSize: 12, color: S.muted, marginBottom: 20 }}>
+              <Link href="/" style={{ color: S.muted, textDecoration: "none" }}>Главная</Link>
+              {" / "}<span style={{ color: S.text }}>Бренды</span>
+            </nav>
+            <h1 style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", fontWeight: 400, fontSize: "clamp(28px,4vw,44px)", color: S.text, margin: "0 0 6px" }}>
+              Бренды парфюмерии
+            </h1>
+          </div>
         </div>
 
-        {/* Brands by letter */}
-        {sorted.map(([letter, list]) => (
-          <div key={letter} id={`letter-${letter}`} style={{ marginBottom: 40 }}>
-            <div style={{ fontSize: 11, letterSpacing: "0.24em", color: "rgba(201,162,94,0.6)", marginBottom: 16, fontWeight: 500 }}>{letter}</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(180px,1fr))", gap: 8 }}>
-              {list.map(b => (
-                <Link key={b.name} href={`/catalog?brand=${encodeURIComponent(b.name)}`} style={{ padding: "10px 14px", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 6, textDecoration: "none", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontSize: 13, color: "#f5f4f0" }}>{b.name}</span>
-                  {b.count > 0 && <span style={{ fontSize: 10, color: "rgba(245,244,240,0.3)" }}>{b.count}</span>}
-                </Link>
-              ))}
-            </div>
-          </div>
-        ))}
+        {/* Client search + grid */}
+        <BrandsSearch brands={brands} total={total} totalItems={totalItems} />
       </div>
     </>
   );

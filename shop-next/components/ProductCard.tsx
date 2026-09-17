@@ -1,9 +1,9 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
-import { Check } from "lucide-react";
+import Image from "next/image";
 import type { ShopProduct } from "@/lib/types";
-import { useCart } from "./CartContext";
+import AddToCartButton from "./ui/AddToCartButton";
 
 const PLACEHOLDER_BG = ["#141414", "#131313", "#151515", "#141313", "#131415"];
 const placeholder = (s: string) => PLACEHOLDER_BG[(s?.charCodeAt(0) ?? 0) % PLACEHOLDER_BG.length];
@@ -14,18 +14,9 @@ interface Props {
 }
 
 export default function ProductCard({ product, showBrand = true }: Props) {
-  const { add } = useCart();
-  const [added, setAdded] = useState(false);
   const [imgError, setImgError] = useState(false);
 
   const img = !imgError && product.images[0] ? product.images[0] : null;
-
-  function handleAdd(e: React.MouseEvent) {
-    e.preventDefault();
-    add(product, 1);
-    setAdded(true);
-    setTimeout(() => setAdded(false), 1600);
-  }
 
   const discount = product.oldPriceRub && product.oldPriceRub > product.priceRub
     ? Math.round((1 - product.priceRub / product.oldPriceRub) * 100)
@@ -36,7 +27,16 @@ export default function ProductCard({ product, showBrand = true }: Props) {
       {/* Image area */}
       <div style={{ position: "relative", paddingBottom: "100%", overflow: "hidden" }}>
         <div style={{ position: "absolute", inset: 0, background: img ? "radial-gradient(ellipse 85% 85% at 50% 46%, #ffffff 0%, #d5ccc0 50%, #0E0D0B 85%)" : placeholder(product.name) }}>
-          {img && <img src={img} alt={product.brand ? `${product.name} ${product.brand}` : product.name} loading="lazy" onError={() => setImgError(true)} style={{ width: "100%", height: "100%", objectFit: "contain", padding: 12, mixBlendMode: "multiply" }} />}
+          {img && (
+            <Image
+              src={img}
+              alt={product.brand ? `${product.name} ${product.brand}` : product.name}
+              fill
+              sizes="(max-width: 640px) 50vw, (max-width: 1200px) 25vw, 200px"
+              onError={() => setImgError(true)}
+              style={{ objectFit: "contain", padding: 12, mixBlendMode: "multiply" }}
+            />
+          )}
         </div>
 
         {/* Badges */}
@@ -60,9 +60,7 @@ export default function ProductCard({ product, showBrand = true }: Props) {
             {product.oldPriceRub && <span style={{ fontSize: 11, color: "rgba(245,244,240,0.3)", textDecoration: "line-through", marginLeft: 6 }}>{product.oldPriceRub.toLocaleString("ru-RU")} ₽</span>}
           </div>
           {product.inStock && (
-            <button onClick={handleAdd} className={`btn-cart${added ? " added" : ""}`}>
-              {added ? <><Check size={11} /> Добавлено</> : "В корзину"}
-            </button>
+            <AddToCartButton product={product} />
           )}
         </div>
       </div>

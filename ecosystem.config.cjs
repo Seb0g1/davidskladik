@@ -1,9 +1,10 @@
 /**
- * PM2 production config (16 GB RAM) — api + worker + health-watchdog.
+ * PM2 production config (16 GB RAM) — api + worker + health-watchdog + shop-next.
  *
- * Запуск: cd /var/www/davidsklad/davidskladik && pm2 start ecosystem.config.cjs --only davidsklad-api,davidsklad-worker,davidsklad-health-watchdog
+ * Запуск: cd /var/www/davidsklad/davidskladik && pm2 start ecosystem.config.cjs --only davidsklad-api,davidsklad-worker,davidsklad-health-watchdog,shop-next
  * REDIS_URL и секреты берутся из .env на сервере.
  */
+const path = require("path");
 const sharedStabilityEnv = {
   // glibc malloc grows up to 8 arenas per core (64 on this 8-core box), 64MB each;
   // Prisma's threaded engine pushes big JSONB rows through them and freed memory never
@@ -131,6 +132,25 @@ module.exports = {
       env: {
         NODE_ENV: "production",
         ...workerOnlyEnv,
+      },
+    },
+    {
+      name: "shop-next",
+      script: "node_modules/.bin/next",
+      args: "start -p 3002",
+      cwd: path.join(__dirname, "shop-next"),
+      instances: 1,
+      exec_mode: "fork",
+      autorestart: true,
+      watch: false,
+      max_memory_restart: "1024M",
+      kill_timeout: 10000,
+      env: {
+        NODE_ENV: "production",
+        PORT: "3002",
+        API_BASE: "https://davidsklad.ru",
+        NEXT_PUBLIC_API_BASE: "https://davidsklad.ru",
+        NEXT_PUBLIC_SITE_URL: "https://magicvibes.ru",
       },
     },
     {

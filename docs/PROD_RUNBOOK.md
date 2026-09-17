@@ -2,8 +2,9 @@
 
 ## Архитектура
 
-- **davidsklad-api** — только HTTP (порт 3000, nginx)
+- **davidsklad-api** — только HTTP (порт 3000, nginx → davidsklad.ru)
 - **davidsklad-worker** — фон: BullMQ, price-retry, maintenance (health: порт 3001)
+- **shop-next** — Next.js 15 SSR (порт 3002, nginx → magicvibes.ru)
 - **Redis** — очередь BullMQ (привязки идут api → Redis → worker)
 
 ## Быстрое восстановление (2 минуты)
@@ -23,6 +24,22 @@ node scripts/deploy-prod.cjs
 ```
 
 Перед деплоем локально: `npm test` + `npm run build`. После деплоя — блокирующий `prod-post-deploy-check.cjs` (exit 1 при сбое).
+
+## Первый деплой magicvibes.ru (one-time setup)
+
+```powershell
+node scripts/setup-magicvibes.cjs
+```
+
+Устанавливает зависимости shop-next, собирает Next.js, запускает PM2-процесс `shop-next` и разворачивает nginx-конфиг из `scripts/magicvibes_nginx.conf`.
+
+## Обновление nginx magicvibes.ru
+
+```powershell
+node scripts/deploy-prod.cjs --update-nginx
+```
+
+Копирует `scripts/magicvibes_nginx.conf` → `/etc/nginx/sites-available/magicvibes`, проверяет конфиг (`nginx -t`) и перезагружает nginx.
 
 ## Что НЕ включать на api
 

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import Image from "next/image";
 import { Quote, Star } from "lucide-react";
 import { fetchPopular, fetchAromaMesyatsa, fetchReviews, fetchNews, fetchBanners } from "@/lib/api";
 import { SITE_URL, SITE_NAME } from "@/lib/seo";
@@ -27,7 +28,6 @@ const STORE_SCHEMA = {
   "@type": "Store",
   name: SITE_NAME,
   url: SITE_URL,
-  image: `${SITE_URL}/og-image.jpg`,
   description: "Оригинальная парфюмерия мировых брендов с доставкой по России",
   priceRange: "₽₽",
   openingHours: "Mo-Su 00:00-24:00",
@@ -193,8 +193,8 @@ export default async function HomePage() {
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: "clamp(24px,4vw,56px)", alignItems: "center", background: "linear-gradient(135deg, rgba(20,16,8,0.7) 0%, rgba(14,13,11,0.6) 100%)", border: "1px solid rgba(201,162,94,0.2)", borderRadius: 4, padding: "clamp(28px,4vw,52px)" }}>
             <div style={{ display: "flex", justifyContent: "center" }}>
-              <div style={{ width: "clamp(180px,30vw,280px)", height: "clamp(180px,30vw,280px)", background: "#141210", borderRadius: 2, border: "1px solid rgba(201,162,94,0.1)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, boxShadow: "0 24px 64px rgba(0,0,0,0.6)" }}>
-                {aromaProduct.images[0] ? <img src={aromaProduct.images[0]} alt={aromaProduct.name} style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : <span style={{ fontSize: 48, color: "rgba(201,162,94,0.1)", fontStyle: "italic" }}>{(aromaProduct.brand || "?")[0]}</span>}
+              <div style={{ width: "clamp(180px,30vw,280px)", height: "clamp(180px,30vw,280px)", background: "#141210", borderRadius: 2, border: "1px solid rgba(201,162,94,0.1)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, boxShadow: "0 24px 64px rgba(0,0,0,0.6)", position: "relative" }}>
+                {aromaProduct.images[0] ? <Image src={aromaProduct.images[0]} alt={aromaProduct.name} fill sizes="280px" style={{ objectFit: "contain", padding: 20 }} /> : <span style={{ fontSize: 48, color: "rgba(201,162,94,0.1)", fontStyle: "italic" }}>{(aromaProduct.brand || "?")[0]}</span>}
               </div>
             </div>
             <div>
@@ -257,8 +257,8 @@ export default async function HomePage() {
             {newsList.map((post) => (
               <a key={post.id} href="https://t.me/magicvibes_ru" target="_blank" rel="noreferrer" style={{ borderRadius: 3, border: "1px solid rgba(255,255,255,0.07)", background: "#0e0e0e", overflow: "hidden", textDecoration: "none", display: "flex", flexDirection: "column" }}>
                 {post.photoUrl && (
-                  <div style={{ width: "100%", aspectRatio: "16/9", overflow: "hidden", background: "#141414" }}>
-                    <img src={post.photoUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} loading="lazy" />
+                  <div style={{ width: "100%", aspectRatio: "16/9", overflow: "hidden", background: "#141414", position: "relative" }}>
+                    <Image src={post.photoUrl} alt="" fill sizes="(max-width: 768px) 100vw, 400px" style={{ objectFit: "cover" }} />
                   </div>
                 )}
                 <div style={{ padding: "18px 18px 20px", flex: 1, display: "flex", flexDirection: "column", gap: 10 }}>

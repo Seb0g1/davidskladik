@@ -1,6 +1,10 @@
 import type { NextConfig } from "next";
+import path from "path";
 
 const nextConfig: NextConfig = {
+  reactStrictMode: true,
+  poweredByHeader: false,
+  outputFileTracingRoot: path.join(__dirname, "../"),
   images: {
     remotePatterns: [
       { protocol: "https", hostname: "**.ozon.ru" },
@@ -8,7 +12,14 @@ const nextConfig: NextConfig = {
       { protocol: "https", hostname: "**.yandex.net" },
       { protocol: "https", hostname: "**.yastatic.net" },
       { protocol: "https", hostname: "davidsklad.ru" },
+      { protocol: "https", hostname: "i.ytimg.com" },
     ],
+    formats: ["image/avif", "image/webp"],
+  },
+  async redirects() {
+    return [
+      { source: "/catalog/:slug", destination: "/catalog?category=:slug", permanent: false },
+    ];
   },
   async headers() {
     return [

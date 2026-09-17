@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import Image from "next/image";
 import { notFound } from "next/navigation";
 import { fetchBlogPost } from "@/lib/api";
 import { breadcrumbJsonLd, SITE_URL, SITE_NAME } from "@/lib/seo";
@@ -85,8 +86,12 @@ export default async function BlogPostPage({ params }: Props) {
         )}
 
         {post.coverUrl && (
-          <div style={{ borderRadius: 16, overflow: "hidden", marginBottom: 36, aspectRatio: "16/9" }}>
-            <img src={post.coverUrl} alt={post.title} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          <div style={{ borderRadius: 16, overflow: "hidden", marginBottom: 36, aspectRatio: "16/9", position: "relative" }}>
+            <Image src={post.coverUrl} alt={post.title} fill
+              sizes="(max-width: 768px) 100vw, 800px"
+              style={{ objectFit: "cover" }}
+              priority
+            />
           </div>
         )}
 

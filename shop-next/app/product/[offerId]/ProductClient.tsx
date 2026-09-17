@@ -1,10 +1,20 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect, useRef, Suspense } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
-import { ShoppingBag, Check, ChevronRight, Star, Shield, Truck, RefreshCw, Minus, Plus, Share2 } from "lucide-react";
+import Image from "next/image";
+import { useMutation } from "@tanstack/react-query";
+
+const BottleViewer = dynamic(() => import("@/components/BottleViewer"), { ssr: false });
+import {
+  ShoppingBag, Check, ChevronLeft, ChevronRight, Star, Shield, Truck, RefreshCw,
+  Minus, Plus, Share2, Link2, Users, X, Bell, MessageSquare, ThumbsUp, Send,
+} from "lucide-react";
 import { useCart } from "@/components/CartContext";
-import type { ShopProduct, ShopSettings, MarketplaceReview, FragranceNotes } from "@/lib/types";
-import ProductCard from "@/components/ProductCard";
+import { useAuth } from "@/components/AuthContext";
+import { stockAlert, postReview, uploadMedia } from "@/lib/client";
+import type { ShopProduct, ShopSettings, MarketplaceReview, FragranceNotes, ProductQAItem } from "@/lib/types";
+import type { ShopReview } from "@/lib/client";
 
 const S = {
   bg:      "#0E0D0B",
@@ -16,205 +26,887 @@ const S = {
   muted:   "rgba(244,239,230,0.48)",
   subtle:  "rgba(244,239,230,0.22)",
   accent:  "#C9A96E",
+  accent2: "#D9BF8F",
+  accent3: "#EDD9B0",
 };
 
-function StarRow({ rating, size = 14 }: { rating: number; size?: number }) {
+const PYRAMID_LAYERS = [
+  { key: "top",   label: "Верхние",  field: "topNotes"    as const, color: "#f0dfa0", rgb: "240,223,160", widthPct: 38 },
+  { key: "heart", label: "Сердце",   field: "middleNotes" as const, color: "#c9a25e", rgb: "201,162,94",  widthPct: 62 },
+  { key: "base",  label: "База",     field: "baseNotes"   as const, color: "#8c7251", rgb: "140,114,81",  widthPct: 88 },
+];
+
+function FragrancePyramid({ notes }: { notes: FragranceNotes }) {
+  const [hovered, setHovered] = useState<string | null>(null);
+  const activeLayers = PYRAMID_LAYERS.filter(l => (notes[l.field] as string[]).length > 0);
+
   return (
-    <div style={{ display: "flex", gap: 2 }}>
-      {[1, 2, 3, 4, 5].map(i => (
-        <Star key={i} size={size} fill={i <= Math.round(rating) ? S.accent : "none"} stroke={S.accent} strokeWidth={1.5} />
-      ))}
+    <div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 0, alignItems: "center" }}>
+        {activeLayers.map((layer, i) => {
+          const items = notes[layer.field] as string[];
+          const isFirst = i === 0;
+          const isLast = i === activeLayers.length - 1;
+          const isHov = hovered === layer.key;
+          return (
+            <div
+              key={layer.key}
+              style={{
+                width: `${layer.widthPct}%`, minWidth: 100, position: "relative",
+                clipPath: isFirst && activeLayers.length > 1
+                  ? "polygon(6% 0%, 94% 0%, 100% 100%, 0% 100%)"
+                  : isLast && activeLayers.length > 1
+                  ? "polygon(0% 0%, 100% 0%, 94% 100%, 6% 100%)"
+                  : undefined,
+              }}
+              onMouseEnter={() => setHovered(layer.key)}
+              onMouseLeave={() => setHovered(null)}
+            >
+              <div style={{
+                background: isHov ? `rgba(${layer.rgb},0.15)` : `rgba(${layer.rgb},0.07)`,
+                borderTop: isFirst ? `1px solid rgba(${layer.rgb},0.35)` : "none",
+                borderLeft: `1px solid rgba(${layer.rgb},0.25)`,
+                borderRight: `1px solid rgba(${layer.rgb},0.25)`,
+                borderBottom: isLast ? `1px solid rgba(${layer.rgb},0.35)` : `1px solid rgba(${layer.rgb},0.12)`,
+                padding: isFirst ? "12px 14px 10px" : isLast ? "10px 14px 14px" : "10px 14px",
+                transition: "background 0.2s",
+              }}>
+                <div style={{ fontSize: 9, letterSpacing: "0.2em", textTransform: "uppercase", color: `rgba(${layer.rgb},0.9)`, fontWeight: 700, marginBottom: 7, textAlign: "center" }}>
+                  {layer.label}
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 6px", justifyContent: "center" }}>
+                  {items.map(note => (
+                    <span key={note} style={{
+                      fontSize: 11,
+                      color: isHov ? `rgba(${layer.rgb},0.95)` : "rgba(242,237,230,0.65)",
+                      background: `rgba(${layer.rgb},0.06)`,
+                      border: `1px solid rgba(${layer.rgb},${isHov ? "0.35" : "0.18"})`,
+                      borderRadius: 3, padding: "2px 8px", whiteSpace: "nowrap",
+                      transition: "color 0.15s, border-color 0.15s",
+                    }}>{note}</span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {notes.accords && notes.accords.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(242,237,230,0.3)", fontWeight: 600, marginBottom: 8, textAlign: "center" }}>Аккорды</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center" }}>
+            {notes.accords.slice(0, 6).map(accord => (
+              <span key={accord} style={{ fontSize: 11, color: "#c9a25e", background: "rgba(201,162,94,0.07)", border: "1px solid rgba(201,162,94,0.2)", borderRadius: 12, padding: "4px 12px" }}>{accord}</span>
+            ))}
+          </div>
+        </div>
+      )}
+      {(notes.gender || (notes.seasons && notes.seasons.length > 0)) && (
+        <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center" }}>
+          {notes.gender && notes.gender !== "unisex" && (
+            <span style={{ fontSize: 10, color: "rgba(242,237,230,0.35)", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+              {notes.gender === "male" ? "♂ Мужской" : "♀ Женский"}
+            </span>
+          )}
+          {notes.seasons?.map(s => {
+            const M: Record<string, string> = { spring: "Весна 🌸", summer: "Лето ☀️", fall: "Осень 🍂", winter: "Зима ❄️" };
+            return M[s] ? <span key={s} style={{ fontSize: 10, color: "rgba(242,237,230,0.35)" }}>{M[s]}</span> : null;
+          })}
+        </div>
+      )}
     </div>
   );
+}
+
+function baseViewerCount(offerId: string, rating?: number | null): number {
+  let h = 0;
+  for (let i = 0; i < offerId.length; i++) h = (h * 31 + offerId.charCodeAt(i)) >>> 0;
+  if ((rating ?? 0) >= 4.5) return (h % 5) + 3;
+  if ((rating ?? 0) >= 4) return (h % 3) + 2;
+  return (h % 2) + 1;
 }
 
 interface Props {
   product: ShopProduct;
   settings: ShopSettings | null;
-  initialReviews: MarketplaceReview[];
+  initialMpReviews: MarketplaceReview[];
   initialAvgRating?: number;
   initialReviewCount?: number;
+  initialSiteReviews: ShopReview[];
   fragranceNotes: FragranceNotes | null;
   relatedProducts: ShopProduct[];
+  qaItems: ProductQAItem[];
 }
 
-export default function ProductClient({ product, settings, initialReviews, initialAvgRating, initialReviewCount, fragranceNotes, relatedProducts }: Props) {
+export default function ProductClient({
+  product, settings, initialMpReviews, initialAvgRating, initialReviewCount,
+  initialSiteReviews, fragranceNotes, relatedProducts, qaItems,
+}: Props) {
   const { add } = useCart();
+  const { customer, token, updateProfile } = useAuth();
   const [qty, setQty] = useState(1);
-  const [added, setAdded] = useState(false);
   const [activeImg, setActiveImg] = useState(0);
-  const [imgErrors, setImgErrors] = useState(new Set<number>());
-  const [copied, setCopied] = useState(false);
+  const [view3d, setView3d] = useState(false);
+  const [added, setAdded] = useState(false);
+  const [cartPopup, setCartPopup] = useState(false);
+  const [imgErrors, setImgErrors] = useState<Set<number>>(new Set());
+  const [viewers, setViewers] = useState(0);
+  const [alertEmail, setAlertEmail] = useState("");
+  const [alertSent, setAlertSent] = useState(false);
+  const [shareCopied, setShareCopied] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const shareRef = useRef<HTMLDivElement>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
+  const [reviewText, setReviewText] = useState("");
+  const [reviewRating, setReviewRating] = useState(5);
+  const [reviewHover, setReviewHover] = useState(0);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [reviewSent, setReviewSent] = useState(false);
+  const [namePromptOpen, setNamePromptOpen] = useState(false);
+  const [nameInput, setNameInput] = useState("");
+  const [nameSaving, setNameSaving] = useState(false);
+  const [nameError, setNameError] = useState("");
+  const [reviewPhotoUrl, setReviewPhotoUrl] = useState("");
+  const [reviewPhotoUploading, setReviewPhotoUploading] = useState(false);
+  const [reviewPhotoDragOver, setReviewPhotoDragOver] = useState(false);
+  const reviewPhotoInputRef = useRef<HTMLInputElement>(null);
+  const [qaOpen, setQaOpen] = useState<Set<string>>(new Set());
+
+  const mpReviews = initialMpReviews;
+  const mpAvgRating = initialAvgRating ?? 0;
+  const mpReviewCount = initialReviewCount ?? 0;
+  const productReviews = initialSiteReviews;
+  const relatedItems = relatedProducts.slice(0, 3);
+
+  const discount = product.oldPriceRub ? Math.round((1 - product.priceRub / product.oldPriceRub) * 100) : 0;
   const validImages = product.images.filter((_, i) => !imgErrors.has(i));
-  const activeValidImg = validImages[activeImg] ?? validImages[0] ?? null;
-
+  const activeValidImg = validImages[activeImg] || null;
   const freeDelivery = settings?.freeDeliveryFrom && product.priceRub >= settings.freeDeliveryFrom;
 
+  // Viewers counter
+  useEffect(() => {
+    const base = baseViewerCount(product.offerId, product.rating);
+    setViewers(base);
+    function scheduleNext(current: number) {
+      const delay = 30_000 + Math.random() * 60_000;
+      return setTimeout(() => {
+        const delta = Math.random() < 0.5 ? 1 : -1;
+        const next = Math.max(1, current + delta);
+        setViewers(next);
+        timerRef.current = scheduleNext(next);
+      }, delay);
+    }
+    timerRef.current = scheduleNext(base);
+    return () => clearTimeout(timerRef.current);
+  }, [product.offerId, product.rating]);
+
+  // Share popup close on outside click
+  useEffect(() => {
+    if (!shareOpen) return;
+    const fn = (e: MouseEvent) => {
+      if (shareRef.current && !shareRef.current.contains(e.target as Node)) setShareOpen(false);
+    };
+    document.addEventListener("mousedown", fn);
+    return () => document.removeEventListener("mousedown", fn);
+  }, [shareOpen]);
+
+  const alertMutation = useMutation({
+    mutationFn: () => stockAlert(product.offerId, alertEmail),
+    onSuccess: () => setAlertSent(true),
+  });
+
+  const reviewMutation = useMutation({
+    mutationFn: () => postReview({
+      offerId: product.offerId,
+      productName: product.name,
+      productImg: product.images[0],
+      rating: reviewRating,
+      text: reviewText,
+      photoUrl: reviewPhotoUrl || undefined,
+    }, token!),
+    onSuccess: () => { setReviewSent(true); setReviewOpen(false); setReviewPhotoUrl(""); },
+  });
+
+  async function handleReviewPhotoFile(file: File) {
+    if (!file) return;
+    setReviewPhotoUploading(true);
+    try {
+      const res = await uploadMedia(file);
+      if (res.ok) setReviewPhotoUrl(res.url);
+    } catch { /* best-effort */ }
+    setReviewPhotoUploading(false);
+  }
+
   function handleAdd() {
+    if (!product.inStock) return;
     add(product, qty);
     setAdded(true);
+    setCartPopup(true);
     setTimeout(() => setAdded(false), 2000);
   }
 
-  function handleShare() {
-    navigator.clipboard.writeText(window.location.href).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+  function copyShareLink() {
+    const url = typeof window !== "undefined" ? window.location.href : "";
+    navigator.clipboard.writeText(url).then(() => {
+      setShareCopied(true);
+      setTimeout(() => setShareCopied(false), 2000);
+    });
   }
 
-  const reviews = initialReviews;
-  const avgRating = initialAvgRating ?? product.rating ?? 0;
-  const reviewCount = initialReviewCount ?? product.reviewCount ?? 0;
+  const pageUrl = typeof window !== "undefined" ? window.location.href : "";
+  const shareText = `${product.name} — ${product.priceRub.toLocaleString("ru-RU")} ₽`;
 
   return (
-    <div style={{ background: S.surface, borderRadius: 24, overflow: "hidden", border: `1px solid ${S.border}` }}>
-      <style>{`@media(min-width:768px){.product-layout{grid-template-columns:1fr 1fr!important;}}`}</style>
-      <div className="product-layout" style={{ display: "grid", gridTemplateColumns: "1fr" }}>
+    <div style={{ background: S.bg, minHeight: "100vh" }}>
+      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "clamp(20px,3vw,48px) clamp(16px,4vw,32px)" }}>
 
-        {/* Images */}
-        <div style={{ background: S.surface2, padding: "clamp(24px,4vw,48px)", display: "flex", flexDirection: "column", gap: 16, borderRight: `1px solid ${S.border}` }}>
-          <div style={{ aspectRatio: "1", borderRadius: 18, overflow: "hidden", background: "radial-gradient(ellipse 82% 82% at 50% 46%, #ffffff 0%, #d8cfc4 52%, #0E0D0B 84%)", display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid ${S.border}`, position: "relative" }}>
-            {activeValidImg ? (
-              <>
-                <img src={activeValidImg} alt={`${product.name} ${product.brand} купить`} style={{ width: "100%", height: "100%", objectFit: "contain", padding: 8, mixBlendMode: "multiply" }} onError={() => setImgErrors(s => new Set(s).add(activeImg))} />
-                <div style={{ position: "absolute", bottom: 16, right: 18, zIndex: 3, display: "flex", alignItems: "center", gap: 5, pointerEvents: "none", opacity: 0.28, mixBlendMode: "multiply" }}>
-                  <img src="/favicon.svg" alt="" width={16} height={16} />
-                  <span style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", fontWeight: 600, fontSize: 14, color: "#6b5a3e" }}>Magic Vibes</span>
-                </div>
-              </>
-            ) : <span style={{ fontSize: 80, color: S.subtle, opacity: 0.2 }}>{product.brand?.[0] ?? "?"}</span>}
-          </div>
-
-          {validImages.length > 1 && (
-            <div style={{ display: "flex", gap: 8, overflowX: "auto" }}>
-              {validImages.map((img, i) => (
-                <button key={i} onClick={() => setActiveImg(i)} style={{ width: 60, height: 60, flexShrink: 0, borderRadius: 10, border: `1px solid ${i === activeImg ? S.accent : S.border}`, background: "radial-gradient(ellipse 85% 85% at center, #fff 0%, #ccc4b8 55%, #0E0D0B 88%)", overflow: "hidden", cursor: "pointer", padding: 0 }}>
-                  <img src={img} alt={`${product.name} фото ${i + 1}`} style={{ width: "100%", height: "100%", objectFit: "contain", padding: 4, mixBlendMode: "multiply" }} onError={() => setImgErrors(s => new Set(s).add(i))} />
-                </button>
-              ))}
-            </div>
+        {/* Breadcrumb */}
+        <nav style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: S.muted, marginBottom: 24, flexWrap: "wrap" }}>
+          <Link href="/" style={{ color: S.muted, textDecoration: "none", transition: "color 0.15s" }}
+            onMouseEnter={e => (e.currentTarget.style.color = S.text)}
+            onMouseLeave={e => (e.currentTarget.style.color = S.muted)}>Главная</Link>
+          <ChevronRight size={11} style={{ color: S.subtle }} />
+          <Link href="/catalog" style={{ color: S.muted, textDecoration: "none", transition: "color 0.15s" }}
+            onMouseEnter={e => (e.currentTarget.style.color = S.text)}
+            onMouseLeave={e => (e.currentTarget.style.color = S.muted)}>Каталог</Link>
+          {product.brand && (
+            <>
+              <ChevronRight size={11} style={{ color: S.subtle }} />
+              <Link href={`/catalog?brand=${encodeURIComponent(product.brand)}`} style={{ color: S.muted, textDecoration: "none", transition: "color 0.15s" }}
+                onMouseEnter={e => (e.currentTarget.style.color = S.text)}
+                onMouseLeave={e => (e.currentTarget.style.color = S.muted)}>{product.brand}</Link>
+            </>
           )}
-        </div>
+          <ChevronRight size={11} style={{ color: S.subtle }} />
+          <span style={{ color: S.text, maxWidth: 240, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{product.name}</span>
+        </nav>
 
-        {/* Info */}
-        <div style={{ padding: "clamp(24px,4vw,48px)", display: "flex", flexDirection: "column", gap: 20 }}>
-          <div>
-            <div style={{ fontSize: 10, letterSpacing: "0.28em", textTransform: "uppercase", color: S.accent, marginBottom: 8 }}>{product.brand}</div>
-            <h1 style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", fontWeight: 300, fontSize: "clamp(24px,4vw,40px)", color: S.text, margin: "0 0 8px", lineHeight: 1.1 }}>{product.name}</h1>
-            {product.volume && <div style={{ fontSize: 13, color: S.muted }}>{product.volume}</div>}
-          </div>
+        <div itemScope itemType="https://schema.org/Product" style={{ background: S.surface, borderRadius: 24, overflow: "hidden", border: `1px solid ${S.border}` }}>
+          <meta itemProp="sku" content={product.offerId} />
+          {product.images[0] && <link itemProp="image" href={product.images[0]} />}
+          <style>{`@media(min-width:768px){.product-layout{grid-template-columns:1fr 1fr!important;}}`}</style>
+          <div className="product-layout" style={{ display: "grid", gridTemplateColumns: "1fr" }}>
 
-          {/* Rating */}
-          {avgRating > 0 && reviewCount > 0 && (
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <StarRow rating={avgRating} />
-              <span style={{ fontSize: 13, color: S.muted }}>{avgRating.toFixed(1)} · {reviewCount} отзывов</span>
-            </div>
-          )}
-
-          {/* Price */}
-          <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
-            <span style={{ fontSize: "clamp(28px,4vw,40px)", fontWeight: 600, color: S.text, letterSpacing: "-0.02em" }}>{product.priceRub.toLocaleString("ru-RU")} ₽</span>
-            {product.oldPriceRub && <span style={{ fontSize: 18, color: S.subtle, textDecoration: "line-through" }}>{product.oldPriceRub.toLocaleString("ru-RU")} ₽</span>}
-          </div>
-
-          {/* Stock status */}
-          <div style={{ fontSize: 13, color: product.inStock ? "#86efac" : "#fca5a5", display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{ width: 6, height: 6, borderRadius: "50%", background: product.inStock ? "#86efac" : "#fca5a5", display: "inline-block" }} />
-            {product.inStock ? `В наличии${product.stockQty > 0 && product.stockQty <= 5 ? ` · осталось ${product.stockQty} шт.` : ""}` : "Нет в наличии"}
-          </div>
-
-          {/* Qty + Add to cart */}
-          {product.inStock && (
-            <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-              <div style={{ display: "flex", alignItems: "center", border: `1px solid ${S.borderMd}`, borderRadius: 10, overflow: "hidden" }}>
-                <button onClick={() => setQty(q => Math.max(1, q - 1))} style={{ width: 40, height: 48, background: "transparent", border: "none", color: S.muted, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Minus size={14} /></button>
-                <span style={{ minWidth: 32, textAlign: "center", fontSize: 15, color: S.text }}>{qty}</span>
-                <button onClick={() => setQty(q => Math.min(product.stockQty || 99, q + 1))} style={{ width: 40, height: 48, background: "transparent", border: "none", color: S.muted, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Plus size={14} /></button>
+            {/* Images column */}
+            <div style={{ background: S.surface2, padding: "clamp(24px,4vw,48px)", display: "flex", flexDirection: "column", gap: 16, borderRight: `1px solid ${S.border}` }}>
+              {/* View mode toggle */}
+              <div style={{ display: "flex", gap: 6, alignSelf: "flex-end" }}>
+                {([false, true] as const).map(is3d => (
+                  <button key={String(is3d)} onClick={() => setView3d(is3d)} style={{
+                    padding: "5px 14px", borderRadius: 20, border: "none", cursor: "pointer",
+                    fontSize: 11, fontWeight: 600, letterSpacing: "0.08em",
+                    background: view3d === is3d ? S.accent : "rgba(255,255,255,0.07)",
+                    color: view3d === is3d ? "#09090b" : S.muted,
+                    transition: "all 0.2s",
+                  }}>
+                    {is3d ? "3D" : "Фото"}
+                  </button>
+                ))}
               </div>
-              <button onClick={handleAdd} style={{ flex: 1, minWidth: 180, height: 48, background: added ? "rgba(100,180,100,0.15)" : "#f2efe6", color: added ? "#86efac" : "#14120f", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, transition: "all 0.3s" }}>
-                {added ? <><Check size={16} /> Добавлено</> : <><ShoppingBag size={16} /> В корзину · {(product.priceRub * qty).toLocaleString("ru-RU")} ₽</>}
-              </button>
-            </div>
-          )}
 
-          {/* Delivery info */}
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "16px", borderRadius: 12, border: `1px solid ${S.border}`, background: "rgba(255,255,255,0.02)" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: S.muted }}>
-              <Truck size={15} style={{ color: S.accent, flexShrink: 0 }} />
-              <span>{freeDelivery ? "Бесплатная доставка" : `Доставка ${(settings?.deliveryPriceRub ?? 350).toLocaleString("ru-RU")} ₽`} · {settings?.deliveryDaysMin ?? 1}–{settings?.deliveryDays ?? 5} дней</span>
+              <div style={{
+                aspectRatio: "1", borderRadius: 18, overflow: "hidden",
+                background: `radial-gradient(ellipse 82% 82% at 50% 46%, #ffffff 0%, #d8cfc4 52%, ${S.bg} 84%)`,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                border: `1px solid ${view3d ? S.accent + "44" : S.border}`, position: "relative",
+                transition: "border-color 0.3s",
+              }}>
+                {view3d ? (
+                  <Suspense fallback={
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, color: S.muted }}>
+                      <div style={{ width: 32, height: 32, border: `2px solid ${S.accent}`, borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+                      <span style={{ fontSize: 12 }}>Загружаю 3D…</span>
+                    </div>
+                  }>
+                    <BottleViewer tint={S.accent} />
+                  </Suspense>
+                ) : activeValidImg
+                  ? <>
+                      <Image src={activeValidImg} alt={product.brand ? `${product.name} ${product.brand} купить` : `${product.name} купить`}
+                        fill
+                        sizes="(max-width: 1024px) 90vw, 50vw"
+                        itemProp="image"
+                        style={{ objectFit: "contain", padding: 8, mixBlendMode: "multiply" }}
+                        onError={() => setImgErrors(s => new Set(s).add(activeImg))} />
+                      <div style={{ position: "absolute", bottom: 16, right: 18, zIndex: 3, display: "flex", alignItems: "center", gap: 5, pointerEvents: "none", userSelect: "none", opacity: 0.28, mixBlendMode: "multiply" }}>
+                        <Image src="/favicon.svg" alt="" width={16} height={16} style={{ display: "block" }} />
+                        <span style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontStyle: "italic", fontWeight: 600, fontSize: 14, letterSpacing: "0.05em", color: "#6b5a3e", lineHeight: 1 }}>Magic Vibes</span>
+                      </div>
+                    </>
+                  : <span style={{ fontSize: 80, fontWeight: 800, color: S.subtle, opacity: 0.2 }}>{product.brand?.[0] ?? "?"}</span>
+                }
+              </div>
+
+              {view3d && (
+                <p style={{ fontSize: 11, color: S.muted, textAlign: "center", marginTop: -8 }}>
+                  Наведите мышь для поворота · Кликните для вращения
+                </p>
+              )}
+
+              {!view3d && validImages.length > 1 && (
+                <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 4 }}>
+                  {product.images.map((img, i) => !imgErrors.has(i) && (
+                    <button key={i} onClick={() => setActiveImg(i)} style={{
+                      flexShrink: 0, width: 56, height: 56, borderRadius: 12, overflow: "hidden",
+                      background: `radial-gradient(ellipse 85% 85% at center, #ffffff 0%, #ccc4b8 55%, ${S.bg} 88%)`,
+                      border: `2px solid ${i === activeImg ? S.accent : S.border}`,
+                      cursor: "pointer", transition: "border-color 0.15s ease",
+                      boxShadow: i === activeImg ? "0 0 16px rgba(201,169,110,0.25)" : "none",
+                      position: "relative",
+                    }}>
+                      <Image src={img} alt={`${product.name} фото ${i + 1}`} fill
+                        sizes="56px"
+                        style={{ objectFit: "contain", padding: 4, mixBlendMode: "multiply" }}
+                        onError={() => setImgErrors(s => new Set(s).add(i))} />
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: S.muted }}>
-              <Shield size={15} style={{ color: S.accent, flexShrink: 0 }} />
-              <span>Гарантия оригинала</span>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: S.muted }}>
-              <RefreshCw size={15} style={{ color: S.accent, flexShrink: 0 }} />
-              <span>Возврат в течение 14 дней</span>
+
+            {/* Info column */}
+            <div style={{ padding: "clamp(24px,4vw,48px)", display: "flex", flexDirection: "column" }}>
+              <Link href="/catalog" style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, color: S.muted, textDecoration: "none", marginBottom: 20, transition: "color 0.15s ease", width: "fit-content" }}
+                onMouseEnter={e => (e.currentTarget.style.color = S.accent3)}
+                onMouseLeave={e => (e.currentTarget.style.color = S.muted)}>
+                <ChevronLeft size={14} /> Назад к каталогу
+              </Link>
+
+              {product.brand && (
+                <div itemProp="brand" itemScope itemType="https://schema.org/Brand" style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: S.accent3, marginBottom: 10 }}>
+                  <span itemProp="name">{product.brand}</span>
+                </div>
+              )}
+              <h1 itemProp="name" style={{ fontSize: "clamp(20px,2.5vw,28px)", fontWeight: 700, color: S.text, letterSpacing: "-0.035em", lineHeight: 1.2, marginBottom: 12 }}>
+                {product.name}
+              </h1>
+
+              {product.volume && (
+                <span style={{ display: "inline-block", fontSize: 12, color: S.muted, background: "rgba(255,255,255,0.06)", border: `1px solid ${S.border}`, borderRadius: 8, padding: "4px 12px", marginBottom: 16, alignSelf: "flex-start" }}>
+                  {product.volume}
+                </span>
+              )}
+
+              {(mpAvgRating > 0 || (product.rating && product.rating > 0)) && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
+                  <div style={{ display: "flex" }}>
+                    {[1,2,3,4,5].map(s => {
+                      const r = mpAvgRating || product.rating!;
+                      return <Star key={s} size={14} style={{ color: s <= Math.round(r) ? "#C9A96E" : S.subtle, fill: s <= Math.round(r) ? "#C9A96E" : S.subtle }} />;
+                    })}
+                  </div>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: S.accent3 }}>{(mpAvgRating || product.rating!).toFixed(1)}</span>
+                  <span style={{ fontSize: 12, color: S.muted }}>
+                    {mpReviewCount > 0 ? `${mpReviewCount} на Ozon` : `${product.reviewCount} отзывов`}
+                  </span>
+                </div>
+              )}
+
+              {/* Price */}
+              <div itemProp="offers" itemScope itemType="https://schema.org/Offer">
+                <meta itemProp="priceCurrency" content="RUB" />
+                <meta itemProp="price" content={String(product.priceRub)} />
+                <link itemProp="availability" href={product.inStock ? "https://schema.org/InStock" : "https://schema.org/OutOfStock"} />
+                {product.description && <meta itemProp="description" content={product.description.slice(0, 300)} />}
+              </div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 8 }}>
+                <span style={{ fontSize: "clamp(28px,3vw,40px)", fontWeight: 700, color: S.text, letterSpacing: "-0.04em" }}>
+                  {product.priceRub.toLocaleString("ru-RU")} ₽
+                </span>
+                {product.oldPriceRub && (
+                  <>
+                    <span style={{ fontSize: 16, color: S.subtle, textDecoration: "line-through" }}>{product.oldPriceRub.toLocaleString("ru-RU")} ₽</span>
+                    <span style={{ fontSize: 12, background: "rgba(239,68,68,0.12)", color: "#f87171", fontWeight: 700, padding: "3px 8px", borderRadius: 8 }}>−{discount}%</span>
+                  </>
+                )}
+              </div>
+
+              {/* Stock + viewers */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 24 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 500, color: product.inStock ? "#4ade80" : S.muted }}>
+                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: product.inStock ? "#4ade80" : S.subtle, boxShadow: product.inStock ? "0 0 8px #4ade80" : "none" }} />
+                  {product.inStock ? `В наличии${product.stockQty > 0 ? ` · ${product.stockQty} шт.` : ""}` : "Нет в наличии"}
+                </div>
+                {product.inStock && viewers > 1 && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: S.muted }}>
+                    <Users size={11} style={{ color: S.accent3 }} />
+                    <span>{viewers} смотрят</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Stock alert (out of stock) */}
+              {!product.inStock && (
+                <div style={{ marginBottom: 24 }}>
+                  {alertSent ? (
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", background: "rgba(74,222,128,0.08)", border: "1px solid rgba(74,222,128,0.2)", borderRadius: 14, fontSize: 13, color: "#4ade80" }}>
+                      <Check size={15} /> Вы в списке ожидания! Уведомим на {alertEmail}
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <input
+                        type="email" value={alertEmail} onChange={e => setAlertEmail(e.target.value)}
+                        placeholder="Ваш email для уведомления"
+                        style={{ flex: 1, padding: "12px 14px", background: S.surface2, border: `1.5px solid ${S.border}`, borderRadius: 12, fontSize: 13, color: S.text, fontFamily: "inherit", outline: "none" }}
+                        onFocus={e => (e.target.style.borderColor = "rgba(201,169,110,0.4)")}
+                        onBlur={e => (e.target.style.borderColor = S.border)}
+                        onKeyDown={e => { if (e.key === "Enter" && alertEmail) alertMutation.mutate(); }}
+                      />
+                      <button
+                        onClick={() => alertMutation.mutate()}
+                        disabled={!alertEmail || alertMutation.isPending}
+                        style={{ display: "flex", alignItems: "center", gap: 6, padding: "12px 18px", background: "rgba(201,169,110,0.1)", border: "1px solid rgba(201,169,110,0.25)", borderRadius: 12, fontSize: 13, fontWeight: 600, color: S.accent3, cursor: "pointer", flexShrink: 0, fontFamily: "inherit", opacity: (!alertEmail || alertMutation.isPending) ? 0.5 : 1 }}
+                      >
+                        <Bell size={14} /> Уведомить
+                      </button>
+                    </div>
+                  )}
+                  {alertMutation.error && <div style={{ fontSize: 12, color: "#f87171", marginTop: 6 }}>{(alertMutation.error as Error).message}</div>}
+                </div>
+              )}
+
+              {/* Qty + Add to cart */}
+              {product.inStock && (
+                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
+                  <div style={{ display: "flex", alignItems: "center", background: S.surface2, borderRadius: 14, border: `1px solid ${S.border}`, overflow: "hidden" }}>
+                    <button onClick={() => setQty(q => Math.max(1, q - 1))} style={{ padding: "12px 16px", background: "none", border: "none", color: S.muted, cursor: "pointer", transition: "color 0.15s" }}
+                      onMouseEnter={e => (e.currentTarget.style.color = S.text)}
+                      onMouseLeave={e => (e.currentTarget.style.color = S.muted)}><Minus size={15} /></button>
+                    <span style={{ padding: "12px 16px", fontSize: 15, fontWeight: 700, color: S.text, minWidth: 48, textAlign: "center" }}>{qty}</span>
+                    <button onClick={() => setQty(q => Math.min(product.stockQty || 99, q + 1))} style={{ padding: "12px 16px", background: "none", border: "none", color: S.muted, cursor: "pointer", transition: "color 0.15s" }}
+                      onMouseEnter={e => (e.currentTarget.style.color = S.text)}
+                      onMouseLeave={e => (e.currentTarget.style.color = S.muted)}><Plus size={15} /></button>
+                  </div>
+                  <button onClick={handleAdd} className={added ? "" : "btn-primary"} style={{
+                    flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+                    padding: "14px 20px", borderRadius: 16, fontSize: 14, fontWeight: 700, border: "none", cursor: "pointer",
+                    ...(added ? { background: "rgba(74,222,128,0.15)", color: "#4ade80", border: "1px solid rgba(74,222,128,0.25)", boxShadow: "none" } : {}),
+                    transition: "all 0.2s ease",
+                  }}>
+                    {added ? <><Check size={18} /> Добавлено!</> : <><ShoppingBag size={18} /> В корзину</>}
+                  </button>
+                </div>
+              )}
+
+              {/* Share popup */}
+              <div ref={shareRef} style={{ position: "relative", marginBottom: 20, display: "inline-block" }}>
+                <button
+                  onClick={() => setShareOpen(o => !o)}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 8,
+                    padding: "9px 18px", borderRadius: 2, cursor: "pointer",
+                    background: shareOpen ? "rgba(201,162,94,0.07)" : "transparent",
+                    border: `1px solid ${shareOpen ? "rgba(201,162,94,0.5)" : S.border}`,
+                    color: shareOpen ? S.accent3 : S.muted, fontSize: 12, fontFamily: "inherit",
+                    letterSpacing: "0.12em", textTransform: "uppercase",
+                    transition: "border-color 0.25s, color 0.25s, background 0.25s",
+                  }}
+                  onMouseEnter={e => { if (!shareOpen) { e.currentTarget.style.borderColor = "rgba(201,162,94,0.45)"; e.currentTarget.style.color = S.text; } }}
+                  onMouseLeave={e => { if (!shareOpen) { e.currentTarget.style.borderColor = S.border; e.currentTarget.style.color = S.muted; } }}
+                >
+                  <Share2 size={13} strokeWidth={1.6} /> Поделиться
+                </button>
+                {shareOpen && (
+                  <div style={{ position: "absolute", bottom: "calc(100% + 10px)", left: 0, zIndex: 60, background: "#1a1815", borderRadius: 3, border: `1px solid ${S.borderMd}`, boxShadow: "0 20px 60px rgba(0,0,0,0.8)", padding: "6px", minWidth: 220 }}>
+                    {[
+                      { label: "Telegram",       href: `https://t.me/share/url?url=${encodeURIComponent(pageUrl)}&text=${encodeURIComponent(shareText)}`, icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="12" fill="#26A5E4"/><path d="M5.5 11.8l11-4.3c.5-.2.9.1.8.6l-1.9 8.8c-.1.6-.5.7-1 .5l-2.8-2-1.3 1.3c-.1.1-.3.2-.5.2l.2-2.8 5.1-4.6c.2-.2 0-.3-.3-.1l-6.4 4-2.7-.9c-.6-.2-.6-.6.1-.9z" fill="white"/></svg> },
+                      { label: "ВКонтакте",      href: `https://vk.com/share.php?url=${encodeURIComponent(pageUrl)}&title=${encodeURIComponent(shareText)}`, icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" rx="4" fill="#4C75A3"/><path d="M12.7 16.5h1.2s.3 0 .5-.3l.2-.5s.2-1.5.9-1.7c.6-.2 1.4 1.4 2.2 2 .6.4 1.1.3 1.1.3l2.2-.1s1.2-.1.6-1c0 0-.4-.8-2.1-2.3-1.7-1.5-1.5-1.3.6-4 1.3-1.8 1.8-2.9 1.7-3.3-.1-.4-1.1-.3-1.1-.3h-2.5s-.2 0-.3.1l-.2.3s-.5 1.4-1.2 2.6c-1.4 2.4-2 2.5-2.2 2.4-.5-.4-.4-1.4-.4-2.2 0-2.4.4-3.4-.7-3.6-.4-.1-.6-.1-1.6-.1-1.3 0-2.3.1-2.9.4-.4.2-.7.6-.5.6.2 0 .8.1 1 .5.3.5.3 1.7.3 1.7s.2 2.8-.4 3.2c-.4.3-1-.4-2.2-2.5-.7-1.2-1.2-2.5-1.2-2.5l-.2-.3s-.1-.1-.3-.2H4.6s-.3 0-.4.1c-.1.2 0 .5 0 .5s2 4.7 4.2 7.1c2 2.2 4.3 2 4.3 2z" fill="white"/></svg> },
+                      { label: "WhatsApp",       href: `https://wa.me/?text=${encodeURIComponent(shareText + " " + pageUrl)}`, icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="12" fill="#25D366"/><path d="M17 14.4c-.3-.1-1.7-.9-2-.9-.2 0-.4.1-.6.4l-.7.8c-.1.2-.3.2-.6.1-1.4-.6-2.4-1.5-3.1-2.7-.2-.4-.1-.6.1-.8l.5-.6c.1-.2.2-.4.1-.6-.1-.2-.6-1.6-.9-2.2-.3-.5-.5-.5-.7-.5-.5 0-.9.1-1.2.4-1 1.1-.9 2.5.3 4 1.2 1.5 3.4 3 5.9 3.7.4.1.8.2 1.2.2.7 0 1.4-.2 1.9-.7.4-.4.5-.9.4-1.3-.1-.2-.3-.3-.6-.3z" fill="white"/></svg> },
+                      { label: "Одноклассники", href: `https://connect.ok.ru/offer?url=${encodeURIComponent(pageUrl)}&title=${encodeURIComponent(shareText)}`, icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="12" fill="#ED812B"/><path d="M12 6.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5zm0 3.5a1 1 0 110-2 1 1 0 010 2zm4 3.2c-.7.5-1.5.8-2.4.9l2.1 2.1c.3.3.3.8 0 1.1-.3.3-.8.3-1.1 0L12 14.8l-2.6 2.5c-.3.3-.8.3-1.1 0-.3-.3-.3-.8 0-1.1l2.1-2.1c-.9-.1-1.7-.4-2.4-.9-.4-.3-.5-.8-.2-1.2.3-.4.8-.5 1.2-.2.9.6 2 1 3.1 1s2.1-.3 3.1-1c.4-.3.9-.2 1.2.2.2.4.1.9-.3 1.2z" fill="white"/></svg> },
+                    ].map(({ label, href, icon }) => (
+                      <a key={label} href={href} target="_blank" rel="noopener noreferrer" onClick={() => setShareOpen(false)}
+                        style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", borderRadius: 2, textDecoration: "none", color: S.text, fontSize: 13, transition: "background 0.15s" }}
+                        onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.05)")}
+                        onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                      >{icon}{label}</a>
+                    ))}
+                    <div style={{ height: 1, background: S.border, margin: "4px 0" }} />
+                    <button onClick={() => { copyShareLink(); setShareOpen(false); }}
+                      style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", borderRadius: 2, background: "transparent", border: "none", cursor: "pointer", color: shareCopied ? "#4ade80" : S.text, fontSize: 13, width: "100%", textAlign: "left", transition: "background 0.15s, color 0.2s", fontFamily: "inherit" }}
+                      onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.05)")}
+                      onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                    >
+                      <Link2 size={18} style={{ color: shareCopied ? "#4ade80" : S.muted, flexShrink: 0, transition: "color 0.2s" }} />
+                      {shareCopied ? "Ссылка скопирована!" : "Копировать ссылку"}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Perks */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 24 }}>
+                {[
+                  { icon: Truck,     label: freeDelivery ? "Бесплатная доставка" : `Доставка ${(settings?.deliveryPriceRub ?? 350).toLocaleString("ru-RU")} ₽` },
+                  { icon: Shield,    label: "100% оригинал" },
+                  { icon: RefreshCw, label: "Возврат 14 дней" },
+                ].map(({ icon: Icon, label }) => (
+                  <div key={label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, background: S.surface2, borderRadius: 14, padding: "12px 8px", textAlign: "center", border: `1px solid ${S.border}` }}>
+                    <Icon size={16} style={{ color: S.accent3 }} />
+                    <span style={{ fontSize: 10.5, color: S.muted, fontWeight: 500, lineHeight: 1.3 }}>{label}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Description */}
+              {product.description && (
+                <div style={{ borderTop: `1px solid ${S.border}`, paddingTop: 20 }}>
+                  <h3 style={{ fontSize: 13, fontWeight: 600, color: S.text, marginBottom: 10 }}>Описание</h3>
+                  <p itemProp="description" style={{ fontSize: 13, color: S.muted, lineHeight: 1.7 }}>{product.description}</p>
+                </div>
+              )}
+
+              {/* Fragrance pyramid */}
+              {fragranceNotes && (fragranceNotes.topNotes.length > 0 || fragranceNotes.middleNotes.length > 0 || fragranceNotes.baseNotes.length > 0) && (
+                <div style={{ borderTop: `1px solid ${S.border}`, paddingTop: 20 }}>
+                  <h3 style={{ fontSize: 13, fontWeight: 600, color: S.text, marginBottom: 16 }}>Пирамида аромата</h3>
+                  <FragrancePyramid notes={fragranceNotes} />
+                </div>
+              )}
             </div>
           </div>
+        </div>
 
-          {/* Description */}
-          {product.description && (
+        {/* Reviews */}
+        <div style={{ marginTop: 32 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, gap: 12, flexWrap: "wrap" }}>
             <div>
-              <div style={{ fontSize: 11, letterSpacing: "0.2em", textTransform: "uppercase", color: S.accent, marginBottom: 10 }}>Описание</div>
-              <p style={{ fontSize: 14, color: S.muted, lineHeight: 1.8, margin: 0 }}>{product.description.slice(0, 400)}</p>
+              <h2 style={{ fontSize: 16, fontWeight: 700, color: S.text, letterSpacing: "-0.03em", marginBottom: 4 }}>
+                Отзывы{(productReviews.length + mpReviews.length) > 0 && (
+                  <span style={{ fontSize: 13, color: S.muted, fontWeight: 400 }}> ({productReviews.length + mpReviews.length})</span>
+                )}
+              </h2>
+              {mpAvgRating > 0 && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                  <div style={{ display: "flex", gap: 2 }}>
+                    {[1,2,3,4,5].map(s => <Star key={s} size={14} style={{ color: s <= Math.round(mpAvgRating) ? "#C9A96E" : S.subtle, fill: s <= Math.round(mpAvgRating) ? "#C9A96E" : S.subtle }} />)}
+                  </div>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: S.accent3 }}>{mpAvgRating.toFixed(1)}</span>
+                  <span style={{ fontSize: 12, color: S.muted }}>{mpReviewCount} {mpReviewCount === 1 ? "отзыв" : mpReviewCount >= 2 && mpReviewCount <= 4 ? "отзыва" : "отзывов"} на Ozon</span>
+                </div>
+              )}
+              {productReviews.length > 0 && mpAvgRating === 0 && (() => {
+                const avg = productReviews.reduce((s, r) => s + r.rating, 0) / productReviews.length;
+                return (
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    {[1,2,3,4,5].map(s => <Star key={s} size={13} style={{ color: s <= Math.round(avg) ? "#fbbf24" : S.subtle, fill: s <= Math.round(avg) ? "#fbbf24" : S.subtle }} />)}
+                    <span style={{ fontSize: 12, color: S.muted }}>{avg.toFixed(1)} средняя оценка</span>
+                  </div>
+                );
+              })()}
+            </div>
+            {customer && !reviewSent && (
+              <button onClick={() => {
+                if (customer.firstName) { setNamePromptOpen(false); setReviewOpen(o => !o); }
+                else { setReviewOpen(false); setNamePromptOpen(o => !o); }
+              }} style={{
+                display: "flex", alignItems: "center", gap: 6, padding: "9px 16px",
+                background: (reviewOpen || namePromptOpen) ? "rgba(201,169,110,0.12)" : "rgba(255,255,255,0.06)",
+                border: `1px solid ${(reviewOpen || namePromptOpen) ? "rgba(201,169,110,0.3)" : S.border}`,
+                borderRadius: 12, fontSize: 13, fontWeight: 500, color: (reviewOpen || namePromptOpen) ? S.accent3 : S.muted,
+                cursor: "pointer", transition: "all 0.15s", fontFamily: "inherit",
+              }}>
+                <MessageSquare size={14} /> Написать отзыв
+              </button>
+            )}
+          </div>
+
+          {/* Name prompt */}
+          {namePromptOpen && customer && !reviewSent && (
+            <div style={{ background: S.surface, borderRadius: 18, padding: 24, border: `1px solid rgba(201,169,110,0.2)`, marginBottom: 20 }}>
+              <div style={{ fontSize: 13, color: S.accent3, fontWeight: 600, marginBottom: 6 }}>Укажите ваше имя</div>
+              <div style={{ fontSize: 12, color: S.muted, marginBottom: 16, lineHeight: 1.6 }}>
+                Для публикации отзыва нужно имя — оно будет показано вместо email.
+              </div>
+              <input type="text" value={nameInput} onChange={e => { setNameInput(e.target.value); setNameError(""); }} placeholder="Ваше имя (например: Анна)" autoFocus maxLength={50}
+                style={{ width: "100%", padding: "12px 14px", background: S.surface2, border: `1.5px solid ${nameError ? "#f87171" : S.border}`, borderRadius: 12, fontSize: 13, color: S.text, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }}
+                onFocus={e => (e.target.style.borderColor = "rgba(201,169,110,0.4)")}
+                onBlur={e => (e.target.style.borderColor = nameError ? "#f87171" : S.border)}
+                onKeyDown={async e => {
+                  if (e.key === "Enter") {
+                    const n = nameInput.trim();
+                    if (!n) { setNameError("Введите имя"); return; }
+                    setNameSaving(true);
+                    try { await updateProfile({ firstName: n }); setNamePromptOpen(false); setReviewOpen(true); }
+                    catch { setNameError("Не удалось сохранить имя"); }
+                    finally { setNameSaving(false); }
+                  }
+                }}
+              />
+              {nameError && <div style={{ fontSize: 12, color: "#f87171", marginTop: 6 }}>{nameError}</div>}
+              <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
+                <button disabled={!nameInput.trim() || nameSaving}
+                  onClick={async () => {
+                    const n = nameInput.trim();
+                    if (!n) { setNameError("Введите имя"); return; }
+                    setNameSaving(true);
+                    try { await updateProfile({ firstName: n }); setNamePromptOpen(false); setReviewOpen(true); }
+                    catch { setNameError("Не удалось сохранить имя"); }
+                    finally { setNameSaving(false); }
+                  }}
+                  style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "11px 20px", background: S.accent, color: "#0E0D0B", border: "none", borderRadius: 12, fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: (!nameInput.trim() || nameSaving) ? 0.5 : 1, fontFamily: "inherit" }}>
+                  {nameSaving ? "Сохранение…" : "Сохранить и продолжить"}
+                </button>
+                <button onClick={() => { setNamePromptOpen(false); setNameError(""); }} style={{ padding: "11px 14px", background: "none", border: `1px solid ${S.border}`, borderRadius: 12, color: S.muted, cursor: "pointer" }}>
+                  <X size={14} />
+                </button>
+              </div>
             </div>
           )}
 
-          {/* Fragrance notes */}
-          {fragranceNotes && (fragranceNotes.topNotes.length > 0 || fragranceNotes.middleNotes.length > 0 || fragranceNotes.baseNotes.length > 0) && (
-            <div>
-              <div style={{ fontSize: 11, letterSpacing: "0.2em", textTransform: "uppercase", color: S.accent, marginBottom: 12 }}>Пирамида аромата</div>
-              {[
-                { label: "Верхние ноты", notes: fragranceNotes.topNotes },
-                { label: "Сердце", notes: fragranceNotes.middleNotes },
-                { label: "База", notes: fragranceNotes.baseNotes },
-              ].filter(g => g.notes.length > 0).map(g => (
-                <div key={g.label} style={{ marginBottom: 10 }}>
-                  <div style={{ fontSize: 11, color: S.subtle, marginBottom: 4 }}>{g.label}</div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                    {g.notes.map(n => <span key={n} style={{ fontSize: 12, padding: "4px 10px", borderRadius: 20, border: `1px solid ${S.border}`, color: S.muted }}>{n}</span>)}
+          {/* Write review form */}
+          {reviewOpen && customer && !reviewSent && (
+            <div style={{ background: S.surface, borderRadius: 18, padding: 24, border: `1px solid ${S.border}`, marginBottom: 20 }}>
+              {customer.firstName && (
+                <div style={{ fontSize: 12, color: S.muted, marginBottom: 16, padding: "8px 12px", background: "rgba(201,169,110,0.06)", borderRadius: 8, border: "1px solid rgba(201,169,110,0.1)" }}>
+                  Отзыв от имени <span style={{ color: S.accent3, fontWeight: 600 }}>{customer.firstName}{customer.lastName ? ` ${customer.lastName}` : ""}</span>
+                </div>
+              )}
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 12, color: S.muted, marginBottom: 8 }}>Ваша оценка</div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  {[1,2,3,4,5].map(s => (
+                    <button key={s} type="button" onClick={() => setReviewRating(s)} onMouseEnter={() => setReviewHover(s)} onMouseLeave={() => setReviewHover(0)}
+                      style={{ background: "none", border: "none", cursor: "pointer", padding: 2 }}>
+                      <Star size={24} style={{ color: s <= (reviewHover || reviewRating) ? "#fbbf24" : S.subtle, fill: s <= (reviewHover || reviewRating) ? "#fbbf24" : S.subtle, transition: "color 0.1s" }} />
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <textarea value={reviewText} onChange={e => setReviewText(e.target.value)} placeholder="Расскажите о товаре — запах, стойкость, упаковка..." rows={4}
+                style={{ width: "100%", padding: "12px 14px", background: S.surface2, border: `1.5px solid ${S.border}`, borderRadius: 12, fontSize: 13, color: S.text, fontFamily: "inherit", outline: "none", resize: "vertical", lineHeight: 1.6, boxSizing: "border-box" }}
+                onFocus={e => (e.target.style.borderColor = "rgba(201,169,110,0.4)")}
+                onBlur={e => (e.target.style.borderColor = S.border)}
+              />
+              <input ref={reviewPhotoInputRef} type="file" accept="image/jpeg,image/png,image/webp" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; if (f) handleReviewPhotoFile(f); }} />
+              <div style={{ marginTop: 10 }}>
+                {reviewPhotoUrl ? (
+                  <div style={{ position: "relative", display: "inline-block" }}>
+                    <Image src={reviewPhotoUrl} alt="" width={72} height={72} style={{ objectFit: "cover", borderRadius: 10, border: `1px solid ${S.border}`, display: "block" }} />
+                    <button onClick={() => setReviewPhotoUrl("")} style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, background: "#2a2a2a", border: "none", borderRadius: "50%", color: S.muted, fontSize: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
                   </div>
+                ) : (
+                  <div
+                    onClick={() => reviewPhotoInputRef.current?.click()}
+                    onDragOver={e => { e.preventDefault(); setReviewPhotoDragOver(true); }}
+                    onDragLeave={() => setReviewPhotoDragOver(false)}
+                    onDrop={e => { e.preventDefault(); setReviewPhotoDragOver(false); const f = e.dataTransfer.files[0]; if (f) handleReviewPhotoFile(f); }}
+                    style={{ padding: "10px 14px", borderRadius: 10, cursor: "pointer", display: "flex", alignItems: "center", gap: 8, border: `1px dashed ${reviewPhotoDragOver ? "rgba(201,169,110,0.6)" : S.border}`, background: reviewPhotoDragOver ? "rgba(201,169,110,0.04)" : "transparent", transition: "border-color 0.2s", color: S.muted, fontSize: 12 }}
+                  >
+                    {reviewPhotoUploading ? <span>Загрузка…</span> : <><span>📷</span><span>Добавить фото</span></>}
+                  </div>
+                )}
+              </div>
+              {reviewMutation.error && <div style={{ fontSize: 12, color: "#f87171", marginTop: 6 }}>{(reviewMutation.error as Error).message}</div>}
+              <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+                <button onClick={() => reviewMutation.mutate()} disabled={reviewText.trim().length < 10 || reviewMutation.isPending}
+                  style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "11px 20px", background: S.accent, color: "#0E0D0B", border: "none", borderRadius: 12, fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: (reviewText.trim().length < 10 || reviewMutation.isPending) ? 0.5 : 1, fontFamily: "inherit" }}>
+                  <Send size={14} /> {reviewMutation.isPending ? "Отправка…" : "Опубликовать отзыв"}
+                </button>
+                <button onClick={() => setReviewOpen(false)} style={{ padding: "11px 14px", background: "none", border: `1px solid ${S.border}`, borderRadius: 12, color: S.muted, cursor: "pointer" }}>
+                  <X size={14} />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {reviewSent && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", background: "rgba(74,222,128,0.08)", border: "1px solid rgba(74,222,128,0.2)", borderRadius: 14, fontSize: 13, color: "#4ade80", marginBottom: 20 }}>
+              <Check size={15} /> Спасибо! Ваш отзыв отправлен на проверку.
+            </div>
+          )}
+
+          {productReviews.length === 0 && mpReviews.length === 0 && !reviewOpen && (
+            <div style={{ textAlign: "center", padding: "40px 24px", background: S.surface, borderRadius: 18, border: `1px solid ${S.border}` }}>
+              <ThumbsUp size={32} style={{ color: S.subtle, marginBottom: 12 }} />
+              <p style={{ fontSize: 14, color: S.muted, marginBottom: 6 }}>Отзывов пока нет</p>
+              <p style={{ fontSize: 12, color: S.subtle }}>
+                {customer ? "Будьте первым — поделитесь впечатлениями!" : "Войдите, чтобы оставить отзыв"}
+              </p>
+            </div>
+          )}
+
+          {/* Ozon marketplace reviews */}
+          {mpReviews.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: S.muted }}>С маркетплейса</span>
+                <div style={{ flex: 1, height: 1, background: S.border }} />
+                <span style={{ fontSize: 10, color: S.subtle }}>Ozon</span>
+              </div>
+              {mpReviews.map(r => (
+                <div key={r.id} style={{ background: S.surface, borderRadius: 16, padding: "16px 20px", border: `1px solid ${S.border}` }}>
+                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <div style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(0,143,255,0.1)", border: "1px solid rgba(0,143,255,0.2)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: "#60b3ff" }}>{(r.author || "П")[0].toUpperCase()}</span>
+                      </div>
+                      <div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: S.text }}>{r.author}</span>
+                          <span style={{ fontSize: 9, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "#60b3ff", background: "rgba(0,143,255,0.1)", borderRadius: 4, padding: "1px 5px" }}>Ozon</span>
+                        </div>
+                        <div style={{ fontSize: 11, color: S.muted }}>{new Date(r.createdAt).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })}</div>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 2, flexShrink: 0 }}>
+                      {[1,2,3,4,5].map(s => <Star key={s} size={12} style={{ color: s <= r.rating ? "#C9A96E" : S.subtle, fill: s <= r.rating ? "#C9A96E" : S.subtle }} />)}
+                    </div>
+                  </div>
+                  <p style={{ fontSize: 13, color: S.muted, lineHeight: 1.65, margin: 0 }}>{r.text}</p>
+                  {r.advantages && (
+                    <div style={{ marginTop: 8, display: "flex", gap: 6, alignItems: "flex-start" }}>
+                      <span style={{ fontSize: 10, color: "#4ade80", fontWeight: 600, flexShrink: 0, marginTop: 1 }}>+</span>
+                      <span style={{ fontSize: 12, color: "rgba(74,222,128,0.8)", lineHeight: 1.5 }}>{r.advantages}</span>
+                    </div>
+                  )}
+                  {r.disadvantages && (
+                    <div style={{ marginTop: 4, display: "flex", gap: 6, alignItems: "flex-start" }}>
+                      <span style={{ fontSize: 10, color: "#f87171", fontWeight: 600, flexShrink: 0, marginTop: 1 }}>−</span>
+                      <span style={{ fontSize: 12, color: "rgba(248,113,113,0.8)", lineHeight: 1.5 }}>{r.disadvantages}</span>
+                    </div>
+                  )}
+                  {r.photos && r.photos.length > 0 && (
+                    <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+                      {r.photos.slice(0, 4).map((url, i) => (
+                        <Image key={i} src={url} alt="" width={64} height={64} style={{ objectFit: "cover", borderRadius: 8, border: `1px solid ${S.border}` }} />
+                      ))}
+                    </div>
+                  )}
+                  {r.videoUrl && (
+                    <video controls preload="metadata" src={r.videoUrl} style={{ width: "100%", maxHeight: 320, borderRadius: 10, marginTop: 10, background: "#000", border: `1px solid ${S.border}` }} />
+                  )}
                 </div>
               ))}
             </div>
           )}
 
-          {/* Share */}
-          <button onClick={handleShare} style={{ alignSelf: "flex-start", display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: S.muted, background: "none", border: "none", cursor: "pointer", padding: 0 }}>
-            {copied ? <><Check size={13} /> Ссылка скопирована</> : <><Share2 size={13} /> Поделиться</>}
-          </button>
+          {/* Site reviews */}
+          {productReviews.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {mpReviews.length > 0 && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: S.muted }}>На нашем сайте</span>
+                  <div style={{ flex: 1, height: 1, background: S.border }} />
+                </div>
+              )}
+              {productReviews.map(r => (
+                <div key={r.id} style={{ background: S.surface, borderRadius: 16, padding: "16px 20px", border: `1px solid ${S.border}` }}>
+                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <div style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(201,169,110,0.12)", border: `1px solid rgba(201,169,110,0.2)`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: S.accent3 }}>{(r.author || "П")[0].toUpperCase()}</span>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: S.text }}>{r.author || "Покупатель"}</div>
+                        <div style={{ fontSize: 11, color: S.muted }}>{new Date(r.createdAt).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })}</div>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 2, flexShrink: 0 }}>
+                      {[1,2,3,4,5].map(s => <Star key={s} size={12} style={{ color: s <= r.rating ? "#fbbf24" : S.subtle, fill: s <= r.rating ? "#fbbf24" : S.subtle }} />)}
+                    </div>
+                  </div>
+                  <p style={{ fontSize: 13, color: S.muted, lineHeight: 1.65, margin: 0 }}>{r.text}</p>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
+
+        {/* Q&A */}
+        {qaItems.length > 0 && (
+          <div style={{ marginTop: 32 }}>
+            <h2 style={{ fontSize: 16, fontWeight: 700, color: S.text, letterSpacing: "-0.03em", marginBottom: 16 }}>
+              Вопросы о товаре <span style={{ fontSize: 13, color: S.muted, fontWeight: 400 }}>({qaItems.length})</span>
+            </h2>
+            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              {qaItems.map(item => {
+                const isOpen = qaOpen.has(item.id);
+                return (
+                  <div key={item.id} style={{ background: S.surface, borderRadius: 14, border: `1px solid ${isOpen ? "rgba(201,169,110,0.2)" : S.border}`, overflow: "hidden", transition: "border-color 0.2s" }}>
+                    <button
+                      onClick={() => setQaOpen(prev => { const next = new Set(prev); if (isOpen) next.delete(item.id); else next.add(item.id); return next; })}
+                      style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 18px", background: "none", border: "none", cursor: "pointer", textAlign: "left", fontFamily: "inherit" }}
+                    >
+                      <span style={{ fontSize: 13, color: S.text, fontWeight: 500, lineHeight: 1.5, flex: 1 }}>{item.question}</span>
+                      <span style={{ color: S.accent, fontSize: 18, lineHeight: 1, flexShrink: 0, transform: isOpen ? "rotate(45deg)" : "none", transition: "transform 0.2s" }}>+</span>
+                    </button>
+                    {isOpen && (
+                      <div style={{ padding: "0 18px 16px", borderTop: `1px solid ${S.border}` }}>
+                        <div style={{ display: "flex", gap: 8, paddingTop: 12, alignItems: "flex-start" }}>
+                          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", color: "#60b3ff", background: "rgba(0,143,255,0.1)", borderRadius: 4, padding: "3px 7px", flexShrink: 0, marginTop: 1 }}>Ozon</span>
+                          <p style={{ fontSize: 13, color: S.muted, lineHeight: 1.65, margin: 0 }}>{item.answer}</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Related products */}
+        {relatedItems.length > 0 && (
+          <div style={{ marginTop: 32 }}>
+            <h2 style={{ fontSize: 16, fontWeight: 700, color: S.text, letterSpacing: "-0.03em", marginBottom: 16 }}>С этим берут</h2>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
+              {relatedItems.map(p => (
+                <Link key={p.offerId} href={`/product/${encodeURIComponent(p.offerId)}`}
+                  style={{ display: "flex", gap: 12, padding: 14, textDecoration: "none", background: S.surface, borderRadius: 16, border: `1px solid ${S.border}`, transition: "border-color 0.15s" }}
+                  onMouseEnter={e => (e.currentTarget.style.borderColor = "rgba(201,169,110,0.25)")}
+                  onMouseLeave={e => (e.currentTarget.style.borderColor = S.border)}>
+                  <div style={{ width: 52, height: 52, borderRadius: 10, overflow: "hidden", flexShrink: 0, background: S.surface2, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {p.images[0]
+                      ? <Image src={p.images[0]} alt={p.name} width={52} height={52} style={{ objectFit: "contain", padding: 4 }} />
+                      : <span style={{ fontSize: 18, fontWeight: 700, color: S.subtle }}>{p.brand?.[0] ?? "?"}</span>}
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 11, color: S.accent3, fontWeight: 600, marginBottom: 2 }}>{p.brand}</div>
+                    <div style={{ fontSize: 12, color: S.text, lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{p.name}</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: S.text, marginTop: 4 }}>{p.priceRub.toLocaleString("ru-RU")} ₽</div>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Reviews section */}
-      {reviews.length > 0 && (
-        <div style={{ padding: "clamp(32px,4vw,56px)", borderTop: `1px solid ${S.border}` }}>
-          <h2 style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", fontSize: 28, fontWeight: 300, color: S.text, margin: "0 0 24px" }}>Отзывы покупателей</h2>
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            {reviews.slice(0, 6).map(r => (
-              <div key={r.id} style={{ padding: "18px 20px", borderRadius: 12, border: `1px solid ${S.border}`, background: "rgba(255,255,255,0.02)" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-                  <StarRow rating={r.rating} size={12} />
-                  <span style={{ fontSize: 11, color: S.subtle }}>{r.author ?? "Покупатель"} · {r.source === "ozon" ? "Ozon" : "Яндекс Маркет"}</span>
-                </div>
-                {r.text && <p style={{ fontSize: 13, color: S.muted, lineHeight: 1.7, margin: 0 }}>{r.text}</p>}
+      {/* Add-to-cart popup */}
+      {cartPopup && (
+        <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 100, padding: "16px clamp(16px,4vw,32px)", background: S.surface, borderTop: `1px solid ${S.border}`, boxShadow: "0 -8px 32px rgba(0,0,0,0.4)", animation: "slideUp 0.25s ease" }}>
+          <div style={{ maxWidth: 680, margin: "0 auto", display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
+              <div style={{ width: 40, height: 40, borderRadius: 10, overflow: "hidden", flexShrink: 0, background: S.surface2 }}>
+                {product.images[0] && <Image src={product.images[0]} alt="" width={40} height={40} style={{ objectFit: "contain", padding: 3 }} />}
               </div>
-            ))}
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 12, color: "#4ade80", fontWeight: 600 }}>Добавлено в корзину</div>
+                <div style={{ fontSize: 12, color: S.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{product.name}</div>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 10, flexShrink: 0 }}>
+              <Link href="/cart" className="btn-primary" style={{ fontSize: 13, padding: "10px 18px" }}>
+                Перейти в корзину →
+              </Link>
+              <button onClick={() => setCartPopup(false)} style={{ padding: "10px 12px", background: "none", border: `1px solid ${S.border}`, borderRadius: 12, color: S.muted, cursor: "pointer" }}>
+                <X size={14} />
+              </button>
+            </div>
           </div>
-        </div>
-      )}
-
-      {/* Related products */}
-      {relatedProducts.length > 0 && (
-        <div style={{ padding: "clamp(32px,4vw,56px)", borderTop: `1px solid ${S.border}` }}>
-          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 20 }}>
-            <h2 style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", fontSize: 24, fontWeight: 300, color: S.text, margin: 0 }}>Похожие ароматы</h2>
-            <Link href={`/catalog?brand=${encodeURIComponent(product.brand)}`} style={{ fontSize: 11, letterSpacing: "0.16em", textTransform: "uppercase", color: S.muted, textDecoration: "none" }}>Все {product.brand} →</Link>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(180px,1fr))", gap: 12 }}>
-            {relatedProducts.map(p => <ProductCard key={p.id} product={p} />)}
-          </div>
+          {relatedItems.length > 0 && (
+            <div style={{ maxWidth: 680, margin: "12px auto 0", display: "flex", gap: 8, overflowX: "auto" }}>
+              <span style={{ fontSize: 11, color: S.muted, flexShrink: 0, lineHeight: "32px" }}>С этим берут:</span>
+              {relatedItems.map(p => (
+                <Link key={p.offerId} href={`/product/${encodeURIComponent(p.offerId)}`} onClick={() => setCartPopup(false)}
+                  style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: S.surface2, borderRadius: 10, border: `1px solid ${S.border}`, textDecoration: "none", fontSize: 12, color: S.text, whiteSpace: "nowrap" }}>
+                  {p.images[0] && <Image src={p.images[0]} alt="" width={24} height={24} style={{ objectFit: "contain", borderRadius: 4 }} />}
+                  {p.priceRub.toLocaleString("ru-RU")} ₽
+                </Link>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

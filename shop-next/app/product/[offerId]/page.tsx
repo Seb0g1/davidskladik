@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { fetchProduct, fetchSettings, fetchMarketplaceReviews, fetchFragranceNotes, fetchCatalog } from "@/lib/api";
+import { fetchProduct, fetchSettings, fetchMarketplaceReviews, fetchFragranceNotes, fetchCatalog, fetchReviews, fetchProductQA } from "@/lib/api";
 import { productJsonLd, breadcrumbJsonLd, SITE_URL, SITE_NAME } from "@/lib/seo";
 import ProductClient from "./ProductClient";
 
@@ -48,11 +48,13 @@ export default async function ProductPage({ params }: Props) {
     notFound();
   }
 
-  const [settings, mpReviews, notes, related] = await Promise.allSettled([
+  const [settings, mpReviews, notes, related, siteReviews, qa] = await Promise.allSettled([
     fetchSettings(),
     fetchMarketplaceReviews(product.offerId),
     fetchFragranceNotes(product.brand, product.name, product.offerId),
     fetchCatalog({ brand: product.brand, pageSize: 8, inStock: true }),
+    fetchReviews(20, product.offerId),
+    fetchProductQA(product.offerId),
   ]);
 
   const s = settings.status === "fulfilled" ? settings.value : null;
@@ -61,6 +63,8 @@ export default async function ProductPage({ params }: Props) {
   const relatedProducts = related.status === "fulfilled"
     ? related.value.products.filter(p => p.offerId !== product.offerId).slice(0, 6)
     : [];
+  const initialSiteReviews = siteReviews.status === "fulfilled" ? siteReviews.value.reviews : [];
+  const qaItems = qa.status === "fulfilled" ? qa.value.items : [];
 
   const productUrl = `/product/${encodeURIComponent(product.offerId)}`;
   const schema = productJsonLd(product, s);
@@ -86,23 +90,17 @@ export default async function ProductPage({ params }: Props) {
         </nav>
       </div>
 
-      {/* SSR product data for crawlers + SEO */}
-      <div style={{ maxWidth: 1200, margin: "0 auto", padding: "24px clamp(18px,4vw,56px)" }}>
-        {/* Hidden H1 for SEO (visible version is in client component) */}
-        <h1 style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)" }}>
-          {product.name} {product.brand} купить
-        </h1>
-
-        <ProductClient
-          product={product}
-          settings={s}
-          initialReviews={reviews?.reviews ?? []}
-          initialAvgRating={reviews?.avgRating}
-          initialReviewCount={reviews?.reviewCount}
-          fragranceNotes={fragNotes}
-          relatedProducts={relatedProducts}
-        />
-      </div>
+      <ProductClient
+        product={product}
+        settings={s}
+        initialMpReviews={reviews?.reviews ?? []}
+        initialAvgRating={reviews?.avgRating}
+        initialReviewCount={reviews?.reviewCount}
+        initialSiteReviews={initialSiteReviews}
+        fragranceNotes={fragNotes}
+        relatedProducts={relatedProducts}
+        qaItems={qaItems}
+      />
     </>
   );
 }
