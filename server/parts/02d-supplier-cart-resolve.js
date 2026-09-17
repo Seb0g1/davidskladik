@@ -393,15 +393,14 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
   // order.campaignId from the batched business endpoint (which Yandex may not populate),
   // and lets us tag each order's isExpress status unambiguously from the campaign config.
   //
-  // Express campaigns = Yandex shops with syncEnabled=false (they protect their own stock).
-  // An explicit sorinExpress.yandexCampaignId in app settings is added as an extra override.
+  // Express campaigns = Yandex shops with syncEnabled=false.
+  // sorinExpress.yandexCampaignId is used only for the Sorin stock-sync, NOT for order tagging —
+  // that way changing the stock-sync campaign ID doesn't re-enable Express order detection.
   const regularCampaignIds = new Set(
     getYandexShops({ includeSyncDisabled: false })
       .flatMap((s) => parseYandexCampaignIds(s.campaignId))
       .filter(Boolean),
   );
-  const appSettingsForExpress = await readAppSettings().catch(() => null);
-  const explicitExpressCampaignId = cleanText(appSettingsForExpress?.sorinExpress?.yandexCampaignId || "");
 
   // Build deduplicated per-campaign entries (one per unique numeric campaignId)
   const campaignEntries = [];
@@ -414,8 +413,7 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
       seenCampaignIds.add(campaignId);
       const numId = Number(campaignId);
       if (!Number.isFinite(numId) || numId <= 0) continue;
-      const isExpressCampaign = !regularCampaignIds.has(campaignId)
-        || (explicitExpressCampaignId !== "" && campaignId === explicitExpressCampaignId);
+      const isExpressCampaign = !regularCampaignIds.has(campaignId);
       campaignEntries.push({ shop, businessId, campaignId: numId, isExpressCampaign });
     }
   }
