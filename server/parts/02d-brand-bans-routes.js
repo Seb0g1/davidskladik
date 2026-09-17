@@ -486,3 +486,36 @@ app.post("/api/brand-bans/:id/apply", requireAdmin, async (req, res, next) => {
     next(err);
   }
 });
+
+// GET /api/brands/export.csv — скачать все уникальные бренды в CSV (бренд + кол-во товаров)
+app.get("/api/brands/export.csv", requireAdmin, async (req, res, next) => {
+  try {
+    const rows = await prisma.brandIndexItem.groupBy({
+      by: ["normalizedBrand", "displayBrand"],
+      _count: { productId: true },
+      orderBy: { displayBrand: "asc" },
+    });
+    // Схлопываем по normalizedBrand — берём первый displayBrand, суммируем productId count
+    const byKey = new Map();
+    for (const row of rows) {
+      const key = row.normalizedBrand;
+      if (!byKey.has(key)) {
+        byKey.set(key, { displayBrand: row.displayBrand, count: row._count.productId });
+      } else {
+        byKey.get(key).count += row._count.productId;
+      }
+    }
+    const sorted = Array.from(byKey.values())
+      .filter((r) => r.displayBrand && !isBrandGarbageValue(r.displayBrand))
+      .sort((a, b) => a.displayBrand.localeCompare(b.displayBrand, "ru", { sensitivity: "base" }));
+
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const lines = ["Бренд,Товаров", ...sorted.map((r) => `"${r.displayBrand.replace(/"/g, '""')}",${r.count}`)];
+    const csv = "﻿" + lines.join("\r\n"); // BOM для Excel
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''brands-${dateStr}.csv`);
+    res.send(csv);
+  } catch (err) {
+    next(err);
+  }
+});

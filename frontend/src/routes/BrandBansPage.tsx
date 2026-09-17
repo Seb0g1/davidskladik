@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArchiveX, ChevronDown, ChevronRight, Eye, Loader2, Plus, Trash2, X } from "lucide-react";
+import { ArchiveX, ChevronDown, ChevronRight, Download, Eye, Loader2, Plus, Trash2, X } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
 
 type BrandBan = {
@@ -297,6 +297,23 @@ export function BrandBansPage() {
         title="Запрет брендов"
         subtitle="Добавьте бренд — все его товары будут сняты с продажи на Ozon, Яндекс Маркете и WB"
       />
+
+      <div className="table-panel" style={{ marginBottom: 8 }}>
+        <div className="section-title">
+          <div>
+            <h3>База брендов</h3>
+          </div>
+          <a
+            href="/api/brands/export.csv"
+            download
+            className="btn btn-sm btn-secondary"
+            style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+          >
+            <Download size={14} />
+            Скачать CSV
+          </a>
+        </div>
+      </div>
 
       <div className="table-panel">
         <div className="section-title">

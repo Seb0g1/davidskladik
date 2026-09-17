@@ -38,6 +38,7 @@ async function uploadDir(sftp, conn, localDir, remoteDir) {
   }
 }
 const SERVER_FILES = [
+  "server/parts/02d-brand-bans-routes.js",
   "server/parts/02d-prices-process-marketplace-job.js",
   "server/parts/02d-prices-stats-automation.js",
   "server/parts/02d-supplier-cart-resolve.js",
