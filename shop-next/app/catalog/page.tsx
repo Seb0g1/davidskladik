@@ -4,7 +4,7 @@ import { SITE_NAME, SITE_URL, breadcrumbJsonLd } from "@/lib/seo";
 import CatalogClient from "./CatalogClient";
 
 interface Props {
-  searchParams: Promise<{ brand?: string; category?: string; q?: string; page?: string; sort?: string; inStock?: string }>;
+  searchParams: Promise<{ brand?: string; category?: string; q?: string; page?: string; sort?: string; inStock?: string; view?: string }>;
 }
 
 export const revalidate = 120;
@@ -69,8 +69,9 @@ export default async function CatalogPage({ searchParams }: Props) {
   const page     = Number(sp.page ?? 1);
   const sort     = (sp.sort ?? "name") as "name" | "price_asc" | "price_desc";
   const inStock  = sp.inStock === "true";
+  const viewGrid = sp.view === "grid";
 
-  const showGrid = !!(brand || category || q || inStock || sort !== "name");
+  const showGrid = !!(brand || category || q || inStock || sort !== "name") || viewGrid;
 
   const emptyResult = { products: [], total: 0, page: 1, pageSize: PAGE_SIZE, brands: [] as string[] };
 

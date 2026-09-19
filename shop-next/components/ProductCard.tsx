@@ -1,8 +1,8 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
-import Image from "next/image";
 import type { ShopProduct } from "@/lib/types";
+import { toProductSlug } from "@/lib/slug";
 import AddToCartButton from "./ui/AddToCartButton";
 
 const PLACEHOLDER_BG = ["#141414", "#131313", "#151515", "#141313", "#131415"];
@@ -23,18 +23,18 @@ export default function ProductCard({ product, showBrand = true }: Props) {
     : null;
 
   return (
-    <Link href={`/product/${encodeURIComponent(product.offerId)}`} className="product-card" style={{ display: "flex", flexDirection: "column", textDecoration: "none" }}>
+    <Link href={`/product/${toProductSlug(product.name, product.offerId)}`} className="product-card" style={{ display: "flex", flexDirection: "column", textDecoration: "none" }}>
       {/* Image area */}
       <div style={{ position: "relative", paddingBottom: "100%", overflow: "hidden" }}>
         <div style={{ position: "absolute", inset: 0, background: img ? "radial-gradient(ellipse 85% 85% at 50% 46%, #ffffff 0%, #d5ccc0 50%, #0E0D0B 85%)" : placeholder(product.name) }}>
           {img && (
-            <Image
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
               src={img}
               alt={product.brand ? `${product.name} ${product.brand}` : product.name}
-              fill
-              sizes="(max-width: 640px) 50vw, (max-width: 1200px) 25vw, 200px"
+              loading="lazy"
               onError={() => setImgError(true)}
-              style={{ objectFit: "contain", padding: 12, mixBlendMode: "multiply" }}
+              style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", padding: 12, mixBlendMode: "multiply" }}
             />
           )}
         </div>
@@ -56,8 +56,8 @@ export default function ProductCard({ product, showBrand = true }: Props) {
 
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "auto", paddingTop: 10, gap: 8 }}>
           <div>
-            <span style={{ fontSize: 16, fontWeight: 500, color: "#f5f4f0", letterSpacing: "-0.01em" }}>{product.priceRub.toLocaleString("ru-RU")} ₽</span>
-            {product.oldPriceRub && <span style={{ fontSize: 11, color: "rgba(245,244,240,0.3)", textDecoration: "line-through", marginLeft: 6 }}>{product.oldPriceRub.toLocaleString("ru-RU")} ₽</span>}
+            <span suppressHydrationWarning style={{ fontSize: 16, fontWeight: 500, color: "#f5f4f0", letterSpacing: "-0.01em" }}>{product.priceRub.toLocaleString("ru-RU")} ₽</span>
+            {product.oldPriceRub && <span suppressHydrationWarning style={{ fontSize: 11, color: "rgba(245,244,240,0.3)", textDecoration: "line-through", marginLeft: 6 }}>{product.oldPriceRub.toLocaleString("ru-RU")} ₽</span>}
           </div>
           {product.inStock && (
             <AddToCartButton product={product} />

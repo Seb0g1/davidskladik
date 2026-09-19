@@ -1289,13 +1289,14 @@ app.get("/api/shop/sitemap-products", shopCors, async (_request, response, next)
     if (!prisma) return response.json({ products: [] });
     const rows = await prisma.warehouseProduct.findMany({
       where: { archived: false, NOT: { status: "deleted" }, currentPrice: { gt: 0 } },
-      select: { offerId: true, updatedAt: true },
+      select: { offerId: true, name: true, updatedAt: true },
       orderBy: { updatedAt: "desc" },
     });
     const products = rows
       .filter((r) => r.offerId && r.offerId.trim())
       .map((r) => ({
         offerId: r.offerId.trim(),
+        name: r.name ?? "",
         lastmod: r.updatedAt ? r.updatedAt.toISOString().slice(0, 10) : null,
       }));
     response.json({ products });
@@ -1424,25 +1425,75 @@ async function _loadOzonPvzAll() {
   }
   const account = getOzonAccountByTarget("ozon");
   if (!account?.clientId || !account?.apiKey) return [];
+
+  const headers = { "Client-Id": account.clientId, "Api-Key": account.apiKey, "Content-Type": "application/json" };
+
+  // Step 1 — try the unfiltered list (works when seller has delivery methods configured)
   try {
     const res = await fetch("https://api-seller.ozon.ru/v1/delivery/point/list", {
-      method: "POST",
-      headers: { "Client-Id": account.clientId, "Api-Key": account.apiKey, "Content-Type": "application/json" },
-      body: "{}",
-      signal: AbortSignal.timeout(60000),
+      method: "POST", headers, body: "{}", signal: AbortSignal.timeout(60000),
     });
-    if (!res.ok) {
+    if (res.ok) {
+      const data = await res.json();
+      const points = data.points || data.result || [];
+      if (points.length > 0) {
+        _ozonPvzAllCache = points.map(p => ({ id: p.map_point_id, lat: p.coordinate?.lat ?? 0, lng: p.coordinate?.long ?? 0 }));
+        _ozonPvzAllCacheAt = Date.now();
+        logger.info("ozon pvz list loaded (unfiltered)", { count: _ozonPvzAllCache.length });
+        return _ozonPvzAllCache;
+      }
+      logger.warn("ozon pvz list empty — trying delivery-method fallback", { keys: Object.keys(data) });
+    } else {
       logger.warn("ozon pvz list failed", { status: res.status });
-      return _ozonPvzAllCache || [];
     }
-    const data = await res.json();
-    const points = data.points || [];
-    _ozonPvzAllCache = points.map(p => ({ id: p.map_point_id, lat: p.coordinate?.lat ?? 0, lng: p.coordinate?.long ?? 0 }));
-    _ozonPvzAllCacheAt = Date.now();
-    logger.info("ozon pvz list loaded", { count: _ozonPvzAllCache.length });
-    return _ozonPvzAllCache;
   } catch (err) {
     logger.warn("ozon pvz list error", { detail: err?.message });
+  }
+
+  // Step 2 — fetch delivery methods first, then load PVZ per method
+  try {
+    const dmRes = await fetch("https://api-seller.ozon.ru/v1/delivery-method/list", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ filter: { is_enabled: true, warehouse_id: 0 }, limit: 50, offset: 0 }),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!dmRes.ok) {
+      logger.warn("ozon delivery-method list failed", { status: dmRes.status });
+      return _ozonPvzAllCache || [];
+    }
+    const dmData = await dmRes.json();
+    const methods = dmData.result || dmData.delivery_methods || [];
+    logger.info("ozon delivery methods fetched", { count: methods.length });
+
+    const allPoints = [];
+    for (const method of methods.slice(0, 5)) {
+      try {
+        const pvzRes = await fetch("https://api-seller.ozon.ru/v1/delivery/point/list", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ delivery_method_id: method.id }),
+          signal: AbortSignal.timeout(60000),
+        });
+        if (!pvzRes.ok) continue;
+        const pvzData = await pvzRes.json();
+        const pts = pvzData.points || pvzData.result || [];
+        logger.info("ozon pvz per method", { methodId: method.id, count: pts.length });
+        allPoints.push(...pts);
+      } catch (e) {
+        logger.warn("ozon pvz per-method error", { methodId: method.id, detail: e?.message });
+      }
+    }
+
+    const seen = new Set();
+    _ozonPvzAllCache = allPoints
+      .filter(p => p.map_point_id && !seen.has(p.map_point_id) && seen.add(p.map_point_id))
+      .map(p => ({ id: p.map_point_id, lat: p.coordinate?.lat ?? 0, lng: p.coordinate?.long ?? 0 }));
+    _ozonPvzAllCacheAt = Date.now();
+    logger.info("ozon pvz list loaded (per-method)", { count: _ozonPvzAllCache.length });
+    return _ozonPvzAllCache;
+  } catch (err) {
+    logger.warn("ozon pvz delivery-method fallback error", { detail: err?.message });
     return _ozonPvzAllCache || [];
   }
 }
@@ -1549,7 +1600,7 @@ app.get("/api/shop/delivery/pvz", shopCors, async (request, response, next) => {
         .map(p => ({ ...p, dist: Math.pow(p.lat - cLat, 2) + Math.pow((p.lng - cLng) * cosLat, 2) }))
         .sort((a, b) => a.dist - b.dist)
         .slice(0, 200);
-      if (!nearby.length) return response.json({ pvz: [], city, source: "ozon", center: { lat: cLat, lng: cLng } });
+      if (!nearby.length) return response.json({ pvz: [], city, source: "ozon", center: { lat: cLat, lng: cLng }, _allLoaded: allPoints.length });
     } else {
       // Поиск по городу: геокодируем → bbox → grid-sampling для равномерного охвата
       const geoRes = await fetch(
@@ -1569,13 +1620,14 @@ app.get("/api/shop/delivery/pvz", shopCors, async (request, response, next) => {
         bboxS = lat - r; bboxN = lat + r; bboxW = lng - rLng; bboxE = lng + rLng;
       }
       const inBox = allPoints.filter(p => p.lat && p.lng && p.lat >= bboxS && p.lat <= bboxN && p.lng >= bboxW && p.lng <= bboxE);
-      if (!inBox.length) return response.json({ pvz: [], city, error: "no_pvz_in_city" });
+      if (!inBox.length) return response.json({ pvz: [], city, error: "no_pvz_in_city", _allLoaded: allPoints.length });
       // Равномерная сетка — 200 точек по всему городу
       nearby = _gridSamplePvz(inBox, bboxS, bboxN, bboxW, bboxE, 200);
     }
 
     const pvz = await _fetchOzonPvzDetails(nearby.map(p => p.id));
-    response.json({ pvz, city, count: pvz.length, source: "ozon" });
+    const extra = pvz.length === 0 ? { _debug: { allPoints: allPoints.length, nearbyRaw: nearby.length } } : {};
+    response.json({ pvz, city, count: pvz.length, source: "ozon", ...extra });
   } catch (error) {
     next(error);
   }

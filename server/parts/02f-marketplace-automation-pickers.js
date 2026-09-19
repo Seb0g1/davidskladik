@@ -71,11 +71,7 @@ function pickNoSupplierAutomationCandidates(products = [], options = {}) {
         // case the automation acts as a retry so the stock actually gets zeroed.
         if (product.hasSnoozedLinks && !marketplaceHasPositiveStock(product)) return false;
         const manualAt = product.noSupplierAutomation?.manualSellableAt;
-        if (manualAt && nowMs - new Date(manualAt).getTime() < manualSellableTtlMs) {
-          // Only protect when stock is already 0 — if the marketplace still shows positive stock
-          // and the supplier re-disappeared within the 48h window, we must zero it immediately.
-          if (!marketplaceHasPositiveStock(product) && Number(product.targetStock || 0) <= 0) return false;
-        }
+        if (manualAt && nowMs - new Date(manualAt).getTime() < manualSellableTtlMs) return false;
         const key = marketplaceOfferAutomationKey(product);
         if (key && protectedOfferKeys.has(key) && !product.hasLinks) return false;
         const updatedMs = product.updatedAt ? new Date(product.updatedAt).getTime() : 0;

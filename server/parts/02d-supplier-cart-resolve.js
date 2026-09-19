@@ -98,25 +98,7 @@ function selectSupplierCartSupplierFromMatches(matches = new Map(), blockedPartn
   const isSorinSupplier = (row) => /сорин/i.test(cleanText(row.partnerName || row.supplierName || ""));
   const isInnaSupplier = (row) => /инна/i.test(cleanText(row.partnerName || row.supplierName || ""));
 
-  // Priority 1: «Наш склад» (stockOnly) — if available, always wins.
-  // stockOnlyFallback: true bypasses live PM validation (их строки могут быть Active=0 намеренно).
-  // skipReason: "" — выбор основной, не fallback, чтобы UI показывал как готово.
-  for (const [linkId, rows] of matches.entries()) {
-    for (const row of rows || []) {
-      if (!supplierUsesStockOnlyPricing(null, row)) continue;
-      const partnerId = cleanText(row.partnerId).toLowerCase();
-      if (blockedPartnerIds.has(partnerId)) continue;
-      return {
-        selected: { ...row, linkId },
-        stockOnlyFallback: true,
-        skipReason: "",
-        blockedAvailable: 0,
-        cutoffPassedAvailable: 0,
-      };
-    }
-  }
-
-  // Priority override: Сорин only. Инна competes on price (her RUB rows are correctly
+  // Priority 1: Сорин only. Инна competes on price (her RUB rows are correctly
   // converted to USD in toUsd/supplierCartOrderScore — she wins only when cheapest).
   for (const isPriority of [isSorinSupplier]) {
     for (const [linkId, rows] of matches.entries()) {

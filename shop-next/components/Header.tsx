@@ -18,13 +18,16 @@ const NAV_LINKS = [
 function usePushNotifications() {
   const [isSubscribed, setIsSubscribed] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const isSupported = typeof window !== "undefined" && "Notification" in window && "serviceWorker" in navigator;
-  const permission = isSupported ? Notification.permission : "default";
+  const [isSupported, setIsSupported] = useState(false);
+  const [permission, setPermission] = useState<NotificationPermission>("default");
 
   useEffect(() => {
-    if (!isSupported) return;
+    const supported = "Notification" in window && "serviceWorker" in navigator;
+    setIsSupported(supported);
+    if (!supported) return;
+    setPermission(Notification.permission);
     navigator.serviceWorker.ready.then(reg => reg.pushManager.getSubscription()).then(sub => setIsSubscribed(!!sub)).catch(() => {});
-  }, [isSupported]);
+  }, []);
 
   async function subscribe() {
     if (!isSupported) return;

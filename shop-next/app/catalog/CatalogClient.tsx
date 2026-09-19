@@ -1,5 +1,5 @@
 "use client";
-import { useState, useRef, useCallback, Suspense } from "react";
+import { useState, useRef, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
@@ -294,7 +294,7 @@ function CatalogInner({ initialProducts, initialTotal, initialBrands, autoCatego
   const page     = Number(sp.get("page") ?? 1);
   const inStock  = sp.get("inStock") === "true";
 
-  const showGrid = !!(category || q || brand || inStock || sort !== "name");
+  const showGrid = !!(category || q || brand || inStock || sort !== "name") || sp.get("view") === "grid";
 
   // Client-side auto-categories (used in mobile chips and carousel mode)
   const { data: clientAutoCats } = useQuery({
@@ -409,7 +409,7 @@ function CatalogInner({ initialProducts, initialTotal, initialBrands, autoCatego
         </div>
 
         {/* Extended filter pills row (desktop) */}
-        <div className="hidden md:flex scroll-x" style={{ gap: 6, padding: "0 clamp(18px,4vw,32px) 10px", alignItems: "center", flexWrap: "nowrap" }}>
+        <div className="hidden md:flex scroll-x" style={{ gap: 6, padding: "0 clamp(18px,4vw,32px) 10px", alignItems: "center", flexWrap: "nowrap", overflow: "visible" }}>
           <span style={{ fontSize: 10.5, letterSpacing: "0.18em", textTransform: "uppercase", color: "#5d5a54", flexShrink: 0, marginRight: 4 }}>Фильтр:</span>
 
           {brands.length > 0 && (
@@ -678,9 +678,5 @@ function CatalogInner({ initialProducts, initialTotal, initialBrands, autoCatego
 }
 
 export default function CatalogClient(props: Props) {
-  return (
-    <Suspense fallback={<div style={{ minHeight: "100vh", background: "#0b0b0b" }} />}>
-      <CatalogInner {...props} />
-    </Suspense>
-  );
+  return <CatalogInner {...props} />;
 }

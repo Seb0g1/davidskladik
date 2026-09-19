@@ -1,10 +1,10 @@
 "use client";
 import { useState, useRef } from "react";
 import Link from "next/link";
-import Image from "next/image";
 import { Search, Sparkles, ShoppingBag, Check, ArrowRight } from "lucide-react";
 import { useCart } from "@/components/CartContext";
 import { aiSearch } from "@/lib/client";
+import { toProductSlug } from "@/lib/slug";
 
 const S = {
   bg:         "#09090b",
@@ -39,7 +39,7 @@ function ResultCard({ product: p }: { product: Product }) {
   }
 
   return (
-    <Link href={`/product/${encodeURIComponent(p.offerId)}`} style={{ textDecoration: "none" }}>
+    <Link href={`/product/${toProductSlug(p.name, p.offerId)}`} style={{ textDecoration: "none" }}>
       <div style={{
         background: "rgba(17,17,19,0.9)", border: `1px solid ${S.border}`,
         borderRadius: 12, overflow: "hidden", display: "flex", flexDirection: "column",
@@ -50,7 +50,8 @@ function ResultCard({ product: p }: { product: Product }) {
       >
         <div style={{ aspectRatio: "1", background: "#161512", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
           {p.images[0]
-            ? <Image src={p.images[0]} alt={p.name} width={240} height={240} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+            // eslint-disable-next-line @next/next/no-img-element
+            ? <img src={p.images[0]} alt={p.name} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
             : <span style={{ fontSize: 40, color: "rgba(242,237,230,0.1)" }}>{p.brand?.[0] ?? "?"}</span>
           }
         </div>

@@ -64,6 +64,125 @@ async function runStalePriceTargetScan() {
   }
 }
 
+// Dalik periodically renumbers ALL their NativeIDs. When that happens, our pinned
+// selected_row links still reference the old supplier_article. This check detects:
+//   1. Name-diverged: the PM row at sourceRowId now has a completely different product
+//      name → clear the pin and revert to article-type matching so autocart can re-resolve.
+//   2. Article-shifted: PM name still matches our warehouse name but NativeID changed
+//      → update supplier_article in the link to the current NativeID.
+async function checkDalikArticleMigrations() {
+  const prisma = getPrisma();
+  if (!prisma || !shouldUsePostgresStorage()) return { skipped: true };
+  if (!pool) return { skipped: true, reason: "no_pm_pool" };
+  try {
+    const links = await prisma.$queryRawUnsafe(`
+      SELECT
+        pl.id        AS link_id,
+        pl.supplier_article,
+        pl.source_row_id,
+        pl.exact_name AS pinned_pm_name,
+        wp.offer_id,
+        wp.name      AS warehouse_name
+      FROM product_links pl
+      JOIN warehouse_products wp ON wp.id = pl.product_id
+      WHERE pl.raw->>'matchType' = 'selected_row'
+        AND pl.source_row_id IS NOT NULL
+        AND (
+          LOWER(pl.supplier_name) LIKE '%далик%'
+          OR LOWER(pl.supplier_name) LIKE '%dalik%'
+        )
+        AND wp.archived = false
+    `);
+
+    if (!links.length) return { ok: true, checked: 0 };
+
+    const EXCLUDE = new Set(["edp", "edt", "parfum", "perfume", "de", "ml", "eau"]);
+    function nameTokens(str) {
+      return [...new Set(
+        (str || "").toLowerCase()
+          .replace(/[^a-z0-9а-яё\s]/gi, " ")
+          .split(/\s+/)
+          .filter((t) => t.length >= 2 && !EXCLUDE.has(t)),
+      )];
+    }
+
+    let diverged = 0; let articleFixed = 0; let ok = 0;
+    const divergedOffers = [];
+
+    for (const link of links) {
+      let pmRow;
+      try {
+        const [rows] = await pool.query(
+          "SELECT NativeID, NativeName FROM OfferRows WHERE RowID = ? LIMIT 1",
+          [link.source_row_id],
+        );
+        pmRow = rows[0];
+      } catch {
+        continue;
+      }
+      if (!pmRow) {
+        // Row no longer exists — reset pin so autocart can re-resolve by article
+        await prisma.$executeRawUnsafe(`
+          UPDATE product_links
+          SET source_row_id = NULL, exact_name = NULL,
+              raw = jsonb_set(jsonb_set(jsonb_set(raw,'{matchType}','"article"'),'{sourceRowId}','null'),'{exactName}','null'),
+              updated_at = now()
+          WHERE id = $1
+        `, link.link_id);
+        diverged++;
+        divergedOffers.push(link.offer_id);
+        continue;
+      }
+
+      const pmTokens = nameTokens(pmRow.NativeName);
+      const wpTokens = nameTokens(link.warehouse_name);
+      const shared = pmTokens.filter((t) => new Set(wpTokens).has(t)).length;
+      const uniquePm = pmTokens.filter((t) => !new Set(wpTokens).has(t));
+      const uniqueWp = wpTokens.filter((t) => !new Set(pmTokens).has(t));
+      const penalty = (uniquePm.length > 0 && uniqueWp.length > 0) ? Math.min(uniquePm.length, 4) * 20 : 0;
+      const isDiverged = shared < 2 || penalty >= 40;
+
+      if (isDiverged) {
+        await prisma.$executeRawUnsafe(`
+          UPDATE product_links
+          SET source_row_id = NULL, exact_name = NULL,
+              raw = jsonb_set(jsonb_set(jsonb_set(raw,'{matchType}','"article"'),'{sourceRowId}','null'),'{exactName}','null'),
+              updated_at = now()
+          WHERE id = $1
+        `, link.link_id);
+        logger.warn("dalik_article_migration_pin_reset", {
+          offerId: link.offer_id, rowId: link.source_row_id,
+          pmName: pmRow.NativeName, warehouseName: link.warehouse_name, shared, penalty,
+        });
+        diverged++;
+        divergedOffers.push(link.offer_id);
+      } else if (String(pmRow.NativeID) !== String(link.supplier_article || "")) {
+        await prisma.$executeRawUnsafe(
+          "UPDATE product_links SET supplier_article = $1, updated_at = now() WHERE id = $2",
+          String(pmRow.NativeID), link.link_id,
+        );
+        articleFixed++;
+      } else {
+        ok++;
+      }
+    }
+
+    logger.info("dalik_article_migration_check", { checked: links.length, diverged, articleFixed, ok });
+
+    if (diverged > 0 && typeof sendHealthAlertTelegram === "function") {
+      const sample = divergedOffers.slice(0, 5).join(", ");
+      sendHealthAlertTelegram(
+        `⚠️ DavidSklad: Далик переименовал артикулы у ${diverged} товаров. Пины сброшены, автокорзина перепривяжет. Примеры: ${sample}. Проверь привязки в карточках склада.`
+      ).catch(() => {});
+    }
+
+    return { ok: true, checked: links.length, diverged, articleFixed };
+  } catch (error) {
+    logger.warn("dalik_article_migration_check_failed", { detail: error?.message || String(error) });
+    return { ok: false, error: error?.message };
+  }
+}
+
 function msUntilNextDailyRun(timeString, now = new Date()) {
   const [rawHour = "11", rawMinute = "0"] = String(timeString || "11:00").split(":");
   const hour = Math.min(Math.max(Number(rawHour) || 11, 0), 23);
@@ -130,6 +249,11 @@ async function runDailyRefresh(trigger = "manual") {
           logger.warn("pm nomenclature new-items check failed in daily refresh", { detail: err?.message || String(err) }),
         );
       }
+      // Dalik article migration check: detect when Dalik renumbers their NativeIDs so
+      // pinned selected_row links referencing old article codes are auto-fixed or reset.
+      checkDalikArticleMigrations().catch((err) =>
+        logger.warn("dalik article migration check failed in daily refresh", { detail: err?.message || String(err) }),
+      );
       // Sponsor daily Telegram report (fire-and-forget, hour-gated).
       if (typeof sendSponsorDailyReport === "function") {
         readAppSettings().then((appSettings) => {

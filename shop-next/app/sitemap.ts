@@ -1,5 +1,6 @@
 import type { MetadataRoute } from "next";
 import { fetchSitemapProducts, fetchBrands, fetchBlog } from "@/lib/api";
+import { toProductSlug } from "@/lib/slug";
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://magicvibes.ru";
 
@@ -35,7 +36,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 
   const productPages: MetadataRoute.Sitemap = productsRes.status === "fulfilled"
     ? productsRes.value.products.map(p => ({
-        url: `${SITE_URL}/product/${encodeURIComponent(p.offerId)}`,
+        url: `${SITE_URL}/product/${toProductSlug(p.name, p.offerId)}`,
         lastModified: p.lastmod ?? now,
         changeFrequency: "weekly" as const,
         priority: 0.85,

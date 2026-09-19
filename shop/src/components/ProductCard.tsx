@@ -1,9 +1,8 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { Check } from "lucide-react";
 import type { ShopProduct } from "../types";
-import { useCart } from "../CartContext";
 import StarRating from "./StarRating";
+import AddToCartButton from "./ui/AddToCartButton";
 
 const PLACEHOLDER_BG = ["#141414","#131313","#151515","#141313","#131415"];
 const placeholder = (s: string) => PLACEHOLDER_BG[(s?.charCodeAt(0) ?? 0) % PLACEHOLDER_BG.length];
@@ -14,8 +13,6 @@ interface Props {
 }
 
 export default function ProductCard({ product, showBrand = true }: Props) {
-  const { add } = useCart();
-  const [added, setAdded] = useState(false);
   const [img1Error, setImg1Error] = useState(false);
   const [img2Error, setImg2Error] = useState(false);
 
@@ -23,15 +20,6 @@ export default function ProductCard({ product, showBrand = true }: Props) {
   const img2 = !img2Error && product.images[1] ? product.images[1] : "";
   const hasFlip = !!(img && img2);
   const initial = (product.brand || product.name || "?")[0]?.toUpperCase() ?? "?";
-
-  function handleAdd(e: React.MouseEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    if (!product.inStock || added) return;
-    add(product);
-    setAdded(true);
-    setTimeout(() => setAdded(false), 1600);
-  }
 
   return (
     <Link
@@ -128,13 +116,7 @@ export default function ProductCard({ product, showBrand = true }: Props) {
             )}
           </div>
           {product.inStock && (
-            <button
-              onClick={handleAdd}
-              className={`btn-cart ${added ? "added" : ""}`}
-              aria-label="В корзину"
-            >
-              {added ? <Check size={12} strokeWidth={2.5} /> : "В корзину"}
-            </button>
+            <AddToCartButton product={product} />
           )}
         </div>
       </div>

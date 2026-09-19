@@ -1,100 +1,150 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
-import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { Minus, Plus, Trash2, ShoppingBag, ArrowRight, Package } from "lucide-react";
 import { useCart } from "@/components/CartContext";
+import { ruPlural } from "@/lib/utils";
+import { toProductSlug } from "@/lib/slug";
 
 const S = {
-  border: "rgba(255,252,245,0.08)",
-  accent: "#C9A96E",
-  muted: "rgba(244,239,230,0.48)",
-  text: "#F4EFE6",
+  bg:      "#0E0D0B",
   surface: "#161512",
-  surface2: "#1D1C18",
+  surface2:"#1D1C18",
+  border:  "rgba(255,252,245,0.07)",
+  borderMd:"rgba(255,252,245,0.13)",
+  text:    "#F4EFE6",
+  muted:   "rgba(244,239,230,0.48)",
+  subtle:  "rgba(244,239,230,0.22)",
+  accent:  "#C9A96E",
+  accent3: "#EDD9B0",
 };
 
 export default function CartPage() {
-  const { items, setQty, remove, totalRub, totalItems } = useCart();
+  const { items, totalRub, remove, setQty, totalItems } = useCart();
   const router = useRouter();
 
-  if (items.length === 0) {
+  if (!items.length) {
     return (
-      <div style={{ minHeight: "60vh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", padding: 40 }}>
-        <ShoppingBag size={64} style={{ color: "rgba(201,162,94,0.2)", marginBottom: 24 }} />
-        <h1 style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", fontWeight: 300, fontSize: 36, color: S.text, margin: "0 0 12px" }}>Корзина пуста</h1>
-        <p style={{ fontSize: 14, color: S.muted, marginBottom: 32 }}>Добавьте что-нибудь из каталога</p>
-        <Link href="/catalog" className="btn-primary" style={{ textDecoration: "none" }}>Перейти в каталог</Link>
+      <div style={{ background: S.bg, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ textAlign: "center", padding: "80px 20px" }}>
+          <div style={{
+            width: 72, height: 72, borderRadius: 24, display: "flex", alignItems: "center", justifyContent: "center",
+            margin: "0 auto 24px", background: "rgba(201,169,110,0.1)", border: "1px solid rgba(201,169,110,0.2)",
+          }}>
+            <ShoppingBag size={32} style={{ color: S.accent3 }} strokeWidth={1.5} />
+          </div>
+          <h2 style={{ fontSize: 22, fontWeight: 700, color: S.text, marginBottom: 8, letterSpacing: "-0.03em" }}>Корзина пуста</h2>
+          <p style={{ fontSize: 14, color: S.muted, marginBottom: 32 }}>Добавьте товары из каталога</p>
+          <Link href="/catalog" className="btn-primary" style={{ fontSize: 14, padding: "12px 28px", textDecoration: "none" }}>
+            Перейти в каталог <ArrowRight size={15} strokeWidth={2.5} />
+          </Link>
+        </div>
       </div>
     );
   }
 
+  const total = totalRub;
+
   return (
-    <div style={{ maxWidth: 900, margin: "0 auto", padding: "clamp(24px,3vw,48px) clamp(18px,4vw,56px)" }}>
-      <nav style={{ fontSize: 12, color: S.muted, marginBottom: 24 }}>
-        <Link href="/" style={{ color: S.muted, textDecoration: "none" }}>Главная</Link> /{" "}
-        <span style={{ color: S.text }}>Корзина</span>
-      </nav>
+    <div style={{ background: S.bg, minHeight: "100vh" }}>
+      <div style={{ maxWidth: 1000, margin: "0 auto", padding: "clamp(24px,4vw,48px) clamp(16px,4vw,32px)" }}>
+        <h1 style={{ fontSize: "clamp(22px,3vw,30px)", fontWeight: 700, color: S.text, letterSpacing: "-0.04em", marginBottom: 32 }}>
+          Корзина
+          <span style={{ fontSize: 16, fontWeight: 500, color: S.muted, marginLeft: 12 }}>
+            · {totalItems} {ruPlural(totalItems, "товар", "товара", "товаров")}
+          </span>
+        </h1>
 
-      <h1 style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", fontWeight: 300, fontSize: "clamp(28px,4vw,44px)", color: S.text, margin: "0 0 32px" }}>Корзина · {totalItems} {totalItems === 1 ? "товар" : totalItems < 5 ? "товара" : "товаров"}</h1>
+        <style>{`@media(min-width:768px){.cart-grid{grid-template-columns:1fr 340px!important;}}`}</style>
+        <div className="cart-grid" style={{ display: "grid", gridTemplateColumns: "1fr", gap: 20, alignItems: "start" }}>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 32 }} className="cart-layout">
-        <style>{`@media(max-width:700px){.cart-layout{grid-template-columns:1fr!important;}}`}</style>
-
-        {/* Items */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {items.map(item => {
-            const img = item.product.images[0] ?? null;
-            return (
-              <div key={item.product.id} style={{ display: "flex", gap: 16, padding: "16px", border: `1px solid ${S.border}`, borderRadius: 12, background: S.surface2, alignItems: "center" }}>
-                <div style={{ width: 72, height: 72, flexShrink: 0, borderRadius: 8, background: "radial-gradient(ellipse 85% 85% at center, #fff 0%, #ccc4b8 55%, #0E0D0B 88%)", overflow: "hidden" }}>
-                  {img && <Image src={img} alt={item.product.name} width={72} height={72} style={{ objectFit: "contain", padding: 6, mixBlendMode: "multiply" }} />}
-                </div>
+          {/* Items */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {items.map(({ product, quantity }) => (
+              <div key={product.offerId} style={{
+                background: S.surface, borderRadius: 18, padding: "16px",
+                border: `1px solid ${S.border}`, display: "flex", gap: 14,
+              }}>
+                <Link href={`/product/${toProductSlug(product.name, product.offerId)}`}
+                  style={{ flexShrink: 0, width: 76, height: 76, borderRadius: 14, overflow: "hidden",
+                    background: S.surface2, display: "flex", alignItems: "center", justifyContent: "center", textDecoration: "none" }}>
+                  {product.images[0]
+                    // eslint-disable-next-line @next/next/no-img-element
+                    ? <img src={product.images[0]} alt={product.name} style={{ width: "100%", height: "100%", objectFit: "contain", padding: 6 }} />
+                    : <span style={{ fontSize: 22, fontWeight: 700, color: S.subtle }}>{product.brand?.[0] ?? "?"}</span>
+                  }
+                </Link>
 
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 9, letterSpacing: "0.2em", color: S.accent, marginBottom: 4 }}>{item.product.brand}</div>
-                  <Link href={`/product/${encodeURIComponent(item.product.offerId)}`} style={{ fontSize: 13, color: S.text, textDecoration: "none", display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.product.name}</Link>
-                  {item.product.volume && <div style={{ fontSize: 11, color: S.muted, marginTop: 2 }}>{item.product.volume}</div>}
-                </div>
-
-                <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-                  <div style={{ display: "flex", alignItems: "center", border: `1px solid ${S.border}`, borderRadius: 8 }}>
-                    <button onClick={() => setQty(item.product.offerId, item.quantity - 1)} style={{ width: 32, height: 32, background: "none", border: "none", color: S.muted, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Minus size={12} /></button>
-                    <span style={{ width: 24, textAlign: "center", fontSize: 13, color: S.text }}>{item.quantity}</span>
-                    <button onClick={() => setQty(item.product.offerId, item.quantity + 1)} style={{ width: 32, height: 32, background: "none", border: "none", color: S.muted, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}><Plus size={12} /></button>
+                  <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: S.accent3, marginBottom: 3 }}>
+                    {product.brand}
                   </div>
-                  <span style={{ fontSize: 14, fontWeight: 500, color: S.text, minWidth: 80, textAlign: "right" }}>{(item.product.priceRub * item.quantity).toLocaleString("ru-RU")} ₽</span>
-                  <button onClick={() => remove(item.product.offerId)} style={{ background: "none", border: "none", color: "rgba(244,239,230,0.28)", cursor: "pointer", padding: 4 }}><Trash2 size={14} /></button>
+                  <Link href={`/product/${toProductSlug(product.name, product.offerId)}`}
+                    style={{ fontSize: 13, fontWeight: 500, color: S.text, textDecoration: "none",
+                      display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", lineHeight: 1.4 } as React.CSSProperties}>
+                    {product.name}
+                  </Link>
+                  {product.volume && <div style={{ fontSize: 11, color: S.muted, marginTop: 2 }}>{product.volume}</div>}
+
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 12 }}>
+                    <div style={{ display: "flex", alignItems: "center", background: S.surface2, borderRadius: 12, overflow: "hidden", border: `1px solid ${S.border}` }}>
+                      <button onClick={() => setQty(product.offerId, quantity - 1)}
+                        style={{ padding: "8px 12px", background: "none", border: "none", color: S.muted, cursor: "pointer" }}>
+                        <Minus size={13} />
+                      </button>
+                      <span style={{ padding: "8px 12px", fontSize: 13, fontWeight: 700, color: S.text, minWidth: 36, textAlign: "center" }}>{quantity}</span>
+                      <button onClick={() => setQty(product.offerId, Math.min(product.stockQty || 99, quantity + 1))}
+                        style={{ padding: "8px 12px", background: "none", border: "none", color: S.muted, cursor: "pointer" }}>
+                        <Plus size={13} />
+                      </button>
+                    </div>
+
+                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                      <span style={{ fontSize: 16, fontWeight: 700, color: S.text }}>
+                        {(product.priceRub * quantity).toLocaleString("ru-RU")} ₽
+                      </span>
+                      <button onClick={() => remove(product.offerId)}
+                        style={{ padding: 8, background: "none", border: "none", color: S.subtle, cursor: "pointer", borderRadius: 10 }}>
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
-            );
-          })}
-        </div>
+            ))}
+          </div>
 
-        {/* Summary */}
-        <div style={{ background: S.surface2, border: `1px solid ${S.border}`, borderRadius: 16, padding: "24px", height: "fit-content", position: "sticky", top: 80 }}>
-          <h2 style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", fontWeight: 300, fontSize: 22, color: S.text, margin: "0 0 20px" }}>Итого</h2>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: S.muted }}>
-              <span>Товары · {totalItems} шт.</span>
-              <span style={{ color: S.text, fontWeight: 500 }}>{totalRub.toLocaleString("ru-RU")} ₽</span>
+          {/* Summary */}
+          <div style={{ background: S.surface, borderRadius: 20, padding: 24, border: `1px solid ${S.border}`, position: "sticky", top: 80 }}>
+            <h3 style={{ fontSize: 15, fontWeight: 700, color: S.text, marginBottom: 20 }}>Итого</h3>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: S.muted }}>
+                <span>Товары · {items.reduce((s, i) => s + i.quantity, 0)} шт.</span>
+                <span style={{ color: S.text, fontWeight: 500 }}>{totalRub.toLocaleString("ru-RU")} ₽</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: S.muted }}>
+                <span>Доставка Ozon</span>
+                <span style={{ color: "#4ade80", fontWeight: 600 }}>Бесплатно</span>
+              </div>
             </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: S.muted }}>
-              <span>Доставка Ozon</span>
-              <span style={{ color: "#4ade80", fontWeight: 600 }}>Бесплатно</span>
+
+            <div style={{ borderTop: `1px solid ${S.border}`, paddingTop: 16, marginBottom: 20 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 18, fontWeight: 700, color: S.text }}>
+                <span>К оплате</span>
+                <span>{total.toLocaleString("ru-RU")} ₽</span>
+              </div>
             </div>
-          </div>
-          <div style={{ borderTop: `1px solid ${S.border}`, paddingTop: 16, marginBottom: 16, display: "flex", justifyContent: "space-between", fontSize: 18, fontWeight: 600, color: S.text }}>
-            <span>К оплате</span>
-            <span>{totalRub.toLocaleString("ru-RU")} ₽</span>
-          </div>
-          <button onClick={() => router.push("/checkout")} style={{ width: "100%", height: 48, background: "#f2efe6", color: "#14120f", border: "none", borderRadius: 10, fontSize: 13, fontWeight: 500, letterSpacing: "0.1em", textTransform: "uppercase", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-            Оформить заказ <ArrowRight size={15} />
-          </button>
-          <div style={{ marginTop: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 11, color: S.muted }}>
-            <Package size={11} />
-            <span>Доставка через Ozon · Оригинал</span>
+
+            <button onClick={() => router.push("/checkout")} className="btn-primary" style={{ width: "100%", fontSize: 15, padding: "14px 0", justifyContent: "center", border: "none", cursor: "pointer" }}>
+              Оформить заказ <ArrowRight size={16} />
+            </button>
+
+            <div style={{ marginTop: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 11, color: S.subtle }}>
+              <Package size={11} />
+              <span>Доставка через Ozon · Оригинальная продукция</span>
+            </div>
           </div>
         </div>
       </div>

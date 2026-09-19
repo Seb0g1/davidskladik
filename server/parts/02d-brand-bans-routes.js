@@ -490,6 +490,7 @@ app.post("/api/brand-bans/:id/apply", requireAdmin, async (req, res, next) => {
 // GET /api/brands/export.csv — скачать все уникальные бренды в CSV (бренд + кол-во товаров)
 app.get("/api/brands/export.csv", requireAdmin, async (req, res, next) => {
   try {
+    const prisma = getPrisma();
     const rows = await prisma.brandIndexItem.groupBy({
       by: ["normalizedBrand", "displayBrand"],
       _count: { productId: true },

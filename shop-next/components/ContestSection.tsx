@@ -1,8 +1,12 @@
 "use client";
+import { useState, useEffect } from "react";
 
 export default function ContestSection() {
-  const month = new Intl.DateTimeFormat("ru-RU", { month: "long" }).format(new Date());
-  const capitalizedMonth = month.charAt(0).toUpperCase() + month.slice(1);
+  const [capitalizedMonth, setCapitalizedMonth] = useState("");
+  useEffect(() => {
+    const m = new Intl.DateTimeFormat("ru-RU", { month: "long" }).format(new Date());
+    setCapitalizedMonth(m.charAt(0).toUpperCase() + m.slice(1));
+  }, []);
 
   return (
     <section className="reveal-section" style={{ padding: "clamp(56px,8vw,96px) clamp(18px,4vw,56px) 0" }}>

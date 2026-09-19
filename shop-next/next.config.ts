@@ -8,6 +8,7 @@ const nextConfig: NextConfig = {
   images: {
     remotePatterns: [
       { protocol: "https", hostname: "**.ozon.ru" },
+      { protocol: "https", hostname: "**.ozone.ru" },
       { protocol: "https", hostname: "**.ozonusercontent.com" },
       { protocol: "https", hostname: "**.yandex.net" },
       { protocol: "https", hostname: "**.yastatic.net" },

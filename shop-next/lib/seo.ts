@@ -1,4 +1,5 @@
 import type { ShopProduct, ShopSettings } from "./types";
+import { toProductSlug } from "./slug";
 
 export const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL ?? "https://magicvibes.ru";
 export const SITE_NAME = "Magic Vibes";
@@ -8,7 +9,7 @@ export function productJsonLd(p: ShopProduct, settings?: ShopSettings | null) {
   const priceValidUntil = new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString().slice(0, 10);
   const isFree = settings?.freeDeliveryFrom && p.priceRub >= settings.freeDeliveryFrom;
   const deliveryPrice = isFree ? "0" : String(settings?.deliveryPriceRub ?? 350);
-  const url = `${SITE_URL}/product/${encodeURIComponent(p.offerId)}`;
+  const url = `${SITE_URL}/product/${toProductSlug(p.name, p.offerId)}`;
 
   const schema: Record<string, unknown> = {
     "@context": "https://schema.org",

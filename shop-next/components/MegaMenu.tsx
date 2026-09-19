@@ -8,7 +8,7 @@ interface MegaGroup { id: string; label: string; href: string; columns: MegaCol[
 
 const GROUPS: MegaGroup[] = [
   {
-    id: "perfume", label: "Парфюмерия", href: "/catalog",
+    id: "perfume", label: "Парфюмерия", href: "/catalog?view=grid",
     columns: [
       { title: "Для кого", items: [
         { label: "Женская",  href: "/catalog?q=женская" },

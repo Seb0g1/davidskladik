@@ -76,7 +76,7 @@ export default function CheckoutPage() {
   const [postalCode, setPostalCode] = useState("");
   const [comment, setComment] = useState("");
   const [deliveryType, setDeliveryType] = useState<"courier" | "pickup">("pickup");
-  const [paymentMethod, setPaymentMethod] = useState<"sbp" | "cash">("sbp");
+  const paymentMethod = "ozon_pay" as const;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pvzMapOpen, setPvzMapOpen] = useState(false);
@@ -266,16 +266,12 @@ export default function CheckoutPage() {
 
               {/* Payment */}
               <Section title="Способ оплаты">
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  {([["sbp", "💸 СБП"], ["cash", "💵 Наличными"]] as const).map(([val, label]) => (
-                    <button key={val} type="button" onClick={() => setPaymentMethod(val)} style={{
-                      padding: "10px 18px", border: `1px solid ${paymentMethod === val ? "rgba(201,169,110,0.5)" : S.border}`,
-                      borderRadius: 12, background: paymentMethod === val ? "rgba(201,169,110,0.08)" : "transparent",
-                      color: paymentMethod === val ? S.accent : S.muted, cursor: "pointer", fontSize: 13,
-                    }}>
-                      {label}
-                    </button>
-                  ))}
+                <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", background: "rgba(0,91,255,0.06)", border: "1px solid rgba(0,91,255,0.2)", borderRadius: 12 }}>
+                  <svg width="32" height="32" viewBox="0 0 32 32" fill="none"><rect width="32" height="32" rx="8" fill="#005BFF"/><text x="16" y="21" textAnchor="middle" fontFamily="Arial,sans-serif" fontWeight="900" fontSize="13" fill="#fff">Ozon</text></svg>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: S.text }}>Ozon Pay</div>
+                    <div style={{ fontSize: 11, color: S.muted, marginTop: 2 }}>Оплата картой или балансом Ozon</div>
+                  </div>
                 </div>
               </Section>
 

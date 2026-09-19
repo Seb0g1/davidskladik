@@ -111,7 +111,7 @@ export async function fetchAromaMesyatsa(): Promise<{ product: ShopProduct | nul
 }
 
 // Sitemap helper — no cache, used only during build
-export async function fetchSitemapProducts(): Promise<{ products: { offerId: string; lastmod?: string }[] }> {
+export async function fetchSitemapProducts(): Promise<{ products: { offerId: string; name: string; lastmod?: string }[] }> {
   return get("/sitemap-products", { cache: "no-store" });
 }
 

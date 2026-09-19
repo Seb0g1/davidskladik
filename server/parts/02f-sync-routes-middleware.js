@@ -145,6 +145,16 @@ app.post("/api/warehouse/sync/run", requireAdmin, async (_request, response, nex
   }
 });
 
+// POST /api/warehouse/check-dalik-migrations — detect and auto-fix Dalik article renumbering
+app.post("/api/warehouse/check-dalik-migrations", requireAdmin, async (_request, response, next) => {
+  try {
+    const result = await checkDalikArticleMigrations();
+    response.json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.use((error, request, response, _next) => {
   logger.error("request error", {
     path: request.path,

@@ -131,6 +131,10 @@ export function SuppliersPage() {
     },
   });
 
+  const dalikMigrationMutation = useMutation({
+    mutationFn: () => fetchJson("/api/warehouse/check-dalik-migrations", MutationResultSchema, { method: "POST" }),
+  });
+
   const saveSupplier = useMutation({
     mutationFn: (payload: SupplierForm) => {
       const body = {
@@ -414,13 +418,32 @@ export function SuppliersPage() {
         title="Поставщики"
         subtitle="Импорт из PriceMaster, баланс долгов, история заказов и управление артикулами."
         action={(
-          <button className="primary-action" type="button" disabled={refreshMutation.isPending} onClick={() => refreshMutation.mutate()}>
-            {refreshMutation.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Загрузить из PriceMaster
-          </button>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="secondary-action" type="button"
+              disabled={dalikMigrationMutation.isPending}
+              title="Проверить и исправить рассинхрон артикулов Далика после переименования в PriceMaster"
+              onClick={() => dalikMigrationMutation.mutate()}>
+              {dalikMigrationMutation.isPending ? <Loader2 className="spin" size={16} /> : <RotateCcw size={16} />} Артикулы Далика
+            </button>
+            <button className="primary-action" type="button" disabled={refreshMutation.isPending} onClick={() => refreshMutation.mutate()}>
+              {refreshMutation.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Загрузить из PriceMaster
+            </button>
+          </div>
         )}
       />
 
       {anyError ? <div className="inline-error sp-error-mb">{errorMessage(anyError)}</div> : null}
+      {dalikMigrationMutation.isSuccess && (
+        <div className="success-strip">
+          Далик: проверено {String((dalikMigrationMutation.data as Record<string, unknown>)?.checked ?? 0)} привязок
+          {Number((dalikMigrationMutation.data as Record<string, unknown>)?.diverged ?? 0) > 0
+            ? ` · сброшено ${String((dalikMigrationMutation.data as Record<string, unknown>)?.diverged)} рассинхронизированных`
+            : ""}
+          {Number((dalikMigrationMutation.data as Record<string, unknown>)?.articleFixed ?? 0) > 0
+            ? ` · артикул обновлён у ${String((dalikMigrationMutation.data as Record<string, unknown>)?.articleFixed)}`
+            : " · всё в порядке"}
+        </div>
+      )}
 
       <section className="dashboard-metrics">
         <Stat label="Активных" value={activeCount} tone={activeCount ? "success" : ""} icon={<Truck size={18} />} />

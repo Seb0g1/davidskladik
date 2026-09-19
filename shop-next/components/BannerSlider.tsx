@@ -42,8 +42,8 @@ function CountdownTimer({ endDate }: { endDate: string }) {
       s: Math.floor((diff % 60000) / 1000),
     };
   };
-  const [t, setT] = useState(getLeft);
-  useEffect(() => { const id = setInterval(() => setT(getLeft()), 1000); return () => clearInterval(id); }, [endDate]);
+  const [t, setT] = useState<ReturnType<typeof getLeft>>(null);
+  useEffect(() => { setT(getLeft()); const id = setInterval(() => setT(getLeft()), 1000); return () => clearInterval(id); }, [endDate]);
   if (!t) return null;
   const pad = (n: number) => String(n).padStart(2, "0");
   const parts = t.d > 0

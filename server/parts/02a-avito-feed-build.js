@@ -81,6 +81,12 @@ function buildUniqueAvitoDescription(listing, feedDefaults = {}) {
   const rawArticle = cleanText(listing.sourceOfferId || listing.adId?.replace(/^oz-/, "") || "").replace(/#/g, "").trim();
   const articleLine = rawArticle ? `Артикул: ${rawArticle}.` : "";
 
+  // When the feed has an explicit description template, always use it — overrides generated copy.
+  const tmplRaw = cleanText(feedDefaults.description || "");
+  if (tmplRaw) {
+    return tmplRaw.replace(/\{title\}/g, title).replace(/\{brand\}/g, brand).replace(/\{article\}/g, rawArticle);
+  }
+
   const adId = cleanText(listing.adId) || "";
   let h = 0;
   for (let i = 0; i < adId.length; i++) h = ((h << 5) - h + adId.charCodeAt(i)) | 0;
@@ -163,9 +169,7 @@ function buildUniqueAvitoDescription(listing, feedDefaults = {}) {
     ] : Array(6).fill(`Уходовая косметика — ${typeStr}.`);
     parts = [BRAND_OPENERS[v], `${title}${volumeTag ? ` (${volumeTag})` : ""} — ${typeStr}.`, condition, delivery, articleLine].filter(Boolean);
   } else {
-    const tmpl = cleanText(feedDefaults.description || "");
-    const base = tmpl.replace(/\{title\}/g, title).replace(/\{brand\}/g, brand);
-    return base + (articleLine ? " " + articleLine : "");
+    parts = [title, delivery, articleLine].filter(Boolean);
   }
 
   return parts.join(" ");

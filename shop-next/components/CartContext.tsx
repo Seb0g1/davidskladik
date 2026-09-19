@@ -1,5 +1,5 @@
 "use client";
-import { createContext, useContext, useReducer, useCallback, useEffect, type ReactNode } from "react";
+import { createContext, useContext, useReducer, useCallback, useEffect, useState, type ReactNode } from "react";
 import type { CartItem, ShopProduct } from "@/lib/types";
 
 const CART_KEY = "mv_cart_v1";
@@ -8,7 +8,8 @@ type Action =
   | { type: "ADD"; product: ShopProduct; qty?: number }
   | { type: "REMOVE"; offerId: string }
   | { type: "SET_QTY"; offerId: string; qty: number }
-  | { type: "CLEAR" };
+  | { type: "CLEAR" }
+  | { type: "LOAD"; items: CartItem[] };
 
 function reducer(state: { items: CartItem[] }, action: Action): { items: CartItem[] } {
   switch (action.type) {
@@ -25,6 +26,7 @@ function reducer(state: { items: CartItem[] }, action: Action): { items: CartIte
       if (action.qty <= 0) return { items: state.items.filter((i) => i.product.offerId !== action.offerId) };
       return { items: state.items.map((i) => i.product.offerId === action.offerId ? { ...i, quantity: action.qty } : i) };
     case "CLEAR": return { items: [] };
+    case "LOAD": return { items: action.items };
     default: return state;
   }
 }
@@ -53,11 +55,21 @@ interface CartCtx {
 const CartContext = createContext<CartCtx | null>(null);
 
 export function CartProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(reducer, undefined, loadCart);
+  // Start with empty cart on both server and client for consistent SSR hydration.
+  // Load from localStorage in useEffect (client-only) to avoid mismatch.
+  const [state, dispatch] = useReducer(reducer, { items: [] });
+  const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
+    const saved = loadCart();
+    if (saved.items.length > 0) dispatch({ type: "LOAD", items: saved.items });
+    setHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
     try { localStorage.setItem(CART_KEY, JSON.stringify({ items: state.items })); } catch { /* ignore */ }
-  }, [state.items]);
+  }, [state.items, hydrated]);
 
   const add = useCallback((product: ShopProduct, qty?: number) => dispatch({ type: "ADD", product, qty }), []);
   const remove = useCallback((offerId: string) => dispatch({ type: "REMOVE", offerId }), []);

@@ -4,6 +4,7 @@ import Image from "next/image";
 import { Quote, Star } from "lucide-react";
 import { fetchPopular, fetchAromaMesyatsa, fetchReviews, fetchNews, fetchBanners } from "@/lib/api";
 import { SITE_URL, SITE_NAME } from "@/lib/seo";
+import { toProductSlug } from "@/lib/slug";
 import ProductCard from "@/components/ProductCard";
 import BannerSlider from "@/components/BannerSlider";
 import BrandGallery from "@/components/BrandGallery";
@@ -209,7 +210,7 @@ export default async function HomePage() {
                   </span>
                 )}
               </div>
-              <Link href={`/product/${encodeURIComponent(aromaProduct.offerId)}`} style={{ display: "inline-flex", alignItems: "center", gap: 10, padding: "13px 28px", borderRadius: 2, background: "linear-gradient(135deg, rgba(201,162,94,0.18), rgba(201,162,94,0.08))", border: "1px solid rgba(201,162,94,0.4)", color: "#c9a25e", fontSize: 13, fontWeight: 600, letterSpacing: "0.06em", textDecoration: "none", textTransform: "uppercase" }}>
+              <Link href={`/product/${toProductSlug(aromaProduct.name, aromaProduct.offerId)}`} style={{ display: "inline-flex", alignItems: "center", gap: 10, padding: "13px 28px", borderRadius: 2, background: "linear-gradient(135deg, rgba(201,162,94,0.18), rgba(201,162,94,0.08))", border: "1px solid rgba(201,162,94,0.4)", color: "#c9a25e", fontSize: 13, fontWeight: 600, letterSpacing: "0.06em", textDecoration: "none", textTransform: "uppercase" }}>
                 Открыть аромат
               </Link>
             </div>
