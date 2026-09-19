@@ -13,6 +13,7 @@ function normalizeMarketplaceAccount(input = {}, current = {}) {
     hidden: Boolean(input.hidden ?? current.hidden),
     syncEnabled: parseBooleanSetting(input.syncEnabled ?? input.sync_enabled, current.syncEnabled !== false),
     importEnabled: parseBooleanSetting(input.importEnabled ?? input.import_enabled, current.importEnabled !== false),
+    expressOnly: parseBooleanSetting(input.expressOnly ?? input.express_only, Boolean(current.expressOnly)),
     createdAt: current.createdAt || input.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -159,6 +160,7 @@ function sanitizeMarketplaceAccount(account = {}) {
     inheritedFromEnv: Boolean(account.inheritedFromEnv),
     syncEnabled: account.syncEnabled !== false,
     importEnabled: account.importEnabled !== false,
+    expressOnly: Boolean(account.expressOnly),
     updatedAt: account.updatedAt || account.createdAt || null,
   };
 }

@@ -4335,7 +4335,7 @@ test("AI image generation requires OpenAI key before creating draft", async () =
     })
     .expect(200);
 
-  product = saved.body.warehouse.products.find((item) => item.id === smokeId);
+  product = saved.body.product?.id === smokeId ? saved.body.product : null;
   assert.ok(product);
 
   const previousKey = process.env.OPENAI_API_KEY;

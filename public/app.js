@@ -196,6 +196,7 @@ const elements = {
   accountIdInput: document.querySelector("#accountIdInput"),
   accountMarketplaceInput: document.querySelector("#accountMarketplaceInput"),
   accountSyncEnabledInput: document.querySelector("#accountSyncEnabledInput"),
+  accountExpressOnlyInput: document.querySelector("#accountExpressOnlyInput"),
   accountSaveButton: document.querySelector("#accountSaveButton"),
   accountCancelEditButton: document.querySelector("#accountCancelEditButton"),
   accountStatus: document.querySelector("#accountStatus"),
@@ -3384,7 +3385,7 @@ function renderAccounts() {
             <div>
               <span class="market-badge ${escapeHtml(account.marketplace)}">${accountMarketplaceLabel(account.marketplace)}</span>
               <h3>${escapeHtml(account.name)}</h3>
-              <p class="account-sync-note">${syncEnabled ? "Загрузка товаров включена" : "Загрузка товаров выключена"}</p>
+              <p class="account-sync-note">${syncEnabled ? "Загрузка товаров включена" : "Загрузка товаров выключена"}${account.expressOnly ? " · Экспресс-кабинет" : ""}</p>
               <p>${account.readOnly ? "Задан в .env" : account.inheritedFromEnv ? "Переопределён из интерфейса" : "Локальная настройка"} · ${account.configured ? "ключи подключены" : "не настроен"}</p>
             </div>
             <div class="account-actions">
@@ -3446,6 +3447,7 @@ function resetAccountForm() {
   elements.accountForm?.reset();
   if (elements.accountIdInput) elements.accountIdInput.value = "";
   if (elements.accountSyncEnabledInput) elements.accountSyncEnabledInput.checked = true;
+  if (elements.accountExpressOnlyInput) elements.accountExpressOnlyInput.checked = false;
   if (elements.accountFormTitle) elements.accountFormTitle.textContent = "Добавить кабинет";
   if (elements.accountSaveButton) elements.accountSaveButton.textContent = "Сохранить кабинет";
   elements.accountCancelEditButton?.classList.add("hidden");
@@ -3462,6 +3464,7 @@ function startAccountEdit(account) {
   elements.accountForm.elements.businessId.value = account.businessId || "";
   elements.accountForm.elements.campaignId.value = account.campaignId || "";
   if (elements.accountSyncEnabledInput) elements.accountSyncEnabledInput.checked = account.syncEnabled !== false;
+  if (elements.accountExpressOnlyInput) elements.accountExpressOnlyInput.checked = Boolean(account.expressOnly);
   if (elements.accountFormTitle) elements.accountFormTitle.textContent = "Редактировать кабинет";
   if (elements.accountSaveButton) elements.accountSaveButton.textContent = "Сохранить изменения";
   elements.accountCancelEditButton?.classList.remove("hidden");
@@ -5251,6 +5254,7 @@ elements.accountForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const formData = Object.fromEntries(new FormData(elements.accountForm).entries());
   formData.syncEnabled = elements.accountSyncEnabledInput?.checked ? "true" : "false";
+  formData.expressOnly = elements.accountExpressOnlyInput?.checked ? "true" : "false";
   const accountId = String(formData.id || "").trim();
   const isEditing = Boolean(accountId);
   elements.accountStatus.textContent = isEditing ? "Сохраняю изменения кабинета..." : "Сохраняю кабинет...";

@@ -375,11 +375,21 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
   // order.campaignId from the batched business endpoint (which Yandex may not populate),
   // and lets us tag each order's isExpress status unambiguously from the campaign config.
   //
-  // Express campaigns = Yandex shops with syncEnabled=false.
-  // sorinExpress.yandexCampaignId is used only for the Sorin stock-sync, NOT for order tagging —
-  // that way changing the stock-sync campaign ID doesn't re-enable Express order detection.
+  // Express campaigns: shops with expressOnly=true (explicit flag), OR — as legacy fallback —
+  // shops with syncEnabled=false when at least one Yandex shop has syncEnabled=true.
+  // The expressOnly flag is the authoritative signal; syncEnabled is a secondary heuristic
+  // kept for backward compat. The fallback guard (regularCampaignIds.size > 0) prevents
+  // the entire cart from flipping to "all express" when all shops have sync disabled.
+  const allYandexShops = getYandexShops({ includeSyncDisabled: true });
+  const expressOnlyCampaignIds = new Set(
+    allYandexShops
+      .filter((s) => s.expressOnly)
+      .flatMap((s) => parseYandexCampaignIds(s.campaignId))
+      .filter(Boolean),
+  );
   const regularCampaignIds = new Set(
-    getYandexShops({ includeSyncDisabled: false })
+    allYandexShops
+      .filter((s) => !s.expressOnly && s.syncEnabled !== false)
       .flatMap((s) => parseYandexCampaignIds(s.campaignId))
       .filter(Boolean),
   );
@@ -395,7 +405,11 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
       seenCampaignIds.add(campaignId);
       const numId = Number(campaignId);
       if (!Number.isFinite(numId) || numId <= 0) continue;
-      const isExpressCampaign = !regularCampaignIds.has(campaignId);
+      // expressOnly=true → always express. Otherwise: not in regularCampaignIds AND
+      // at least one regular campaign exists (size>0 guard prevents all-express when sync is
+      // accidentally disabled on all shops).
+      const isExpressCampaign = expressOnlyCampaignIds.has(campaignId)
+        || (regularCampaignIds.size > 0 && !regularCampaignIds.has(campaignId));
       campaignEntries.push({ shop, businessId, campaignId: numId, isExpressCampaign });
     }
   }
