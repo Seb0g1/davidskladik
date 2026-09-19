@@ -368,18 +368,18 @@ async function fetchOzonSupplierCartLines({ from, to, limit, statuses } = {}) {
 }
 
 async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substatuses } = {}) {
-  // Express Yandex campaign orders look identical to regular FBS in the API — no delivery.type=EXPRESS.
-  // Detect express by which campaign the order belongs to, not by order fields.
+  // Express detection strategy — two layers:
+  // 1. expressOnly campaign (shop.expressOnly=true): entire campaign is express → force isExpress=true.
+  // 2. Regular campaign: use order-level delivery fields (delivery.type, specificFeatures, etc.)
+  //    to detect per-order express. This handles the common case where the main FBS campaign
+  //    also contains Sorin Express warehouse orders that Yandex marks with EXPRESS delivery type.
   //
   // Strategy: make ONE API call per campaign (not per business). This avoids relying on
-  // order.campaignId from the batched business endpoint (which Yandex may not populate),
-  // and lets us tag each order's isExpress status unambiguously from the campaign config.
+  // order.campaignId from the batched business endpoint (which Yandex may not populate).
   //
-  // Express campaigns: shops with expressOnly=true (explicit flag), OR — as legacy fallback —
-  // shops with syncEnabled=false when at least one Yandex shop has syncEnabled=true.
-  // The expressOnly flag is the authoritative signal; syncEnabled is a secondary heuristic
-  // kept for backward compat. The fallback guard (regularCampaignIds.size > 0) prevents
-  // the entire cart from flipping to "all express" when all shops have sync disabled.
+  // legacySyncDisabled heuristic: if NO shop has expressOnly set but some have syncEnabled=false,
+  // treat syncEnabled=false shops as express-only (backward compat), but only when at least one
+  // sync-enabled shop exists (size>0 guard prevents all-express on misconfigured setups).
   const allYandexShops = getYandexShops({ includeSyncDisabled: true });
   const expressOnlyCampaignIds = new Set(
     allYandexShops
@@ -439,11 +439,14 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
         sourcePlatforms: ["MARKET"],
       });
       const rawLines = normalizeYandexSupplierCartOrders(data, shop, campaignId);
-      // Campaign identity is authoritative for Express tagging.
-      // Express campaigns: force isExpress=true even if order fields say otherwise.
-      // Regular campaigns: force isExpress=false even if delivery fields say EXPRESS
-      // (e.g. ym-express is a Yandex Express warehouse but we process its orders as regular FBS).
-      const taggedLines = rawLines.map((line) => ({ ...line, isExpress: isExpressCampaign }));
+      // Express tagging strategy:
+      // - expressOnly campaign → force isExpress=true (whole campaign is express)
+      // - Regular campaign → preserve the order-level detection from delivery fields
+      //   (e.g. Sorin Express warehouse orders come through the main campaign but
+      //    the order's delivery type/specificFeatures identify them as express)
+      const taggedLines = isExpressCampaign
+        ? rawLines.map((line) => ({ ...line, isExpress: true }))
+        : rawLines;
       lines.push(...taggedLines);
       pageToken = cleanText(data?.paging?.nextPageToken || data?.result?.paging?.nextPageToken || data?.nextPageToken);
       if (!pageToken) break;
