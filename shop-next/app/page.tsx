@@ -71,14 +71,14 @@ export default async function HomePage() {
 
       {/* ════════ STATS ════════ */}
       <section className="reveal-section" style={{ borderTop: "1px solid rgba(255,255,255,0.06)", borderBottom: "1px solid rgba(255,255,255,0.06)", margin: "0 clamp(18px,4vw,56px)" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))" }}>
+        <div className="stats-grid">
           {[
             { value: "22 000+", label: "Ароматов в наличии" },
             { value: "100%",    label: "Гарантия оригинала" },
             { value: "1–5 дн.", label: "Доставка по России" },
             { value: "4.9",     label: "Рейтинг на Ozon" },
-          ].map(({ value, label }, i) => (
-            <div key={label} style={{ padding: "34px 26px", borderRight: i < 3 ? "1px solid rgba(255,255,255,0.06)" : undefined }}>
+          ].map(({ value, label }) => (
+            <div key={label} className="stats-grid-item" style={{ padding: "34px 26px" }}>
               <p style={{ margin: 0, fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", fontSize: 40, lineHeight: 1, color: "#f5f4f0" }}>{value}</p>
               <p style={{ margin: "10px 0 0", fontSize: 12.5, letterSpacing: "0.08em", color: "#7d7a73" }}>{label}</p>
             </div>
@@ -132,7 +132,7 @@ export default async function HomePage() {
             </div>
             <Link href="/catalog" className="btn-ghost">Смотреть всё →</Link>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(200px,1fr))", gap: 18 }}>
+          <div className="product-grid">
             {popularProducts.map(p => <div key={p.id} data-mv-card="1"><ProductCard product={p} /></div>)}
           </div>
         </section>

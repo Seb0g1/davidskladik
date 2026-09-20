@@ -556,7 +556,7 @@ function CatalogInner({ initialProducts, initialTotal, initialBrands, autoCatego
 
               {products.length > 0 ? (
                 <>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 14 }}>
+                  <div className="product-grid">
                     {products.map((p, i) => (
                       <div key={p.offerId} className="anim-slide-up" style={{ animationDelay: `${Math.min(i, 12) * 0.03}s` }}>
                         <ProductCard product={p} />

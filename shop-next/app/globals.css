@@ -369,7 +369,7 @@
 /* ──────────────────────────── INPUTS ──────────────────────────── */
 .input-base {
   width: 100%;
-  height: 40px;
+  height: 44px;
   padding: 0 12px;
   background: #131313;
   border: 1px solid var(--border-md);
@@ -385,7 +385,7 @@
 
 /* ──────────────────────────── PAGINATION ──────────────────────────── */
 .pg-btn {
-  width: 36px; height: 36px;
+  width: 40px; height: 40px;
   border-radius: 2px;
   border: 1px solid var(--border);
   font-size: 13px; font-weight: 400;
@@ -394,6 +394,9 @@
   background: transparent;
   display: flex; align-items: center; justify-content: center;
   transition: all 0.3s ease;
+}
+@media (max-width: 767px) {
+  .pg-btn { width: 44px; height: 44px; }
 }
 .pg-btn:hover:not(:disabled) { border-color: rgba(201,162,94,0.6); color: var(--accent2); }
 .pg-btn.current { background: rgba(201,162,94,0.12); border-color: rgba(201,162,94,0.5); color: var(--accent2); }
@@ -595,6 +598,58 @@
 .blog-content img { max-width: 100%; border-radius: 4px; margin: 24px 0; border: 1px solid rgba(255,255,255,0.07); }
 .blog-content blockquote { border-left: 2px solid rgba(201,162,94,0.5); padding-left: 16px; margin: 24px 0; font-style: italic; color: rgba(242,237,230,0.65); }
 .blog-content strong { color: #f2ede6; }
+
+/* ──────────────────────────── PRODUCT CARD RESPONSIVE FOOTER ──────────────────────────── */
+@media (max-width: 559px) {
+  .pc-footer { flex-wrap: wrap; }
+  .pc-price-wrap { flex: 0 0 100%; }
+}
+
+/* ──────────────────────────── RESPONSIVE PRODUCT GRID ──────────────────────────── */
+.product-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+@media (min-width: 560px) {
+  .product-grid {
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 14px;
+  }
+}
+@media (min-width: 960px) {
+  .product-grid {
+    gap: 18px;
+  }
+}
+
+/* ──────────────────────────── STATS GRID ──────────────────────────── */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+.stats-grid-item {
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+.stats-grid-item:last-child {
+  border-bottom: none;
+}
+@media (min-width: 700px) {
+  .stats-grid-item {
+    border-bottom: none;
+    border-right: 1px solid rgba(255,255,255,0.06);
+  }
+  .stats-grid-item:last-child {
+    border-right: none;
+  }
+}
+
+/* ──────────────────────────── SAFE AREA BOTTOM NAV PADDING ──────────────────────────── */
+@media (max-width: 767px) {
+  .page-root {
+    padding-bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+  }
+}
 
 /* ──────────────────────────── CATALOG PAGE ──────────────────────────── */
 .cat-layout { display: block; }

@@ -151,13 +151,15 @@ export default function BannerSlider({ banners: initialBanners }: { banners?: Sh
       {banners.length > 1 && (
         <>
           {[{ dir: "prev", fn: prev, side: "left" }, { dir: "next", fn: next, side: "right" }].map(({ dir, fn, side }) => (
-            <button key={dir} onClick={fn} style={{ position: "absolute", [side]: 12, top: "50%", transform: "translateY(-50%)", zIndex: 10, background: "rgba(255,255,255,0.12)", backdropFilter: "blur(8px)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "50%", width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#f2ede6" }}>
+            <button key={dir} onClick={fn} style={{ position: "absolute", [side]: 12, top: "50%", transform: "translateY(-50%)", zIndex: 10, background: "rgba(255,255,255,0.12)", backdropFilter: "blur(8px)", border: "1px solid rgba(255,255,255,0.15)", borderRadius: "50%", width: 44, height: 44, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: "#f2ede6" }}>
               {dir === "prev" ? <ChevronLeft size={18} /> : <ChevronRight size={18} />}
             </button>
           ))}
           <div style={{ position: "absolute", bottom: 14, left: "50%", transform: "translateX(-50%)", display: "flex", gap: 6, zIndex: 10 }}>
             {banners.map((_, i) => (
-              <button key={i} onClick={() => setIdx(i)} style={{ borderRadius: 4, border: "none", cursor: "pointer", width: i === idx ? 24 : 8, height: 8, background: i === idx ? "#f2ede6" : "rgba(242,237,230,0.35)", transition: "all 0.3s" }} />
+              <button key={i} onClick={() => setIdx(i)} style={{ borderRadius: 4, border: "none", cursor: "pointer", background: "transparent", padding: "10px 4px", lineHeight: 0 }}>
+                <span style={{ display: "block", borderRadius: 4, width: i === idx ? 24 : 8, height: 8, background: i === idx ? "#f2ede6" : "rgba(242,237,230,0.35)", transition: "all 0.3s" }} />
+              </button>
             ))}
           </div>
         </>

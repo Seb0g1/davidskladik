@@ -54,8 +54,8 @@ export default function ProductCard({ product, showBrand = true }: Props) {
         <div style={{ fontSize: 13, fontWeight: 400, color: "#f5f4f0", lineHeight: 1.4, letterSpacing: "0.02em", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{product.name}</div>
         {product.volume && <div style={{ fontSize: 11, color: "rgba(245,244,240,0.35)", letterSpacing: "0.06em" }}>{product.volume}</div>}
 
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "auto", paddingTop: 10, gap: 8 }}>
-          <div>
+        <div className="pc-footer" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "auto", paddingTop: 10, gap: 8 }}>
+          <div className="pc-price-wrap">
             <span suppressHydrationWarning style={{ fontSize: 16, fontWeight: 500, color: "#f5f4f0", letterSpacing: "-0.01em" }}>{product.priceRub.toLocaleString("ru-RU")} ₽</span>
             {product.oldPriceRub && <span suppressHydrationWarning style={{ fontSize: 11, color: "rgba(245,244,240,0.3)", textDecoration: "line-through", marginLeft: 6 }}>{product.oldPriceRub.toLocaleString("ru-RU")} ₽</span>}
           </div>

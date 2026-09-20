@@ -843,7 +843,7 @@ export default function ProductClient({
 
       {/* Add-to-cart popup */}
       {cartPopup && (
-        <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 100, padding: "16px clamp(16px,4vw,32px)", background: S.surface, borderTop: `1px solid ${S.border}`, boxShadow: "0 -8px 32px rgba(0,0,0,0.4)", animation: "slideUp 0.25s ease" }}>
+        <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 100, padding: `16px clamp(16px,4vw,32px) calc(16px + env(safe-area-inset-bottom, 0px))`, background: S.surface, borderTop: `1px solid ${S.border}`, boxShadow: "0 -8px 32px rgba(0,0,0,0.4)", animation: "slideUp 0.25s ease" }}>
           <div style={{ maxWidth: 680, margin: "0 auto", display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
               <div style={{ width: 40, height: 40, borderRadius: 10, overflow: "hidden", flexShrink: 0, background: S.surface2 }}>
@@ -859,7 +859,7 @@ export default function ProductClient({
               <Link href="/cart" className="btn-primary" style={{ fontSize: 13, padding: "10px 18px" }}>
                 Перейти в корзину →
               </Link>
-              <button onClick={() => setCartPopup(false)} style={{ padding: "10px 12px", background: "none", border: `1px solid ${S.border}`, borderRadius: 12, color: S.muted, cursor: "pointer" }}>
+              <button onClick={() => setCartPopup(false)} style={{ padding: "12px", minWidth: 44, minHeight: 44, background: "none", border: `1px solid ${S.border}`, borderRadius: 12, color: S.muted, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
                 <X size={14} />
               </button>
             </div>

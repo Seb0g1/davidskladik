@@ -90,12 +90,12 @@ export default function CartPage() {
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 12 }}>
                     <div style={{ display: "flex", alignItems: "center", background: S.surface2, borderRadius: 12, overflow: "hidden", border: `1px solid ${S.border}` }}>
                       <button onClick={() => setQty(product.offerId, quantity - 1)}
-                        style={{ padding: "8px 12px", background: "none", border: "none", color: S.muted, cursor: "pointer" }}>
+                        style={{ padding: "8px 14px", minHeight: 44, background: "none", border: "none", color: S.muted, cursor: "pointer", display: "flex", alignItems: "center" }}>
                         <Minus size={13} />
                       </button>
-                      <span style={{ padding: "8px 12px", fontSize: 13, fontWeight: 700, color: S.text, minWidth: 36, textAlign: "center" }}>{quantity}</span>
+                      <span style={{ padding: "8px 12px", fontSize: 13, fontWeight: 700, color: S.text, minWidth: 36, textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center" }}>{quantity}</span>
                       <button onClick={() => setQty(product.offerId, Math.min(product.stockQty || 99, quantity + 1))}
-                        style={{ padding: "8px 12px", background: "none", border: "none", color: S.muted, cursor: "pointer" }}>
+                        style={{ padding: "8px 14px", minHeight: 44, background: "none", border: "none", color: S.muted, cursor: "pointer", display: "flex", alignItems: "center" }}>
                         <Plus size={13} />
                       </button>
                     </div>
@@ -105,7 +105,7 @@ export default function CartPage() {
                         {(product.priceRub * quantity).toLocaleString("ru-RU")} ₽
                       </span>
                       <button onClick={() => remove(product.offerId)}
-                        style={{ padding: 8, background: "none", border: "none", color: S.subtle, cursor: "pointer", borderRadius: 10 }}>
+                        style={{ padding: 12, background: "none", border: "none", color: S.subtle, cursor: "pointer", borderRadius: 10 }}>
                         <Trash2 size={15} />
                       </button>
                     </div>

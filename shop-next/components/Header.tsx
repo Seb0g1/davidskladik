@@ -188,12 +188,12 @@ export default function Header() {
 
           {/* Mobile right */}
           <div className="flex md:hidden" style={{ alignItems: "center", gap: 8, marginLeft: "auto" }}>
-            <button onClick={() => setSearchOpen(s => !s)} style={{ padding: 8, background: "transparent", border: "none", color: "rgba(245,244,240,0.52)", cursor: "pointer" }}>
+            <button onClick={() => setSearchOpen(s => !s)} style={{ padding: 12, background: "transparent", border: "none", color: "rgba(245,244,240,0.52)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
               <Search size={20} strokeWidth={1.5} />
             </button>
-            <Link href="/cart" style={{ position: "relative", padding: 8, color: "rgba(245,244,240,0.52)", textDecoration: "none" }}>
+            <Link href="/cart" style={{ position: "relative", padding: 12, color: "rgba(245,244,240,0.52)", textDecoration: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>
               <ShoppingBag size={20} strokeWidth={1.5} />
-              {totalItems > 0 && <span style={{ position: "absolute", top: 4, right: 4, width: 14, height: 14, background: "#c9a25e", color: "#0b0b0b", fontSize: 8, fontWeight: 600, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center" }}>{totalItems > 9 ? "9+" : totalItems}</span>}
+              {totalItems > 0 && <span style={{ position: "absolute", top: 6, right: 6, width: 14, height: 14, background: "#c9a25e", color: "#0b0b0b", fontSize: 8, fontWeight: 600, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center" }}>{totalItems > 9 ? "9+" : totalItems}</span>}
             </Link>
           </div>
 

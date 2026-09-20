@@ -135,7 +135,7 @@ export default function AiFinderClient() {
           }}
         />
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 16px 16px" }}>
-          <span style={{ fontSize: 11, color: S.muted }}>Ctrl+Enter для поиска</span>
+          <span className="hidden md:inline" style={{ fontSize: 11, color: S.muted }}>Ctrl+Enter для поиска</span>
           <button
             onClick={() => search()}
             disabled={loading || !query.trim()}
@@ -225,7 +225,7 @@ export default function AiFinderClient() {
             </div>
           ) : (
             <>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(240px,1fr))", gap: 16 }}>
+              <div className="product-grid">
                 {results.map(p => <ResultCard key={p.offerId} product={p} />)}
               </div>
               <div style={{ marginTop: 32, textAlign: "center" }}>

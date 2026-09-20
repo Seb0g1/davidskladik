@@ -110,7 +110,7 @@ export default function AddToCartButton({ product, size = "sm" }: Props) {
     setTimeout(() => setPhase("idle"), 2100)
   }, [phase, product, add, flyX, flyY, flyScale, flyOp, flyRotate])
 
-  const h  = size === "md" ? 40 : 34
+  const h  = size === "md" ? 44 : 40
   const px = size === "md" ? 18 : 13
   const fs = size === "md" ? 12 : 11
 

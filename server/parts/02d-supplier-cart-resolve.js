@@ -368,18 +368,14 @@ async function fetchOzonSupplierCartLines({ from, to, limit, statuses } = {}) {
 }
 
 async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substatuses } = {}) {
-  // Express detection strategy — two layers:
-  // 1. expressOnly campaign (shop.expressOnly=true): entire campaign is express → force isExpress=true.
-  // 2. Regular campaign: use order-level delivery fields (delivery.type, specificFeatures, etc.)
-  //    to detect per-order express. This handles the common case where the main FBS campaign
-  //    also contains Sorin Express warehouse orders that Yandex marks with EXPRESS delivery type.
+  // Express detection strategy — authoritative campaign config only:
+  // - expressOnly campaign (shop.expressOnly=true OR SORIN_EXPRESS_YANDEX_CAMPAIGN_ID env):
+  //   force isExpress=true for every order from that campaign.
+  // - Regular campaign: force isExpress=false for every order.
   //
-  // Strategy: make ONE API call per campaign (not per business). This avoids relying on
-  // order.campaignId from the batched business endpoint (which Yandex may not populate).
-  //
-  // legacySyncDisabled heuristic: if NO shop has expressOnly set but some have syncEnabled=false,
-  // treat syncEnabled=false shops as express-only (backward compat), but only when at least one
-  // sync-enabled shop exists (size>0 guard prevents all-express on misconfigured setups).
+  // We do NOT use delivery field heuristics (specificFeatures, deliveryPartnerType, etc.)
+  // because Yandex sets EXPRESS_DELIVERY in specificFeatures for regular FBS orders too,
+  // which causes all regular Parfyumerius orders to be incorrectly tagged as express.
   const allYandexShops = getYandexShops({ includeSyncDisabled: true });
   const expressOnlyCampaignIds = new Set(
     allYandexShops
@@ -387,6 +383,10 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
       .flatMap((s) => parseYandexCampaignIds(s.campaignId))
       .filter(Boolean),
   );
+  // SORIN_EXPRESS_YANDEX_CAMPAIGN_ID is always express even if not in marketplace accounts
+  const sorinExpressCampaignId = cleanText(process.env.SORIN_EXPRESS_YANDEX_CAMPAIGN_ID || "");
+  if (sorinExpressCampaignId) expressOnlyCampaignIds.add(sorinExpressCampaignId);
+
   const regularCampaignIds = new Set(
     allYandexShops
       .filter((s) => !s.expressOnly && s.syncEnabled !== false)
@@ -405,12 +405,28 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
       seenCampaignIds.add(campaignId);
       const numId = Number(campaignId);
       if (!Number.isFinite(numId) || numId <= 0) continue;
-      // expressOnly=true → always express. Otherwise: not in regularCampaignIds AND
-      // at least one regular campaign exists (size>0 guard prevents all-express when sync is
-      // accidentally disabled on all shops).
       const isExpressCampaign = expressOnlyCampaignIds.has(campaignId)
         || (regularCampaignIds.size > 0 && !regularCampaignIds.has(campaignId));
       campaignEntries.push({ shop, businessId, campaignId: numId, isExpressCampaign });
+    }
+  }
+  // If Sorin Express campaign is configured via env but not in marketplace accounts,
+  // add it as a virtual express entry using the first Yandex shop's businessId and
+  // the dedicated Sorin Express API key (or the regular shop key as fallback).
+  if (sorinExpressCampaignId && !seenCampaignIds.has(sorinExpressCampaignId)) {
+    const sorinExpressApiKey = cleanText(process.env.SORIN_EXPRESS_YANDEX_API_KEY || "");
+    const baseShop = allYandexShops[0];
+    if (baseShop && baseShop.businessId && (sorinExpressApiKey || baseShop.apiKey)) {
+      const numSorin = Number(sorinExpressCampaignId);
+      if (Number.isFinite(numSorin) && numSorin > 0) {
+        seenCampaignIds.add(sorinExpressCampaignId);
+        campaignEntries.push({
+          shop: { ...baseShop, id: `yandex-express-${sorinExpressCampaignId}`, campaignId: sorinExpressCampaignId, apiKey: sorinExpressApiKey || baseShop.apiKey },
+          businessId: cleanText(baseShop.businessId),
+          campaignId: numSorin,
+          isExpressCampaign: true,
+        });
+      }
     }
   }
 
@@ -439,14 +455,8 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
         sourcePlatforms: ["MARKET"],
       });
       const rawLines = normalizeYandexSupplierCartOrders(data, shop, campaignId);
-      // Express tagging strategy:
-      // - expressOnly campaign → force isExpress=true (whole campaign is express)
-      // - Regular campaign → preserve the order-level detection from delivery fields
-      //   (e.g. Sorin Express warehouse orders come through the main campaign but
-      //    the order's delivery type/specificFeatures identify them as express)
-      const taggedLines = isExpressCampaign
-        ? rawLines.map((line) => ({ ...line, isExpress: true }))
-        : rawLines;
+      // Force isExpress from campaign config — never rely on delivery field heuristics.
+      const taggedLines = rawLines.map((line) => ({ ...line, isExpress: isExpressCampaign }));
       lines.push(...taggedLines);
       pageToken = cleanText(data?.paging?.nextPageToken || data?.result?.paging?.nextPageToken || data?.nextPageToken);
       if (!pageToken) break;
