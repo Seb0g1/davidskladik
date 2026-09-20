@@ -109,10 +109,13 @@ async function confirmMarketplaceOrdersAfterInsert(inserted = []) {
     results.push(await confirmOzonPostingPackaged(postingNumber, products, account));
   }
 
-  // Yandex: сгруппировать не-экспресс строки по orderId и подтвердить READY_TO_SHIP
+  // Yandex: сгруппировать строки по orderId и подтвердить READY_TO_SHIP.
+  // Включаем как обычный FBS (Magic stick), так и FBS-экспресс (Наш склад) —
+  // оба типа требуют READY_TO_SHIP по Яндекс API. campaignId из строки указывает
+  // нужный магазин; getYandexShopByTarget находит правильный ключ API.
   const yandexOrders = new Map();
   for (const row of inserted) {
-    if (row.marketplace !== "yandex" || row.isExpress || !row.orderId) continue;
+    if (row.marketplace !== "yandex" || !row.orderId) continue;
     const campaignId = cleanText(row.campaignId || "");
     if (!yandexOrders.has(row.orderId)) yandexOrders.set(row.orderId, campaignId);
   }

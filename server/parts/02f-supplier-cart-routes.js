@@ -891,7 +891,7 @@ app.post("/api/supplier-cart/reconfirm-marketplace", requireAdmin, async (reques
     const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
     const isRecent = (row) => !row.soldAt || new Date(row.soldAt) >= cutoff;
     const toConfirm = draftRows.filter(
-      (row) => row.alreadyCommitted && row.postingNumber && row.ozonProductId && row.marketplace === "ozon" && isRecent(row),
+      (row) => row.alreadyCommitted && !row.isExpress && row.postingNumber && row.ozonProductId && row.marketplace === "ozon" && isRecent(row),
     );
     const toConfirmYandex = draftRows.filter(
       (row) => row.alreadyCommitted && row.orderId && row.campaignId && row.marketplace === "yandex" && isRecent(row),
