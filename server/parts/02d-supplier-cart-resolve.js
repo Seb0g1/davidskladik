@@ -368,14 +368,20 @@ async function fetchOzonSupplierCartLines({ from, to, limit, statuses } = {}) {
 }
 
 async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substatuses } = {}) {
-  // Express detection strategy — authoritative campaign config only:
-  // - expressOnly campaign (shop.expressOnly=true OR SORIN_EXPRESS_YANDEX_CAMPAIGN_ID env):
-  //   force isExpress=true for every order from that campaign.
-  // - Regular campaign: force isExpress=false for every order.
+  // Express detection strategy:
+  // Yandex's business-level orders API returns orders from ALL campaigns in the business,
+  // ignoring the campaignIds filter. Each order includes its campaignId in the response.
+  // We use that per-order campaignId to classify express vs regular:
+  //   - if order.campaignId is in expressOnlyCampaignIds → isExpress=true
+  //   - otherwise → isExpress=false
   //
-  // We do NOT use delivery field heuristics (specificFeatures, deliveryPartnerType, etc.)
-  // because Yandex sets EXPRESS_DELIVERY in specificFeatures for regular FBS orders too,
-  // which causes all regular Parfyumerius orders to be incorrectly tagged as express.
+  // Express campaign IDs come from:
+  //   1. shop.expressOnly=true in marketplace accounts
+  //   2. SORIN_EXPRESS_YANDEX_CAMPAIGN_ID env var (Наш склад express warehouse)
+  //
+  // We make ONE API call per configured shop (deduped by campaignId). The initial
+  // isExpressCampaign on the API call is used only as fallback when order.campaignId
+  // is absent from the response.
   const allYandexShops = getYandexShops({ includeSyncDisabled: true });
   const expressOnlyCampaignIds = new Set(
     allYandexShops
@@ -383,7 +389,7 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
       .flatMap((s) => parseYandexCampaignIds(s.campaignId))
       .filter(Boolean),
   );
-  // SORIN_EXPRESS_YANDEX_CAMPAIGN_ID is always express even if not in marketplace accounts
+  // SORIN_EXPRESS_YANDEX_CAMPAIGN_ID = the Yandex Express store campaign (e.g. «Наш склад»)
   const sorinExpressCampaignId = cleanText(process.env.SORIN_EXPRESS_YANDEX_CAMPAIGN_ID || "");
   if (sorinExpressCampaignId) expressOnlyCampaignIds.add(sorinExpressCampaignId);
 
@@ -394,7 +400,7 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
       .filter(Boolean),
   );
 
-  // Build deduplicated per-campaign entries (one per unique numeric campaignId)
+  // Build deduplicated per-API-call entries (one per configured campaign, not express virtual)
   const campaignEntries = [];
   const seenCampaignIds = new Set();
   for (const shop of getYandexShops({ includeSyncDisabled: true })) {
@@ -405,28 +411,10 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
       seenCampaignIds.add(campaignId);
       const numId = Number(campaignId);
       if (!Number.isFinite(numId) || numId <= 0) continue;
+      // isExpressCampaign used only as fallback when order.campaignId is absent
       const isExpressCampaign = expressOnlyCampaignIds.has(campaignId)
         || (regularCampaignIds.size > 0 && !regularCampaignIds.has(campaignId));
       campaignEntries.push({ shop, businessId, campaignId: numId, isExpressCampaign });
-    }
-  }
-  // If Sorin Express campaign is configured via env but not in marketplace accounts,
-  // add it as a virtual express entry using the first Yandex shop's businessId and
-  // the dedicated Sorin Express API key (or the regular shop key as fallback).
-  if (sorinExpressCampaignId && !seenCampaignIds.has(sorinExpressCampaignId)) {
-    const sorinExpressApiKey = cleanText(process.env.SORIN_EXPRESS_YANDEX_API_KEY || "");
-    const baseShop = allYandexShops[0];
-    if (baseShop && baseShop.businessId && (sorinExpressApiKey || baseShop.apiKey)) {
-      const numSorin = Number(sorinExpressCampaignId);
-      if (Number.isFinite(numSorin) && numSorin > 0) {
-        seenCampaignIds.add(sorinExpressCampaignId);
-        campaignEntries.push({
-          shop: { ...baseShop, id: `yandex-express-${sorinExpressCampaignId}`, campaignId: sorinExpressCampaignId, apiKey: sorinExpressApiKey || baseShop.apiKey },
-          businessId: cleanText(baseShop.businessId),
-          campaignId: numSorin,
-          isExpressCampaign: true,
-        });
-      }
     }
   }
 
@@ -455,18 +443,22 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
         sourcePlatforms: ["MARKET"],
       });
       const rawLines = normalizeYandexSupplierCartOrders(data, shop, campaignId);
-      // Force isExpress from campaign config — never rely on delivery field heuristics.
-      const taggedLines = rawLines.map((line) => ({ ...line, isExpress: isExpressCampaign }));
+      // Classify express using per-order campaignId if Yandex returned it;
+      // fall back to the campaign-level config when it's absent.
+      const taggedLines = rawLines.map((line) => {
+        const orderCampaign = cleanText(line.campaignId || "");
+        if (orderCampaign) {
+          return { ...line, isExpress: expressOnlyCampaignIds.has(orderCampaign) };
+        }
+        return { ...line, isExpress: isExpressCampaign };
+      });
       lines.push(...taggedLines);
       pageToken = cleanText(data?.paging?.nextPageToken || data?.result?.paging?.nextPageToken || data?.nextPageToken);
       if (!pageToken) break;
     }
   }
-  // Yandex's business-level orders API may return the same order in every campaign call when
-  // the campaignIds filter is not honoured server-side. Deduplicate by orderId+itemId.
-  // Non-express (regular FBS) result always wins over express-tagged duplicates: an order is
-  // only Express if it appears exclusively from the express campaign — if it also shows up in
-  // a regular campaign call that means the API leaked it, and the real campaign is regular.
+  // Deduplicate by orderId+itemId — the business API may leak orders across campaigns.
+  // When the same order appears twice, non-express wins (it came from the right FBS store).
   const finalDedup = new Map();
   for (const line of lines) {
     const dedupeKey = `${cleanText(line.orderId)}|${cleanText(line.itemId || line.offerId)}`;
