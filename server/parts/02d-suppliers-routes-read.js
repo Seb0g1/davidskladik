@@ -226,7 +226,7 @@ app.post("/api/supplier-ledger/payments", requireStaff, async (request, response
           id: `payment:${saved.id}`,
           amount: -deductRub,
           currency: "RUB",
-          note: cleanText(supplierName || partnerId),
+          note: `Оплатил: ${cleanText(supplierName || partnerId)}`,
           createdAt: new Date().toISOString(),
           createdBy: pickerUsername,
         });

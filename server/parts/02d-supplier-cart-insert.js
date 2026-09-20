@@ -702,7 +702,9 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
   // Also confirm orders for pmBlocked items that were auto-synced (previously committed to PM
   // but marketplace was never notified — state write failed at the time of the original commit).
   const syncedRows = pmBlocked.flatMap((b) => b.sourceRows || []);
-  const toConfirm = [...inserted, ...syncedRows];
+  // returnCoveredRows fulfilled from the return pool still need marketplace confirmation
+  // (READY_TO_SHIP / Ozon ship) even though they generated no new PM row.
+  const toConfirm = [...inserted, ...syncedRows, ...returnCoveredRows];
   // Run confirmations synchronously with a 6-second ceiling so the HTTP response includes
   // the Ozon/Yandex/WB results. On timeout we resolve to [] and let the background tail
   // finish on its own — the operator can use /reconfirm-marketplace as fallback.

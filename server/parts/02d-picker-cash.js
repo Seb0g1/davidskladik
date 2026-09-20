@@ -147,9 +147,16 @@ async function savePickerBalance(username, data) {
   });
 }
 
+function activePickerCredits(credits = []) {
+  // picking:* entries were deductions added at "Собрал" time (wrong behaviour, removed).
+  // Filter them out so they don't appear in balance history or affect the total.
+  return credits.filter((c) => !String(c.id || "").startsWith("picking:"));
+}
+
 function pickerBalanceBody(username, balance) {
-  const total = balance.credits.reduce((sum, c) => sum + Number(c.amount || 0), 0);
-  return { ok: true, username: cleanText(username), total: Math.round(total), credits: balance.credits };
+  const credits = activePickerCredits(balance.credits);
+  const total = credits.reduce((sum, c) => sum + Number(c.amount || 0), 0);
+  return { ok: true, username: cleanText(username), total: Math.round(total), credits };
 }
 
 app.get("/api/picker-cash/balance", requireStaff, async (request, response, next) => {
@@ -173,7 +180,7 @@ app.get("/api/picker-cash/balances", requireAdmin, async (request, response, nex
     const balances = settings.map((s) => {
       const username = String(s.key).replace("picker_balance:", "");
       const raw = s.value;
-      const credits = Array.isArray(raw?.credits) ? raw.credits : [];
+      const credits = activePickerCredits(Array.isArray(raw?.credits) ? raw.credits : []);
       const total = credits.reduce((sum, c) => sum + Number(c.amount || 0), 0);
       return { username, total: Math.round(total), credits };
     });
@@ -219,7 +226,7 @@ app.get("/api/picker-cash/balance/my-day", requireStaff, async (request, respons
     const end = new Date(`${dateStr}T23:59:59.999Z`);
     // Credits issued to this picker today (positive) + spent (negative deductions from picking)
     const balance = await loadPickerBalance(username);
-    const creditsToday = balance.credits.filter((c) => {
+    const creditsToday = activePickerCredits(balance.credits).filter((c) => {
       const d = new Date(c.createdAt || 0);
       return d >= start && d <= end;
     });

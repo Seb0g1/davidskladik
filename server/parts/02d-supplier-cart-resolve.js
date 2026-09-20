@@ -87,7 +87,7 @@ function normalizeSupplierCartPreviewRow(input = {}) {
     inactivePm: Boolean(input.inactivePm),
     skipReason: cleanText(input.skipReason || input.reason),
     requestDocId: cleanText(input.requestDocId || input.docId),
-    requestRowId: cleanText(input.requestRowId || input.rowId),
+    requestRowId: cleanText(input.requestRowId),
     manualNote: cleanText(input.manualNote || ""),
     pmName: cleanText(input.pmName || ""),
     pmNameMismatch: Boolean(input.pmNameMismatch),

@@ -864,7 +864,7 @@ export function PickingListPage() {
                       return (
                         <div className="picker-credit-row" key={c.id}>
                           <span className={`picker-credit-amount${Number(c.amount) >= 0 ? " tone-success" : " tone-danger"}`}>{Number(c.amount) >= 0 ? "+" : "−"}{(c as Record<string, unknown>).originalUsd != null ? `${Math.abs(Number((c as Record<string, unknown>).originalUsd)).toLocaleString("ru-RU")} $` : balanceStr(Math.abs(Number(c.amount)))}</span>
-                          <span className="muted-note picker-credit-note">{c.note || "—"}</span>
+                          <span className="muted-note picker-credit-note">{Number(c.amount) >= 0 ? `Выдано${c.note ? ` · ${c.note}` : ""}` : (c.note || "—")}</span>
                           <span className="muted-note picker-credit-date">{compactDate(c.createdAt ?? null)}</span>
                           <button
                             className="icon-action"
@@ -1546,7 +1546,7 @@ export function PickingListPage() {
                     return (
                       <div className="picker-credit-row" key={c.id}>
                         <span className={`picker-credit-amount${Number(c.amount) >= 0 ? " tone-success" : " tone-danger"}`}>{Number(c.amount) >= 0 ? "+" : "−"}{balanceStr(Math.abs(Number(c.amount)))}</span>
-                        <span className="muted-note picker-credit-note">{c.note || "—"}</span>
+                        <span className="muted-note picker-credit-note">{Number(c.amount) >= 0 ? `Выдано${c.note ? ` · ${c.note}` : ""}` : (c.note || "—")}</span>
                         <span className="muted-note picker-credit-date">{compactDate(c.createdAt ?? null)}</span>
                         <button
                           className="icon-action"
