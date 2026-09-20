@@ -292,17 +292,9 @@ function normalizeYandexSupplierCartOrders(data = {}, shop = {}, queriedCampaign
     // Prefer campaignId from the order itself; fall back to the campaign we queried for, then
     // the shop's configured campaignId. queriedCampaignId gives a cleaner single value than
     // shop.campaignId which may be a comma-separated list.
-    const rawOrderCampaignId = cleanText(order.campaignId || "");
-    const orderCampaignId = rawOrderCampaignId
+    const orderCampaignId = cleanText(order.campaignId || "")
       || (queriedCampaignId ? String(queriedCampaignId) : "")
       || cleanText(shop.campaignId || "");
-    logger.info("yandex_order_campaign_id_debug", {
-      orderId: order.id || order.orderId,
-      rawOrderCampaignId: rawOrderCampaignId || null,
-      queriedCampaignId: queriedCampaignId ? String(queriedCampaignId) : null,
-      resolvedCampaignId: orderCampaignId,
-      deliverySpecificFeatures: order.delivery?.specificFeatures || null,
-    });
     for (const item of items) {
       const itemStatus = cleanText(item.itemStatus || item.status).toUpperCase();
       if (itemStatus === "REJECTED" || itemStatus === "RETURNED") continue;
