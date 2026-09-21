@@ -826,12 +826,20 @@ app.post("/api/shop/ai-search", shopCors, async (request, response, next) => {
   } catch (error) { next(error); }
 });
 
+let _bannersCache = null;
+let _bannersCacheAt = 0;
+const _BANNERS_TTL = 10 * 60 * 1000; // 10 min
+
 app.get("/api/shop/banners", shopCors, async (_request, response, next) => {
   try {
+    if (_bannersCache && Date.now() - _bannersCacheAt < _BANNERS_TTL) {
+      return response.json(_bannersCache);
+    }
     const [banners, holidayBanners] = await Promise.all([readShopBanners(), buildHolidayBanners()]);
     const active = banners.filter((b) => b.active).sort((a, b) => a.order - b.order);
-    // Holiday banners appear first (order -1), regular banners follow
-    response.json([...holidayBanners, ...active]);
+    _bannersCache = [...holidayBanners, ...active];
+    _bannersCacheAt = Date.now();
+    response.json(_bannersCache);
   } catch (error) {
     next(error);
   }
@@ -846,8 +854,15 @@ app.get("/api/shop/categories", shopCors, async (_request, response, next) => {
   }
 });
 
+let _autoCatsCache = null;
+let _autoCatsCacheAt = 0;
+const _AUTO_CATS_TTL = 20 * 60 * 1000; // 20 min
+
 app.get("/api/shop/auto-categories", shopCors, async (_request, response, next) => {
   try {
+    if (_autoCatsCache && Date.now() - _autoCatsCacheAt < _AUTO_CATS_TTL) {
+      return response.json(_autoCatsCache);
+    }
     const prisma = getPrisma();
     if (!prisma) return response.json([]);
     const allProds = await prisma.warehouseProduct.findMany({
@@ -878,27 +893,42 @@ app.get("/api/shop/auto-categories", shopCors, async (_request, response, next) 
         const label = def ? def.label : slug === "parfumery" ? "Парфюмерия" : slug;
         result.push({ slug, label, count });
       });
+    _autoCatsCache = result;
+    _autoCatsCacheAt = Date.now();
     response.json(result);
   } catch (error) { next(error); }
 });
+
+const _newProductsCache = new Map(); // key `days:pageSize` → { data, at }
+const _NEW_PRODUCTS_TTL = 10 * 60 * 1000; // 10 min
 
 app.get("/api/shop/new", shopCors, async (request, response, next) => {
   try {
     const days = Math.max(1, Math.min(90, Number(request.query.days || 14) || 14));
     const pageSize = Math.max(1, Math.min(96, Number(request.query.pageSize || 24) || 24));
+    const cacheKey = `${days}:${pageSize}`;
+    const cached = _newProductsCache.get(cacheKey);
+    if (cached && Date.now() - cached.at < _NEW_PRODUCTS_TTL) return response.json(cached.data);
     const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
     const result = await buildShopProductsFromDb({ q: "", brand: "", category: "", inStock: false, sort: "name", page: 1, pageSize, createdAfter: cutoff });
-    response.json({ ok: true, ...result, days });
+    const body = { ok: true, ...result, days };
+    _newProductsCache.set(cacheKey, { data: body, at: Date.now() });
+    response.json(body);
   } catch (error) { next(error); }
 });
 
 // ── Popular products (last 30 days by marketplace + site sales) ───────────────
+const _popularCache = new Map(); // key `limit` → { data, at }
+const _POPULAR_TTL = 5 * 60 * 1000; // 5 min
+
 app.get("/api/shop/popular", shopCors, async (request, response, next) => {
   try {
     const prisma = getPrisma();
     if (!prisma) return response.json({ ok: true, products: [] });
 
     const limit = Math.max(4, Math.min(20, Number(request.query.limit || 8) || 8));
+    const cached = _popularCache.get(limit);
+    if (cached && Date.now() - cached.at < _POPULAR_TTL) return response.json(cached.data);
     const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
     // Count from marketplace sales (FinanceOrder — Ozon/Yandex real orders)
@@ -1040,7 +1070,9 @@ app.get("/api/shop/popular", shopCors, async (request, response, next) => {
       .sort((a, b) => b.salesScore - a.salesScore)
       .slice(0, limit);
 
-    response.json({ ok: true, products, source: "sales" });
+    const result = { ok: true, products, source: "sales" };
+    _popularCache.set(limit, { data: result, at: Date.now() });
+    response.json(result);
   } catch (error) { next(error); }
 });
 
@@ -1339,14 +1371,26 @@ app.get("/api/shop/settings", shopCors, async (_request, response, next) => {
 });
 
 // ── Аромат месяца ─────────────────────────────────────────────────────────
+let _aromaMesyatsaCache = null;
+let _aromaMesyatsaCacheAt = 0;
+const _AROMA_MESYATSA_TTL = 5 * 60 * 1000; // 5 min
+
 app.get("/api/shop/aroma-mesyatsa", shopCors, async (_request, response, next) => {
   try {
+    if (_aromaMesyatsaCache && Date.now() - _aromaMesyatsaCacheAt < _AROMA_MESYATSA_TTL) {
+      return response.json(_aromaMesyatsaCache);
+    }
     const settings = await readShopSettings();
     const am = settings.aromaMesyatsa;
-    if (!am || !am.offerId) return response.json({ ok: true, product: null });
+    if (!am || !am.offerId) {
+      _aromaMesyatsaCache = { ok: true, product: null };
+      _aromaMesyatsaCacheAt = Date.now();
+      return response.json(_aromaMesyatsaCache);
+    }
     const product = await findShopProductByOfferId(am.offerId);
-    if (!product) return response.json({ ok: true, product: null });
-    response.json({ ok: true, product, note: cleanText(am.note || ""), validUntil: am.validUntil || null });
+    _aromaMesyatsaCache = { ok: true, product: product || null, note: cleanText(am.note || ""), validUntil: am.validUntil || null };
+    _aromaMesyatsaCacheAt = Date.now();
+    response.json(_aromaMesyatsaCache);
   } catch (error) { next(error); }
 });
 
