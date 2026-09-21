@@ -288,6 +288,16 @@ app.delete("/api/picker-cash/balance/:username/:id", requireAdmin, async (reques
       await savePickerBalance(pickerUsername, balance);
       return balance;
     });
+    // If this credit corresponds to a supplier ledger payment, void it to keep ledger consistent.
+    if (entryId.startsWith("payment:") && shouldUsePostgresStorage()) {
+      const ledgerEntryId = entryId.slice("payment:".length);
+      getPrisma().supplierLedgerEntry.update({
+        where: { id: ledgerEntryId },
+        data: { status: "voided", voidedAt: new Date() },
+      }).then(() => { suppliersListCache = null; }).catch((err) => {
+        logger.warn("picker balance delete: supplier ledger void failed", { ledgerEntryId, detail: err?.message || String(err) });
+      });
+    }
     response.json(pickerBalanceBody(pickerUsername, result));
   } catch (error) {
     next(error);

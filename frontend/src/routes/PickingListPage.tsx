@@ -333,6 +333,10 @@ export function PickingListPage() {
       void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
       void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
       void queryClient.invalidateQueries({ queryKey: ["finance"] });
+      void queryClient.invalidateQueries({ queryKey: ["picker-balances"] });
+      void queryClient.invalidateQueries({ queryKey: ["picker-balance"] });
+      void queryClient.invalidateQueries({ queryKey: ["picker-spending"] });
+      void queryClient.invalidateQueries({ queryKey: ["picker-my-day"] });
     },
     onError: (error, variables) => {
       setPaymentErrors((current) => ({ ...current, [variables.supplierName]: (error as Error).message || "Ошибка оплаты" }));
@@ -2068,7 +2072,7 @@ export function PickingListPage() {
                                         ? <a href={`https://seller.ozon.ru/app/orders/${row.orderId || row.postingNumber}`} target="_blank" rel="noopener noreferrer" className="link-plain">{row.orderId || row.postingNumber}</a>
                                         : (row.orderId || row.postingNumber || "-")}</span>
                                       {row.saleAmount ? <span className="tone-success">Продажа: {moneyAmount(row.saleAmount, supplierCurrency)}</span> : null}
-                                      {row.pricePaidRub ? <span className="tone-warn">Оплачено: {moneyAmount(row.pricePaidRub, "RUB")}</span> : null}
+                                      {row.pricePaidRub ? <span className="tone-warn">Цена факт: {moneyAmount(row.pricePaidRub, "RUB")}</span> : null}
                                       <span>Доверие: {row.trustFactor}/100</span>
                                       {row.orderCutoffTime ? <span>До {row.orderCutoffTime}</span> : null}
                                       {row.reseller ? <span className="tone-warn">Перекупщик</span> : null}
@@ -2151,7 +2155,7 @@ export function PickingListPage() {
                                           placeholder={isUsd ? (row.price ? `${row.price} $` : "Сумма, $") : (priceRub ? `${priceRub.toLocaleString("ru-RU")} ₽` : "Сумма, ₽")}
                                           value={priceDrafts[row.key] || ""}
                                           onChange={(e) => setPriceDrafts((p) => ({ ...p, [row.key]: e.target.value }))}
-                                          title={isUsd ? "Сумма в USD — автоматически конвертируется в рубли" : "Фактическая сумма оплаты поставщику в рублях"}
+                                          title={isUsd ? "Сумма в USD — автоматически конвертируется в рубли" : "Фактическая цена товара у поставщика (₽)"}
                                         />
                                       </div>
                                     ) : null}

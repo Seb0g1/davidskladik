@@ -250,6 +250,9 @@ export function SuppliersPage() {
       void queryClient.invalidateQueries({ queryKey: ["supplier-profile"] });
       void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
       void queryClient.invalidateQueries({ queryKey: ["finance"] });
+      void queryClient.invalidateQueries({ queryKey: ["picker-balances"] });
+      void queryClient.invalidateQueries({ queryKey: ["picker-balance"] });
+      void queryClient.invalidateQueries({ queryKey: ["picker-spending"] });
     },
   });
 
