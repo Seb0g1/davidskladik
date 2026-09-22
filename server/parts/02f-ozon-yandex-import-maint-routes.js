@@ -193,6 +193,7 @@ app.post("/api/ozon-yandex-import/fix-yandex-categories", requireAdmin, async (r
     const results = [];
     let totalOffers = 0;
     let cardsWithErrors = 0;
+    const globalCategoryHistogram = new Map();
 
     for (const shop of shops) {
       const mappings = await getYandexOfferMappings(shop);
@@ -261,6 +262,13 @@ app.post("/api/ozon-yandex-import/fix-yandex-categories", requireAdmin, async (r
         }
       }
 
+      // Accumulate category histogram across all shops
+      for (const [catName, idCounts] of idsByCategoryName.entries()) {
+        const existing = globalCategoryHistogram.get(catName) || new Map();
+        for (const [id, cnt] of idCounts) existing.set(id, (existing.get(id) || 0) + cnt);
+        globalCategoryHistogram.set(catName, existing);
+      }
+
       if (!dryRun) {
         const byShopPlanned = planned.filter((item) => item.shopId === shop.id);
         for (const chunk of chunkArray(byShopPlanned, 500)) {
@@ -283,9 +291,9 @@ app.post("/api/ozon-yandex-import/fix-yandex-categories", requireAdmin, async (r
       fixesByTransition.set(key, (fixesByTransition.get(key) || 0) + 1);
     }
 
-    // Build full category histogram for diagnosis (visible in dryRun response)
+    // Build full category histogram for diagnosis
     const categoryHistogram = [];
-    for (const [catName, idCounts] of idsByCategoryName.entries()) {
+    for (const [catName, idCounts] of globalCategoryHistogram.entries()) {
       const topId = [...idCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || 0;
       const total = [...idCounts.values()].reduce((a, b) => a + b, 0);
       categoryHistogram.push({ categoryName: catName, count: total, marketCategoryId: topId });
