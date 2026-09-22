@@ -48,7 +48,7 @@ function buildYandexOfferMapping(product, overrides = {}) {
   const offer = compactObject({
     offerId: cleanText(overrides.offerId || yandex.offerId || normalized.offerId),
     name: cleanText(overrides.name || yandex.name || approvedDraft?.name || ozon.name || normalized.name),
-    marketCategoryId: Number(yandex.marketCategoryId || ozon.marketCategoryId || 0) || undefined,
+    marketCategoryId: Number(yandex.marketCategoryId || 0) || undefined,
     pictures,
     vendor,
     description: cleanText(descriptionRaw) || undefined,

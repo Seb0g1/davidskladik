@@ -154,6 +154,7 @@ const YANDEX_WRONG_CATEGORY_PATTERNS = [
   /брюк/i, /куртк/i, /носк/i, /детск/i, /спортивн/i, /канцеляр/i, /посуд/i,
   /водород/i, /интимн/i, /съедобн/i,
   /для взрослых/i, /товары для взрослых/i, /эротик/i, /18\+/i,
+  /ароматизатор/i,
 ];
 
 function isWrongYandexBeautyCategory(categoryName = "") {
@@ -282,6 +283,15 @@ app.post("/api/ozon-yandex-import/fix-yandex-categories", requireAdmin, async (r
       fixesByTransition.set(key, (fixesByTransition.get(key) || 0) + 1);
     }
 
+    // Build full category histogram for diagnosis (visible in dryRun response)
+    const categoryHistogram = [];
+    for (const [catName, idCounts] of idsByCategoryName.entries()) {
+      const topId = [...idCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || 0;
+      const total = [...idCounts.values()].reduce((a, b) => a + b, 0);
+      categoryHistogram.push({ categoryName: catName, count: total, marketCategoryId: topId });
+    }
+    categoryHistogram.sort((a, b) => b.count - a.count);
+
     response.json({
       ok: dryRun || results.every((item) => item.ok),
       dryRun,
@@ -297,6 +307,7 @@ app.post("/api/ozon-yandex-import/fix-yandex-categories", requireAdmin, async (r
       sent: results.filter((item) => item.ok).length,
       failed: results.filter((item) => !item.ok).length,
       errors: results.filter((item) => !item.ok).slice(0, 30),
+      categoryDistribution: categoryHistogram,
     });
   } catch (error) {
     next(error);

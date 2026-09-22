@@ -43,7 +43,7 @@ const currencySymbol = (currency: string) => (String(currency || "USD").toUpperC
 const moneyAmount = (value: unknown, currency = "USD") => {
   const n = Number(value || 0);
   if (!Number.isFinite(n) || n <= 0) return "-";
-  return `${Math.round(n).toLocaleString("ru-RU")} ${currencySymbol(currency)}`;
+  return `${n.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currencySymbol(currency)}`;
 };
 
 const moneySigned = (value: unknown, currency = "USD") => {
@@ -242,10 +242,24 @@ export function SuppliersPage() {
         currency,
         note,
       })),
-    onSuccess: (_data, variables) => {
+    onSuccess: (data, variables) => {
       const id = supplierId(variables.supplier);
       setPaymentDrafts((current) => ({ ...current, [id]: "" }));
       setPaymentNotes((current) => ({ ...current, [id]: "" }));
+      // Immediately patch the supplier's ledger in the list cache with the fresh per-supplier
+      // summary from the payment response — avoids showing a stale balance while the bulk
+      // suppliers re-fetch completes (bulk query can miss entries stored with alternate names).
+      if (data?.summary) {
+        queryClient.setQueryData(["suppliers"], (old: Record<string, unknown> | undefined) => {
+          if (!old?.suppliers || !Array.isArray(old.suppliers)) return old;
+          return {
+            ...old,
+            suppliers: (old.suppliers as Supplier[]).map((s) =>
+              supplierId(s) === id ? { ...s, ledger: data.summary } : s
+            ),
+          };
+        });
+      }
       void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
       void queryClient.invalidateQueries({ queryKey: ["supplier-profile"] });
       void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
@@ -372,9 +386,12 @@ export function SuppliersPage() {
     const raw = asRecord(supplier);
     const articles = supplierArticles(supplier);
     const draft = articleDrafts[id] || { article: "", note: "" };
-    const ledger = asRecord(raw.ledger);
-    const balance = Number(ledger.balance || 0);
     const supplierCurrency = String(raw.priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD";
+    const profile = historyQuery.data;
+    // Prefer the per-supplier profile summary (fresh individual query) over the bulk list ledger
+    // (which can miss entries if they were stored with a different partnerId/supplierName variant).
+    const ledger = asRecord((profile?.ledger?.summary ?? raw.ledger) as Record<string, unknown>);
+    const balance = Number(ledger.balance || 0);
     // Use original USD prices from raw picking data to avoid drift when the rate changes.
     const debtTotalUsdDrawer = Number((ledger as Record<string, unknown>).debtTotalUsd || 0);
     const debtTotalRubDrawer = Number((ledger as Record<string, unknown>).debtTotal || 0);
@@ -394,7 +411,6 @@ export function SuppliersPage() {
     const paymentNote = paymentNotes[id] || "";
     const active = supplierIsActive(supplier);
     const stockOnly = supplier.pricingMode === "stock_only" || supplier.stockOnly === true;
-    const profile = historyQuery.data;
     const ledgerEntries = profile?.ledger?.entries || [];
     const returnedKeys = new Set(
       ledgerEntries.filter((e) => e.entryType === "supplier_return" && e.pickingKey).map((e) => e.pickingKey as string)
