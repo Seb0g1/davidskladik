@@ -98,6 +98,25 @@ function selectSupplierCartSupplierFromMatches(matches = new Map(), blockedPartn
   const isSorinSupplier = (row) => /сорин/i.test(cleanText(row.partnerName || row.supplierName || ""));
   const isInnaSupplier = (row) => /инна/i.test(cleanText(row.partnerName || row.supplierName || ""));
 
+  // Priority 0: собственный склад / own warehouse — fulfills from our inventory without an
+  // external purchase order. Selected before Sorin so express orders from "наш склад" are
+  // routed to in-house stock rather than triggering an unnecessary PM order to Sorin.
+  // PM active/price flags are irrelevant here (own stock doesn't have PM prices).
+  for (const [linkId, rows] of matches.entries()) {
+    for (const row of rows || []) {
+      if (!supplierUsesStockOnlyPricing(null, row)) continue;
+      const partnerId = cleanText(row.partnerId).toLowerCase();
+      if (blockedPartnerIds.has(partnerId)) continue;
+      return {
+        selected: { ...row, linkId },
+        stockOnlyFallback: true,
+        blockedAvailable: 0,
+        cutoffPassedAvailable: 0,
+        skipReason: "own_warehouse_priority",
+      };
+    }
+  }
+
   // Priority 1: Сорин only. Инна competes on price (her RUB rows are correctly
   // converted to USD in toUsd/supplierCartOrderScore — she wins only when cheapest).
   for (const isPriority of [isSorinSupplier]) {
@@ -281,12 +300,19 @@ function normalizeYandexSupplierCartOrders(data = {}, shop = {}, queriedCampaign
     const deliveryTypeStr = cleanText(
       order.delivery?.type || order.delivery?.deliveryType || order.deliveryType || order.type || "",
     ).toUpperCase();
-    const isExpress = deliveryTypeStr === "EXPRESS" || deliveryTypeStr.includes("EXPRESS")
-      || Boolean(order.isExpress)
-      || Boolean(order.delivery?.isExpress)
-      || cleanText(order.delivery?.partnerType || order.delivery?.partnerInfo?.type || "").toUpperCase().includes("EXPRESS")
-      || cleanText(order.delivery?.deliveryPartnerType || "").toUpperCase().includes("EXPRESS")
-      || (Array.isArray(order.delivery?.specificFeatures) && order.delivery.specificFeatures.some((f) => cleanText(f).toUpperCase().includes("EXPRESS")));
+    const _expressDeliveryType = deliveryTypeStr === "EXPRESS" || deliveryTypeStr.includes("EXPRESS");
+    const _expressOrderFlag = Boolean(order.isExpress) || Boolean(order.delivery?.isExpress);
+    const _expressPartnerType = cleanText(order.delivery?.partnerType || order.delivery?.partnerInfo?.type || "").toUpperCase().includes("EXPRESS");
+    const _expressDeliveryPartnerType = cleanText(order.delivery?.deliveryPartnerType || "").toUpperCase().includes("EXPRESS");
+    const _expressSpecificFeatures = Array.isArray(order.delivery?.specificFeatures) && order.delivery.specificFeatures.some((f) => cleanText(f).toUpperCase().includes("EXPRESS"));
+    const isExpress = _expressDeliveryType || _expressOrderFlag || _expressPartnerType || _expressDeliveryPartnerType || _expressSpecificFeatures;
+    if (isExpress) {
+      logger.info("yandex_express_detected", {
+        orderId: order.id, campaignId: cleanText(order.campaignId || ""), queriedCampaignId,
+        deliveryTypeStr, _expressDeliveryType, _expressOrderFlag, _expressPartnerType, _expressDeliveryPartnerType, _expressSpecificFeatures,
+        deliveryRaw: { type: order.delivery?.type, partnerType: order.delivery?.partnerType, deliveryPartnerType: order.delivery?.deliveryPartnerType, specificFeatures: order.delivery?.specificFeatures },
+      });
+    }
     const orderSubstatus = cleanText(order.substatus || order.subStatus || "").toUpperCase();
     if (orderSubstatus === "SHIPPED" || orderSubstatus === "DELIVERY") continue;
     // Prefer campaignId from the order itself; fall back to the campaign we queried for, then
@@ -448,9 +474,13 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
       const taggedLines = rawLines.map((line) => {
         const orderCampaign = cleanText(line.campaignId || "");
         if (orderCampaign) {
-          return { ...line, isExpress: expressOnlyCampaignIds.has(orderCampaign) };
+          // Preserve delivery-type-based isExpress (detected from order.delivery.type in
+          // normalizeYandexSupplierCartOrders). The campaign fallback only adds express;
+          // it never strips it — otherwise express orders fetched via the regular FBS
+          // campaign query lose their flag and get dropped by the dedup below.
+          return { ...line, isExpress: line.isExpress || expressOnlyCampaignIds.has(orderCampaign) };
         }
-        return { ...line, isExpress: isExpressCampaign };
+        return { ...line, isExpress: line.isExpress || isExpressCampaign };
       });
       lines.push(...taggedLines);
       pageToken = cleanText(data?.paging?.nextPageToken || data?.result?.paging?.nextPageToken || data?.nextPageToken);
@@ -458,12 +488,13 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
     }
   }
   // Deduplicate by orderId+itemId — the business API may leak orders across campaigns.
-  // When the same order appears twice, non-express wins (it came from the right FBS store).
+  // Express wins over non-express: the express campaign is the authoritative source for
+  // express orders; a non-express copy (from the regular FBS query) must not override it.
   const finalDedup = new Map();
   for (const line of lines) {
     const dedupeKey = `${cleanText(line.orderId)}|${cleanText(line.itemId || line.offerId)}`;
     const existing = finalDedup.get(dedupeKey);
-    if (!existing || (!line.isExpress && existing.isExpress)) {
+    if (!existing || (line.isExpress && !existing.isExpress)) {
       finalDedup.set(dedupeKey, line);
     }
   }
@@ -737,21 +768,6 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { p
       supplierName: selected.partnerName,
       partnerId: selected.partnerId,
       rowId: selected.rowId,
-    });
-    return normalizeSupplierCartPreviewRow({
-      ...normalizedLine,
-      warehouseProductId: product.id,
-      groupKey: warehouseProductPageGroupKey(product),
-      groupOfferId: product.offerId,
-      ready: false,
-      skipReason: "pm_name_mismatch",
-      saleAmount: computeMarketplaceSaleAmountRub(normalizedLine),
-      soldAt: normalizedLine.orderedAt,
-      alreadyCommitted: Boolean(processed) || alreadyPicked || coveredByManual,
-      requestDocId: processed?.requestDocId,
-      requestRowId: processed?.requestRowId,
-      pmName,
-      pmNameMismatch,
     });
   }
   return normalizeSupplierCartPreviewRow({

@@ -493,7 +493,7 @@ export function SupplierCartPanel() {
             {filteredRows.map((row) => {
               const disabled = !row.ready || row.alreadyCommitted;
               return (
-                <article className={`supplier-cart-row ${row.ready ? "ready" : "skipped"}${row.isExpress ? " is-express" : ""}`} key={row.key}>
+                <article className={`supplier-cart-row ${row.ready ? "ready" : "skipped"}${row.isExpress ? " is-express" : ""}${row.pmNameMismatch ? " pm-name-mismatch" : ""}`} key={row.key}>
                   <label className="checkline">
                     <input type="checkbox" disabled={disabled} checked={selected.has(row.key)} onChange={() => toggleRow(row.key)} />
                     <span><MarketplaceBadge marketplace={row.marketplace} /> · {row.orderId || row.postingNumber || "-"} · {row.offerId}</span>
@@ -514,9 +514,7 @@ export function SupplierCartPanel() {
                     {row.isExpress ? <span className="express-badge"><Zap size={12} /> Экспресс — подтверждение Ozon после «Собрал»</span> : null}
                   </div>
                   {row.pmNameMismatch ? (
-                    <div className="inline-warning op-warning-mt">
-                      ⚠ Название в PM не совпадает с заказом — возможно неверная привязка поставщика. PM: «{row.pmName}» vs заказ: «{row.productName}»
-                    </div>
+                    <small className="pm-mismatch-hint">⚠ PM: «{row.pmName}» vs заказ: «{row.productName}»</small>
                   ) : null}
                   {row.alreadyCommitted ? (
                     <div className="op-already-row">
