@@ -585,7 +585,7 @@ export function PickingListPage() {
     });
 
   const balanceTone = myBalance > 500 ? "success" : myBalance > 0 ? "warn" : myBalance < 0 ? "danger" : "";
-  const balanceStr = (n: number) => `${Math.round(n / usdRate).toLocaleString("ru-RU")} $`;
+  const balanceStr = (n: number) => `${(n / usdRate).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $`;
   const rubStr = (n: number) => `₽${Math.round(n).toLocaleString("ru-RU")}`;
   const dailyTotal = dailyTotalQuery.data?.total ?? 0;
   const dailyItems = dailyTotalQuery.data?.items ?? 0;
@@ -867,14 +867,14 @@ export function PickingListPage() {
                       }
                       return (
                         <div className="picker-credit-row" key={c.id}>
-                          <span className={`picker-credit-amount${Number(c.amount) >= 0 ? " tone-success" : " tone-danger"}`}>{Number(c.amount) >= 0 ? "+" : "−"}{(c as Record<string, unknown>).originalUsd != null ? `${Math.abs(Number((c as Record<string, unknown>).originalUsd)).toLocaleString("ru-RU")} $` : balanceStr(Math.abs(Number(c.amount)))}</span>
+                          <span className={`picker-credit-amount${Number(c.amount) >= 0 ? " tone-success" : " tone-danger"}`}>{Number(c.amount) >= 0 ? "+" : "−"}{(c as Record<string, unknown>).originalUsd != null ? `${Math.abs(Number((c as Record<string, unknown>).originalUsd)).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $` : balanceStr(Math.abs(Number(c.amount)))}</span>
                           <span className="muted-note picker-credit-note">{Number(c.amount) >= 0 ? `Выдано${c.note ? ` · ${c.note}` : ""}` : (c.note || "—")}</span>
                           <span className="muted-note picker-credit-date">{compactDate(c.createdAt ?? null)}</span>
                           <button
                             className="icon-action"
                             type="button"
                             title="Редактировать"
-                            onClick={() => { const origUsd = Number((c as Record<string, unknown>).originalUsd ?? Math.round(c.amount / usdRate)); setEditCredit({ username: issuePickerDraft, id: c.id, amount: String(origUsd), note: c.note ?? "", originalUsd: origUsd }); }}
+                            onClick={() => { const origUsd = Number((c as Record<string, unknown>).originalUsd ?? (c.amount / usdRate)); setEditCredit({ username: issuePickerDraft, id: c.id, amount: String(origUsd), note: c.note ?? "", originalUsd: origUsd }); }}
                           >
                             <Pencil size={11} />
                           </button>
@@ -1556,7 +1556,7 @@ export function PickingListPage() {
                           className="icon-action"
                           type="button"
                           title="Редактировать"
-                          onClick={() => { const origUsd = Number((c as Record<string, unknown>).originalUsd ?? Math.round(c.amount / usdRate)); setEditCredit({ username: issuePickerDraft, id: c.id, amount: String(origUsd), note: c.note ?? "", originalUsd: origUsd }); }}
+                          onClick={() => { const origUsd = Number((c as Record<string, unknown>).originalUsd ?? (c.amount / usdRate)); setEditCredit({ username: issuePickerDraft, id: c.id, amount: String(origUsd), note: c.note ?? "", originalUsd: origUsd }); }}
                         >
                           <Pencil size={11} />
                         </button>

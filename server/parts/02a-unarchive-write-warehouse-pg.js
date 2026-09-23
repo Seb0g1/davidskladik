@@ -58,6 +58,7 @@ async function writeWarehouseToPostgresInner(prisma, payload) {
     productChunk.push(product);
     if (productChunk.length >= chunkSize) {
       for (const p of productChunk) {
+        await new Promise((r) => setImmediate(r));
         await upsertWarehouseProductPostgres(prisma, p);
         await new Promise((r) => setImmediate(r));
       }
@@ -68,6 +69,7 @@ async function writeWarehouseToPostgresInner(prisma, payload) {
   }
   if (productChunk.length) {
     for (const p of productChunk) {
+      await new Promise((r) => setImmediate(r));
       await upsertWarehouseProductPostgres(prisma, p);
       await new Promise((r) => setImmediate(r));
     }

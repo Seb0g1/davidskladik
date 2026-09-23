@@ -13,15 +13,33 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: npm
+
       - run: npm ci
-      # Только линты + unit-тесты: security/smoke зависают в CI (нет живого сервера и БД)
-      - run: npm run lint:computed-fields && npm run lint:source-manifest && npm run lint:queue-priorities && npm run lint:warehouse-cache && npm run lint:regex-exec
-      - run: node --test test/unit.test.cjs
-      - run: npm run build
-      - run: node scripts/deploy-prod.cjs --skip-local-checks
+
+      - name: Lint
+        run: npm run lint:computed-fields && npm run lint:source-manifest && npm run lint:queue-priorities && npm run lint:warehouse-cache && npm run lint:regex-exec
+
+      - name: Unit tests
+        run: node --test test/unit.test.cjs
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/davidsklad_deploy
+          chmod 600 ~/.ssh/davidsklad_deploy
+          ssh-keyscan -H 81.17.154.153 >> ~/.ssh/known_hosts
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+
+      - name: Deploy to server
+        run: node scripts/deploy-prod.cjs --skip-local-checks --skip-push
         env:
           DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}

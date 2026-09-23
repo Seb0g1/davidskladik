@@ -51,7 +51,11 @@ async function deleteWarehouseGroupLinkRefs(request, response, refsInput = []) {
   if (!refs.length) return response.status(400).json({ error: "No PriceMaster links selected for delete." });
 
   const requestedIds = new Set(refs.map((ref) => String(ref.productId)));
-  const hydratedProducts = await hydrateWarehouseProductsForIds(Array.from(requestedIds), { expandGroups: true });
+  // forceRefresh: worker may have written a newer product.updatedAt to Postgres while the API
+  // holds a stale in-memory copy. Without forceRefresh, link.id in the stale copy wouldn't
+  // match the ref.linkId from the frontend (which had the fresh copy), causing alreadyDeleted
+  // on the first try and working only after the subsequent cache-busting refetch.
+  const hydratedProducts = await hydrateWarehouseProductsForIds(Array.from(requestedIds), { expandGroups: true, forceRefresh: true });
   let initialSeeds = hydratedProducts.filter((product) => requestedIds.has(String(product.id)));
   if (!initialSeeds.length) {
     initialSeeds = await readWarehouseProductsFromPostgresByIds(Array.from(requestedIds), { includeDisabledTargets: true });

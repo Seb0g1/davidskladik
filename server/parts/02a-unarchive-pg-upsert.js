@@ -29,9 +29,12 @@ function productFromPostgres(row = {}) {
     });
   });
   const rawLinks = Array.isArray(raw.links) ? raw.links.map(normalizeWarehouseLink) : [];
-  const links = postgresLinksLoaded
-    ? (postgresLinks.length > 0 || rowMarketplace !== "yandex" ? postgresLinks : rawLinks)
-    : rawLinks;
+  // ProductLink table is authoritative when loaded (postgresLinksLoaded=true).
+  // The old Yandex fallback to rawLinks caused deleted links to reappear: worker's
+  // stale in-memory copy would write raw.links=[old_link] back to Postgres; then
+  // productFromPostgres saw ProductLink=[] (correctly deleted) but rawLinks=[old_link]
+  // and restored the link. Once the ProductLink row is gone, it stays gone.
+  const links = postgresLinksLoaded ? postgresLinks : rawLinks;
   const { product } = repairWarehouseProductSupplierSnapshot(normalizeWarehouseProduct({
     ...raw,
     id: row.id,

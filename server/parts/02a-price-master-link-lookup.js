@@ -103,7 +103,11 @@ async function getBatchPriceMasterMatchesForLinks(links, managedSuppliers = [], 
   const articleLinks = normalizedLinks.filter((link) => link.matchType === "article" && link.article);
   const map = new Map();
   if (specialLinks.length) {
-    for (const link of specialLinks) {
+    for (let _si = 0; _si < specialLinks.length; _si++) {
+      // Yield every 5 special links so the event loop stays responsive during sequential
+      // selected_row lookups (150 products × sequential await → 2-5s blocks without yield).
+      if (_si > 0 && _si % 5 === 0) await new Promise((r) => setImmediate(r));
+      const link = specialLinks[_si];
       map.set(link.id, await findPriceMasterRowsForLinkFast(link, usdRate, managedSuppliers, {
         timeoutMs,
         cacheEmpty: false,
