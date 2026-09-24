@@ -428,40 +428,27 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
     const tokenGroups = q ? pmQueryToTokenGroups(q) : null;
 
     // Query live MySQL directly — always fresh, includes active=0 rows (marked _unavailable).
+    // Only each partner's current price list (pm_latest_docs): scanning every historical doc
+    // let old daily copies fill the fetch window and hid other suppliers' offers.
     let items = [];
     if (pool) {
       try {
+        const cte = await pmLatestDocsCteSql();
         const params = [];
         const conditions = ["r.Ignored = 0"];
+        let scoreSql = "0";
+        let scoreParams = [];
 
         if (q) {
           if (tokenGroups && tokenGroups.length) {
-            // AND across token groups, OR within each group (synonyms).
-            // Compound tokens (e.g. "BOD13") are OR'd against the AND block so
-            // exact article codes always reach the JS post-filter.
-            const sqlGroups = tokenGroups.filter((g) => !g._compound);
-            const compoundGroups = tokenGroups.filter((g) => g._compound);
-
-            const andParts = sqlGroups.map((group) => {
-              const conds = group.flatMap(() => ["r.NativeName LIKE ?", "r.NativeID LIKE ?"]);
-              params.push(...group.flatMap((t) => [likeSearch(t), likeSearch(t)]));
-              return `(${conds.join(" OR ")})`;
-            });
-            const compoundConds = compoundGroups.flatMap((g) => {
-              params.push(likeSearch(g[0]), likeSearch(g[0]));
-              return ["r.NativeName LIKE ?", "r.NativeID LIKE ?"];
-            });
-
-            if (andParts.length && compoundConds.length) {
-              conditions.push(`((${andParts.join(" AND ")}) OR (${compoundConds.join(" OR ")}))`);
-            } else if (andParts.length) {
-              for (const part of andParts) conditions.push(part);
-            } else if (compoundConds.length) {
-              conditions.push(`(${compoundConds.join(" OR ")})`);
-            }
+            const clause = pmBuildMysqlSearchClause(tokenGroups, { name: "r.NativeName", article: "r.NativeID", barcode: "r.BarCode" });
+            conditions.push(`(${clause.where})`);
+            params.push(...clause.params);
+            scoreSql = clause.scoreSql;
+            scoreParams = clause.scoreParams;
           } else {
-            conditions.push("(r.NativeName LIKE ? OR r.NativeID LIKE ?)");
-            params.push(likeSearch(q), likeSearch(q));
+            conditions.push("(r.NativeName LIKE ? OR r.NativeID LIKE ? OR r.BarCode LIKE ?)");
+            params.push(likeSearch(q), likeSearch(q), likeSearch(q));
           }
         }
 
@@ -470,27 +457,35 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
           params.push(partnerId);
         }
 
-        // Fetch limit*10 (cap 2000) to allow de-dup and post-filter, then slice to limit.
+        // Fetch limit*10 (cap 2000) best-matching rows to allow de-dup and post-filter.
         params.push(Math.min(limit * 10, 2000));
 
         const [liveRows] = await pool.query(
-          `SELECT r.RowID AS rowId, r.NativeID AS article, r.NativeName AS nativeName,
-                  r.NativePrice AS price, r.Active AS active, d.DocDate AS docDate,
-                  d.PartnerID AS partnerId, p.PartnerName AS partnerName
-           FROM OfferRows r
-           JOIN OfferDocs d ON d.DocID = r.DocID
+          `${cte}
+           SELECT r.RowID AS rowId, r.NativeID AS article, r.NativeName AS nativeName,
+                  r.BarCode AS barcode, r.NativePrice AS price, r.Active AS active, d.DocDate AS docDate,
+                  d.PartnerID AS partnerId, p.PartnerName AS partnerName,
+                  ${scoreSql} AS matchScore
+           FROM pm_latest_docs ld
+           JOIN OfferDocs d ON d.DocID = ld.DocID
+           JOIN OfferRows r ON r.DocID = d.DocID
            LEFT JOIN Partners p ON p.PartnerID = d.PartnerID
            WHERE ${conditions.join(" AND ")}
-           ORDER BY d.DocDate DESC, r.RowID DESC
+           ORDER BY matchScore DESC, r.Active DESC, d.DocDate DESC, r.RowID DESC
            LIMIT ?`,
-          params,
+          [...scoreParams, ...params],
         );
 
-        // De-duplicate: keep only the newest row per partner+article+name combination.
+        // De-duplicate: keep only the best row per partner+article+name combination.
         // Key must include name so that rows without NativeID (article="") from the same
         // partner are not all collapsed into a single entry.
         const seenOffer = new Set();
         for (const row of liveRows) {
+          // Post-filter: apply quality bar (word boundaries, n-1 rule; barcode is searchable).
+          if (tokenGroups && tokenGroups.length >= 1) {
+            const hay = [cleanText(row.nativeName || ""), cleanText(row.article || ""), cleanText(row.barcode || "")].join(" ");
+            if (!pmPassesSearchFilter(hay, tokenGroups)) continue;
+          }
           const offerKey = `${cleanText(row.partnerId)}|${cleanText(row.article || "").toLowerCase()}|${cleanText(row.nativeName || "").toLowerCase()}`;
           if (seenOffer.has(offerKey)) continue;
           seenOffer.add(offerKey);
@@ -498,6 +493,7 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
             id: `live_${cleanText(row.rowId)}`,
             rowId: cleanText(row.rowId || ""),
             article: cleanText(row.article || ""),
+            barcode: cleanText(row.barcode || ""),
             partnerId: cleanText(row.partnerId || ""),
             partnerName: cleanText(row.partnerName || ""),
             nativeName: cleanText(row.nativeName || ""),
@@ -508,20 +504,10 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
             _unavailable: !row.active,
           });
         }
-
-        // Post-filter: apply quality bar (required keywords must match; numbers/units optional).
-        if (tokenGroups && tokenGroups.length >= 1) {
-          items = items.filter((item) => {
-            const hay = [cleanText(item.nativeName || ""), cleanText(item.article || "")].join(" ");
-            return pmPassesSearchFilter(hay, tokenGroups);
-          });
-        }
       } catch (mysqlErr) {
         logger.warn("pm-search MySQL query failed", { detail: mysqlErr?.message || String(mysqlErr) });
       }
     }
-
-    items = items.slice(0, limit);
 
     const usdRate = Number((await getUsdRate()).rate || process.env.DEFAULT_USD_RATE || 95);
     // Инна prices in PM snapshot are stored with currency="USD" (snapshot has no managed-supplier
@@ -541,9 +527,9 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
     //   +1 per optional group that matches (numbers/units)
     //   +1 bonus when a numeric token matches with BOTH-sides word boundary
     //      (exact volume: "5ml" scores higher than "1.5ml" or "15ml")
-    const computeRelevance = (name, article) => {
+    const computeRelevance = (text) => {
       if (!tokenGroups || !tokenGroups.length) return 0;
-      const hay = [name, article].join(" ").toLowerCase().replace(/ё/g, "е");
+      const hay = pmNormalizeSearchText(text);
       let score = 0;
       for (const group of tokenGroups) {
         const isOptional = pmTokenGroupIsOptional(group);
@@ -569,6 +555,7 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
       const partnerName = cleanText(item.partnerName || "");
       const name = cleanText(item.nativeName || "");
       const article = cleanText(item.article || "");
+      const matchText = [name, article, cleanText(item.barcode || "")].join(" ");
       return {
         id: item.id,
         rowId: cleanText(item.rowId || ""),
@@ -582,7 +569,8 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
         isTester: isTesterName(item.nativeName || ""),
         docDate: item.docDate?.toISOString?.()?.slice(0, 10) || null,
         unavailable: Boolean(item._unavailable),
-        _relevance: computeRelevance(name, article),
+        partialMatch: Boolean(tokenGroups && tokenGroups.length) && !pmIsFullMatch(matchText, tokenGroups),
+        _relevance: computeRelevance(matchText),
       };
     });
     // Sort: 0=active, 1=active+tester, 2=inactive+tester, 3=inactive-non-tester ("не в PM")
@@ -597,10 +585,11 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
       return a.priceRub - b.priceRub;
     });
     mapped.forEach((item) => { delete item._relevance; });
+    // Slice only after ranking — slicing first kept the newest rows, not the best matches.
     response.json({
       ok: true,
       total: mapped.length,
-      items: mapped,
+      items: mapped.slice(0, limit),
     });
   } catch (error) {
     next(error);

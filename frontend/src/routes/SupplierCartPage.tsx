@@ -64,6 +64,7 @@ const PmSearchItemSchema = z.object({
   isTester: z.boolean().optional().default(false),
   docDate: z.coerce.string().optional().nullable(),
   unavailable: z.boolean().optional().default(false),
+  partialMatch: z.boolean().optional().default(false),
 }).passthrough();
 
 const PmSearchResponseSchema = z.object({
@@ -625,6 +626,8 @@ export function PmSearchPanel({ onClose }: { onClose: () => void }) {
     return [...list].sort((a, b) => {
       const ra = rank(a), rb = rank(b);
       if (ra !== rb) return ra - rb;
+      // Rows missing one of the query words (n-1 match) stay below complete matches.
+      if (a.partialMatch !== b.partialMatch) return a.partialMatch ? 1 : -1;
       return secondary(a, b);
     });
   }, [allItems, sortMode, supplierFilter]);

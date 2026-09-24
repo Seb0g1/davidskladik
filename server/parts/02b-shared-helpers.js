@@ -85,7 +85,6 @@ async function searchPriceMasterSnapshotOffers({ search = "", partner = "", limi
   const take = cleanLimit(limit, 150, 500);
 
   const groups = tokenGroups && tokenGroups.length ? tokenGroups : (q ? pmQueryToTokenGroups(q) : null);
-  const minMatchCount = groups ? pmMinMatchCount(groups) : 0;
 
   // Barcode search: 8-13 digits → search raw->>'barcode' / raw->>'BarCode' and return.
   if (q && /^\d{8,13}$/.test(q)) {
@@ -110,39 +109,9 @@ async function searchPriceMasterSnapshotOffers({ search = "", partner = "", limi
   function buildQuery(allGroups, includeInactive = false) {
     const and = includeInactive ? [] : [{ active: true }];
     if (allGroups && allGroups.length) {
-      // AND across groups: each group is a required term; synonyms within a group are OR'd.
-      // Previously all groups were flattened into one OR — this caused fetch of 450 broadly-
-      // matching rows (e.g. anything containing "of"/"the") which cut off valid deep results.
-      //
-      // Compound tokens (e.g. "BOD13") are OR'd against the AND block so that products whose
-      // article exactly matches the compound code are always fetched even when the token-split
-      // AND would exhaust the fetch window with false positives.
-      const sqlGroups = allGroups.filter((g) => !g._compound);
-      const compoundGroups = allGroups.filter((g) => g._compound);
-      const compoundOrTerms = compoundGroups.flatMap((g) => g.flatMap((synonym) => [
-        { article: { contains: synonym, mode: "insensitive" } },
-        { nativeName: { contains: synonym, mode: "insensitive" } },
-      ]));
-
-      if (sqlGroups.length && compoundOrTerms.length) {
-        // Build the AND clauses for split tokens, then OR with compound direct match.
-        const splitAndClauses = sqlGroups.map((group) => ({
-          OR: group.flatMap((synonym) => [
-            { article: { contains: synonym, mode: "insensitive" } },
-            { nativeName: { contains: synonym, mode: "insensitive" } },
-          ]),
-        }));
-        and.push({ OR: [{ AND: splitAndClauses }, ...compoundOrTerms] });
-      } else {
-        for (const group of sqlGroups) {
-          const orTerms = group.flatMap((synonym) => [
-            { article: { contains: synonym, mode: "insensitive" } },
-            { nativeName: { contains: synonym, mode: "insensitive" } },
-          ]);
-          if (orTerms.length) and.push({ OR: orTerms });
-        }
-        if (compoundOrTerms.length) and.push({ OR: compoundOrTerms });
-      }
+      // Same semantics as the live MySQL search and pmPassesSearchFilter: strict groups AND,
+      // long words n-1, filler words not required (pmBuildPrismaSearchWhere).
+      and.push(...pmBuildPrismaSearchWhere(allGroups));
     } else if (q) {
       and.push({
         OR: [

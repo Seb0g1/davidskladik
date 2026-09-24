@@ -92,6 +92,32 @@ async function discoverOfferDocsActiveColumn() {
   return offerDocsActiveColumn;
 }
 
+// CTE "pm_latest_docs(PartnerID, DocID)" — the current price list of every partner, same rule
+// as getCurrentOffers (newest DocDate, then highest DocID, skipping locked/inactive docs).
+// Live searches join OfferRows against it: scanning every historical doc let old daily copies
+// of frequently updated suppliers fill the LIMIT window and push other suppliers out.
+async function pmLatestDocsCteSql() {
+  await discoverOfferDocsActiveColumn();
+  const col = offerDocsActiveColumn;
+  const suffix = offerDocsActiveFilterSuffix;
+  return `
+    WITH pm_latest_dates AS (
+      SELECT PartnerID, MAX(DocDate) AS LatestDocDate
+      FROM OfferDocs
+      ${col ? `WHERE ${col}${suffix}` : ""}
+      GROUP BY PartnerID
+    ),
+    pm_latest_docs AS (
+      SELECT d.PartnerID, MAX(d.DocID) AS DocID
+      FROM OfferDocs d
+      JOIN pm_latest_dates l
+        ON l.PartnerID = d.PartnerID
+       AND l.LatestDocDate = d.DocDate
+      ${col ? `WHERE d.${col}${suffix}` : ""}
+      GROUP BY d.PartnerID
+    )`;
+}
+
 async function getCurrentOffers(connection) {
   await discoverOfferDocsActiveColumn();
   const col = offerDocsActiveColumn;

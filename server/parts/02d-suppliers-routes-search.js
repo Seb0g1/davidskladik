@@ -23,11 +23,10 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
     const cached = getPriceMasterSearchCache(cacheKey);
     if (cached) return response.json(cached);
 
-    // AND-across-groups approach (matches GingerPM word search): each token group is a
-    // required term; SQL ANDs them; synonyms within a group are OR'd. JS post-filter enforces
-    // word-boundary precision.
+    // Word search (GingerPM-style): synonyms within a group are OR'd; numbers/short words are
+    // strict, long words follow the n-1 rule, filler words only rank. SQL (pmBuildMysqlSearchClause)
+    // is a superset of the JS post-filter, which enforces word-boundary precision.
     const tokenGroups = q ? pmQueryToTokenGroups(q) : null;
-    const minMatchCount = tokenGroups ? pmMinMatchCount(tokenGroups) : 0;
 
     // Live PriceMaster is the source of truth — query it FIRST so the linking dialog
     // sees every current offer. The snapshot only supplements (it lags syncs and hides
@@ -37,43 +36,21 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
     let liveOk = false;
 
     try {
-      const params = [];
+      // Only each partner's current price list (pm_latest_docs) — the same offers the
+      // snapshot/pricing uses. Rows are ranked by match quality before LIMIT so the best
+      // matches are never cut off by newer-but-weaker rows.
+      const cte = await pmLatestDocsCteSql();
       const conditions = ["r.Ignored = 0", "r.Active != 0"];
-      if (offerDocsActiveColumn) conditions.push(`d.${offerDocsActiveColumn}${offerDocsActiveFilterSuffix}`);
+      const params = [];
+      let scoreSql = "0";
+      let scoreParams = [];
       if (q) {
         if (tokenGroups && tokenGroups.length) {
-          // AND across token groups (each group is a required distinct term; synonyms within a
-          // group are OR'd). Previously all groups were in one OR — this caused the LIMIT to be
-          // filled by high-frequency words like "of"/"the" so multi-word matches were missed.
-          //
-          // Compound tokens (e.g. "BOD13" from query "BOD13") are included as an OR condition on
-          // NativeID so that an exact article code match always reaches the JS post-filter even
-          // when the fetch window (LIMIT) fills up with false positives from the split tokens.
-          const sqlGroups = tokenGroups.filter((g) => !g._compound);
-          const compoundGroups = tokenGroups.filter((g) => g._compound);
-
-          if (sqlGroups.length || compoundGroups.length) {
-            // Build per-group AND conditions from regular (non-compound) tokens.
-            const andParts = sqlGroups.map((group) => {
-              const conds = group.flatMap((t) => ["r.NativeName LIKE ?", "r.NativeID LIKE ?", "r.BarCode LIKE ?"]);
-              params.push(...group.flatMap((t) => [likeSearch(t), likeSearch(t), likeSearch(t)]));
-              return `(${conds.join(" OR ")})`;
-            });
-            // Compound-token direct article match: (NativeName LIKE '%bod13%' OR NativeID LIKE '%bod13%').
-            const compoundConds = compoundGroups.flatMap((g) => {
-              params.push(likeSearch(g[0]), likeSearch(g[0]));
-              return [`r.NativeName LIKE ?`, `r.NativeID LIKE ?`];
-            });
-
-            if (andParts.length && compoundConds.length) {
-              // (split-token AND match) OR (whole-code article match)
-              conditions.push(`((${andParts.join(" AND ")}) OR (${compoundConds.join(" OR ")}))`);
-            } else if (andParts.length) {
-              for (const part of andParts) conditions.push(part);
-            } else {
-              conditions.push(`(${compoundConds.join(" OR ")})`);
-            }
-          }
+          const clause = pmBuildMysqlSearchClause(tokenGroups, { name: "r.NativeName", article: "r.NativeID", barcode: "r.BarCode" });
+          conditions.push(`(${clause.where})`);
+          params.push(...clause.params);
+          scoreSql = clause.scoreSql;
+          scoreParams = clause.scoreParams;
         } else {
           conditions.push("(r.NativeID LIKE ? OR r.NativeName LIKE ? OR r.BarCode LIKE ? OR p.PartnerName LIKE ?)");
           const like = likeSearch(q);
@@ -84,42 +61,42 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
         conditions.push("p.PartnerName LIKE ?");
         params.push(likeSearch(supplier));
       }
-      params.push(limit * 10);
       const [liveRows] = await pool.query(
         `
+        ${cte}
         SELECT
           r.NativeID AS article,
           r.NativeName AS name,
+          r.BarCode AS barcode,
           r.NativePrice AS price,
           r.Active AS active,
           r.RowID AS rowId,
           d.DocDate AS docDate,
           d.PartnerID AS partnerId,
-          p.PartnerName AS partnerName
-        FROM OfferRows r
-        JOIN OfferDocs d ON d.DocID = r.DocID
+          p.PartnerName AS partnerName,
+          ${scoreSql} AS matchScore
+        FROM pm_latest_docs ld
+        JOIN OfferDocs d ON d.DocID = ld.DocID
+        JOIN OfferRows r ON r.DocID = d.DocID
         LEFT JOIN Partners p ON p.PartnerID = d.PartnerID
         WHERE ${conditions.join(" AND ")}
-        ORDER BY d.DocDate DESC, r.RowID DESC
+        ORDER BY matchScore DESC, d.DocDate DESC, r.RowID DESC
         LIMIT ?
         `,
-        params,
+        [...scoreParams, ...params, limit * 10],
       );
-      // Keep only the newest row per partner+article+name (docs repeat daily).
       const seenOffer = new Set();
       for (const row of liveRows) {
+        // Post-filter: apply quality bar (word boundaries, n-1 rule). Barcode is part of the
+        // haystack — the SQL matches r.BarCode, so dropping it here hid barcode searches.
+        if (tokenGroups && tokenGroups.length >= 1) {
+          const hay = [cleanText(row.name || ""), cleanText(row.article || ""), cleanText(row.barcode || "")].join(" ");
+          if (!pmPassesSearchFilter(hay, tokenGroups)) continue;
+        }
         const offerKey = `${cleanText(row.partnerId)}|${cleanText(row.article).toLowerCase()}|${cleanText(row.name).toLowerCase()}`;
         if (seenOffer.has(offerKey)) continue;
         seenOffer.add(offerKey);
         rows.push(mapPriceMasterSearchResponseRow(row, usdRate));
-      }
-      // Post-filter: apply quality bar. Run for any non-empty query so single numeric
-      // chips (e.g. "5") also enforce word-boundary matching via pmPassesSearchFilter.
-      if (tokenGroups && tokenGroups.length >= 1) {
-        rows = rows.filter((row) => {
-          const hay = [cleanText(row.name || ""), cleanText(row.article || "")].join(" ");
-          return pmPassesSearchFilter(hay, tokenGroups);
-        });
       }
       liveOk = true;
     } catch (error) {
@@ -167,11 +144,13 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
         if (supplier) fbParams.push(likeSearch(supplier));
         fbParams.push(limit);
         const [fbRows] = await pool.query(
-          `SELECT r.NativeID AS article, r.NativeName AS name, r.NativePrice AS price,
+          `${await pmLatestDocsCteSql()}
+           SELECT r.NativeID AS article, r.NativeName AS name, r.NativePrice AS price,
                   r.Active AS active, r.RowID AS rowId, d.DocDate AS docDate,
                   d.PartnerID AS partnerId, p.PartnerName AS partnerName
-           FROM OfferRows r
-           JOIN OfferDocs d ON d.DocID = r.DocID
+           FROM pm_latest_docs ld
+           JOIN OfferDocs d ON d.DocID = ld.DocID
+           JOIN OfferRows r ON r.DocID = d.DocID
            LEFT JOIN Partners p ON p.PartnerID = d.PartnerID
            WHERE r.Ignored = 0
              AND r.Active != 0
@@ -213,7 +192,7 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
     // Word-boundary bonus: token appears as whole word in name (not mid-word like "oud" in "cloud")
     const computeRelevance = (row) => {
       const article = cleanText(row?.article || "").toLowerCase();
-      const name = cleanText(row?.name || "").toLowerCase();
+      const name = pmNormalizeSearchText(row?.name || "");
       if (qLower && article === qLower) return 1000;
       if (qLower && article.startsWith(qLower)) return 900;
       if (qLower && article.includes(qLower)) return 800;

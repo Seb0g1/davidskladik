@@ -791,17 +791,11 @@ app.get("/api/consignment/pm-search", requireAdmin, async (request, response, ne
     const q = cleanText(request.query.q || "");
     if (q.length < 2) return response.json({ ok: true, items: [] });
     const tokenGroups = pmQueryToTokenGroups(q);
-    // OR pre-filter casts a wide net so n-1 tolerance in pmPassesSearchFilter can work.
+    // Same pre-filter as the other PM searches (strict groups AND, long words n-1). The old flat
+    // OR let any common token ("ml", "100") fill the 500-row window and hide the real matches.
     const and = [];
     if (tokenGroups.length) {
-      const sqlGroups = tokenGroups.filter((g) => !g._compound);
-      const orTerms = sqlGroups.flatMap((group) =>
-        group.flatMap((synonym) => [
-          { article: { contains: synonym, mode: "insensitive" } },
-          { nativeName: { contains: synonym, mode: "insensitive" } },
-        ]),
-      );
-      if (orTerms.length) and.push({ OR: orTerms });
+      and.push(...pmBuildPrismaSearchWhere(tokenGroups));
     } else {
       and.push({ OR: [{ article: { contains: q, mode: "insensitive" } }, { nativeName: { contains: q, mode: "insensitive" } }] });
     }

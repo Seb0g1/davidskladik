@@ -12,7 +12,7 @@ const PM_SYNONYM_GROUPS = [
   // EDT / туалетная вода
   ["edt", "toilette", "туалетная"],
   // EDP / парфюмерная вода
-  ["edp", "parfum", "parfume", "парфюмерная"],
+  ["edp", "parfum", "parfume", "парфюмерная", "парфюмированная"],
   // Тестер
   ["tester", "test", "testep", "testor", "testr", "тестер"],
   // Объём мл
@@ -65,11 +65,36 @@ for (const group of PM_SYNONYM_GROUPS) {
   for (const t of group) PM_SYNONYM_MAP.set(t, group.filter((s) => s !== t));
 }
 
-// Split text into tokens at: spaces, symbols, letter↔digit, latin↔cyrillic.
-function pmWordTokenize(text) {
-  const lower = String(text || "")
+// Filler words from marketplace-style titles ("Eau de Parfum", "парфюмерная вода 100 мл").
+// PriceMaster names rarely contain them, so they only add relevance, never filter rows out.
+const PM_SOFT_TOKENS = new Set([
+  "eau", "de", "du", "des", "la", "le", "les", "di", "da", "del", "of", "the", "for", "by", "pour", "and", "et",
+  "ml", "мл", "вода", "для", "и", "в", "с", "духи", "парфюм", "аромат",
+  "мужской", "мужская", "мужские", "женский", "женская", "женские", "унисекс",
+]);
+
+// Canonical form for matching: lowercase, ё→е, Latin diacritics stripped (Hermès → hermes,
+// Giò → gio), apostrophe variants (’ ` ´ ʼ ‘) unified to "'". Cyrillic й is preserved so the
+// same normalized token still matches in MySQL LIKE.
+function pmNormalizeSearchText(text) {
+  return String(text || "")
     .toLowerCase()
     .replace(/ё/g, "е")
+    .replace(/ß/g, "ss")
+    .replace(/æ/g, "ae")
+    .replace(/œ/g, "oe")
+    .replace(/ø/g, "o")
+    .normalize("NFD")
+    .replace(/([a-z])[\u0300-\u036f]+/g, "$1")
+    .normalize("NFC")
+    .replace(/[’‘`´ʼ]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Split text into tokens at: spaces, symbols, letter↔digit, latin↔cyrillic.
+function pmWordTokenize(text) {
+  const lower = pmNormalizeSearchText(text)
     .replace(/[^a-zа-я0-9]+/g, " ")
     .replace(/([a-zа-я])(\d)/g, "$1 $2")
     .replace(/(\d)([a-zа-я])/g, "$1 $2")
@@ -87,39 +112,70 @@ function pmWordExpand(token) {
 // Pure-numeric tokens (e.g. "6" for 6 ml) or single letters pass through.
 // Alphanumeric compounds (e.g. "no5", "h24") get an extra required group with _compound=true
 // that matches with optional whitespace between the alpha and digit parts.
+// Apostrophe words ("j'adore", "l'eau") stay one token that matches "J'adore", "Jadore",
+// "J Adore" alike — splitting them produced a standalone "j" that almost never matched.
 function pmQueryToTokenGroups(query) {
-  const lower = String(query || "").toLowerCase().replace(/ё/g, "е");
-  const rawWords = lower.replace(/[^a-zа-я0-9]+/g, " ").split(/\s+/).filter(Boolean);
+  const norm = pmNormalizeSearchText(query);
+  const rawWords = norm
+    .split(/[^a-zа-я0-9']+/)
+    .map((w) => w.replace(/^'+|'+$/g, ""))
+    .filter(Boolean);
 
-  const baseGroups = pmWordTokenize(query)
-    .filter((t) => t.length >= 2 || /^\d+$/.test(t) || t.length === 1)
-    .map(pmWordExpand);
+  const groups = [];
+  const seen = new Set();
+  const compoundWords = [];
+  for (const rawWord of rawWords) {
+    const parts = rawWord.split("'").filter(Boolean);
+    if (parts.length >= 2 && parts.every((p) => /^[a-zа-я]+$/.test(p))) {
+      const token = parts.join("'");
+      if (!seen.has(token)) {
+        seen.add(token);
+        groups.push([token]);
+      }
+      continue;
+    }
+    const word = parts.join("");
+    for (const token of pmWordTokenize(word)) {
+      if (seen.has(token)) continue;
+      seen.add(token);
+      groups.push(pmWordExpand(token));
+    }
+    if (word.length >= 2 && /[a-zа-я]/.test(word) && /\d/.test(word)) compoundWords.push(word);
+  }
 
-  const existingTokens = new Set(baseGroups.flat());
-  const compoundGroups = rawWords
-    .filter((w) => w.length >= 2 && /[a-zа-я]/.test(w) && /\d/.test(w) && !existingTokens.has(w))
+  const existingTokens = new Set(groups.flat());
+  const compoundGroups = [...new Set(compoundWords)]
+    // "100ml" / "50мл": the unit is soft, so a compound would wrongly demand "100ml" spelled together.
+    .filter((w) => !existingTokens.has(w) && !(w.match(/[a-zа-я]+/g) || []).every((a) => PM_SOFT_TOKENS.has(a)))
     .map((w) => {
       const arr = [w];
       arr._compound = true;
       return arr;
     });
 
-  return [...baseGroups, ...compoundGroups];
+  return [...groups, ...compoundGroups];
 }
 
-// Match a single token against lowercased text.
+function pmEscapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Match a single token against normalized (pmNormalizeSearchText) text.
 function pmTokenMatchesText(lower, token) {
   if (/^\d+$/.test(token)) {
     // Both-boundary digit matching: "5" matches "5ml", "1.5ml" but NOT "50ml", "495ml", "15ml".
     // Left boundary is non-digit (so "1.5" still passes — "." is not \d).
-    const esc = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(`(?<!\\d)${esc}(?!\\d)`).test(lower);
+    return new RegExp(`(?<!\\d)${pmEscapeRegExp(token)}(?!\\d)`).test(lower);
+  }
+  // Apostrophe word ("j'adore"): parts may be joined by an apostrophe, space, hyphen or nothing.
+  if (token.includes("'")) {
+    const flex = token.split("'").map(pmEscapeRegExp).join("[\\s'\\-._]*");
+    return new RegExp(`(?<![a-zа-я])${flex}`).test(lower);
   }
   // Short pure-alpha tokens (≤3 chars like "ml", "no", "de"): require letter-word boundaries
   // to prevent "no" matching "noir", "ml" matching "mlm", etc.
   if (token.length <= 3 && /^[a-zа-я]+$/.test(token)) {
-    const esc = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(`(?<![a-zа-я])${esc}(?![a-zа-я])`).test(lower);
+    return new RegExp(`(?<![a-zа-я])${pmEscapeRegExp(token)}(?![a-zа-я])`).test(lower);
   }
   // Alphanumeric compound ("no5", "h24"): match exact substring OR with optional separator
   // (space, hyphen, dot, underscore) between letter/digit parts — so "bod13" matches "bod-13".
@@ -133,58 +189,177 @@ function pmTokenMatchesText(lower, token) {
   return lower.includes(token);
 }
 
+// Names are matched as written and, when they contain apostrophes, also with them removed —
+// so a typed "jadore" still finds "J'adore".
+function pmGroupMatches(lower, group) {
+  if (group.some((token) => pmTokenMatchesText(lower, token))) return true;
+  if (!lower.includes("'")) return false;
+  const joined = lower.replace(/'/g, "");
+  return group.some((token) => !token.includes("'") && pmTokenMatchesText(joined, token));
+}
+
 // True when text contains at least one term from each group.
 function pmWordMatch(text, tokenGroups) {
   if (!tokenGroups || !tokenGroups.length) return true;
-  const lower = String(text || "").toLowerCase().replace(/ё/g, "е");
-  return tokenGroups.every((group) => group.some((token) => pmTokenMatchesText(lower, token)));
+  const lower = pmNormalizeSearchText(text);
+  return tokenGroups.every((group) => pmGroupMatches(lower, group));
 }
 
 // Count how many token groups match (0..tokenGroups.length).
 // Used for relevance scoring: higher = better match.
 function pmWordMatchScore(text, tokenGroups) {
   if (!tokenGroups || !tokenGroups.length) return 0;
-  const lower = String(text || "").toLowerCase().replace(/ё/g, "е");
-  return tokenGroups.reduce((n, group) => n + (group.some((token) => pmTokenMatchesText(lower, token)) ? 1 : 0), 0);
+  const lower = pmNormalizeSearchText(text);
+  return tokenGroups.reduce((n, group) => n + (pmGroupMatches(lower, group) ? 1 : 0), 0);
 }
 
-// A token group is "optional" if every synonym in it is either a pure number or ≤3 chars.
-// Numbers ("50", "100") and short units ("ml", "мл") are extremely common and would match
-// thousands of unrelated products if required — they contribute to scoring but not to minMatch.
+// Filler group ("eau", "de", "мл"): never required, only adds relevance.
+function pmTokenGroupIsSoft(group) {
+  if (group._compound) return false;
+  return group.every((t) => PM_SOFT_TOKENS.has(t));
+}
+
+// A token group is "optional" (not counted in the n-1 required minimum) if it is soft or
+// every synonym in it is a pure number or ≤3 chars. Numbers ("50", "100") and short words
+// would match thousands of unrelated products if they were the only criteria.
 // Compound groups (e.g. ["no5"] with _compound flag) are always required.
 function pmTokenGroupIsOptional(group) {
   if (group._compound) return false;
+  if (pmTokenGroupIsSoft(group)) return true;
   return group.every((t) => /^\d+$/.test(t) || t.length <= 3);
+}
+
+// Splits groups by role:
+//   required — long words; with 3+ of them one may be missing (n-1 tolerance)
+//   strict   — numbers / short words the user typed; all must match (word boundaries)
+//   soft     — filler; relevance only
+// A query made only of filler words treats them as strict so it still filters.
+function pmClassifyTokenGroups(tokenGroups) {
+  const groups = tokenGroups || [];
+  const nonSoft = groups.filter((g) => !pmTokenGroupIsSoft(g));
+  const allSoft = groups.length > 0 && nonSoft.length === 0;
+  const soft = allSoft ? [] : groups.filter((g) => pmTokenGroupIsSoft(g));
+  const required = allSoft ? [] : nonSoft.filter((g) => !pmTokenGroupIsOptional(g));
+  const strict = allSoft ? groups : nonSoft.filter((g) => pmTokenGroupIsOptional(g));
+  const minRequired = required.length <= 2 ? required.length : required.length - 1;
+  return { required, strict, soft, minRequired };
 }
 
 // Minimum number of REQUIRED token groups that must match for a row to be included.
 // Optional groups (numbers, short units) are excluded from the minimum calculation.
 function pmMinMatchCount(tokenGroups) {
   if (!tokenGroups || !tokenGroups.length) return 0;
-  const required = tokenGroups.filter((g) => !pmTokenGroupIsOptional(g));
-  if (required.length === 0) return 1;
-  return required.length <= 2 ? required.length : required.length - 1;
+  const { required, minRequired } = pmClassifyTokenGroups(tokenGroups);
+  return required.length ? minRequired : 1;
 }
 
 // Returns true when text satisfies the search quality bar for the given token groups.
-// Required groups (>3 chars, non-numeric) must all match up to (n-1) — same n-1 rule as before.
-// Optional groups (numbers, short units) the user explicitly provided must ALSO match — so
-// "5 ml" with "Christian Dior" requires the "5" to be present as a standalone number, not "50".
-function pmPassesSearchFilter(text, tokenGroups) {
+// Required groups must match up to (n-1) for 3+ of them; strict groups (numbers, short
+// words) must all match — so "5 ml" with "Christian Dior" requires a standalone "5", not "50".
+// Soft groups (filler words, units) are ignored.
+function pmPassesSearchFilter(text, tokenGroups, { fuzzy = false } = {}) {
   if (!tokenGroups || !tokenGroups.length) return true;
-  const lower = String(text || "").toLowerCase().replace(/ё/g, "е");
-  const required = tokenGroups.filter((g) => !pmTokenGroupIsOptional(g));
-  const optional = tokenGroups.filter((g) => pmTokenGroupIsOptional(g));
-  if (required.length === 0) {
-    // e.g. "5 ml" or "GTT81" — all short/numeric; ALL token groups must match (AND).
-    return tokenGroups.every((group) => group.some((t) => pmTokenMatchesText(lower, t)));
+  const lower = pmNormalizeSearchText(text);
+  const { required, strict, minRequired } = pmClassifyTokenGroups(tokenGroups);
+  if (!strict.every((group) => pmGroupMatches(lower, group))) return false;
+  let score = 0;
+  for (const group of required) {
+    if (pmGroupMatches(lower, group)) { score++; continue; }
+    if (!fuzzy || group._compound) continue;
+    // Fuzzy: trigram similarity for long tokens (≥5 chars) — handles insertion/deletion typos.
+    if (group.some((t) => t.length >= 5 && wordSimJs(t, lower) >= 0.4)) { score++; continue; }
+    // Fuzzy: sorted-char for short tokens (4-7 chars) — handles transpositions like "doir"→"dior".
+    if (group.some((t) => t.length >= 4 && sortedCharMatch(t, lower))) score++;
   }
-  // Required groups use the n-1 tolerance rule for long queries.
-  const minMatch = required.length <= 2 ? required.length : required.length - 1;
-  const score = required.reduce((n, group) => n + (group.some((t) => pmTokenMatchesText(lower, t)) ? 1 : 0), 0);
-  if (score < minMatch) return false;
-  // Numeric/unit groups the user explicitly provided must also be present (word-boundary for numbers).
-  return optional.every((group) => group.some((t) => pmTokenMatchesText(lower, t)));
+  return score >= minRequired;
+}
+
+// True when every required group matches (no n-1 allowance used) — lets the UI keep partial
+// matches below complete ones even when it re-sorts by price.
+function pmIsFullMatch(text, tokenGroups) {
+  if (!tokenGroups || !tokenGroups.length) return true;
+  const lower = pmNormalizeSearchText(text);
+  const { required, strict } = pmClassifyTokenGroups(tokenGroups);
+  return [...required, ...strict].every((group) => pmGroupMatches(lower, group));
+}
+
+// SQL LIKE needle for a token: apostrophe words use their longest part ("j'adore" → "adore")
+// because the stored spelling may be "J'adore", "J`adore" or "Jadore".
+function pmTokenSqlNeedle(token) {
+  if (!token.includes("'")) return token;
+  return token.split("'").sort((a, b) => b.length - a.length)[0] || token;
+}
+
+function pmSqlLike(value) {
+  return `%${String(value).replace(/[\\%_]/g, "\\$&")}%`;
+}
+
+// Builds a MySQL WHERE fragment that is a superset of pmPassesSearchFilter (same n-1 rule,
+// soft words not required), plus a relevance expression for ORDER BY so the LIMIT window
+// is filled with the best matches first instead of just the newest rows.
+// columns: { name, article, barcode? } — fully qualified column expressions.
+function pmBuildMysqlSearchClause(tokenGroups, columns = {}) {
+  const cols = [columns.name, columns.article, columns.barcode].filter(Boolean);
+  // Same name without apostrophes (mirrors pmGroupMatches) so "jadore" reaches "J'adore" rows.
+  if (columns.name) cols.push("REPLACE(REPLACE(REPLACE(" + columns.name + ", '''', ''), '`', ''), '\u2019', '')");
+  const groupCond = (group, params) => {
+    const needles = [...new Set(group.map(pmTokenSqlNeedle).filter(Boolean))];
+    const conds = [];
+    for (const needle of needles) {
+      for (const col of cols) {
+        conds.push(`${col} LIKE ?`);
+        params.push(pmSqlLike(needle));
+      }
+    }
+    return conds.length ? `(${conds.join(" OR ")})` : "1=1";
+  };
+  const { required, strict, soft, minRequired } = pmClassifyTokenGroups(tokenGroups);
+  const whereParts = [];
+  const params = [];
+  // Compound groups are implied by their split parts (already strict groups) — the exact
+  // spelling only affects ranking.
+  for (const group of strict) whereParts.push(groupCond(group, params));
+  const sqlRequired = required.filter((g) => !g._compound);
+  const sqlMin = Math.min(sqlRequired.length, minRequired);
+  if (sqlRequired.length && sqlMin === sqlRequired.length) {
+    for (const group of sqlRequired) whereParts.push(groupCond(group, params));
+  } else if (sqlRequired.length && sqlMin > 0) {
+    const sum = sqlRequired.map((group) => `IF(${groupCond(group, params)}, 1, 0)`).join(" + ");
+    whereParts.push(`(${sum}) >= ?`);
+    params.push(sqlMin);
+  }
+
+  const scoreParams = [];
+  const scoreTerms = [];
+  for (const group of required) scoreTerms.push(`IF(${groupCond(group, scoreParams)}, 2, 0)`);
+  for (const group of [...strict, ...soft]) scoreTerms.push(`IF(${groupCond(group, scoreParams)}, 1, 0)`);
+  return {
+    where: whereParts.length ? whereParts.join(" AND ") : "1=1",
+    params,
+    scoreSql: scoreTerms.length ? `(${scoreTerms.join(" + ")})` : "0",
+    scoreParams,
+  };
+}
+
+// Prisma `AND` clauses (array) equivalent of pmBuildMysqlSearchClause for pm_snapshot_items.
+function pmBuildPrismaSearchWhere(tokenGroups, fields = ["article", "nativeName"]) {
+  const groupClause = (group) => ({
+    OR: [...new Set(group.map(pmTokenSqlNeedle).filter(Boolean))].flatMap((needle) =>
+      fields.map((field) => ({ [field]: { contains: needle, mode: "insensitive" } }))),
+  });
+  const { required, strict, minRequired } = pmClassifyTokenGroups(tokenGroups);
+  const and = strict.map(groupClause);
+  const sqlRequired = required.filter((g) => !g._compound);
+  const sqlMin = Math.min(sqlRequired.length, minRequired);
+  if (sqlRequired.length && sqlMin === sqlRequired.length) {
+    and.push(...sqlRequired.map(groupClause));
+  } else if (sqlRequired.length && sqlMin > 0) {
+    // n-1 of n: any one group may be missing.
+    and.push({
+      OR: sqlRequired.map((_, skip) => ({ AND: sqlRequired.filter((__, i) => i !== skip).map(groupClause) })),
+    });
+  }
+  return and;
 }
 
 // Trigram similarity between two strings (mirrors Postgres pg_trgm similarity()).
@@ -224,25 +399,7 @@ function sortedCharMatch(token, lower) {
 // via trigram similarity (≥0.4) when exact match fails.
 // Used for fuzzy fallback results so typos in brand names still pass.
 function pmPassesSearchFilterFuzzy(text, tokenGroups) {
-  if (!tokenGroups || !tokenGroups.length) return true;
-  const lower = String(text || "").toLowerCase().replace(/ё/g, "е");
-  const required = tokenGroups.filter((g) => !pmTokenGroupIsOptional(g));
-  const optional = tokenGroups.filter((g) => pmTokenGroupIsOptional(g));
-  if (required.length === 0) {
-    return tokenGroups.every((group) => group.some((t) => pmTokenMatchesText(lower, t)));
-  }
-  const minMatch = required.length <= 2 ? required.length : required.length - 1;
-  let score = 0;
-  for (const group of required) {
-    const exactHit = group.some((t) => pmTokenMatchesText(lower, t));
-    if (exactHit) { score++; continue; }
-    // Fuzzy: trigram similarity for long tokens (≥5 chars) — handles insertion/deletion typos.
-    if (!group._compound && group.some((t) => t.length >= 5 && wordSimJs(t, lower) >= 0.4)) { score++; continue; }
-    // Fuzzy: sorted-char for short tokens (4-7 chars) — handles transpositions like "doir"→"dior".
-    if (!group._compound && group.some((t) => t.length >= 4 && sortedCharMatch(t, lower))) score++;
-  }
-  if (score < minMatch) return false;
-  return optional.every((group) => group.some((t) => pmTokenMatchesText(lower, t)));
+  return pmPassesSearchFilter(text, tokenGroups, { fuzzy: true });
 }
 
 // Build sorted word list from PM row names (for autocomplete).
