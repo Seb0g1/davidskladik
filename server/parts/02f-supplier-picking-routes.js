@@ -172,7 +172,7 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
     }
 
     state.rows[key] = nextRow;
-    await writeSupplierPickingState(state);
+    await writeSupplierPickingState(state, { onlyKeys: [key] });
 
     const cartState = await readSupplierCartState();
     const blockKey = supplierBlockKey(current.offerId, current.partnerId);
@@ -237,7 +237,7 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
             });
             nextRow.cancelledNotifiedEmail = partnerEmail;
             state.rows[key] = nextRow;
-            await writeSupplierPickingState(state);
+            await writeSupplierPickingState(state, { onlyKeys: [key] });
             logger.info("manual cancellation email sent", { key, to: partnerEmail, offerId: nextRow.offerId });
           }
         } catch (emailError) {
@@ -256,7 +256,7 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
       if (wbShipment?.ok && wbShipment.supplyId) {
         nextRow.wbSupplyId = wbShipment.supplyId;
         state.rows[key] = nextRow;
-        await writeSupplierPickingState(state);
+        await writeSupplierPickingState(state, { onlyKeys: [key] });
       }
     }
 
@@ -415,7 +415,7 @@ app.post("/api/supplier-picking-list/:key/defer", requireStaff, async (request, 
     }
     const nextRow = normalizeSupplierPickingRow({ ...current, deferredUntil });
     state.rows[key] = nextRow;
-    await writeSupplierPickingState(state);
+    await writeSupplierPickingState(state, { onlyKeys: [key] });
     await appendAudit(request, clear ? "supplier_picking.defer_cleared" : "supplier_picking.deferred", {
       entityType: "supplier_picking",
       entityId: key,
@@ -523,7 +523,7 @@ app.post("/api/supplier-picking-list/:key/supplier-return", requireStaff, async 
       supplierReturnAmountRub: amountRub,
     });
     state.rows[key] = nextRow;
-    await writeSupplierPickingState(state);
+    await writeSupplierPickingState(state, { onlyKeys: [key] });
 
     await appendAudit(request, "supplier_picking.supplier_return", {
       entityType: "supplier_picking",

@@ -205,7 +205,10 @@ async function readSupplierPickingState() {
   }
 }
 
-async function writeSupplierPickingState(state = {}) {
+// options.onlyKeys: persist just these rows to Postgres. Single-row status changes used to
+// upsert every picking row (thousands of statements, 7-10 s per click) and, without a lock,
+// overwrote rows changed concurrently by another picker with the stale copy read earlier.
+async function writeSupplierPickingState(state = {}, { onlyKeys = null } = {}) {
   const normalized = normalizeSupplierPickingState({
     ...state,
     updatedAt: new Date().toISOString(),
@@ -213,7 +216,11 @@ async function writeSupplierPickingState(state = {}) {
   if (shouldUsePostgresStorage()) {
     try {
       const prisma = getPrisma();
-      const rows = Object.values(normalized.rows || {}).map(supplierPickingRowToPostgres).filter((row) => row.pickingKey);
+      const keyFilter = Array.isArray(onlyKeys) ? new Set(onlyKeys.map((k) => cleanText(k)).filter(Boolean)) : null;
+      const rows = Object.values(normalized.rows || {})
+        .filter((row) => !keyFilter || keyFilter.has(cleanText(row.key)))
+        .map(supplierPickingRowToPostgres)
+        .filter((row) => row.pickingKey);
       for (const batch of chunkArray(rows, 250)) {
         await prisma.$transaction(batch.map((row) => prisma.supplierPickingRow.upsert({
           where: { pickingKey: row.pickingKey },

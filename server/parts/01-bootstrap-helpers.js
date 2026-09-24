@@ -329,9 +329,31 @@ function invalidateWarehouseViewCache() {
   warehousePostgresDetailInflight.clear();
   warehouseFastPageCache.clear();
   warehouseFastPageCacheGeneration += 1;
+  traceWarehouseCacheInvalidation();
   warehouseGroupCountCache.clear();
   warehouseGroupCountInflight.clear();
   warehouseCatalogPairingContextCache = { at: 0, groupContext: null, pairingRows: null };
+}
+
+// Diagnostics: the catalog page cache is cleared so often in the API process that the page
+// rarely comes from cache. Log who clears it (at most once per 5 s, with a short stack).
+let warehouseCacheInvalidationCount = 0;
+let warehouseCacheInvalidationLoggedAt = 0;
+function traceWarehouseCacheInvalidation() {
+  warehouseCacheInvalidationCount += 1;
+  const now = Date.now();
+  if (now - warehouseCacheInvalidationLoggedAt < 5000) return;
+  warehouseCacheInvalidationLoggedAt = now;
+  const stack = String(new Error().stack || "")
+    .split("\n")
+    .slice(2, 9)
+    .map((line) => line.trim().replace(/^at /, ""))
+    .join(" <- ");
+  logger.info("warehouse cache invalidated", {
+    role: process.env.SERVER_ROLE || "",
+    count: warehouseCacheInvalidationCount,
+    stack,
+  });
 }
 
 // PLAN-HARDENING.md 1.4: warehouse view caches must be invalidated AFTER a mutation
