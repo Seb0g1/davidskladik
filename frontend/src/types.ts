@@ -573,6 +573,15 @@ export const SupplierLedgerEntrySchema = z.object({
 
 export const SupplierLedgerSummarySchema = z.object({
   balance: z.number().optional().default(0),
+  balanceRub: z.number().optional().default(0),
+  balanceUsd: z.number().optional().default(0),
+  debtTotalRub: z.number().optional().default(0),
+  paidTotalRubEquiv: z.number().optional().default(0),
+  paidTotalUsdEquiv: z.number().optional().default(0),
+  returnsTotalRub: z.number().optional().default(0),
+  returnsTotalUsd: z.number().optional().default(0),
+  correctionsTotalRub: z.number().optional().default(0),
+  correctionsTotalUsd: z.number().optional().default(0),
   debtTotal: z.number().optional().default(0),
   debtTotalUsd: z.number().optional().default(0),
   paidTotal: z.number().optional().default(0),
@@ -588,6 +597,15 @@ export const SupplierLedgerSummarySchema = z.object({
 
 const emptySupplierLedgerSummary = {
   balance: 0,
+  balanceRub: 0,
+  balanceUsd: 0,
+  debtTotalRub: 0,
+  paidTotalRubEquiv: 0,
+  paidTotalUsdEquiv: 0,
+  returnsTotalRub: 0,
+  returnsTotalUsd: 0,
+  correctionsTotalRub: 0,
+  correctionsTotalUsd: 0,
   debtTotal: 0,
   debtTotalUsd: 0,
   paidTotal: 0,

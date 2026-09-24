@@ -173,13 +173,15 @@ app.post("/api/supplier-ledger/payments", requireStaff, async (request, response
     const amount = normalizeFinanceMoney(request.body?.amount, 0);
     if (!supplierName && !partnerId) return response.status(400).json({ error: "supplierName or partnerId is required.", code: "supplier_ledger_identity_required" });
     if (!(amount > 0)) return response.status(400).json({ error: "Payment amount must be greater than zero.", code: "supplier_ledger_amount_required" });
+    const currency = supplierLedgerRequestCurrency(request.body?.currency);
+    const usdRate = await supplierLedgerCurrentUsdRate();
     const entry = normalizeSupplierLedgerEntry({
       sourceKey: `payment:${crypto.randomUUID()}`,
       entryType: "payment",
       supplierName,
       partnerId,
       amount: Math.abs(amount),
-      currency: cleanText(request.body?.currency || "RUB").toUpperCase() || "RUB",
+      currency,
       note: cleanText(request.body?.note || ""),
       occurredAt: request.body?.paidAt || request.body?.occurredAt || new Date().toISOString(),
       createdBy: requestUsername(request),
@@ -188,6 +190,8 @@ app.post("/api/supplier-ledger/payments", requireStaff, async (request, response
         supplierName,
         partnerId,
         amount,
+        currency,
+        usdRate,
         note: cleanText(request.body?.note || ""),
       },
     });
@@ -217,8 +221,6 @@ app.post("/api/supplier-ledger/payments", requireStaff, async (request, response
     // Deduct from the picker's cash balance: convert USD→RUB so the balance stays in RUB.
     const pickerUsername = requestUsername(request);
     if (pickerUsername && amount > 0) {
-      const usdRate = Number((await getUsdRate().catch(() => ({ rate: process.env.DEFAULT_USD_RATE || 95 }))).rate || process.env.DEFAULT_USD_RATE || 95);
-      const currency = cleanText(request.body?.currency || "RUB").toUpperCase() || "RUB";
       const deductRub = currency === "USD" ? Math.round(amount * usdRate) : Math.round(amount);
       withPickerBalanceLock(pickerUsername, async () => {
         const balance = await loadPickerBalance(pickerUsername);
@@ -277,7 +279,7 @@ app.post("/api/supplier-ledger/return-picking", requireAdmin, async (request, re
       note: note || "Возврат товара поставщику",
       occurredAt: new Date().toISOString(),
       createdBy: requestUsername(request),
-      raw: { source: "return_picking", pickingKey, debtEntryId: debtEntry.id },
+      raw: { source: "return_picking", pickingKey, debtEntryId: debtEntry.id, usdRate: Number(debtEntry.raw?.usdRate || 0) || await supplierLedgerCurrentUsdRate() },
     });
     const row = await getPrisma().supplierLedgerEntry.create({
       data: {
@@ -520,16 +522,20 @@ app.post("/api/supplier-ledger/adjust", requireAdmin, async (request, response, 
     }
     const supplierName = cleanText(request.body?.supplierName || request.body?.supplier || "");
     const partnerId = cleanText(request.body?.partnerId || "");
-    const targetBalance = normalizeFinanceMoney(request.body?.targetBalance, null);
+    const rawTarget = request.body?.targetBalance;
+    const targetRaw = rawTarget === undefined || rawTarget === null || rawTarget === "" ? NaN : Number(rawTarget);
     const note = cleanText(request.body?.note || "");
-    const currency = cleanText(request.body?.currency || "RUB").toUpperCase() || "RUB";
+    // targetBalance is in the supplier's own currency; the correction is stored in it too.
+    const currency = supplierLedgerRequestCurrency(request.body?.currency);
     if (!supplierName && !partnerId) return response.status(400).json({ error: "supplierName or partnerId is required.", code: "supplier_ledger_identity_required" });
-    if (targetBalance === null || !Number.isFinite(targetBalance)) return response.status(400).json({ error: "targetBalance is required.", code: "target_balance_required" });
+    if (!Number.isFinite(targetRaw)) return response.status(400).json({ error: "targetBalance is required.", code: "target_balance_required" });
+    const targetBalance = normalizeFinanceMoney(targetRaw, 0);
+    const usdRate = await supplierLedgerCurrentUsdRate();
     const current = await listSupplierLedgerEntries({ supplierName, partnerId, status: "active", limit: 1000, period: "all" });
-    const currentBalance = normalizeFinanceMoney(current.summary.balance, 2);
-    const delta = targetBalance - currentBalance;
+    const currentBalance = normalizeFinanceMoney(currency === "USD" ? current.summary.balanceUsd : current.summary.balanceRub, 0);
+    const delta = normalizeFinanceMoney(targetBalance - currentBalance, 0);
     if (Math.abs(delta) < 0.005) {
-      return response.json({ ok: true, skipped: true, currentBalance, targetBalance, delta: 0, message: "Баланс уже совпадает, корректировка не нужна." });
+      return response.json({ ok: true, skipped: true, currency, currentBalance, targetBalance, delta: 0, message: "Баланс уже совпадает, корректировка не нужна." });
     }
     const entry = normalizeSupplierLedgerEntry({
       sourceKey: `balance_correction:${crypto.randomUUID()}`,
@@ -541,7 +547,7 @@ app.post("/api/supplier-ledger/adjust", requireAdmin, async (request, response, 
       note: note || `Корректировка баланса: ${currentBalance} → ${targetBalance}`,
       occurredAt: new Date().toISOString(),
       createdBy: requestUsername(request),
-      raw: { source: "balance_correction", supplierName, partnerId, currentBalance, targetBalance, delta, note },
+      raw: { source: "balance_correction", mode: "delta", supplierName, partnerId, currency, usdRate, currentBalance, targetBalance, delta, note },
     });
     const row = await getPrisma().supplierLedgerEntry.create({
       data: {
@@ -567,7 +573,7 @@ app.post("/api/supplier-ledger/adjust", requireAdmin, async (request, response, 
       newValue: { ...saved, currentBalance, targetBalance, delta },
     }).catch((error) => logger.warn("supplier ledger adjust audit failed", { detail: error?.message || String(error) }));
     const summary = await listSupplierLedgerEntries({ supplierName, partnerId, status: "active", limit: 100, period: "all" });
-    response.status(201).json({ ok: true, entry: saved, summary: summary.summary, currentBalance, targetBalance, delta });
+    response.status(201).json({ ok: true, entry: saved, summary: summary.summary, currency, currentBalance, targetBalance, delta });
   } catch (error) {
     next(error);
   }
@@ -583,17 +589,19 @@ app.post("/api/supplier-ledger/returns", requireAdmin, async (request, response,
     const amount = normalizeFinanceMoney(request.body?.amount, 0);
     if (!supplierName && !partnerId) return response.status(400).json({ error: "supplierName or partnerId is required.", code: "supplier_ledger_identity_required" });
     if (!(amount > 0)) return response.status(400).json({ error: "Return amount must be greater than zero.", code: "supplier_ledger_amount_required" });
+    const currency = supplierLedgerRequestCurrency(request.body?.currency);
+    const usdRate = await supplierLedgerCurrentUsdRate();
     const entry = normalizeSupplierLedgerEntry({
       sourceKey: `supplier_return:${crypto.randomUUID()}`,
       entryType: "supplier_return",
       supplierName,
       partnerId,
       amount: Math.abs(amount),
-      currency: cleanText(request.body?.currency || "RUB").toUpperCase() || "RUB",
+      currency,
       note: cleanText(request.body?.note || ""),
       occurredAt: request.body?.occurredAt || new Date().toISOString(),
       createdBy: requestUsername(request),
-      raw: { source: "manual_return", supplierName, partnerId, amount, note: cleanText(request.body?.note || "") },
+      raw: { source: "manual_return", supplierName, partnerId, amount, currency, usdRate, note: cleanText(request.body?.note || "") },
     });
     const row = await getPrisma().supplierLedgerEntry.create({
       data: {

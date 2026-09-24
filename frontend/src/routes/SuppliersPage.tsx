@@ -74,6 +74,33 @@ function supplierSearchText(supplier: Supplier) {
   ].join(" ").toLowerCase();
 }
 
+function supplierCurrencyOf(supplier: Supplier): "USD" | "RUB" {
+  return String(asRecord(supplier).priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD";
+}
+
+// The server values every ledger entry in both currencies at the rate of its own moment;
+// the UI only picks the side matching the supplier currency and never recomputes balances.
+function ledgerInCurrency(ledgerValue: unknown, currency: "USD" | "RUB") {
+  const ledger = asRecord(ledgerValue);
+  const usd = currency === "USD";
+  return {
+    balance: Number((usd ? ledger.balanceUsd : ledger.balanceRub ?? ledger.balance) || 0),
+    debt: Number((usd ? ledger.debtTotalUsd : ledger.debtTotalRub ?? ledger.debtTotal) || 0),
+    paid: Number((usd ? ledger.paidTotalUsdEquiv : ledger.paidTotalRubEquiv ?? ledger.paidTotal) || 0),
+    returns: Number((usd ? ledger.returnsTotalUsd : ledger.returnsTotalRub) || 0),
+    corrections: Number((usd ? ledger.correctionsTotalUsd : ledger.correctionsTotalRub) || 0),
+  };
+}
+
+function supplierBalance(supplier: Supplier) {
+  return ledgerInCurrency(asRecord(supplier).ledger, supplierCurrencyOf(supplier)).balance;
+}
+
+function supplierBalanceRub(supplier: Supplier) {
+  const ledger = asRecord(asRecord(supplier).ledger);
+  return Number(ledger.balanceRub ?? ledger.balance ?? 0);
+}
+
 function supplierIsActive(supplier: Supplier) {
   return supplier.stopped !== true && supplier.active !== false;
 }
@@ -205,11 +232,12 @@ export function SuppliersPage() {
   });
 
   const returnSupplier = useMutation({
-    mutationFn: ({ supplier, amount, note }: { supplier: Supplier; amount: number; note: string }) =>
+    mutationFn: ({ supplier, amount, currency, note }: { supplier: Supplier; amount: number; currency: "USD" | "RUB"; note: string }) =>
       fetchJson("/api/supplier-ledger/returns", SupplierLedgerPaymentSchema, mutationBody({
         supplierName: supplier.name || "",
         partnerId: supplier.partnerId || "",
         amount,
+        currency,
         note,
       })),
     onSuccess: (_data, variables) => {
@@ -271,11 +299,12 @@ export function SuppliersPage() {
   });
 
   const adjustBalance = useMutation({
-    mutationFn: ({ supplier, targetBalance, note }: { supplier: Supplier; targetBalance: number; note: string }) =>
+    mutationFn: ({ supplier, targetBalance, currency, note }: { supplier: Supplier; targetBalance: number; currency: "USD" | "RUB"; note: string }) =>
       fetchJson("/api/supplier-ledger/adjust", z.object({ ok: z.boolean(), skipped: z.boolean().optional(), currentBalance: z.number().optional(), targetBalance: z.number().optional(), delta: z.number().optional(), message: z.string().optional() }).passthrough(), mutationBody({
         supplierName: supplier.name || "",
         partnerId: supplier.partnerId || "",
         targetBalance,
+        currency,
         note,
       })),
     onSuccess: () => {
@@ -316,13 +345,10 @@ export function SuppliersPage() {
         const text = supplierSearchText(supplier);
         return words.every((w) => text.includes(w));
       })
-      .filter((supplier) => !hasDebtFilter || Number(asRecord(asRecord(supplier).ledger).balance || 0) < 0)
+      .filter((supplier) => !hasDebtFilter || supplierBalance(supplier) < -0.005)
       .sort((a, b) => {
-        if (sortBy === "debt") {
-          const debtA = -Number(asRecord(asRecord(a).ledger).balance || 0);
-          const debtB = -Number(asRecord(asRecord(b).ledger).balance || 0);
-          return debtB - debtA;
-        }
+        // Compare in RUB so USD and RUB suppliers rank on one scale.
+        if (sortBy === "debt") return supplierBalanceRub(a) - supplierBalanceRub(b);
         return String(a.name || "").localeCompare(String(b.name || ""), "ru");
       });
   }, [search, suppliers, view, sortBy, hasDebtFilter]);
@@ -386,27 +412,12 @@ export function SuppliersPage() {
     const raw = asRecord(supplier);
     const articles = supplierArticles(supplier);
     const draft = articleDrafts[id] || { article: "", note: "" };
-    const supplierCurrency = String(raw.priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD";
+    const supplierCurrency = supplierCurrencyOf(supplier);
     const profile = historyQuery.data;
-    // Prefer the per-supplier profile summary (fresh individual query) over the bulk list ledger
-    // (which can miss entries if they were stored with a different partnerId/supplierName variant).
+    // Prefer the fresh per-supplier profile summary; the list summary is built by the same
+    // server function over the same entries, so both always agree.
     const ledger = asRecord((profile?.ledger?.summary ?? raw.ledger) as Record<string, unknown>);
-    const balance = Number(ledger.balance || 0);
-    // Use original USD prices from raw picking data to avoid drift when the rate changes.
-    const debtTotalUsdDrawer = Number((ledger as Record<string, unknown>).debtTotalUsd || 0);
-    const debtTotalRubDrawer = Number((ledger as Record<string, unknown>).debtTotal || 0);
-    const paidTotalRubDrawer = Number(ledger.paidTotal || 0);
-    // Split credits by currency: USD payments stored as USD, old RUB payments stored as RUB.
-    const creditTotalUsdDrawer = Number((ledger as Record<string, unknown>).creditTotalUsd || 0);
-    const creditTotalRubDrawer = Number((ledger as Record<string, unknown>).creditTotalRub || 0);
-    const paidTotalUsdDrawer = Number((ledger as Record<string, unknown>).paidTotalUsd || 0);
-    const paidTotalRubOnlyDrawer = Number((ledger as Record<string, unknown>).paidTotalRubOnly || paidTotalRubDrawer);
-    const debtStoredInRub = Boolean((ledger as Record<string, unknown>).debtStoredInRub);
-    // New-format suppliers store debts in RUB — balance is RUB, must convert via debtTotalUsd.
-    // Old-format suppliers stored debts in USD — balance is already USD-denominated.
-    const balanceUsd = supplierCurrency === "USD"
-      ? (debtStoredInRub ? paidTotalUsdDrawer + paidTotalRubOnlyDrawer / usdRate - debtTotalUsdDrawer : balance)
-      : balance / usdRate;
+    const totals = ledgerInCurrency(ledger, supplierCurrency);
     const paymentAmount = paymentDrafts[id] || "";
     const paymentNote = paymentNotes[id] || "";
     const active = supplierIsActive(supplier);
@@ -428,7 +439,7 @@ export function SuppliersPage() {
       if (cutoff && !r.pickedAt) return false;
       return true;
     });
-    return { id, supplier, raw, articles, draft, ledger, balance, balanceUsd, supplierCurrency, paymentAmount, paymentNote, active, stockOnly, profile, ledgerEntries, returnedKeys, debtByKey, pickedRows, debtTotalUsdDrawer, debtTotalRubDrawer, paymentEntries, creditTotalUsdDrawer, creditTotalRubDrawer, paidTotalUsdDrawer, paidTotalRubOnlyDrawer };
+    return { id, supplier, raw, articles, draft, ledger, totals, supplierCurrency, paymentAmount, paymentNote, active, stockOnly, profile, ledgerEntries, returnedKeys, debtByKey, pickedRows, paymentEntries };
   })() : null;
 
   return (
@@ -567,15 +578,8 @@ export function SuppliersPage() {
               const id = supplierId(supplier);
               const raw = asRecord(supplier);
               const ledger = asRecord(raw.ledger);
-              const balance = Number(ledger.balance || 0);
-              const supplierCurrency = String(raw.priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD";
-              const listDebtStoredInRub = Boolean((ledger as Record<string, unknown>).debtStoredInRub);
-              const listDebtTotalUsd = Number((ledger as Record<string, unknown>).debtTotalUsd || 0);
-              const listPaidTotalUsd = Number((ledger as Record<string, unknown>).paidTotalUsd || 0);
-              const listPaidTotalRubOnly = Number((ledger as Record<string, unknown>).paidTotalRubOnly || 0);
-              const balanceDisplay = supplierCurrency === "USD" && listDebtStoredInRub
-                ? listPaidTotalUsd + listPaidTotalRubOnly / usdRate - listDebtTotalUsd
-                : balance;
+              const supplierCurrency = supplierCurrencyOf(supplier);
+              const balanceDisplay = ledgerInCurrency(ledger, supplierCurrency).balance;
               const active = supplierIsActive(supplier);
               const isOpen = drawerSupplier && supplierId(drawerSupplier) === id;
               return (
@@ -668,13 +672,11 @@ export function SuppliersPage() {
 
             {/* Ledger strip */}
             <div className="summary-grid compact-summary supplier-ledger-strip">
-              {drawerData.supplierCurrency === "USD" ? (
-                <DiagnosticValue label={drawerData.balanceUsd < 0 ? "Долг поставщику" : "Аванс / баланс"} value={moneySigned(drawerData.balanceUsd, "USD")} tone={drawerData.balanceUsd < 0 ? "danger" : drawerData.balanceUsd > 0 ? "success" : ""} />
-              ) : (
-                <DiagnosticValue label={drawerData.balance < 0 ? "Долг поставщику" : "Аванс / баланс"} value={moneySigned(drawerData.balance, "RUB")} tone={drawerData.balance < 0 ? "danger" : drawerData.balance > 0 ? "success" : ""} />
-              )}
-              <DiagnosticValue label="Собрано в долг" value={drawerData.supplierCurrency === "USD" ? moneyAmount(drawerData.debtTotalUsdDrawer, "USD") : moneyAmount(drawerData.debtTotalRubDrawer, "RUB")} />
-              <DiagnosticValue label="Оплачено" value={drawerData.supplierCurrency === "USD" ? moneySigned(drawerData.paidTotalUsdDrawer + drawerData.paidTotalRubOnlyDrawer / usdRate, "USD") : moneySigned(drawerData.paidTotalRubOnlyDrawer, "RUB")} tone={(drawerData.paidTotalUsdDrawer + drawerData.paidTotalRubOnlyDrawer) > 0 ? "success" : ""} />
+              <DiagnosticValue label={drawerData.totals.balance < 0 ? "Долг поставщику" : "Аванс / баланс"} value={moneySigned(drawerData.totals.balance, drawerData.supplierCurrency)} tone={drawerData.totals.balance < 0 ? "danger" : drawerData.totals.balance > 0 ? "success" : ""} />
+              <DiagnosticValue label="Собрано в долг" value={moneyAmount(drawerData.totals.debt, drawerData.supplierCurrency)} />
+              <DiagnosticValue label="Оплачено" value={moneySigned(drawerData.totals.paid, drawerData.supplierCurrency)} tone={drawerData.totals.paid > 0 ? "success" : ""} />
+              {Math.abs(drawerData.totals.returns) >= 0.005 ? <DiagnosticValue label="Возвраты" value={moneySigned(drawerData.totals.returns, drawerData.supplierCurrency)} /> : null}
+              {Math.abs(drawerData.totals.corrections) >= 0.005 ? <DiagnosticValue label="Корректировки" value={moneySigned(drawerData.totals.corrections, drawerData.supplierCurrency)} /> : null}
               <DiagnosticValue label="Последняя оплата" value={drawerData.ledger.lastPaymentAt ? compactDate(String(drawerData.ledger.lastPaymentAt)) : "—"} />
             </div>
 
@@ -741,7 +743,7 @@ export function SuppliersPage() {
                   placeholder={drawerData.supplierCurrency === "USD" ? "Фактический баланс, $" : "Фактический баланс, ₽"}
                   value={adjustDrafts[drawerData.id] || ""}
                   onChange={(e) => setAdjustDrafts((p) => ({ ...p, [drawerData.id]: e.target.value }))}
-                  title={`Текущий: ${drawerData.supplierCurrency === "USD" ? `${moneySigned(drawerData.balanceUsd, "USD")} (≈ ${moneySigned(drawerData.balance, "RUB")})` : moneySigned(drawerData.balance, "RUB")}`}
+                  title={`Текущий: ${moneySigned(drawerData.totals.balance, drawerData.supplierCurrency)}`}
                 />
                 <input
                   className="supplier-payment-note"
@@ -756,8 +758,7 @@ export function SuppliersPage() {
                   onClick={() => {
                     const inputVal = Number(adjustDrafts[drawerData.id] || 0);
                     if (!Number.isFinite(inputVal)) return;
-                    const targetBalance = drawerData.supplierCurrency === "USD" ? Math.round(inputVal * usdRate) : inputVal;
-                    adjustBalance.mutate({ supplier: drawerData.supplier, targetBalance, note: adjustNotes[drawerData.id] || "" }, {
+                    adjustBalance.mutate({ supplier: drawerData.supplier, targetBalance: inputVal, currency: drawerData.supplierCurrency, note: adjustNotes[drawerData.id] || "" }, {
                       onSuccess: () => {
                         setAdjustDrafts((p) => ({ ...p, [drawerData.id]: "" }));
                         setAdjustNotes((p) => ({ ...p, [drawerData.id]: "" }));
@@ -772,9 +773,7 @@ export function SuppliersPage() {
                 <div className="inline-success sp-adjust-ok">
                   {adjustBalance.data.skipped
                     ? adjustBalance.data.message
-                    : drawerData.supplierCurrency === "USD"
-                      ? `Корректировка: ${moneySigned((adjustBalance.data.currentBalance ?? 0) / usdRate, "USD")} → ${moneySigned((adjustBalance.data.targetBalance ?? 0) / usdRate, "USD")} (запись на ${moneySigned((adjustBalance.data.delta ?? 0) / usdRate, "USD")})`
-                      : `Корректировка: ${moneySigned(adjustBalance.data.currentBalance ?? 0, "RUB")} → ${moneySigned(adjustBalance.data.targetBalance ?? 0, "RUB")} (запись на ${moneySigned(adjustBalance.data.delta ?? 0, "RUB")})`}
+                    : `Корректировка: ${moneySigned(adjustBalance.data.currentBalance ?? 0, adjustBalance.variables.currency)} → ${moneySigned(adjustBalance.data.targetBalance ?? 0, adjustBalance.variables.currency)} (запись на ${moneySigned(adjustBalance.data.delta ?? 0, adjustBalance.variables.currency)})`}
                 </div>
               )}
               {adjustBalance.isError && adjustBalance.variables && supplierId(adjustBalance.variables.supplier) === drawerData.id && <div className="inline-error sp-adjust-error">{errorMessage(adjustBalance.error)}</div>}
@@ -791,8 +790,9 @@ export function SuppliersPage() {
                     <span>Тип</span><span>Сумма</span><span>Дата</span><span>Заметка</span>
                   </div>
                   {drawerData.paymentEntries.map((entry) => {
+                    const entryRate = Number(asRecord(asRecord(entry).raw).usdRate || 0) || usdRate;
                     const amountUsd = drawerData.supplierCurrency === "USD"
-                      ? (String(entry.currency || "RUB").toUpperCase() === "USD" ? entry.amount : entry.amount / usdRate)
+                      ? (String(entry.currency || "RUB").toUpperCase() === "USD" ? entry.amount : entry.amount / entryRate)
                       : null;
                     const typeLabel = entry.entryType === "payment" ? "Оплата"
                       : entry.entryType === "balance_correction" ? "Корректировка"
@@ -805,7 +805,7 @@ export function SuppliersPage() {
                         <span className="supplier-order-amount" style={{ color: isNeg ? "var(--danger, #f87171)" : "var(--success, #4ed39a)" }}>
                           {drawerData.supplierCurrency === "USD" && amountUsd !== null
                             ? moneySigned(amountUsd, "USD")
-                            : moneySigned(entry.amount, "RUB")}
+                            : moneySigned(String(entry.currency || "RUB").toUpperCase() === "USD" ? entry.amount * entryRate : entry.amount, "RUB")}
                         </span>
                         <span className="muted-note">{compactDate(entry.occurredAt ?? null)}</span>
                         <span className="muted-note sp-note-xs">{entry.note || ""}</span>
@@ -906,7 +906,7 @@ export function SuppliersPage() {
                     className="primary-action"
                     type="button"
                     disabled={returnSupplier.isPending || !(Number(returnDrafts[drawerData.id]) > 0)}
-                    onClick={() => returnSupplier.mutate({ supplier: drawerData.supplier, amount: drawerData.supplierCurrency === "USD" ? Math.round(Number(returnDrafts[drawerData.id] || 0) * usdRate) : Number(returnDrafts[drawerData.id] || 0), note: returnNotes[drawerData.id] || "" })}
+                    onClick={() => returnSupplier.mutate({ supplier: drawerData.supplier, amount: Number(returnDrafts[drawerData.id] || 0), currency: drawerData.supplierCurrency, note: returnNotes[drawerData.id] || "" })}
                   >
                     {returnSupplier.isPending ? <Loader2 className="spin" size={16} /> : <RotateCcw size={16} />} Возврат
                   </button>

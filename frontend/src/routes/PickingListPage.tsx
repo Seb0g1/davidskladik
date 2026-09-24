@@ -1749,14 +1749,6 @@ export function PickingListPage() {
               ))
             ) : grouped.map(([supplierName, supplierRows]) => {
               const ledger = supplierLedger[supplierName] || {};
-              const balance = Number(ledger.balance || 0);
-              const debtTotalUsd = Number(ledger.debtTotalUsd || 0);
-              const debtTotalRub = Number(ledger.debtTotal || 0);
-              const paidTotalRub = Number(ledger.paidTotal || 0);
-              const paidTotalUsdPick = Number((ledger as Record<string, unknown>).paidTotalUsd ?? paidTotalRub);
-              const paidTotalRubOnlyPick = Number((ledger as Record<string, unknown>).paidTotalRubOnly || 0);
-              const creditTotalUsdPick = Number((ledger as Record<string, unknown>).creditTotalUsd || 0);
-              const creditTotalRubPick = Number((ledger as Record<string, unknown>).creditTotalRub || 0);
               const draftAmount = paymentDrafts[supplierName] || "";
               const draftNote = paymentNotes[supplierName] || "";
               const total = currentGroupTotal(supplierRows);
@@ -1764,12 +1756,14 @@ export function PickingListPage() {
               const supplierCurrency = String(supplierRows[0]?.priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD";
               const totalQtyAll = supplierRows.reduce((s, r) => s + (r.quantity || 1), 0);
               const hasReseller = supplierRows.some(r => r.reseller);
-              const debtStoredInRub = Boolean((ledger as Record<string, unknown>).debtStoredInRub);
-              const balanceUsd = supplierCurrency === "USD"
-                ? (debtStoredInRub ? paidTotalUsdPick + paidTotalRubOnlyPick / usdRate - debtTotalUsd : balance)
-                : balance;
-              const isOverpaid = balanceUsd > 0;
-              const isInDebt = balanceUsd < 0;
+              // Balances come ready from the server (same function as the suppliers page).
+              const ledgerRecord = ledger as Record<string, unknown>;
+              const isUsdSupplier = supplierCurrency === "USD";
+              const balanceNative = Number((isUsdSupplier ? ledgerRecord.balanceUsd : ledgerRecord.balanceRub ?? ledgerRecord.balance) || 0);
+              const debtNative = Number((isUsdSupplier ? ledgerRecord.debtTotalUsd : ledgerRecord.debtTotalRub ?? ledgerRecord.debtTotal) || 0);
+              const paidNative = Number((isUsdSupplier ? ledgerRecord.paidTotalUsdEquiv : ledgerRecord.paidTotalRubEquiv ?? ledgerRecord.paidTotal) || 0);
+              const isOverpaid = balanceNative >= 0.005;
+              const isInDebt = balanceNative <= -0.005;
               return (
                 <article className="picking-supplier-card" key={supplierName}>
                   <div className="picking-supplier-toolbar">
@@ -1790,8 +1784,8 @@ export function PickingListPage() {
                         {(isInDebt || isOverpaid) ? (
                           <a href="/suppliers" className={`picking-supplier-balance-badge${isOverpaid ? " overpaid" : " in-debt"}`}>
                             {isOverpaid
-                              ? `Аванс ${moneyAmount(Math.abs(balanceUsd), supplierCurrency, supplierCurrency === "USD" ? 2 : 0)}`
-                              : `Долг ${moneyAmount(Math.abs(balanceUsd), supplierCurrency, supplierCurrency === "USD" ? 2 : 0)}`}
+                              ? `Аванс ${moneyAmount(Math.abs(balanceNative), supplierCurrency, isUsdSupplier ? 2 : 0)}`
+                              : `Долг ${moneyAmount(Math.abs(balanceNative), supplierCurrency, isUsdSupplier ? 2 : 0)}`}
                           </a>
                         ) : null}
                         {(() => {
@@ -1814,16 +1808,8 @@ export function PickingListPage() {
                       </div>
                     </div>
                     <div className="supplier-ledger-row">
-                      {supplierCurrency === "USD" ? (
-                        <DiagnosticValue label="Общий долг" value={debtTotalUsd > 0 ? moneyAmount(debtTotalUsd, "USD") : "—"} tone={debtTotalUsd > 0 ? "danger" : ""} />
-                      ) : (
-                        <DiagnosticValue label="Общий долг" value={debtTotalRub > 0 ? moneyAmount(debtTotalRub, "RUB") : "—"} tone={debtTotalRub > 0 ? "danger" : ""} />
-                      )}
-                      {supplierCurrency === "USD" ? (
-                        <DiagnosticValue label="Оплачено" value={(paidTotalUsdPick + paidTotalRubOnlyPick / usdRate) > 0 ? moneyAmount(Math.round(paidTotalUsdPick + paidTotalRubOnlyPick / usdRate), "USD") : "—"} tone={(paidTotalUsdPick + paidTotalRubOnlyPick) > 0 ? "success" : ""} />
-                      ) : (
-                        <DiagnosticValue label="Оплачено" value={paidTotalRubOnlyPick > 0 ? moneyAmount(paidTotalRubOnlyPick, "RUB") : "—"} tone={paidTotalRubOnlyPick > 0 ? "success" : ""} />
-                      )}
+                      <DiagnosticValue label="Общий долг" value={debtNative > 0 ? moneyAmount(debtNative, supplierCurrency, isUsdSupplier ? 2 : 0) : "—"} tone={debtNative > 0 ? "danger" : ""} />
+                      <DiagnosticValue label="Оплачено" value={paidNative > 0 ? moneyAmount(paidNative, supplierCurrency, isUsdSupplier ? 2 : 0) : "—"} tone={paidNative > 0 ? "success" : ""} />
                       <DiagnosticValue label="Сборка" value={supplierCurrency === "RUB" ? moneyAmount(total, "RUB") : `${moneyAmount(total, "USD")} / ≈${moneyAmount(totalRub, "RUB")}`} />
                     </div>
                   </div>

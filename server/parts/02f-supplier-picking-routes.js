@@ -63,7 +63,12 @@ app.get("/api/supplier-picking-list", requireStaff, async (request, response, ne
       ? rowsForSupplierDropdown
       : allRows;
     const suppliers = Array.from(new Set(supplierSourceRows.map((row) => row.supplierName).filter(Boolean))).sort((a, b) => a.localeCompare(b, "ru", { sensitivity: "base" }));
-    const supplierLedgerMap = await supplierLedgerSummaryMapForSuppliers(suppliers.map((name) => ({ id: name, name })));
+    // Match ledger entries by partnerId too, exactly like the suppliers page does.
+    const partnerIdBySupplier = new Map();
+    for (const row of supplierSourceRows) {
+      if (row.supplierName && row.partnerId && !partnerIdBySupplier.has(row.supplierName)) partnerIdBySupplier.set(row.supplierName, row.partnerId);
+    }
+    const supplierLedgerMap = await supplierLedgerSummaryMapForSuppliers(suppliers.map((name) => ({ id: name, name, partnerId: partnerIdBySupplier.get(name) || "" })));
     const supplierLedger = Object.fromEntries(suppliers.map((name) => [name, supplierLedgerMap.get(name) || supplierLedgerSummaryFromEntries([])]));
     const ratePayload = await getUsdRate().catch(() => null);
     const usdRate = Number(ratePayload?.rate || process.env.DEFAULT_USD_RATE || 95) || 95;
@@ -473,7 +478,7 @@ app.post("/api/supplier-picking-list/:key/supplier-return", requireStaff, async 
           note,
           occurredAt: now.toISOString(),
           createdBy: username,
-          raw: { source: "supplier_return_picking", pickingKey: key, debtEntryId: debtEntry?.id || null },
+          raw: { source: "supplier_return_picking", pickingKey: key, debtEntryId: debtEntry?.id || null, usdRate: Number(debtEntry?.raw?.usdRate || 0) || await supplierLedgerCurrentUsdRate() },
         });
         try {
           const saved = await getPrisma().supplierLedgerEntry.create({
