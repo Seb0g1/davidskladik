@@ -40,6 +40,7 @@ async function writeMarketplaceAccounts(accounts) {
     marketplaceAccountsPath,
     JSON.stringify({ updatedAt: new Date().toISOString(), accounts: normalized }, null, 2),
   );
+  marketplaceAccountsCache = null;
   return normalized;
 }
 
@@ -108,7 +109,22 @@ function getEnvWbAccounts() {
   ];
 }
 
+// getMarketplaceAccounts runs for every product normalized (targetById → marketplaceTargets):
+// uncached it re-read and re-parsed marketplace-accounts.json synchronously thousands of times
+// per catalog page — ~40% of the API CPU in a production profile. The cache lives only until
+// the current synchronous run ends (cleared on setImmediate), so a loop over 25k products reads
+// the file once, while any later request — or a file edited by another process — sees fresh data.
+let marketplaceAccountsCache = null;
+
 function getMarketplaceAccounts() {
+  if (!marketplaceAccountsCache) {
+    marketplaceAccountsCache = buildMarketplaceAccounts();
+    setImmediate(() => { marketplaceAccountsCache = null; });
+  }
+  return marketplaceAccountsCache.map((account) => ({ ...account }));
+}
+
+function buildMarketplaceAccounts() {
   const envAccounts = [...getEnvOzonAccounts(), ...getEnvYandexShops(), ...getEnvAvitoAccounts(), ...getEnvWbAccounts()];
   const localAccounts = readMarketplaceAccountsSync().map((account) => ({ ...account, source: "local", readOnly: false }));
   const localById = new Map(localAccounts.map((account) => [account.id, account]));

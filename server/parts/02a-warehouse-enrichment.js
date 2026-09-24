@@ -142,14 +142,24 @@ async function enrichWarehouseProducts(productIds = []) {
   return updated;
 }
 
+// productId → last auto-enrich attempt. Products that stay "weak" after enrichment were
+// re-enriched on every page build: Ozon API calls inside the page request plus a warehouse
+// write whose invalidation wiped the whole page cache right after it was filled.
+const warehousePageEnrichAttemptAt = new Map();
+const warehousePageEnrichCooldownMs = Math.max(0, Number(process.env.WAREHOUSE_PAGE_AUTO_ENRICH_COOLDOWN_MS ?? 30 * 60_000) || 0);
+
 async function enrichWeakOzonProductsForPage(products = []) {
   if (process.env.WAREHOUSE_PAGE_AUTO_ENRICH_ENABLED !== "true") return products;
   const limit = Math.max(0, Number(process.env.WAREHOUSE_PAGE_AUTO_ENRICH_LIMIT || 60) || 60);
   if (!limit) return products;
+  const now = Date.now();
   const candidates = (products || [])
     .filter((product) => product?.marketplace === "ozon" && product.offerId && ozonProductNeedsDetailRefresh(product))
+    .filter((product) => now - (warehousePageEnrichAttemptAt.get(product.id) || 0) >= warehousePageEnrichCooldownMs)
     .slice(0, limit);
   if (!candidates.length) return products;
+  if (warehousePageEnrichAttemptAt.size > 50_000) warehousePageEnrichAttemptAt.clear();
+  for (const product of candidates) warehousePageEnrichAttemptAt.set(product.id, now);
 
   const updatedById = new Map();
   for (const account of getOzonAccounts()) {
