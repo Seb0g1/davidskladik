@@ -747,155 +747,22 @@ app.get("/public/avito-stock/:token.csv", async (request, response, next) => {
 // по актуальным ценам PM: товары с поставщиком останутся в фиде навсегда,
 // товары без поставщика снова уйдут в outOfStock, но их 30-дневный таймер в
 // Avito сброшен — они не истекут ещё 30 дней.
-app.post("/api/avito/restore-expired", requireAdmin, async (request, response, next) => {
-  try {
-    const account = resolveAvitoAccountOr404(request, response);
-    if (!account) return;
-    const limit = Math.max(10, Math.min(2000, Number(request.body?.limit || 2000) || 2000));
-    const state = await readAvitoListingsFile();
-    const candidates = state.items.filter((item) => item.adId && item.outOfStock === true && item.enabled !== false);
-    const batch = candidates.slice(0, limit);
-    if (!batch.length) {
-      return response.json({ ok: true, restored: 0, total: candidates.length, message: "Все объявления уже активны (нет outOfStock-кандидатов)." });
-    }
-    // Снимаем outOfStock и выставляем дефолтный остаток для всего батча.
-    const batchAdIds = new Set(batch.map((item) => item.adId));
-    const nextItems = state.items.map((item) =>
-      batchAdIds.has(item.adId)
-        ? { ...item, outOfStock: false, stockQuantity: avitoFeedDefaultStock }
-        : item
-    );
-    await writeAvitoListingsFile({ ...state, items: nextItems });
-    // Тригерим скачивание фида — обходим 55-минутный rate-limit через force=true.
-    const uploadResult = await runAvitoUploadTriggerIfNeeded({ force: true }).catch((err) => ({ ok: false, error: err?.message }));
-    const remaining = Math.max(0, candidates.length - batch.length);
-    await appendAudit(request, "avito.restore_expired", { restored: batch.length, total: candidates.length, remaining });
-    response.json({
-      ok: true,
-      restored: batch.length,
-      total: candidates.length,
-      remaining,
-      uploadResult,
-      message: `${batch.length} объявлений включено в фид со стоком ${avitoFeedDefaultStock} шт. Avito скачает обновлённый фид и переиздаст просроченные.${remaining > 0 ? ` Осталось ещё ${remaining}.` : ""}`,
+// Отключено 24.09.2026. Эти «аварийные» действия усугубляли потерю лимитов Avito:
+// • restore-expired помечал до 2000 товаров без наличия как «в наличии» и форсил загрузку —
+//   публикации на несуществующий товар и трата лимита;
+// • collect-expired-for-archive + archive-old-duplicates собирали ВСЕ объявления со статусом
+//   «Истёк срок» и безвозвратно удаляли их. Удалённое объявление больше не публикуется под
+//   тем же Id (ошибка 1150), а новый Id = «повторное объявление» и новый штраф.
+// Истёкшие объявления Avito продлевает сам при наличии лимита — удалять их нельзя.
+for (const disabledPath of ["/api/avito/restore-expired", "/api/avito/collect-expired-for-archive", "/api/avito/archive-old-duplicates"]) {
+  app.post(disabledPath, requireAdmin, (_request, response) => {
+    response.status(410).json({
+      ok: false,
+      code: "avito_action_disabled",
+      error: "Действие отключено: оно удаляло или переопубликовывало объявления и тратило лимиты Avito.",
     });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// --- Архивация старых дублирующих объявлений ---
-
-// Собирает Avito-ID просроченных объявлений («Истёк срок размещения») через
-// core Items API и сохраняет в data/avito-archive-queue.json для последующей
-// архивации через POST /api/avito/archive-old-duplicates.
-// Причина: когда код убрал суффикс -r1 из adId, Авито начал трактовать новые
-// adId как дубли старых просроченных → ошибка «Повторное размещение». Архивация
-// просроченных снимает блокировку, и новые объявления публикуются.
-app.post("/api/avito/collect-expired-for-archive", requireAdmin, async (request, response, next) => {
-  try {
-    const account = resolveAvitoAccountOr404(request, response);
-    if (!account) return;
-    const userId = await getAvitoUserId(account);
-    // Avito Items API status values: "old" = Истёк срок, "not_published" = Неопубликованное
-    const statuses = ["old", "not_published"];
-    const allIds = [];
-    for (const status of statuses) {
-      let page = 1;
-      const perPage = 100;
-      while (true) {
-        const data = await getAvitoItemsByStatus(account, userId, status, { perPage, page });
-        const items = Array.isArray(data?.resources) ? data.resources : [];
-        for (const item of items) {
-          if (item.id) allIds.push(Number(item.id));
-        }
-        const total = Number(data?.meta?.total || 0);
-        const pages = Math.ceil(total / perPage) || 1;
-        if (page >= pages || !items.length) break;
-        page++;
-        await sleep(150);
-      }
-    }
-    const queuePath = path.join(dataDir, "avito-archive-queue.json");
-    let existing = [];
-    try {
-      const raw = await fs.readFile(queuePath, "utf8");
-      existing = JSON.parse(raw);
-      if (!Array.isArray(existing)) existing = [];
-    } catch {}
-    const merged = [...new Set([...existing, ...allIds])];
-    await fs.writeFile(queuePath, JSON.stringify(merged), "utf8");
-    await appendAudit(request, "avito.collect_expired_for_archive", { collected: allIds.length, queueTotal: merged.length });
-    response.json({
-      ok: true,
-      collected: allIds.length,
-      queueTotal: merged.length,
-      message: `Найдено ${allIds.length} просроченных объявлений. Запустите POST /api/avito/archive-old-duplicates (батчами по 200) для архивации.`,
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// Читает очередь дублей из data/avito-archive-queue.json (сформированную из
-// отчёта автозагрузки: Avito-ID объявлений, вызвавших «Повторное размещение»).
-// Архивирует до limit штук за вызов, удаляя обработанные из файла.
-// Когда очередь опустеет — возвращает done: true.
-app.post("/api/avito/archive-old-duplicates", requireAdmin, async (request, response, next) => {
-  try {
-    const account = resolveAvitoAccountOr404(request, response);
-    if (!account) return;
-    const limit = Math.max(10, Math.min(500, Number(request.body?.limit || 200) || 200));
-    const queuePath = path.join(dataDir, "avito-archive-queue.json");
-
-    let queue = [];
-    try {
-      const raw = await fs.readFile(queuePath, "utf8");
-      queue = JSON.parse(raw);
-      if (!Array.isArray(queue)) queue = [];
-    } catch {
-      return response.json({ ok: true, archived: 0, remaining: 0, done: true, message: "Очередь не найдена или уже пуста." });
-    }
-
-    if (!queue.length) {
-      return response.json({ ok: true, archived: 0, remaining: 0, done: true, message: "Очередь пуста — все дубли уже архивированы." });
-    }
-
-    const batch = queue.slice(0, limit);
-    const userId = await getAvitoUserId(account);
-    let archived = 0;
-    const errors = [];
-    for (const avitoId of batch) {
-      try {
-        await archiveAvitoItemById(account, userId, Number(avitoId));
-        archived++;
-      } catch (err) {
-        // 404 = уже удалён/не существует — не считаем ошибкой
-        if (err?.statusCode !== 404 && !String(err?.message).includes("404")) {
-          errors.push(String(err?.message || err));
-        } else {
-          archived++; // уже нет — считаем обработанным
-        }
-      }
-      await sleep(60); // ~16 req/s
-    }
-
-    // Убираем обработанный батч из файла
-    const remaining = queue.slice(batch.length);
-    await fs.writeFile(queuePath, JSON.stringify(remaining), "utf8");
-
-    await appendAudit(request, "avito.archive_duplicates", { archived, errors: errors.length, remaining: remaining.length });
-    response.json({
-      ok: true,
-      archived,
-      errors: errors.length,
-      remaining: remaining.length,
-      done: remaining.length === 0,
-      message: `Архивировано ${archived} дублей. Осталось в очереди: ${remaining.length}.${remaining.length === 0 ? " Готово!" : " Нажмите ещё раз."}`,
-    });
-  } catch (error) {
-    next(error);
-  }
-});
+  });
+}
 
 app.get("/avito/callback", (_request, response) => {
   response.status(200).send("OK");

@@ -7517,17 +7517,22 @@ test("Avito stock CSV follows help format and zeroes out-of-stock ads", () => {
   const lines = live.csv.trim().split("\n");
   assert.equal(lines[0], "#date,2026-07-15T12:00:00");
   assert.equal(lines[1], "Id,Stock");
-  assert.equal(lines[2], "oz-1,7");
+  // Id в CSV обязан совпадать с Id объявления в XML-фиде (avitoFeedAdId, суффикс -r1),
+  // иначе Авито не сопоставит ни одной строки остатков.
+  assert.equal(lines[2], "oz-1-r1,7");
   // p2 не найден в живых данных склада → товара нет, остаток 0.
-  assert.equal(lines[3], "oz-2,0");
+  assert.equal(lines[3], "oz-2-r1,0");
   assert.equal(live.count, 2);
   assert.equal(live.outOfStock, 1);
   // Postgres недоступен (liveStates === null): сохранённый флаг outOfStock
   // обнуляет остаток, объявление без количества получает целевой остаток фида.
   const stored = renderAvitoStockCsv(listings, { autoUpdatePrices: false }, null, {});
   const storedLines = stored.csv.trim().split("\n");
-  assert.equal(storedLines[2], "oz-1,7");
-  assert.equal(storedLines[3], "oz-2,0");
+  assert.equal(storedLines[2], "oz-1-r1,7");
+  assert.equal(storedLines[3], "oz-2-r1,0");
+  const { buildAvitoAdXml } = require("../server.js");
+  const xml = buildAvitoAdXml({ ...listings[0], imageUrls: ["https://example.com/a.jpg"] }, {});
+  assert.ok(xml.includes("<Id>oz-1-r1</Id>"), "XML and CSV must use the same ad Id");
 });
 
 test("warehouse supplier picker skips anomalously cheap price outliers", () => {

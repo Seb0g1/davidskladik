@@ -175,6 +175,17 @@ function buildUniqueAvitoDescription(listing, feedDefaults = {}) {
   return parts.join(" ");
 }
 
+// Id объявления в файле автозагрузки (и в CSV «Управления остатками» — он обязан совпадать).
+// ФОРМАТ МЕНЯТЬ НЕЛЬЗЯ: для Avito новый Id = новое объявление. Смена формата 09.08 (+"-r1")
+// и 05.09 (без "-r1") дважды выложила ~13 тыс. «повторных объявлений», и Avito ввёл
+// штрафной лимит размещений (код 1520). В хранилище adId лежит без суффикса.
+const AVITO_FEED_AD_ID_SUFFIX = "-r1";
+function avitoFeedAdId(adId) {
+  const id = cleanText(adId);
+  if (!id) return "";
+  return id.endsWith(AVITO_FEED_AD_ID_SUFFIX) ? id : id + AVITO_FEED_AD_ID_SUFFIX;
+}
+
 function buildAvitoAdXml(listing, feedDefaults = {}) {
   const description = listing.description?.trim() || buildUniqueAvitoDescription(listing, feedDefaults);
   const emitted = new Set();
@@ -184,7 +195,7 @@ function buildAvitoAdXml(listing, feedDefaults = {}) {
     if (tag) emitted.add(name);
     xml += tag;
   };
-  emit("Id", listing.adId + "-r1");
+  emit("Id", avitoFeedAdId(listing.adId));
   emit("Title", listing.title);
   xml += avitoXmlCdataTag("Description", description);
   emitted.add("Description");
@@ -385,7 +396,8 @@ function renderAvitoStockCsv(listings, rules, liveStates, pricing, now = new Dat
       ? 0
       : hasQuantity ? Math.max(0, Math.round(Number(listing.stockQuantity))) : avitoFeedDefaultStock;
     if (stock <= 0) outOfStockCount += 1;
-    csv += `${avitoStockCsvCell(listing.adId)},${stock}\n`;
+    // Тот же Id, что в XML: без суффикса ни одна строка CSV не совпадала с объявлениями.
+    csv += `${avitoStockCsvCell(avitoFeedAdId(listing.adId))},${stock}\n`;
     count += 1;
   }
   return { csv, count, outOfStock: outOfStockCount };
@@ -471,7 +483,7 @@ async function buildAvitoFeedXml() {
   // Включаем старые adId (формат oz-XXXX-r1) с Status=Удалено — Avito удалит
   // их из системы, что снимет блокировку «Повторное размещение» для новых
   // объявлений с теми же товарами. После обработки Avito'м файл можно очистить.
-  const activeAdIds = new Set(state.items.map((item) => cleanText(item.adId) + "-r1").filter(Boolean));
+  const activeAdIds = new Set(state.items.map((item) => avitoFeedAdId(item.adId)).filter(Boolean));
   let deletedCount = 0;
   for (const oldAdId of oldAdIds) {
     if (!oldAdId || activeAdIds.has(oldAdId)) continue; // не удаляем активные
