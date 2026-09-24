@@ -138,9 +138,13 @@ const warehousePostgresDetailInflight = new Map();
 const warehousePostgresDetailCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE_DETAIL_CACHE_MS || 45000));
 const warehouseFastPageCache = new Map();
 const warehouseFastPageInflight = new Map();
+// Bumped by invalidateWarehouseViewCache: a page build that started before a mutation must
+// not write its (pre-mutation) result into the cache after the mutation cleared it.
+let warehouseFastPageCacheGeneration = 0;
 let warehousePageBuildActive = 0;
 const warehousePageBuildWaiters = [];
 const warehouseFastPageCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE_PAGE_CACHE_TTL_MS || process.env.WAREHOUSE_FAST_PAGE_CACHE_MS || 45000));
+const warehouseFastPageStaleTtlMs = Math.min(15 * 60_000, Math.max(0, Number(process.env.WAREHOUSE_FAST_PAGE_STALE_MS ?? 300000) || 0));
 const warehouseFastPageCacheMax = Math.max(10, Number(process.env.WAREHOUSE_FAST_PAGE_CACHE_MAX || 80));
 const warehouseCatalogPairingContextCacheTtlMs = Math.max(5000, Number(process.env.WAREHOUSE_PAIRING_CONTEXT_CACHE_MS || 300000) || 300000);
 let warehouseCatalogPairingContextCache = { at: 0, groupContext: null, pairingRows: null };
@@ -324,6 +328,7 @@ function invalidateWarehouseViewCache() {
   warehousePostgresDetailCache.clear();
   warehousePostgresDetailInflight.clear();
   warehouseFastPageCache.clear();
+  warehouseFastPageCacheGeneration += 1;
   warehouseGroupCountCache.clear();
   warehouseGroupCountInflight.clear();
   warehouseCatalogPairingContextCache = { at: 0, groupContext: null, pairingRows: null };

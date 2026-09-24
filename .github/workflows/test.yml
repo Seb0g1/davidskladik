@@ -18,4 +18,4 @@ jobs:
           node-version: "20"
           cache: npm
       - run: npm ci
-      - run: node --test test/unit.test.cjs
+      - run: node --test --test-force-exit test/unit.test.cjs test/pm-word-search.test.cjs test/warehouse-page-cache.test.cjs

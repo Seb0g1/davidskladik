@@ -2802,6 +2802,7 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
   });
   const activeOrdersCount = ordersCountQuery.data?.total ?? (ordersCountQuery.data?.lines?.length ?? null);
 
+  const autoRefetchCountRef = useRef(0);
   const pageQuery = useQuery({
     queryKey: ["warehouse", "page", effectiveFilters, pageSize],
     queryFn: () => fetchJson(buildPageUrl(effectiveFilters, pageSize), WarehousePageSchema),
@@ -2812,7 +2813,22 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
     },
     staleTime: 30_000,
     gcTime: 120_000,
+    // Server answered from a stale cache (rebuilding in background) or could not finish the
+    // page in time — fetch again shortly instead of leaving old/empty data on screen. Capped so
+    // a persistently degraded backend is not hammered with rebuilds every few seconds.
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      const pagePartialEmpty = Boolean(data?.partial && !(data?.items || []).length);
+      if (!data?.revalidating && !pagePartialEmpty) {
+        autoRefetchCountRef.current = 0;
+        return false;
+      }
+      if (autoRefetchCountRef.current >= 5) return false;
+      autoRefetchCountRef.current += 1;
+      return data?.revalidating ? 3_000 : 5_000;
+    },
   });
+  const pagePending = Boolean(pageQuery.data?.partial && !(pageQuery.data?.items || []).length);
   const rows = useMemo(
     () => (pageQuery.data?.items || []).filter(isProductPageItem),
     [pageQuery.data?.items],
@@ -2835,8 +2851,11 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
     [serverGroups],
   );
   const demoGroups = useMemo(() => demoGroupsForFilters(effectiveFilters), [effectiveFilters]);
+  // Demo catalog is a local-development aid only: in production an API error or an empty
+  // filter result must never be replaced by made-up products.
   const useDemoCatalog = Boolean(
-    !pageQuery.isLoading
+    import.meta.env.DEV
+      && !pageQuery.isLoading
       && !hasRealServerCatalog
       && (pageQuery.error
         || (pageQuery.data && Number(pageQuery.data.totalAll || pageQuery.data.total || pageQuery.data.groupTotal || serverProductCount || 0) <= Math.max(1, serverProductCount))),
@@ -3154,7 +3173,14 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
               })}
             </div>
             {pageQuery.isLoading && <CatalogSkeleton rows={8} />}
-            {!pageQuery.isLoading && !groups.length && (
+            {!pageQuery.isLoading && !groups.length && pagePending && (
+              <div className="empty-search-state">
+                <Loader2 className="spin" size={28} />
+                <strong>Сервер ещё собирает каталог</strong>
+                <span>Список обновится автоматически. Если он не появится — нажмите «Обновить».</span>
+              </div>
+            )}
+            {!pageQuery.isLoading && !groups.length && !pagePending && (
               <div className="empty-search-state">
                 <SearchX size={32} />
                 <strong>Ничего не найдено</strong>

@@ -85,9 +85,10 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
           total: Number(fastPage.total || 0),
         });
       }
-      if (!fastPage.partial) {
+      // Stale (stale-while-revalidate) pages were already checked when they were built.
+      if (!fastPage.partial && !fastPage.stale) {
         const priceRows = grouped
-          ? (fastPage.groups || fastPage.items || []).flatMap((group) => group.products || [])
+          ? (fastPage.items || []).flatMap((group) => group.products || [])
           : fastPage.items;
         queueChangedWarehousePrices(priceRows, "warehouse_page_detected_changed_prices");
       }
@@ -99,7 +100,6 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
           grouped: true,
           rowTotal: fastPage.total,
           total: Math.max(groups.length, Math.ceil(Number(fastPage.total || 0) / 1.6)),
-          groups,
           items: groups,
         });
       }

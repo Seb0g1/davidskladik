@@ -27,7 +27,6 @@ async function buildFastWarehouseGroupPageFromPostgres({
       rowTotal,
       groupTotal: groupTotal > 0 ? groupTotal : 0,
       total: groupTotal > 0 ? groupTotal : 0,
-      groups: [],
       items: [],
       groupCountPending,
     };
@@ -42,7 +41,8 @@ async function buildFastWarehouseGroupPageFromPostgres({
     rowTotal,
     groupTotal: total,
     total,
-    groups,
+    // Only `items`: a duplicate `groups` array doubled the JSON (~0.9 MB per 100-card page)
+    // and every JSON clone of the page cache.
     items: groups,
     hasMore: (page * pageSize) < rowTotal,
     partial: Boolean(basePage.partial),
@@ -69,14 +69,20 @@ function warehouseFastPageCacheKey({ page = 1, pageSize = 60, usdRate, filters =
   });
 }
 
+// Fresh within warehouseFastPageCacheTtlMs. After that the entry is kept as "stale" for
+// warehouseFastPageStaleTtlMs so buildFastWarehousePage can answer instantly and rebuild in
+// the background (stale-while-revalidate) — before, the first visitor after every 45 s idle
+// gap waited the full ~3 s rebuild. Mutations still clear the whole cache
+// (invalidateWarehouseViewCache), so edits never come back as stale pages.
 function getWarehouseFastPageCache(params = {}) {
   const key = warehouseFastPageCacheKey(params);
   const cached = warehouseFastPageCache.get(key);
-  if (!cached || Date.now() - cached.at > warehouseFastPageCacheTtlMs) {
+  const age = cached ? Date.now() - cached.at : Infinity;
+  if (!cached || age > warehouseFastPageCacheTtlMs + warehouseFastPageStaleTtlMs) {
     warehouseFastPageCache.delete(key);
-    return { key, value: null };
+    return { key, value: null, stale: false };
   }
-  return { key, value: cloneAuditValue(cached.value) };
+  return { key, value: cloneAuditValue(cached.value), stale: age > warehouseFastPageCacheTtlMs };
 }
 
 function setWarehouseFastPageCache(key, value) {

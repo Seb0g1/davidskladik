@@ -148,6 +148,8 @@ export const WarehousePageSchema = z.object({
   usdRate: z.number().optional().nullable(),
   updatedAt: z.string().optional().nullable(),
   sourceError: z.string().optional().default(""),
+  partial: z.boolean().optional().default(false),
+  revalidating: z.boolean().optional().default(false),
   grouped: z.boolean().optional().default(false),
   rowTotal: z.number().optional().default(0),
   groupTotal: z.number().optional().default(0),
