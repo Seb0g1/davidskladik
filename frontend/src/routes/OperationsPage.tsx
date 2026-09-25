@@ -483,7 +483,7 @@ export function SupplierCartPanel() {
               {commitMutation.isPending ? <Loader2 className="spin" size={16} /> : null}
               Добавить выбранное в PriceMaster ({selectedReady.length})
             </button>
-            <button className="secondary-action" type="button" onClick={() => setSelected(new Set(rows.filter((row) => row.ready && !row.alreadyCommitted).map((row) => row.key)))}>
+            <button className="secondary-action" type="button" onClick={() => setSelected(new Set(rows.filter((row) => row.ready && !row.alreadyCommitted && !row.pmNameMismatch).map((row) => row.key)))}>
               Выбрать готовые
             </button>
             <button className="secondary-action" type="button" onClick={() => setSelected(new Set())}>Снять выбор</button>

@@ -382,9 +382,42 @@ function hasDraftInput(input = {}) {
 // staleness fallback (re-upload with new RowID) when the name tokens confirm it is the
 // same product. Returning unrelated article matches risks ordering the wrong product when
 // a supplier reuses an article number for a completely different item.
+// Anchor name of a pinned link: the explicit exactName or the PM row name saved when pinned.
+function selectedRowPinnedName(link = {}) {
+  return cleanText(link.exactName || (link.resolvedPriceMasterRow && link.resolvedPriceMasterRow.name) || "");
+}
+
+// True when a PM row found only through the article fallback is the same product as the pinned
+// one (a re-upload under a new RowID), not another product under a reused article — Далик's
+// LQOA100 carries both "ALHAMBRA …" and "LATTAFA QUEEN …". Numbers are ignored as words (every
+// perfume is "100 ml"); most name words must be shared and volume/tester must agree.
+function pmRowConfirmsPinnedName(row, pinnedName) {
+  const rowName = cleanText(row.name || row.nativeName || "");
+  const words = (value) => new Set(priceMasterNameTokens(value).filter((token) => !/\d/.test(token)));
+  const anchorWords = words(pinnedName);
+  const rowWords = words(rowName);
+  if (!anchorWords.size || !rowWords.size) return false;
+  const shared = [...rowWords].filter((token) => anchorWords.has(token)).length;
+  if (shared / Math.min(anchorWords.size, rowWords.size) < 0.6) return false;
+  const anchorVolumes = extractPriceMasterVolumes(pinnedName);
+  const rowVolumes = extractPriceMasterVolumes(rowName);
+  if (anchorVolumes.length && rowVolumes.length && !rowVolumes.some((volume) => anchorVolumes.includes(volume))) return false;
+  return priceMasterTesterFlag(rowName) === priceMasterTesterFlag(pinnedName);
+}
+
 function filterSelectedRowMatchesToBestPin(link, matches) {
-  if (!Array.isArray(matches) || matches.length <= 1) return matches;
+  if (!Array.isArray(matches) || !matches.length) return matches;
   if (link.matchType !== "selected_row" || !link.sourceRowId) return matches;
+  if (matches.length === 1) {
+    // A lone candidate is safe when it is the pinned row itself or has the pinned name.
+    // Otherwise it came from the article fallback: the pinned row left the price list and the
+    // supplier now sells something else under that article — never route the order to it.
+    const [only] = matches;
+    const pinnedName = selectedRowPinnedName(link);
+    if (String(only.rowId || "") === String(link.sourceRowId) || !pinnedName) return matches;
+    if (exactPriceMasterNameMatches(cleanText(only.name || only.nativeName || ""), pinnedName)) return matches;
+    return pmRowConfirmsPinnedName(only, pinnedName) ? matches : [];
+  }
 
   const byRowId = matches.filter((m) => String(m.rowId || "") === String(link.sourceRowId));
   // Return the pinned row only when it's still active AND has a price. If the supplier
@@ -394,8 +427,7 @@ function filterSelectedRowMatchesToBestPin(link, matches) {
 
   // Use explicit exactName first; fall back to the name recorded when the row was pinned.
   // resolvedPriceMasterRow.name is stored by the link UI when a user selects a specific row.
-  const fallbackName = link.exactName
-    || cleanText((link.resolvedPriceMasterRow && link.resolvedPriceMasterRow.name) || "");
+  const fallbackName = selectedRowPinnedName(link);
   if (fallbackName) {
     const byName = matches.filter((m) => exactPriceMasterNameMatches(
       cleanText(m.name || m.nativeName || ""), fallbackName,
@@ -410,17 +442,11 @@ function filterSelectedRowMatchesToBestPin(link, matches) {
   // Without this guard, selectSupplierCartSupplierFromMatches would pick the highest rowId
   // among unrelated rows sharing the article, potentially ordering the wrong product.
   if (fallbackName) {
-    const anchorTokens = new Set(priceMasterNameTokens(fallbackName));
-    if (anchorTokens.size > 0) {
-      const bySimilarName = matches.filter((m) => {
-        const rowTokens = priceMasterNameTokens(cleanText(m.name || m.nativeName || ""));
-        return rowTokens.some((token) => anchorTokens.has(token));
-      });
-      // Use the token-similar rows only when at least one is active with a price.
-      // Otherwise fall back to the pinned row (inactive) so the cart shows not_available
-      // instead of ordering a different product from this supplier.
-      if (bySimilarName.some((m) => m.active !== false && (m.price || 0) > 0)) return bySimilarName;
-    }
+    const bySimilarName = matches.filter((m) => pmRowConfirmsPinnedName(m, fallbackName));
+    // Use the confirmed rows only when at least one is active with a price.
+    // Otherwise fall back to the pinned row (inactive) so the cart shows not_available
+    // instead of ordering a different product from this supplier.
+    if (bySimilarName.some((m) => m.active !== false && (m.price || 0) > 0)) return bySimilarName;
   }
 
   // No name anchor available: both name-match blocks above were skipped entirely.

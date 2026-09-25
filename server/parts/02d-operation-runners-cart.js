@@ -8,7 +8,10 @@ async function runSupplierCartCommitOperation(payload = {}, request = null) {
     ? payload.rows
     : (await buildSupplierCartPreview(payload)).rows;
   const keys = new Set(Array.isArray(payload.keys) ? payload.keys.map(cleanText).filter(Boolean) : []);
-  const rows = keys.size ? sourceRows.filter((row) => keys.has(cleanText(row.key))) : sourceRows;
+  // Without explicit keys commit only rows whose PM name does not contradict the product.
+  const rows = keys.size
+    ? sourceRows.filter((row) => keys.has(cleanText(row.key)))
+    : sourceRows.filter((row) => !row.pmNameMismatch);
   const result = await insertSupplierCartRowsIntoPriceMaster(rows, request);
   return {
     ok: true,

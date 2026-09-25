@@ -835,6 +835,9 @@ app.post("/api/ready-to-ship/batch-order", requireStaff, async (request, respons
       const normalizedLine = normalizeSupplierCartLine({ marketplace, accountId, orderId, offerId, quantity, productName: cleanText(line.productName || "") });
       const row = await resolveSupplierCartRow(warehouse, normalizedLine, state);
       if (!row.ready) { failed.push({ key: lineKey, offerId, reason: row.skipReason || "no_supplier" }); continue; }
+      // Batch ordering never shows the PM row name — refuse rows whose PM name contradicts the
+      // product (a supplier reusing the article for another perfume); order them one by one.
+      if (row.pmNameMismatch) { failed.push({ key: lineKey, offerId, reason: "pm_name_mismatch", pmName: row.pmName }); continue; }
 
       cartRows.push(normalizeSupplierCartPreviewRow({
         ...row,
@@ -853,7 +856,11 @@ app.post("/api/ready-to-ship/batch-order", requireStaff, async (request, respons
     }
 
     if (!cartRows.length) {
-      return response.status(400).json({ ok: false, error: "No orders could be resolved.", failed });
+      const mismatched = failed.filter((item) => item.reason === "pm_name_mismatch");
+      const error = mismatched.length
+        ? `Не заказано: у поставщика под этим артикулом другой товар (${mismatched.map((item) => `${item.offerId} → «${item.pmName}»`).join("; ")}). Проверьте привязку или закажите вручную через «Заменить поставщика».`
+        : "No orders could be resolved.";
+      return response.status(400).json({ ok: false, error, failed });
     }
 
     const result = await insertSupplierCartRowsIntoPriceMaster(cartRows, request);

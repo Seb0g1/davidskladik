@@ -364,6 +364,11 @@ function ReadyToShipPanel() {
       {batchOrderMutation.isSuccess ? (
         <div className="success-strip">Добавлено в PM: {batchOrderMutation.data?.inserted} · Не удалось: {batchOrderMutation.data?.failed} · Документы: {(batchOrderMutation.data?.docIds || []).join(", ") || "-"}</div>
       ) : null}
+      {(batchOrderMutation.data?.failedDetails || []).filter((item) => item.reason === "pm_name_mismatch").map((item) => (
+        <div key={String(item.key)} className="inline-error">
+          {String(item.offerId)}: у поставщика под этим артикулом другой товар — «{String(item.pmName || "")}». Не заказано; проверьте привязку или закажите через «Заменить поставщика».
+        </div>
+      ))}
       {batchOrderMutation.isError ? <div className="inline-error">Пакетный заказ: {errorMessage(batchOrderMutation.error)}</div> : null}
       {mpErrors.map((err) => <div key={err} className="inline-error">{err}</div>)}
       {marketplaceQuery.error ? <div className="inline-error">{errorMessage(marketplaceQuery.error)}</div> : null}

@@ -752,9 +752,18 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { p
   const pmScoreVsWarehouse = (Boolean(pmName) && Boolean(warehouseProductNameForMismatch) && warehouseProductNameForMismatch !== disambigName)
     ? priceMasterArticleCandidateScore({ name: pmName }, { name: warehouseProductNameForMismatch }).score
     : null;
+  // The row the operator pinned when linking (or its re-upload) is the right product by
+  // definition, even when the marketplace/warehouse names are Russian and the PM name English.
+  const confirmedByPin = Boolean(pmName) && groupLinks.some((link) => {
+    if (link.matchType !== "selected_row") return false;
+    if (link.sourceRowId && String(link.sourceRowId) === String(selected.rowId || "")) return true;
+    const pinnedName = selectedRowPinnedName(link);
+    return Boolean(pinnedName) && (exactPriceMasterNameMatches(pmName, pinnedName) || pmRowConfirmsPinnedName({ name: pmName }, pinnedName));
+  });
   // Mismatch only when ALL available name scores are ≤ 0.
   // If either the order name or the warehouse name positively confirms the PM row, trust it.
-  const pmNameMismatch = (pmScoreVsDisambig !== null || pmScoreVsWarehouse !== null)
+  const pmNameMismatch = !confirmedByPin
+    && (pmScoreVsDisambig !== null || pmScoreVsWarehouse !== null)
     && (pmScoreVsDisambig === null || pmScoreVsDisambig <= 0)
     && (pmScoreVsWarehouse === null || pmScoreVsWarehouse <= 0);
   if (pmNameMismatch) {
