@@ -1,8 +1,11 @@
+// resolvedBy values of links pinned to one PriceMaster row by the operator or by the name score.
+const PINNED_LINK_RESOLVED_BY = new Set(["selected_row", "selected_row_explicit", "product_name_score"]);
+
 function normalizeWarehouseLink(input = {}) {
   const priceCurrency = cleanText(input.priceCurrency || input.price_currency || input.currency).toUpperCase();
   const matchTypeRaw = cleanText(input.matchType || input.match_type);
   let matchType = ["article", "selected_row", "exact_name"].includes(matchTypeRaw) ? matchTypeRaw : "article";
-  const exactName = cleanText(input.exactName || input.exact_name || input.nativeName || input.name);
+  let exactName = cleanText(input.exactName || input.exact_name || input.nativeName || input.name);
   let sourceRowId = cleanText(input.sourceRowId || input.source_row_id || input.rowId);
   let article = cleanText(input.article || input.offerId || input.nativeId);
   const syntheticNoArticleRowId = parsePriceMasterNoArticleRowId(article);
@@ -10,6 +13,19 @@ function normalizeWarehouseLink(input = {}) {
     article = "";
     sourceRowId = sourceRowId || syntheticNoArticleRowId;
     matchType = "selected_row";
+  }
+  const resolvedBy = cleanText(input.resolvedBy || input.resolved_by);
+  const resolvedRow = input.resolvedPriceMasterRow && typeof input.resolvedPriceMasterRow === "object"
+    ? input.resolvedPriceMasterRow
+    : {};
+  // The old daily Далик check turned operator pins into bare article links (matchType "article",
+  // sourceRowId/exactName cleared) but left the chosen row in resolvedPriceMasterRow. A bare
+  // article then priced whatever other perfume Далик listed under it — restore the pin.
+  if (matchType === "article" && !sourceRowId && !exactName
+      && PINNED_LINK_RESOLVED_BY.has(resolvedBy) && cleanText(resolvedRow.rowId) && cleanText(resolvedRow.name)) {
+    matchType = "selected_row";
+    sourceRowId = cleanText(resolvedRow.rowId);
+    exactName = cleanText(resolvedRow.name);
   }
   const preserveSelectedRow = matchType === "selected_row" && sourceRowId;
   return {
@@ -27,7 +43,7 @@ function normalizeWarehouseLink(input = {}) {
     updatedAt: input.updatedAt || input.createdAt || new Date().toISOString(),
     createdBy: cleanText(input.createdBy || input.created_by),
     updatedBy: cleanText(input.updatedBy || input.updated_by || input.createdBy || input.created_by),
-    resolvedBy: cleanText(input.resolvedBy || input.resolved_by),
+    resolvedBy,
     resolvedPriceMasterRow: input.resolvedPriceMasterRow && typeof input.resolvedPriceMasterRow === "object"
       ? cloneAuditValue(input.resolvedPriceMasterRow)
       : null,

@@ -64,12 +64,16 @@ async function runStalePriceTargetScan() {
   }
 }
 
-// Dalik periodically renumbers ALL their NativeIDs. When that happens, our pinned
-// selected_row links still reference the old supplier_article. This check detects:
-//   1. Name-diverged: the PM row at sourceRowId now has a completely different product
-//      name → clear the pin and revert to article-type matching so autocart can re-resolve.
-//   2. Article-shifted: PM name still matches our warehouse name but NativeID changed
-//      → update supplier_article in the link to the current NativeID.
+// Далик periodically renumbers its NativeIDs and reuses them for other perfumes; PriceMaster
+// then shows the pinned RowID under another name, or drops it. The pin names the product the
+// operator chose (exact_name), so the pin follows that name, never the bare article:
+//   1. The pinned row still carries the pinned name → only sync supplier_article to its NativeID.
+//   2. Otherwise re-pin to the partner's active row with the pinned name (PM snapshot).
+//   3. Nothing found → keep the pin: the product shows "нет у поставщика" instead of being priced
+//      and ordered as the other perfume Далик now sells under the old article.
+// An earlier version of this check turned such pins into bare article links (ADW100 priced as
+// LATTAFA BADEE AL OUD under article 96); those keep the chosen row in resolvedPriceMasterRow
+// and are re-pinned here the same way.
 async function checkDalikArticleMigrations() {
   const prisma = getPrisma();
   if (!prisma || !shouldUsePostgresStorage()) return { skipped: true };
@@ -80,103 +84,116 @@ async function checkDalikArticleMigrations() {
         pl.id        AS link_id,
         pl.supplier_article,
         pl.source_row_id,
+        pl.partner_id,
         pl.exact_name AS pinned_pm_name,
-        wp.offer_id,
-        wp.name      AS warehouse_name
+        pl.raw       AS link_raw,
+        wp.offer_id
       FROM product_links pl
       JOIN warehouse_products wp ON wp.id = pl.product_id
-      WHERE pl.raw->>'matchType' = 'selected_row'
-        AND pl.source_row_id IS NOT NULL
-        AND (
+      WHERE (
           LOWER(pl.supplier_name) LIKE '%далик%'
           OR LOWER(pl.supplier_name) LIKE '%dalik%'
         )
         AND wp.archived = false
+        AND (
+          (pl.raw->>'matchType' = 'selected_row' AND pl.source_row_id IS NOT NULL)
+          OR (
+            pl.raw->>'matchType' = 'article'
+            AND pl.source_row_id IS NULL
+            AND pl.raw->>'resolvedBy' IN ('selected_row', 'selected_row_explicit', 'product_name_score')
+            AND pl.raw->'resolvedPriceMasterRow'->>'rowId' IS NOT NULL
+          )
+        )
     `);
 
     if (!links.length) return { ok: true, checked: 0 };
+    const pmIndexes = await getPriceMasterSnapshotIndexes();
 
-    const EXCLUDE = new Set(["edp", "edt", "parfum", "perfume", "de", "ml", "eau"]);
-    function nameTokens(str) {
-      return [...new Set(
-        (str || "").toLowerCase()
-          .replace(/[^a-z0-9а-яё\s]/gi, " ")
-          .split(/\s+/)
-          .filter((t) => t.length >= 2 && !EXCLUDE.has(t)),
-      )];
-    }
-
-    let diverged = 0; let articleFixed = 0; let ok = 0;
-    const divergedOffers = [];
+    let ok = 0; let articleFixed = 0; let repinned = 0; let restored = 0; let missing = 0; let skipped = 0;
+    const missingOffers = [];
 
     for (const link of links) {
+      const raw = typeof link.link_raw === "string" ? JSON.parse(link.link_raw) : (link.link_raw || {});
+      // normalizeWarehouseLink turns a cleared pin back into selected_row from resolvedPriceMasterRow.
+      const pin = normalizeWarehouseLink({
+        ...raw,
+        sourceRowId: link.source_row_id || raw.sourceRowId,
+        exactName: link.pinned_pm_name || raw.exactName,
+        article: raw.article || link.supplier_article,
+        partnerId: link.partner_id || raw.partnerId,
+      });
+      const pinnedName = selectedRowPinnedName(pin);
+      if (pin.matchType !== "selected_row" || !pin.sourceRowId || !pinnedName) { skipped++; continue; }
+      const restoring = raw.matchType !== "selected_row";
+
       let pmRow;
       try {
         const [rows] = await pool.query(
           "SELECT NativeID, NativeName FROM OfferRows WHERE RowID = ? LIMIT 1",
-          [link.source_row_id],
+          [pin.sourceRowId],
         );
         pmRow = rows[0];
       } catch {
         continue;
       }
-      if (!pmRow) {
-        // Row no longer exists — reset pin so autocart can re-resolve by article
-        await prisma.$executeRawUnsafe(`
-          UPDATE product_links
-          SET source_row_id = NULL, exact_name = NULL,
-              raw = jsonb_set(jsonb_set(jsonb_set(raw,'{matchType}','"article"'),'{sourceRowId}','null'),'{exactName}','null'),
-              updated_at = now()
-          WHERE id = $1
-        `, link.link_id);
-        diverged++;
-        divergedOffers.push(link.offer_id);
-        continue;
+
+      let target = null;
+      if (pmRow && pmRowHoldsPinnedName({ name: cleanText(pmRow.NativeName) }, pinnedName)) {
+        target = { rowId: pin.sourceRowId, article: cleanText(pmRow.NativeID) || pin.article };
+      } else {
+        const byName = (pmIndexes.byName.get(pinnedName.toLowerCase()) || [])
+          .map(priceMasterSnapshotRowFields)
+          .filter((row) => row.active && !row.ignored && (!pin.partnerId || row.partnerId === pin.partnerId));
+        if (byName.length) target = { rowId: byName[0].rowId, article: byName[0].article || pin.article };
       }
 
-      const pmTokens = nameTokens(pmRow.NativeName);
-      const wpTokens = nameTokens(link.warehouse_name);
-      const shared = pmTokens.filter((t) => new Set(wpTokens).has(t)).length;
-      const uniquePm = pmTokens.filter((t) => !new Set(wpTokens).has(t));
-      const uniqueWp = wpTokens.filter((t) => !new Set(pmTokens).has(t));
-      const penalty = (uniquePm.length > 0 && uniqueWp.length > 0) ? Math.min(uniquePm.length, 4) * 20 : 0;
-      const isDiverged = shared < 2 || penalty >= 40;
+      if (!target) {
+        missing++;
+        missingOffers.push(link.offer_id);
+        logger.warn("dalik_pinned_product_missing", {
+          offerId: link.offer_id, rowId: pin.sourceRowId, pinnedName,
+          pmNameAtRow: pmRow ? pmRow.NativeName : null,
+        });
+        continue;
+      }
+      const moved = target.rowId !== pin.sourceRowId;
+      const articleChanged = target.article !== cleanText(link.supplier_article) || target.article !== cleanText(raw.article);
+      if (!restoring && !moved && !articleChanged) { ok++; continue; }
 
-      if (isDiverged) {
+      try {
         await prisma.$executeRawUnsafe(`
           UPDATE product_links
-          SET source_row_id = NULL, exact_name = NULL,
-              raw = jsonb_set(jsonb_set(jsonb_set(raw,'{matchType}','"article"'),'{sourceRowId}','null'),'{exactName}','null'),
+          SET source_row_id = $1, exact_name = $2, supplier_article = $3,
+              raw = COALESCE(raw, '{}'::jsonb) || jsonb_build_object(
+                'matchType', 'selected_row', 'sourceRowId', $1::text, 'exactName', $2::text, 'article', $3::text),
               updated_at = now()
-          WHERE id = $1
-        `, link.link_id);
-        logger.warn("dalik_article_migration_pin_reset", {
-          offerId: link.offer_id, rowId: link.source_row_id,
-          pmName: pmRow.NativeName, warehouseName: link.warehouse_name, shared, penalty,
+          WHERE id = $4
+        `, target.rowId, pinnedName, target.article, link.link_id);
+      } catch (updateError) {
+        logger.warn("dalik_pin_update_failed", { offerId: link.offer_id, detail: updateError?.message || String(updateError) });
+        continue;
+      }
+      if (restoring) restored++;
+      else if (moved) repinned++;
+      else articleFixed++;
+      if (restoring || moved) {
+        logger.info("dalik_pin_followed_name", {
+          offerId: link.offer_id, fromRowId: pin.sourceRowId, toRowId: target.rowId, article: target.article, pinnedName, restoring,
         });
-        diverged++;
-        divergedOffers.push(link.offer_id);
-      } else if (String(pmRow.NativeID) !== String(link.supplier_article || "")) {
-        await prisma.$executeRawUnsafe(
-          "UPDATE product_links SET supplier_article = $1, updated_at = now() WHERE id = $2",
-          String(pmRow.NativeID), link.link_id,
-        );
-        articleFixed++;
-      } else {
-        ok++;
       }
     }
 
-    logger.info("dalik_article_migration_check", { checked: links.length, diverged, articleFixed, ok });
+    logger.info("dalik_article_migration_check", { checked: links.length, ok, articleFixed, repinned, restored, missing, skipped });
+    if ((articleFixed || repinned || restored) && typeof invalidateWarehouseViewCache === "function") invalidateWarehouseViewCache();
 
-    if (diverged > 0 && typeof sendHealthAlertTelegram === "function") {
-      const sample = divergedOffers.slice(0, 5).join(", ");
+    if (missing > 0 && typeof sendHealthAlertTelegram === "function") {
+      const sample = missingOffers.slice(0, 5).join(", ");
       sendHealthAlertTelegram(
-        `⚠️ DavidSklad: Далик переименовал артикулы у ${diverged} товаров. Пины сброшены, автокорзина перепривяжет. Примеры: ${sample}. Проверь привязки в карточках склада.`
+        `⚠️ DavidSklad: у Далика не найдено ${missing} привязанных товаров (ни по строке, ни по названию). Цена и автокорзина по ним не берут другой товар под тем же артикулом. Примеры: ${sample}. Проверь привязки в карточках склада.`
       ).catch(() => {});
     }
 
-    return { ok: true, checked: links.length, diverged, articleFixed };
+    return { ok: true, checked: links.length, articleFixed, repinned, restored, missing };
   } catch (error) {
     logger.warn("dalik_article_migration_check_failed", { detail: error?.message || String(error) });
     return { ok: false, error: error?.message };
@@ -249,8 +266,8 @@ async function runDailyRefresh(trigger = "manual") {
           logger.warn("pm nomenclature new-items check failed in daily refresh", { detail: err?.message || String(err) }),
         );
       }
-      // Dalik article migration check: detect when Dalik renumbers their NativeIDs so
-      // pinned selected_row links referencing old article codes are auto-fixed or reset.
+      // Dalik article migration check: pinned Далик links follow the pinned product name when
+      // Далик renumbers or reuses its NativeIDs (never reset to a bare article).
       checkDalikArticleMigrations().catch((err) =>
         logger.warn("dalik article migration check failed in daily refresh", { detail: err?.message || String(err) }),
       );

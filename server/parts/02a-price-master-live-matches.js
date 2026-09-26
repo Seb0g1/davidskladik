@@ -24,8 +24,9 @@ async function getPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRa
         evictLivePMCache();
         candidateRows = await getLivePMRowsForArticle(link.article);
       }
+      candidateRows = withPinnedNameSnapshotRows(candidateRows, link, snapshotIndexes);
     } else if (link.matchType === "selected_row" && link.sourceRowId) {
-      candidateRows = snapshotIndexes.byRowId.get(cleanText(link.sourceRowId)) || [];
+      candidateRows = withPinnedNameSnapshotRows(snapshotIndexes.byRowId.get(cleanText(link.sourceRowId)) || [], link, snapshotIndexes);
     } else {
       const exactName = cleanText(link.exactName || link.article).toLowerCase();
       candidateRows = exactName ? (snapshotIndexes.byName.get(exactName) || []) : snapshotIndexes.rows;
@@ -71,6 +72,23 @@ async function getPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRa
   }
 
   return map;
+}
+
+// Далик renumbers articles and reuses them for other perfumes, so the pinned product can sit
+// under a new article. Rows carrying the pinned name (same partner — priceMasterRowMatchesLink
+// checks it) are added as candidates so the pin follows the product instead of the article.
+function withPinnedNameSnapshotRows(candidateRows, link, snapshotIndexes) {
+  const pinnedName = selectedRowPinnedName(link).toLowerCase();
+  const byName = pinnedName ? (snapshotIndexes.byName.get(pinnedName) || []) : [];
+  if (!byName.length) return candidateRows;
+  const seen = new Set(candidateRows.map((row) => priceMasterSnapshotRowFields(row).rowId));
+  return [...candidateRows, ...byName.filter((row) => !seen.has(priceMasterSnapshotRowFields(row).rowId))];
+}
+
+function pinnedLinkNeedsNameFallback(link, rows) {
+  return link.matchType === "selected_row"
+    && Boolean(selectedRowPinnedName(link))
+    && !rows.some((row) => row.active !== false && Number(row.price || 0) > 0);
 }
 
 async function findPriceMasterRowsForLink(linkInput, usdRate, managedSuppliers = []) {
@@ -127,7 +145,7 @@ async function findPriceMasterRowsForLink(linkInput, usdRate, managedSuppliers =
     `,
     params,
   );
-  const mapped = rows
+  const mapRows = (sourceRows) => sourceRows
     .filter((row) => priceMasterRowMatchesLink(row, link))
     .map((row) => {
       const priceCurrency = resolvePriceMasterRowCurrency(row, link, supplierMaps, usdRate);
@@ -149,7 +167,17 @@ async function findPriceMasterRowsForLink(linkInput, usdRate, managedSuppliers =
         available: Boolean(row.active) && (pricingMeta.stockOnly || Number(priceData.price || 0) > 0),
       };
     });
-  return filterSelectedRowMatchesToBestPin(link, mapped);
+  const result = filterSelectedRowMatchesToBestPin(link, mapRows(rows));
+  if (!pinnedLinkNeedsNameFallback(link, result)) return result;
+  // The article no longer carries the pinned product: look it up by name in the snapshot
+  // (in memory, no extra MySQL scan) and pick again with those rows as candidates.
+  const snapshotIndexes = await getPriceMasterSnapshotIndexes().catch(() => null);
+  if (!snapshotIndexes) return result;
+  const nameRows = withPinnedNameSnapshotRows([], link, snapshotIndexes)
+    .map(priceMasterSnapshotRowFields)
+    .filter((row) => row.active && !row.ignored);
+  if (!nameRows.length) return result;
+  return filterSelectedRowMatchesToBestPin(link, mapRows([...rows, ...nameRows]));
 }
 
 function priceMasterSnapshotLinkRow(row = {}, link = {}, usdRate, supplierMaps = managedSupplierMaps()) {
@@ -196,8 +224,12 @@ async function findPriceMasterSnapshotRowsForLink(linkInput, usdRate, managedSup
   const and = [];
   if (link.matchType === "selected_row" && link.article) {
     // Self-heal pinned links (see findPriceMasterRowsForLink): match by article + partner so
-    // a re-uploaded supplier's current active row replaces the deactivated pinned row.
-    and.push({ article: cleanText(link.article) });
+    // a re-uploaded supplier's current active row replaces the deactivated pinned row, or by
+    // the pinned name when the supplier moved the product to another article.
+    const pinnedName = selectedRowPinnedName(link);
+    and.push(pinnedName
+      ? { OR: [{ article: cleanText(link.article) }, { nativeName: { equals: pinnedName, mode: "insensitive" } }] }
+      : { article: cleanText(link.article) });
   } else if (link.matchType === "selected_row" && link.sourceRowId) {
     and.push({ rowId: cleanText(link.sourceRowId) });
   } else if (link.matchType === "selected_row" || link.matchType === "exact_name") {

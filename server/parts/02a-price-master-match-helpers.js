@@ -326,7 +326,8 @@ function priceMasterRowMatchesLink(row = {}, link = {}) {
   if (!supplierOk || !partnerOk || !keywordOk) return false;
   if (link.matchType === "selected_row") {
     if (link.sourceRowId && String(fields.rowId || "") === String(link.sourceRowId)) return true;
-    if (link.exactName && exactPriceMasterNameMatches(fields.name, link.exactName)) return true;
+    const pinnedName = selectedRowPinnedName(link);
+    if (pinnedName && exactPriceMasterNameMatches(fields.name, pinnedName)) return true;
     // Staleness fallback: when a supplier re-uploads an offer, PriceMaster deactivates the
     // pinned row (sourceRowId) and creates a NEW active row with a different RowID and
     // slightly different NativeName for the SAME supplier+article. Without this, the product
@@ -405,21 +406,48 @@ function pmRowConfirmsPinnedName(row, pinnedName) {
   return priceMasterTesterFlag(rowName) === priceMasterTesterFlag(pinnedName);
 }
 
+// True when the row still carries the pinned product: the same name or a light rename.
+function pmRowHoldsPinnedName(row, pinnedName) {
+  const rowName = cleanText(row.name || row.nativeName || "");
+  return exactPriceMasterNameMatches(rowName, pinnedName) || pmRowConfirmsPinnedName(row, pinnedName);
+}
+
+// Article links follow the supplier's article, but Далик lists several perfumes under one article
+// (ADW100: "96" is both ALHAMBRA DECADENT WONDER and LATTAFA BADEE AL OUD). When the supplier of
+// the row saved with the link shows different names under the article, keep only that product.
+function filterArticleMatchesToSavedRow(link, matches) {
+  const saved = link.resolvedPriceMasterRow || {};
+  const savedName = cleanText(saved.name);
+  if (!savedName || matches.length <= 1) return matches;
+  const savedPartnerId = cleanText(saved.partnerId || link.partnerId);
+  if (!savedPartnerId && !link.supplierName) return matches;
+  const ofSavedSupplier = (m) => (savedPartnerId ? cleanText(m.partnerId) === savedPartnerId : true);
+  const names = new Set(matches.filter(ofSavedSupplier)
+    .map((m) => normalizeSearchText(m.name || m.nativeName || ""))
+    .filter(Boolean));
+  if (names.size <= 1) return matches;
+  return matches.filter((m) => !ofSavedSupplier(m) || pmRowHoldsPinnedName(m, savedName));
+}
+
 function filterSelectedRowMatchesToBestPin(link, matches) {
   if (!Array.isArray(matches) || !matches.length) return matches;
+  if (link.matchType === "article") return filterArticleMatchesToSavedRow(link, matches);
   if (link.matchType !== "selected_row" || !link.sourceRowId) return matches;
+  const pinnedName = selectedRowPinnedName(link);
+  // PriceMaster updates rows in place by article, so when Далик moves an article to another
+  // perfume the pinned RowID itself starts carrying that perfume: the RowID alone proves nothing.
+  const isPinnedRow = (m) => String(m.rowId || "") === String(link.sourceRowId)
+    && (!pinnedName || !cleanText(m.name || m.nativeName || "") || pmRowHoldsPinnedName(m, pinnedName));
   if (matches.length === 1) {
     // A lone candidate is safe when it is the pinned row itself or has the pinned name.
     // Otherwise it came from the article fallback: the pinned row left the price list and the
     // supplier now sells something else under that article — never route the order to it.
     const [only] = matches;
-    const pinnedName = selectedRowPinnedName(link);
-    if (String(only.rowId || "") === String(link.sourceRowId) || !pinnedName) return matches;
-    if (exactPriceMasterNameMatches(cleanText(only.name || only.nativeName || ""), pinnedName)) return matches;
-    return pmRowConfirmsPinnedName(only, pinnedName) ? matches : [];
+    if (!pinnedName || isPinnedRow(only)) return matches;
+    return pmRowHoldsPinnedName(only, pinnedName) ? matches : [];
   }
 
-  const byRowId = matches.filter((m) => String(m.rowId || "") === String(link.sourceRowId));
+  const byRowId = matches.filter(isPinnedRow);
   // Return the pinned row only when it's still active AND has a price. If the supplier
   // re-uploaded with a new RowID (old row kept active but price set to 0), fall through
   // to the staleness fallback so the new row with a real price is found instead.
@@ -427,7 +455,7 @@ function filterSelectedRowMatchesToBestPin(link, matches) {
 
   // Use explicit exactName first; fall back to the name recorded when the row was pinned.
   // resolvedPriceMasterRow.name is stored by the link UI when a user selects a specific row.
-  const fallbackName = selectedRowPinnedName(link);
+  const fallbackName = pinnedName;
   if (fallbackName) {
     const byName = matches.filter((m) => exactPriceMasterNameMatches(
       cleanText(m.name || m.nativeName || ""), fallbackName,
