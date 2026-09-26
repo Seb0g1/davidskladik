@@ -1,5 +1,6 @@
-// resolvedBy values of links pinned to one PriceMaster row by the operator or by the name score.
-const PINNED_LINK_RESOLVED_BY = new Set(["selected_row", "selected_row_explicit", "product_name_score"]);
+// resolvedBy values of links pinned to one PriceMaster row: by the operator, the name score or
+// the stale-row repairs (which re-pin an existing pin).
+const PINNED_LINK_RESOLVED_BY = new Set(["selected_row", "selected_row_explicit", "product_name_score", "stale_row_id_fix", "bulk_stale_recovery"]);
 
 function normalizeWarehouseLink(input = {}) {
   const priceCurrency = cleanText(input.priceCurrency || input.price_currency || input.currency).toUpperCase();

@@ -100,7 +100,7 @@ async function checkDalikArticleMigrations() {
           OR (
             pl.raw->>'matchType' = 'article'
             AND pl.source_row_id IS NULL
-            AND pl.raw->>'resolvedBy' IN ('selected_row', 'selected_row_explicit', 'product_name_score')
+            AND pl.raw->>'resolvedBy' IN ('selected_row', 'selected_row_explicit', 'product_name_score', 'stale_row_id_fix', 'bulk_stale_recovery')
             AND pl.raw->'resolvedPriceMasterRow'->>'rowId' IS NOT NULL
           )
         )

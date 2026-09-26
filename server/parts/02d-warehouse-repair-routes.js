@@ -45,12 +45,19 @@ app.post("/api/warehouse/catalog/repair-linked", requireAdmin, async (request, r
   }
 });
 
+// A stale pin may only move to the supplier's newest row under the article when that row is the
+// same product: Далик reuses articles, and the newest row under "96" was another perfume.
+function staleRowKeepsPinnedProduct(row) {
+  const pinnedName = cleanText(row.pinned_name);
+  return !pinnedName || pmRowHoldsPinnedName({ name: cleanText(row.new_name) }, pinnedName);
+}
+
 app.post("/api/warehouse/links/fix-stale-row-ids", requireAdmin, async (request, response, next) => {
   try {
     const prisma = getPrisma();
     if (!prisma) return response.status(503).json({ error: "Postgres is unavailable." });
     const dryRun = request.body?.dryRun !== false;
-    const staleLinks = await prisma.$queryRawUnsafe(`
+    const staleLinks = (await prisma.$queryRawUnsafe(`
       SELECT
         pl.id                           AS link_id,
         pl.product_id,
@@ -63,6 +70,7 @@ app.post("/api/warehouse/links/fix-stale-row-ids", requireAdmin, async (request,
         pm_new.row_id                  AS new_row_id,
         pm_new.price::float            AS new_price,
         pm_new.native_name             AS new_name,
+        COALESCE(NULLIF(pl.exact_name, ''), pl.raw->'resolvedPriceMasterRow'->>'name', '') AS pinned_name,
         wp.raw->>'offerId'             AS offer_id,
         wp.id                          AS product_id_str,
         wp.marketplace
@@ -78,7 +86,7 @@ app.post("/api/warehouse/links/fix-stale-row-ids", requireAdmin, async (request,
           AND pm2.partner_id::text = pl.partner_id::text
           AND pm2.active = true
           AND pm2.price IS NOT NULL AND pm2.price > 0
-        ORDER BY pm2.doc_date DESC, pm2.row_id DESC
+        ORDER BY (LOWER(TRIM(pm2.native_name)) = LOWER(TRIM(COALESCE(NULLIF(pl.exact_name, ''), pl.raw->'resolvedPriceMasterRow'->>'name', '')))) DESC, pm2.doc_date DESC, pm2.row_id DESC
         LIMIT 1
       ) pm_new ON true
       WHERE pl.raw->>'matchType' = 'selected_row'
@@ -91,7 +99,7 @@ app.post("/api/warehouse/links/fix-stale-row-ids", requireAdmin, async (request,
           OR pm_old.price IS NULL
           OR pm_old.price = 0
         )
-    `);
+    `)).filter(staleRowKeepsPinnedProduct);
 
     const linkSummary = staleLinks.map((r) => ({
       offerId: r.offer_id,
@@ -167,7 +175,7 @@ async function runBulkStaleRecoveryOperation(payload = {}) {
   const prisma = getPrisma();
   if (!prisma) throw new Error("Postgres is unavailable.");
 
-  const staleLinks = await prisma.$queryRawUnsafe(`
+  const staleLinks = (await prisma.$queryRawUnsafe(`
       SELECT
         pl.id                           AS link_id,
         pl.product_id,
@@ -175,6 +183,8 @@ async function runBulkStaleRecoveryOperation(payload = {}) {
         pl.partner_id,
         COALESCE(pl.source_row_id, pl.raw->>'sourceRowId') AS pinned_row_id,
         pm_new.row_id                  AS new_row_id,
+        pm_new.native_name             AS new_name,
+        COALESCE(NULLIF(pl.exact_name, ''), pl.raw->'resolvedPriceMasterRow'->>'name', '') AS pinned_name,
         wp.id                          AS product_id_str,
         wp.marketplace
       FROM product_links pl
@@ -183,13 +193,13 @@ async function runBulkStaleRecoveryOperation(payload = {}) {
         ON pm_old.row_id = COALESCE(pl.source_row_id, pl.raw->>'sourceRowId')
         AND pm_old.partner_id::text = pl.partner_id::text
       JOIN LATERAL (
-        SELECT pm2.row_id, pm2.price, pm2.doc_date
+        SELECT pm2.row_id, pm2.price, pm2.native_name, pm2.doc_date
         FROM pm_snapshot_items pm2
         WHERE pm2.article = COALESCE(NULLIF(pl.raw->>'article',''), pl.supplier_article)
           AND pm2.partner_id::text = pl.partner_id::text
           AND pm2.active = true
           AND pm2.price IS NOT NULL AND pm2.price > 0
-        ORDER BY pm2.doc_date DESC, pm2.row_id DESC
+        ORDER BY (LOWER(TRIM(pm2.native_name)) = LOWER(TRIM(COALESCE(NULLIF(pl.exact_name, ''), pl.raw->'resolvedPriceMasterRow'->>'name', '')))) DESC, pm2.doc_date DESC, pm2.row_id DESC
         LIMIT 1
       ) pm_new ON true
       WHERE pl.raw->>'matchType' = 'selected_row'
@@ -203,7 +213,7 @@ async function runBulkStaleRecoveryOperation(payload = {}) {
           OR pm_old.price = 0
         )
       LIMIT 5000
-    `);
+    `)).filter(staleRowKeepsPinnedProduct);
 
   if (!staleLinks.length) {
     return { ok: true, found: 0, fixed: 0, productCount: 0, recovered: 0, productIds: [] };

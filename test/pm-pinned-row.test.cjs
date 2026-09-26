@@ -198,3 +198,12 @@ this.api = { getPriceMasterMatchesForLinks };`, liveCtx);
   const map = await liveCtx.api.getPriceMasterMatchesForLinks([{ ...adw, id: "L1" }], [], 90);
   assert.deepEqual(ids(map.get("L1")), ["777"]);
 });
+
+test("pin moved by the stale-row repair and then cleared is restored too (ADW100)", () => {
+  const link = normalizeWarehouseLink({
+    matchType: "article", article: "96", sourceRowId: null, exactName: null, resolvedBy: "bulk_stale_recovery",
+    resolvedPriceMasterRow: { rowId: "2331634", name: "ALHAMBRA DECADENT WONDER (U) EDP 100 ML" },
+  });
+  assert.equal(link.matchType, "selected_row");
+  assert.equal(link.sourceRowId, "2331634");
+});
