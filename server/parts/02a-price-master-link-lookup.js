@@ -96,10 +96,152 @@ async function findPriceMasterRowsForLinkFast(linkInput, usdRate, managedSupplie
   }
 }
 
+// Row from the live PriceMaster query → supplier candidate of a link.
+function livePriceMasterMatchFromRow(link, row, { stoppedMap, supplierMaps, usdRate }) {
+  const stoppedSupplier = stoppedMap.get(normalizeSupplierName(row.partnerName));
+  const pricingMeta = priceMasterSupplierPricingMeta(row, supplierMaps);
+  const priceCurrency = resolvePriceMasterRowCurrency(row, link, supplierMaps, usdRate);
+  const normalizedPrice = normalizePriceMasterPrice(row.price, usdRate, priceCurrency);
+  const price = stoppedSupplier ? 0 : normalizedPrice.price;
+  const active = stoppedSupplier ? false : Boolean(row.active);
+  return {
+    ...link,
+    rowId: row.rowId,
+    article: row.article,
+    name: row.name,
+    partnerId: row.partnerId,
+    partnerName: row.partnerName,
+    price,
+    priceCurrency,
+    originalPrice: normalizedPrice.originalPrice,
+    sourceCurrency: normalizedPrice.sourceCurrency,
+    convertedFromRub: normalizedPrice.convertedFromRub,
+    priceSource: "live",
+    active,
+    stopped: Boolean(stoppedSupplier),
+    stopReason: stoppedSupplier?.note || null,
+    pricingMode: pricingMeta.pricingMode,
+    stockOnly: pricingMeta.stockOnly,
+    priceEligible: pricingMeta.priceEligible,
+    stockEligible: pricingMeta.stockEligible,
+    trustFactor: pricingMeta.trustFactor,
+    orderCutoffTime: pricingMeta.orderCutoffTime,
+    reseller: pricingMeta.reseller,
+    available: active && (pricingMeta.stockOnly || price > 0),
+    docDate: row.docDate,
+  };
+}
+
+const livePriceMasterRowColumns = `
+      r.NativeID AS article,
+      r.NativeName AS name,
+      r.NativePrice AS price,
+      r.Active AS active,
+      r.Ignored AS ignored,
+      r.RowID AS rowId,
+      d.DocDate AS docDate,
+      d.PartnerID AS partnerId,
+      p.PartnerName AS partnerName`;
+
+// Pinned links with an article: the current rows of (partner, article) and, for pins whose
+// article no longer carries the pinned product, the partner's rows with the pinned name —
+// straight from PriceMaster MySQL (same server) instead of the snapshot, which lags behind
+// supplier uploads. Small batches select by article (1000 per query, ~0.2 s); large ones read
+// every active row once (~190k rows, ~0.4 s), which beats dozens of article scans.
+const livePinnedFullLoadMinPairs = Math.max(500, Number(process.env.PM_LIVE_PINNED_FULL_LOAD_MIN_PAIRS || 3000) || 3000);
+
+async function getLivePinnedPriceMasterMatches(pinnedLinks, ctx, { activeDocFilter, queryTimeout }) {
+  const map = new Map();
+  const pairKey = (partnerId, value) => `${cleanText(partnerId)}|${value}`;
+  const partnerIds = new Set(pinnedLinks.map((link) => cleanText(link.partnerId)));
+  const rowsByPair = new Map();
+  const rowsByName = new Map();
+  const addRow = (row) => {
+    const partnerId = cleanText(row.partnerId);
+    if (!partnerIds.has(partnerId)) return;
+    const byArticle = pairKey(partnerId, cleanText(row.article));
+    if (!rowsByPair.has(byArticle)) rowsByPair.set(byArticle, []);
+    rowsByPair.get(byArticle).push(row);
+    const byName = pairKey(partnerId, cleanText(row.name).toLowerCase());
+    if (!rowsByName.has(byName)) rowsByName.set(byName, []);
+    rowsByName.get(byName).push(row);
+  };
+  const baseSql = `SELECT ${livePriceMasterRowColumns}
+    FROM OfferRows r
+    JOIN OfferDocs d ON d.DocID = r.DocID
+    LEFT JOIN Partners p ON p.PartnerID = d.PartnerID
+    WHERE r.Ignored = 0 AND r.Active != 0${activeDocFilter}`;
+  const orderSql = " ORDER BY d.DocDate DESC, r.RowID DESC";
+  const articles = Array.from(new Set(pinnedLinks.map((link) => link.article)));
+  const fullLoad = articles.length >= livePinnedFullLoadMinPairs;
+  if (fullLoad) {
+    const [rows] = await pool.query({ sql: baseSql + orderSql, timeout: Math.max(queryTimeout, 15000) });
+    for (const row of rows || []) addRow(row);
+  } else {
+    for (const batch of chunkArray(articles, 1000)) {
+      const [rows] = await pool.query({
+        sql: `${baseSql} AND BINARY TRIM(r.NativeID) IN (${batch.map(() => "?").join(",")})${orderSql}`,
+        values: batch,
+        timeout: queryTimeout,
+      });
+      for (const row of rows || []) addRow(row);
+    }
+  }
+  const pick = (link, rows) => {
+    const seenRowIds = new Set();
+    return filterSelectedRowMatchesToBestPin(link, rows
+      .filter((row) => {
+        const rowId = String(row.rowId);
+        if (seenRowIds.has(rowId)) return false;
+        seenRowIds.add(rowId);
+        return priceMasterRowMatchesLink(row, link);
+      })
+      .map((row) => livePriceMasterMatchFromRow(link, row, ctx)));
+  };
+  const needName = [];
+  for (const link of pinnedLinks) {
+    const result = pick(link, rowsByPair.get(pairKey(link.partnerId, link.article)) || []);
+    map.set(link.id, result);
+    if (pinnedLinkNeedsNameFallback(link, result)) needName.push(link);
+  }
+  if (!needName.length) return map;
+  if (!fullLoad) {
+    // NativeName is indexed; pinned names are PriceMaster names, so an exact IN lookup works.
+    const names = Array.from(new Set(needName.map((link) => selectedRowPinnedName(link))));
+    for (const batch of chunkArray(names, 1000)) {
+      const [rows] = await pool.query({
+        sql: `${baseSql} AND r.NativeName IN (${batch.map(() => "?").join(",")})${orderSql}`,
+        values: batch,
+        timeout: queryTimeout,
+      });
+      for (const row of rows || []) {
+        const partnerId = cleanText(row.partnerId);
+        const key = pairKey(partnerId, cleanText(row.name).toLowerCase());
+        if (!partnerIds.has(partnerId)) continue;
+        if (!rowsByName.has(key)) rowsByName.set(key, []);
+        rowsByName.get(key).push(row);
+      }
+    }
+  }
+  for (const link of needName) {
+    const nameRows = rowsByName.get(pairKey(link.partnerId, selectedRowPinnedName(link).toLowerCase())) || [];
+    if (!nameRows.length) continue;
+    map.set(link.id, pick(link, [...(rowsByPair.get(pairKey(link.partnerId, link.article)) || []), ...nameRows]));
+  }
+  return map;
+}
+
 async function getBatchPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRate, { timeoutMs } = {}) {
   const normalizedLinks = links.map(normalizeWarehouseLink).filter((link) => link.article || link.exactName || link.sourceRowId);
   if (!normalizedLinks.length) return new Map();
-  const specialLinks = normalizedLinks.filter((link) => link.matchType !== "article");
+  // Pinned links scoped to a partner and an article (the bulk of the catalog) are read live in
+  // one batch; the rest (exact-name links, pins without an article) keep the per-link path.
+  const isLivePinned = (link) => link.matchType === "selected_row"
+    && link.article
+    && /^\d+$/.test(link.partnerId)
+    && !(link.sourceRowId && link.article === String(link.sourceRowId));
+  const pinnedLinks = normalizedLinks.filter(isLivePinned);
+  const specialLinks = normalizedLinks.filter((link) => link.matchType !== "article" && !isLivePinned(link));
   const articleLinks = normalizedLinks.filter((link) => link.matchType === "article" && link.article);
   const map = new Map();
   if (specialLinks.length) {
@@ -115,33 +257,42 @@ async function getBatchPriceMasterMatchesForLinks(links, managedSuppliers = [], 
       }));
     }
   }
-  if (!articleLinks.length) return map;
-  // De-duplicate articles but do NOT slice — send all articles in batches of 500 to avoid
-  // MySQL parameter limits. Previously .slice(0, 500) silently dropped products whose article
-  // fell outside the first 500, causing them to show selectedSupplier=null and get zeroed.
-  const articles = Array.from(new Set(articleLinks.map((link) => link.article)));
-  const stoppedMap = stoppedSupplierMap(managedSuppliers);
-  const supplierMaps = managedSupplierMaps(managedSuppliers);
+  if (!articleLinks.length && !pinnedLinks.length) return map;
+  const ctx = { stoppedMap: stoppedSupplierMap(managedSuppliers), supplierMaps: managedSupplierMaps(managedSuppliers), usdRate };
   const queryTimeout = Math.max(250, Number(timeoutMs || process.env.WAREHOUSE_PAGE_PM_TIMEOUT_MS || 1500));
   // Match the active-doc filter used by findPriceMasterRowsForLink so that rows from
   // inactive/locked OfferDocs are excluded in both batch and individual paths.
   await discoverOfferDocsActiveColumn();
   const activeDocFilter = offerDocsActiveColumn ? ` AND d.${offerDocsActiveColumn}${offerDocsActiveFilterSuffix}` : "";
+
+  if (pinnedLinks.length) {
+    try {
+      const pinnedMap = await getLivePinnedPriceMasterMatches(pinnedLinks, ctx, { activeDocFilter, queryTimeout: Math.max(queryTimeout, 5000) });
+      for (const [id, rows] of pinnedMap) map.set(id, rows);
+    } catch (error) {
+      // Live PriceMaster unavailable: fall back to the per-link path (snapshot first).
+      logger.warn("live pinned PriceMaster batch failed, using per-link lookup", { links: pinnedLinks.length, detail: error?.message || String(error) });
+      for (const link of pinnedLinks) {
+        map.set(link.id, await findPriceMasterRowsForLinkFast(link, usdRate, managedSuppliers, {
+          timeoutMs,
+          cacheEmpty: false,
+          skipNegativeCache: true,
+        }));
+      }
+    }
+  }
+  if (!articleLinks.length) return map;
+
+  // De-duplicate articles but do NOT slice — send all articles in batches of 500 to avoid
+  // MySQL parameter limits. Previously .slice(0, 500) silently dropped products whose article
+  // fell outside the first 500, causing them to show selectedSupplier=null and get zeroed.
+  const articles = Array.from(new Set(articleLinks.map((link) => link.article)));
   const rowsByArticle = new Map();
   for (const batch of chunkArray(articles, 500)) {
     const placeholders = batch.map(() => "?").join(",");
     const [batchRows] = await pool.query({
       sql: `
-    SELECT
-      r.NativeID AS article,
-      r.NativeName AS name,
-      r.NativePrice AS price,
-      r.Active AS active,
-      r.Ignored AS ignored,
-      r.RowID AS rowId,
-      d.DocDate AS docDate,
-      d.PartnerID AS partnerId,
-      p.PartnerName AS partnerName
+    SELECT ${livePriceMasterRowColumns}
     FROM OfferRows r
     JOIN OfferDocs d ON d.DocID = r.DocID
     LEFT JOIN Partners p ON p.PartnerID = d.PartnerID
@@ -161,40 +312,7 @@ async function getBatchPriceMasterMatchesForLinks(links, managedSuppliers = [], 
   for (const link of articleLinks) {
     const matches = (rowsByArticle.get(link.article) || [])
       .filter((row) => priceMasterRowMatchesLink(row, link))
-      .map((row) => {
-        const stoppedSupplier = stoppedMap.get(normalizeSupplierName(row.partnerName));
-        const pricingMeta = priceMasterSupplierPricingMeta(row, supplierMaps);
-        const priceCurrency = resolvePriceMasterRowCurrency(row, link, supplierMaps, usdRate);
-        const normalizedPrice = normalizePriceMasterPrice(row.price, usdRate, priceCurrency);
-        const price = stoppedSupplier ? 0 : normalizedPrice.price;
-        const active = stoppedSupplier ? false : Boolean(row.active);
-        return {
-          ...link,
-          rowId: row.rowId,
-          article: row.article,
-          name: row.name,
-          partnerId: row.partnerId,
-          partnerName: row.partnerName,
-          price,
-          priceCurrency,
-          originalPrice: normalizedPrice.originalPrice,
-          sourceCurrency: normalizedPrice.sourceCurrency,
-          convertedFromRub: normalizedPrice.convertedFromRub,
-          priceSource: "live",
-          active,
-          stopped: Boolean(stoppedSupplier),
-          stopReason: stoppedSupplier?.note || null,
-          pricingMode: pricingMeta.pricingMode,
-          stockOnly: pricingMeta.stockOnly,
-          priceEligible: pricingMeta.priceEligible,
-          stockEligible: pricingMeta.stockEligible,
-          trustFactor: pricingMeta.trustFactor,
-          orderCutoffTime: pricingMeta.orderCutoffTime,
-          reseller: pricingMeta.reseller,
-          available: active && (pricingMeta.stockOnly || price > 0),
-          docDate: row.docDate,
-        };
-      });
+      .map((row) => livePriceMasterMatchFromRow(link, row, ctx));
     map.set(link.id, filterSelectedRowMatchesToBestPin(link, matches));
   }
   return map;

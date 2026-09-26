@@ -260,6 +260,7 @@ const partFiles = [
   "02f-yandex-pending-stock-scheduler.js",
   "02f-stock-sweep.js",
   "02f-sorin-express-sync.js",
+  "02f-pm-change-watcher.js",
   "02f-marketplace-verify-scheduler.js",
   "02f-zero-stock-sweep.js",
   "02f-avito-feed-refresh.js",

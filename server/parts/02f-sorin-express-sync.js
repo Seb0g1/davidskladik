@@ -1,11 +1,14 @@
-// Sorin express-warehouse sync.
-// Products that have an ACTIVE link to supplier Сорин in PriceMaster are stocked at exactly
-// SORIN_EXPRESS_STOCK (default 2) units regardless of price (Sorin is always priority) on:
+// Express-warehouse sync (Ozon «Наш склад» warehouse, Yandex «EXPRESS · Наш склад» campaign).
+//
+// Only products that are physically at hand go to the express warehouses: a product with a
+// link to supplier «Сорин» or «Наш склад» whose row is ACTIVE in PriceMaster gets exactly
+// SORIN_EXPRESS_STOCK (default 2) units; every other product there gets 0:
 //   - Ozon  express warehouse SORIN_EXPRESS_OZON_WAREHOUSE_ID  (default 1020005000398404)
-//   - Yandex express campaign  SORIN_EXPRESS_YANDEX_CAMPAIGN_ID (default 216697459)
-// Products whose Sorin rows are inactive/stopped in PM receive stock=0 to prevent
-// express orders when Sorin cannot fulfil the product.
-// The sync runs every stock sweep cycle (~3 min).
+//   - Yandex express campaign  SORIN_EXPRESS_YANDEX_CAMPAIGN_ID (default 149026853)
+// syncSorinExpressStocks runs after every stock sweep: it sets 2 / 0 for linked products and,
+// at most every EXPRESS_ENFORCE_INTERVAL_MINUTES, reads what the express warehouses actually
+// hold and zeroes whatever is not eligible (products whose Сорин link was removed, stock put
+// there by hand or by an old sync).
 
 const sorinExpressOzonWarehouseIdEnv = cleanText(
   process.env.SORIN_EXPRESS_OZON_WAREHOUSE_ID || "1020005000398404",
@@ -13,20 +16,33 @@ const sorinExpressOzonWarehouseIdEnv = cleanText(
 // Если задан — используем только этот Ozon-аккаунт для экспресс-склада (остальные игнорируем).
 // Нужно когда экспресс-склад принадлежит только одному кабинету.
 const sorinExpressOzonAccountId = cleanText(process.env.SORIN_EXPRESS_OZON_ACCOUNT_ID || "");
-// Default: 149026853 = «EXPRESS · Наш склад» (присутствует в YANDEX_SHOPS_JSON).
-// Прежний дефолт 216697459 не был в YANDEX_SHOPS_JSON → FORBIDDEN на каждый чанк.
+// Default: 149026853 = «EXPRESS · Наш склад».
 const sorinExpressYandexCampaignIdEnv = cleanText(
   process.env.SORIN_EXPRESS_YANDEX_CAMPAIGN_ID || "149026853",
 );
 // Опциональный отдельный API-ключ для Яндекс Экспресс кампании.
-// Если не задан — используем ключ найденного shop из YANDEX_SHOPS_JSON.
+// Если не задан — используем ключ основного магазина из YANDEX_SHOPS_JSON (тот же бизнес).
 const sorinExpressYandexApiKey = cleanText(process.env.SORIN_EXPRESS_YANDEX_API_KEY || "");
 const sorinExpressStockEnv = Math.max(1, Number(process.env.SORIN_EXPRESS_STOCK || 2) || 2);
 const sorinExpressSyncEnabled = process.env.SORIN_EXPRESS_SYNC_ENABLED !== "false";
+const expressEnforceIntervalMs = Math.max(
+  5 * 60_000,
+  Number(process.env.EXPRESS_ENFORCE_INTERVAL_MINUTES || 15) * 60_000 || 15 * 60_000,
+);
+let expressEnforceLastAt = 0;
+let expressEnforceRunning = false;
 // Per-campaign FORBIDDEN circuit breaker: after a 403 on Yandex Express, back off for 1 hour
-// before retrying — avoids spamming 566 failed API calls per sync cycle.
+// before retrying — avoids spamming failed API calls per sync cycle.
 const sorinYandexForbiddenAt = new Map(); // campaignId -> ms
 const SORIN_YANDEX_FORBIDDEN_BACKOFF_MS = 60 * 60 * 1000; // 1 hour
+
+// Suppliers whose goods may be sold from the express warehouses.
+function expressSupplierKey(name = "") {
+  const normalized = normalizeSupplierName(name);
+  if (isSorinSupplierName(name) || normalized.includes("сорин") || normalized.includes("sorin")) return "sorin";
+  if (stripSupplierLegalFormPrefix(normalized) === "наш склад") return "our_stock";
+  return "";
+}
 
 function productHasSorinLink(product = {}) {
   if (!product) return false;
@@ -36,75 +52,121 @@ function productHasSorinLink(product = {}) {
   return links.some((link) => isSorinSupplierName(link.supplierName || link.partnerName || ""));
 }
 
-// Загружает товары с Сорин-привязками, возвращая все supplier_article для каждого.
-// Одному товару может соответствовать несколько артикулов (несколько ссылок на PM).
-async function loadSorinLinkedProducts() {
+function expressSyncConfig(runtimeSettings = null) {
+  const db = runtimeSettings?.sorinExpress;
+  let yandexCampaignId = cleanText(String(db?.yandexCampaignId || sorinExpressYandexCampaignIdEnv || "149026853"));
+  // The express campaign must never be a regular shop: the settings once held the main
+  // campaign 128820967, so this sync overwrote the main Yandex stock (2 for Sorin goods, 0 for
+  // the rest of them) while the real express campaign was never updated.
+  const regularCampaigns = new Set(getYandexShops({ includeSyncDisabled: true }).map((shop) => String(shop.campaignId)));
+  if (regularCampaigns.has(yandexCampaignId)) {
+    const fallback = regularCampaigns.has(sorinExpressYandexCampaignIdEnv) ? "" : sorinExpressYandexCampaignIdEnv;
+    logger.warn("express_campaign_is_regular_shop", { configured: yandexCampaignId, using: fallback || null });
+    yandexCampaignId = fallback;
+  }
+  let ozonWarehouseId = cleanText(String(db?.ozonWarehouseId || sorinExpressOzonWarehouseIdEnv));
+  // Same guard for Ozon: only the configured express warehouse, never a regular FBS one.
+  if (ozonWarehouseId !== sorinExpressOzonWarehouseIdEnv && sorinExpressOzonWarehouseIdEnv) {
+    logger.warn("express_warehouse_differs_from_env", { configured: ozonWarehouseId, using: sorinExpressOzonWarehouseIdEnv });
+    ozonWarehouseId = sorinExpressOzonWarehouseIdEnv;
+  }
+  return {
+    enabled: db ? db.enabled !== false : sorinExpressSyncEnabled,
+    stock: Math.max(1, Number(db?.stock ?? sorinExpressStockEnv) || sorinExpressStockEnv),
+    yandexCampaignId,
+    ozonWarehouseId,
+  };
+}
+
+function expressOzonAccounts() {
+  return sorinExpressOzonAccountId
+    ? getOzonAccounts().filter((a) => a.id === sorinExpressOzonAccountId)
+    : getOzonAccounts();
+}
+
+// The Yandex express campaign lives in the same business as the main shop; it is not in
+// YANDEX_SHOPS_JSON, so the request uses the main shop's business with the express key.
+function expressYandexShop(campaignId) {
+  const allShops = getYandexShops({ includeSyncDisabled: true });
+  const matchedShop = allShops.find((s) => String(s.campaignId) === String(campaignId));
+  if (!matchedShop && !sorinExpressYandexApiKey) return null;
+  const baseShop = matchedShop || allShops[0];
+  if (!baseShop) return null;
+  return {
+    ...baseShop,
+    id: `yandex-express-${campaignId}`,
+    name: "Яндекс Экспресс",
+    campaignId,
+    apiKey: sorinExpressYandexApiKey || baseShop.apiKey,
+  };
+}
+
+// Товары с привязкой к Сорину или «Нашему складу»: по строке на привязку.
+async function loadExpressLinkedProducts() {
   const prisma = getPrisma();
   if (!prisma) return [];
   const rows = await prisma.$queryRawUnsafe(`
     SELECT p.id, p.marketplace, p.target, p.offer_id AS "offerId",
-           l.supplier_article AS "supplierArticle"
+           l.supplier_article AS "supplierArticle", l.supplier_name AS "supplierName"
     FROM warehouse_products p
     JOIN product_links l ON l.product_id = p.id
     WHERE p.archived = false
       AND (
         l.supplier_name ILIKE '%сорин%'
         OR l.supplier_name ILIKE '%sorin%'
+        OR l.supplier_name ILIKE '%наш склад%'
       )
   `);
-  return Array.isArray(rows) ? rows : [];
+  return (Array.isArray(rows) ? rows : [])
+    .map((row) => ({ ...row, supplierKey: expressSupplierKey(row.supplierName) }))
+    .filter((row) => row.supplierKey);
 }
 
-// Проверяет в PM MySQL какие из переданных артикулов активны у Сорина.
-// Возвращает Set активных артикулов, или null если PM недоступен (→ не зануляем, fallback).
-async function fetchActiveSorinArticlesFromPm(articles) {
+// Kept for callers that only need the Sorin-linked rows.
+async function loadSorinLinkedProducts() {
+  return (await loadExpressLinkedProducts()).filter((row) => row.supplierKey === "sorin");
+}
+
+// Какие артикулы сейчас активны у Сорина / «Нашего склада» в PriceMaster: Set "key|article".
+// null — PM недоступен (тогда ничего не зануляем, чтобы не было ложного нуля).
+async function fetchActiveExpressArticlesFromPm(articles) {
   if (!articles.length) return new Set();
   try {
     await discoverOfferDocsActiveColumn();
     const activeDocFilter = offerDocsActiveColumn
       ? ` AND d.${offerDocsActiveColumn}${offerDocsActiveFilterSuffix}`
       : "";
-    const placeholders = articles.map(() => "?").join(", ");
-    const [rows] = await pool.query(
-      `SELECT DISTINCT BINARY TRIM(r.NativeID) AS article
-       FROM OfferRows r
-       JOIN OfferDocs d ON d.DocID = r.DocID
-       JOIN Partners p ON p.PartnerID = d.PartnerID
-       WHERE BINARY TRIM(r.NativeID) IN (${placeholders})
-         AND r.Ignored = 0
-         AND r.Active != 0
-         AND (p.PartnerName LIKE '%Сорин%' OR p.PartnerName LIKE '%Sorin%')
-         ${activeDocFilter}`,
-      articles,
-    );
-    return new Set(rows.map((r) => cleanText(String(r.article || ""))).filter(Boolean));
+    const active = new Set();
+    for (const batch of chunkArray(articles, 500)) {
+      const placeholders = batch.map(() => "?").join(", ");
+      const [rows] = await pool.query(
+        `SELECT DISTINCT p.PartnerName AS partnerName, TRIM(r.NativeID) AS article
+         FROM OfferRows r
+         JOIN OfferDocs d ON d.DocID = r.DocID
+         JOIN Partners p ON p.PartnerID = d.PartnerID
+         WHERE BINARY TRIM(r.NativeID) IN (${placeholders})
+           AND r.Ignored = 0
+           AND r.Active != 0
+           AND (p.PartnerName LIKE '%Сорин%' OR p.PartnerName LIKE '%Sorin%' OR p.PartnerName LIKE '%Наш склад%')
+           ${activeDocFilter}`,
+        batch,
+      );
+      for (const row of rows) {
+        const key = expressSupplierKey(row.partnerName);
+        const article = cleanText(String(row.article || ""));
+        if (key && article) active.add(`${key}|${article}`);
+      }
+    }
+    return active;
   } catch (error) {
     logger.warn("sorin_express_pm_check_failed", { detail: error?.message || String(error) });
-    return null; // PM недоступен — не зануляем продукты, чтобы не было ложного нуля
+    return null;
   }
 }
 
-async function syncSorinExpressStocks() {
-  if (!sorinExpressSyncEnabled) return { status: "disabled" };
-  if (!shouldUsePostgresStorage()) return { status: "postgres_disabled" };
-
-  // Read runtime config from DB settings (allows UI control without env restart).
-  const runtimeSettings = await readAppSettings().catch(() => null);
-  const sorinDbSettings = runtimeSettings?.sorinExpress;
-  const effectiveEnabled = sorinDbSettings ? sorinDbSettings.enabled !== false : sorinExpressSyncEnabled;
-  const sorinExpressStock = Math.max(1, Number(sorinDbSettings?.stock ?? sorinExpressStockEnv) || sorinExpressStockEnv);
-  const sorinExpressYandexCampaignId = cleanText(String(sorinDbSettings?.yandexCampaignId || sorinExpressYandexCampaignIdEnv || "149026853"));
-  const sorinExpressOzonWarehouseId = cleanText(String(sorinDbSettings?.ozonWarehouseId || sorinExpressOzonWarehouseIdEnv));
-
-  if (!effectiveEnabled) return { status: "disabled" };
-
-  const rawRows = await loadSorinLinkedProducts().catch((error) => {
-    logger.warn("sorin_express_sync: load failed", { detail: error?.message || String(error) });
-    return [];
-  });
-  if (!rawRows.length) return { status: "ok", sorinProducts: 0 };
-
-  // Группируем по (marketplace:target:offerId) — собираем все артикулы для каждого товара.
+// Offers that must hold express stock, per marketplace, plus the linked ones that must not.
+async function resolveExpressEligibility() {
+  const rawRows = await loadExpressLinkedProducts();
   const productMap = new Map();
   for (const row of rawRows) {
     const key = `${row.marketplace}:${String(row.target || "")}:${row.offerId}`;
@@ -114,257 +176,223 @@ async function syncSorinExpressStocks() {
         marketplace: String(row.marketplace).toLowerCase(),
         target: row.target,
         offerId: String(row.offerId),
-        articles: new Set(),
+        linkKeys: new Set(),
+        hasBareLink: false,
       });
     }
     const article = cleanText(String(row.supplierArticle || ""));
-    if (article) productMap.get(key).articles.add(article);
+    if (article) productMap.get(key).linkKeys.add(`${row.supplierKey}|${article}`);
+    else productMap.get(key).hasBareLink = true;
   }
-
   const products = [...productMap.values()];
+  const allArticles = [...new Set(products.flatMap((p) => [...p.linkKeys].map((k) => k.split("|").slice(1).join("|"))))];
+  const activeKeys = await fetchActiveExpressArticlesFromPm(allArticles);
+  const pmAvailable = activeKeys !== null;
+  const isActive = (p) => !pmAvailable || [...p.linkKeys].some((k) => activeKeys.has(k)) || (p.hasBareLink && !p.linkKeys.size);
+  return {
+    pmAvailable,
+    products,
+    active: products.filter(isActive),
+    inactive: pmAvailable ? products.filter((p) => !isActive(p)) : [],
+  };
+}
 
-  // Проверяем в PM какие артикулы активны у Сорина.
-  const allArticles = [...new Set(products.flatMap((p) => [...p.articles]))].filter(Boolean);
-  const activePmArticles = await fetchActiveSorinArticlesFromPm(allArticles);
-  const pmAvailable = activePmArticles !== null;
+async function sendOzonExpressStocks(account, warehouseId, rows, results, counterPrefix = "ozon") {
+  for (const chunk of chunkArray(rows, 100)) {
+    try {
+      await ozonRequest("/v2/products/stocks", {
+        stocks: chunk.map((r) => ({ offer_id: r.offerId, warehouse_id: Number(warehouseId), stock: r.stock })),
+      }, account);
+      const zeroed = chunk.filter((s) => s.stock === 0).length;
+      results[`${counterPrefix}Sent`] += chunk.length - zeroed;
+      results[`${counterPrefix}Zeroed`] += zeroed;
+    } catch (error) {
+      results[`${counterPrefix}Failed`] += chunk.length;
+      logger.warn("sorin_express_ozon_stock_failed", {
+        account: account.id,
+        items: chunk.length,
+        detail: error?.message || String(error),
+      });
+    }
+  }
+}
 
-  // Активные: хотя бы один артикул активен в PM (или PM недоступен → все активны).
-  // Неактивные: все артикулы мёртвые → шлём stock=0 чтобы Ozon/Яндекс не принимали заказы.
-  const activeProducts = pmAvailable
-    ? products.filter((p) => p.articles.size === 0 || [...p.articles].some((a) => activePmArticles.has(a)))
-    : products;
-  const inactiveProducts = pmAvailable
-    ? products.filter((p) => p.articles.size > 0 && ![...p.articles].some((a) => activePmArticles.has(a)))
-    : [];
+async function sendYandexExpressStocks(campaignId, rows, results) {
+  const shop = expressYandexShop(campaignId);
+  if (!shop) {
+    logger.warn("sorin_express_sync: Yandex Express campaign not in YANDEX_SHOPS_JSON and no SORIN_EXPRESS_YANDEX_API_KEY — skipping Yandex.", { campaign: campaignId });
+    results.yandexFailed += rows.length;
+    return;
+  }
+  const forbiddenAt = sorinYandexForbiddenAt.get(campaignId) || 0;
+  if (forbiddenAt && Date.now() - forbiddenAt < SORIN_YANDEX_FORBIDDEN_BACKOFF_MS) {
+    results.yandexFailed += rows.length;
+    return;
+  }
+  let forbidden = false;
+  for (const chunk of chunkArray(rows, 100)) {
+    if (forbidden) { results.yandexFailed += chunk.length; continue; }
+    try {
+      await sendYandexStockChunk(shop, chunk);
+      const zeroed = chunk.filter((s) => s.stock === 0).length;
+      results.yandexSent += chunk.length - zeroed;
+      results.yandexZeroed += zeroed;
+      sorinYandexForbiddenAt.delete(campaignId);
+    } catch (error) {
+      results.yandexFailed += chunk.length;
+      const isForbidden = /403|forbidden/i.test(error?.message || "") || error?.statusCode === 403 || error?.status === 403;
+      if (isForbidden) {
+        forbidden = true;
+        sorinYandexForbiddenAt.set(campaignId, Date.now());
+        logger.warn("sorin_express_yandex_forbidden_circuit_break", { campaign: campaignId, detail: error?.message || String(error) });
+      } else {
+        logger.warn("sorin_express_yandex_stock_failed", { campaign: campaignId, items: chunk.length, detail: error?.message || String(error) });
+      }
+    }
+  }
+}
 
-  const ozonActive = activeProducts.filter((p) => p.marketplace === "ozon");
-  const ozonInactive = inactiveProducts.filter((p) => p.marketplace === "ozon");
-  const yandexActive = activeProducts.filter((p) => p.marketplace === "yandex");
-  const yandexInactive = inactiveProducts.filter((p) => p.marketplace === "yandex");
+async function syncSorinExpressStocks() {
+  if (!shouldUsePostgresStorage()) return { status: "postgres_disabled" };
+  const config = expressSyncConfig(await readAppSettings().catch(() => null));
+  if (!config.enabled) return { status: "disabled" };
 
+  const eligibility = await resolveExpressEligibility().catch((error) => {
+    logger.warn("sorin_express_sync: load failed", { detail: error?.message || String(error) });
+    return null;
+  });
+  if (!eligibility) return { status: "error" };
+  const { active, inactive, products, pmAvailable } = eligibility;
   const results = { ozonSent: 0, ozonFailed: 0, ozonZeroed: 0, yandexSent: 0, yandexFailed: 0, yandexZeroed: 0 };
 
-  // ── Ozon ──────────────────────────────────────────────────────────────────
-  if (sorinExpressOzonWarehouseId && (ozonActive.length || ozonInactive.length)) {
-    const ozonAccounts = sorinExpressOzonAccountId
-      ? getOzonAccounts().filter((a) => a.id === sorinExpressOzonAccountId)
-      : getOzonAccounts();
-    for (const account of ozonAccounts) {
-      const activeForAccount = ozonActive.filter((r) =>
-        matchesOzonTarget(String(r.target || "ozon"), account.id),
-      );
-      const inactiveForAccount = ozonInactive.filter((r) =>
-        matchesOzonTarget(String(r.target || "ozon"), account.id),
-      );
-
-      const stocksToSend = [
-        ...activeForAccount.map((r) => ({
-          offer_id: r.offerId,
-          warehouse_id: Number(sorinExpressOzonWarehouseId),
-          stock: sorinExpressStock,
-        })),
-        ...inactiveForAccount.map((r) => ({
-          offer_id: r.offerId,
-          warehouse_id: Number(sorinExpressOzonWarehouseId),
-          stock: 0,
-        })),
+  if (config.ozonWarehouseId) {
+    for (const account of expressOzonAccounts()) {
+      const forAccount = (list) => list.filter((r) => r.marketplace === "ozon" && matchesOzonTarget(String(r.target || "ozon"), account.id));
+      const rows = [
+        ...forAccount(active).map((r) => ({ offerId: r.offerId, stock: config.stock })),
+        ...forAccount(inactive).map((r) => ({ offerId: r.offerId, stock: 0 })),
       ];
-
-      for (const chunk of chunkArray(stocksToSend, 100)) {
-        try {
-          await ozonRequest("/v2/products/stocks", { stocks: chunk }, account);
-          const zeroed = chunk.filter((s) => s.stock === 0).length;
-          results.ozonSent += chunk.length - zeroed;
-          results.ozonZeroed += zeroed;
-        } catch (error) {
-          results.ozonFailed += chunk.length;
-          logger.warn("sorin_express_ozon_stock_failed", {
-            account: account.id,
-            items: chunk.length,
-            detail: error?.message || String(error),
-          });
-        }
-      }
-
-      if (inactiveForAccount.length) {
-        logger.info("sorin_express_sync: zeroed inactive products on Ozon", {
-          account: account.id,
-          count: inactiveForAccount.length,
-          offerIds: inactiveForAccount.slice(0, 10).map((r) => r.offerId),
-        });
-      }
+      if (rows.length) await sendOzonExpressStocks(account, config.ozonWarehouseId, rows, results);
     }
   }
 
-  // ── Yandex ────────────────────────────────────────────────────────────────
-  if (sorinExpressYandexCampaignId && (yandexActive.length || yandexInactive.length)) {
-    const allShops = getYandexShops({ includeSyncDisabled: true });
-    // Ищем shop с нужным campaignId — у него уже правильный apiKey.
-    const matchedShop = allShops.find((s) => String(s.campaignId) === String(sorinExpressYandexCampaignId));
-    // If the campaignId is not in YANDEX_SHOPS_JSON and no explicit API key is configured,
-    // using another shop's key will always return 403 — skip to avoid API spam.
-    if (!matchedShop && !sorinExpressYandexApiKey) {
-      logger.warn("sorin_express_sync: Yandex Express campaign not in YANDEX_SHOPS_JSON and no SORIN_EXPRESS_YANDEX_API_KEY — skipping Yandex. Fix: remove SORIN_EXPRESS_YANDEX_CAMPAIGN_ID from .env or set it to a campaign that IS in YANDEX_SHOPS_JSON.", {
-        campaign: sorinExpressYandexCampaignId,
-        configuredCampaigns: allShops.map((s) => s.campaignId),
-      });
-      results.yandexFailed += yandexActive.length + yandexInactive.length;
-    } else {
-    const baseShop = matchedShop || allShops[0];
-    if (baseShop) {
-      const expressShop = {
-        ...baseShop,
-        id: `yandex-express-${sorinExpressYandexCampaignId}`,
-        name: "Яндекс Экспресс",
-        campaignId: sorinExpressYandexCampaignId,
-        // SORIN_EXPRESS_YANDEX_API_KEY имеет приоритет; иначе берём ключ найденного shop.
-        apiKey: sorinExpressYandexApiKey || baseShop.apiKey,
-      };
-
-      const stockRows = [
-        ...yandexActive.map((r) => ({ offerId: r.offerId, stock: sorinExpressStock })),
-        ...yandexInactive.map((r) => ({ offerId: r.offerId, stock: 0 })),
-      ];
-
-      // Module-level circuit breaker: skip for 1 hour after a FORBIDDEN to avoid
-      // flooding logs with 566 failed API calls every sync cycle.
-      const forbiddenAt = sorinYandexForbiddenAt.get(sorinExpressYandexCampaignId) || 0;
-      const stillCoolingDown = forbiddenAt && Date.now() - forbiddenAt < SORIN_YANDEX_FORBIDDEN_BACKOFF_MS;
-      if (stillCoolingDown) {
-        results.yandexFailed += stockRows.length;
-      } else {
-        let yandexForbidden = false;
-        for (const chunk of chunkArray(stockRows, 100)) {
-          if (yandexForbidden) { results.yandexFailed += chunk.length; continue; }
-          try {
-            await sendYandexStockChunk(expressShop, chunk);
-            const zeroed = chunk.filter((s) => s.stock === 0).length;
-            results.yandexSent += chunk.length - zeroed;
-            results.yandexZeroed += zeroed;
-            // Successful send — clear the FORBIDDEN circuit breaker for this campaign.
-            sorinYandexForbiddenAt.delete(sorinExpressYandexCampaignId);
-          } catch (error) {
-            results.yandexFailed += chunk.length;
-            const isForbidden = /403|forbidden/i.test(error?.message || "") || error?.statusCode === 403 || error?.status === 403;
-            if (isForbidden) {
-              yandexForbidden = true;
-              sorinYandexForbiddenAt.set(sorinExpressYandexCampaignId, Date.now());
-              logger.warn("sorin_express_yandex_forbidden_circuit_break", {
-                campaign: sorinExpressYandexCampaignId,
-                detail: error?.message || String(error),
-                backoffMs: SORIN_YANDEX_FORBIDDEN_BACKOFF_MS,
-              });
-            } else {
-              logger.warn("sorin_express_yandex_stock_failed", {
-                campaign: sorinExpressYandexCampaignId,
-                items: chunk.length,
-                detail: error?.message || String(error),
-              });
-            }
-          }
-        }
-      }
-
-      if (yandexInactive.length) {
-        logger.info("sorin_express_sync: zeroed inactive products on Yandex express", {
-          count: yandexInactive.length,
-          offerIds: yandexInactive.slice(0, 10).map((r) => r.offerId),
-        });
-      }
-    } else {
-      logger.warn("sorin_express_sync: no Yandex shop configured, skipping Yandex express stock");
-    }
-    } // end else (matchedShop || sorinExpressYandexApiKey)
+  if (config.yandexCampaignId) {
+    const rows = [
+      ...active.filter((r) => r.marketplace === "yandex").map((r) => ({ offerId: r.offerId, stock: config.stock })),
+      ...inactive.filter((r) => r.marketplace === "yandex").map((r) => ({ offerId: r.offerId, stock: 0 })),
+    ];
+    if (rows.length) await sendYandexExpressStocks(config.yandexCampaignId, rows, results);
   }
 
   logger.info("sorin_express_sync_complete", {
-    sorinProducts: products.length,
-    active: activeProducts.length,
-    inactive: inactiveProducts.length,
+    expressProducts: products.length,
+    active: active.length,
+    inactive: inactive.length,
     pmAvailable,
-    expressStock: sorinExpressStock,
+    expressStock: config.stock,
     ...results,
   });
-  return { status: "ok", sorinProducts: products.length, active: activeProducts.length, inactive: inactiveProducts.length, ...results };
+
+  if (pmAvailable && !expressEnforceRunning && Date.now() - expressEnforceLastAt >= expressEnforceIntervalMs) {
+    expressEnforceLastAt = Date.now();
+    enforceExpressWarehouseStocks({ eligibility, config }).catch((error) =>
+      logger.warn("express_enforce_failed", { detail: error?.message || String(error) }));
+  }
+  return { status: "ok", expressProducts: products.length, active: active.length, inactive: inactive.length, ...results };
 }
 
-// One-shot sweep: zero ALL Ozon products on the Express warehouse except those with active
-// Sorin links (which the periodic syncSorinExpressStocks will restore to sorinExpressStock).
-// Use this endpoint after accidentally setting stock on the Express warehouse for non-Sorin goods.
-async function zeroAllNonSorinExpressStock({ dryRun = false } = {}) {
-  if (!shouldUsePostgresStorage()) return { status: "postgres_disabled" };
-
-  const runtimeSettings = await readAppSettings().catch(() => null);
-  const sorinDbSettings = runtimeSettings?.sorinExpress;
-  const sorinExpressOzonWarehouseId = cleanText(
-    String(sorinDbSettings?.ozonWarehouseId || sorinExpressOzonWarehouseIdEnv),
-  );
-  if (!sorinExpressOzonWarehouseId) return { status: "error", error: "Express warehouse ID not configured" };
-
-  // Load Sorin-linked offer IDs so we can skip them (their sync manages them separately).
-  const sorinRows = await loadSorinLinkedProducts().catch(() => []);
-  const sorinOfferIds = new Set(sorinRows.map((r) => cleanText(String(r.offerId || ""))).filter(Boolean));
-
-  const results = { zeroed: 0, failed: 0, skippedSorin: 0, total: 0, dryRun };
-
-  const ozonAccounts = sorinExpressOzonAccountId
-    ? getOzonAccounts().filter((a) => a.id === sorinExpressOzonAccountId)
-    : getOzonAccounts();
-
-  for (const account of ozonAccounts) {
-    // Page through all Ozon products and collect their offer_ids.
-    const offerIds = [];
-    let lastId = "";
-    do {
-      try {
-        const data = await ozonRequest("/v3/product/list", { filter: { visibility: "ALL" }, limit: 1000, last_id: lastId }, account);
-        const items = data.result?.items || [];
-        for (const item of items) {
-          const oid = cleanText(item.offer_id || "");
-          if (oid) offerIds.push(oid);
-        }
-        lastId = data.result?.last_id || "";
-        if (!items.length) break;
-      } catch (err) {
-        logger.warn("zero_express: product list page failed", { account: account.id, detail: err?.message });
-        break;
+// Offers currently holding stock on the Yandex express campaign.
+async function listYandexExpressStockedOffers(campaignId) {
+  const shop = expressYandexShop(campaignId);
+  if (!shop) return null;
+  const stocked = new Map(); // offerId -> count
+  let pageToken = "";
+  for (let page = 0; page < 500; page += 1) {
+    const query = `limit=200${pageToken ? `&page_token=${encodeURIComponent(pageToken)}` : ""}`;
+    const data = await yandexRequest(shop, "POST", `/v2/campaigns/${campaignId}/offers/stocks?${query}`, {});
+    for (const warehouse of data?.result?.warehouses || []) {
+      for (const offer of warehouse.offers || []) {
+        const fit = (offer.stocks || []).filter((s) => s.type === "FIT").reduce((sum, s) => sum + Number(s.count || 0), 0);
+        if (fit > 0) stocked.set(cleanText(offer.offerId), fit);
       }
-    } while (lastId);
+    }
+    pageToken = data?.result?.paging?.nextPageToken || "";
+    if (!pageToken) break;
+  }
+  return stocked;
+}
 
-    results.total += offerIds.length;
+// Offers of an Ozon account that hold stock on the express warehouse
+// (/v1/product/info/warehouse/stocks lists one FBS warehouse, 1000 per page).
+async function listOzonExpressStockedOffers(account, warehouseId) {
+  const stocked = new Set();
+  let cursor = "";
+  for (let page = 0; page < 500; page += 1) {
+    const data = await ozonRequest("/v1/product/info/warehouse/stocks", {
+      warehouse_id: Number(warehouseId),
+      limit: 1000,
+      ...(cursor ? { cursor } : {}),
+    }, account);
+    const stocks = data?.stocks || data?.result?.stocks || [];
+    for (const row of stocks) {
+      if (Number(row.present || 0) > 0 && row.offer_id) stocked.add(cleanText(row.offer_id));
+    }
+    cursor = data?.cursor || "";
+    if (!data?.has_next || !cursor || !stocks.length) break;
+  }
+  return stocked;
+}
 
-    // Build zero-stock payload for non-Sorin offer IDs.
-    const toZero = offerIds.filter((oid) => {
-      if (sorinOfferIds.has(oid)) { results.skippedSorin += 1; return false; }
-      return true;
-    });
+// Zero every offer on the express warehouses that is not eligible (not an active Сорин /
+// «Наш склад» product). Reads the real express stock, so it also catches products whose
+// link was removed or that were stocked there by hand.
+async function enforceExpressWarehouseStocks({ dryRun = false, eligibility = null, config = null } = {}) {
+  if (expressEnforceRunning) return { status: "already_running" };
+  expressEnforceRunning = true;
+  try {
+    const cfg = config || expressSyncConfig(await readAppSettings().catch(() => null));
+    const elig = eligibility || await resolveExpressEligibility();
+    if (!elig.pmAvailable) return { status: "pm_unavailable" };
+    const eligible = (marketplace) => new Set(elig.active.filter((p) => p.marketplace === marketplace).map((p) => p.offerId));
+    const results = { dryRun, ozonStocked: 0, ozonToZero: 0, ozonSent: 0, ozonZeroed: 0, ozonFailed: 0, yandexStocked: 0, yandexToZero: 0, yandexSent: 0, yandexZeroed: 0, yandexFailed: 0 };
+    const samples = { ozon: [], yandex: [] };
 
-    if (!dryRun) {
-      for (const chunk of chunkArray(toZero, 100)) {
-        try {
-          await ozonRequest("/v2/products/stocks", {
-            stocks: chunk.map((oid) => ({ offer_id: oid, warehouse_id: Number(sorinExpressOzonWarehouseId), stock: 0 })),
-          }, account);
-          results.zeroed += chunk.length;
-        } catch (err) {
-          results.failed += chunk.length;
-          logger.warn("zero_express: stock send failed", { account: account.id, chunk: chunk.length, detail: err?.message });
+    if (cfg.ozonWarehouseId) {
+      const ozonEligible = eligible("ozon");
+      for (const account of expressOzonAccounts()) {
+        const stocked = await listOzonExpressStockedOffers(account, cfg.ozonWarehouseId);
+        results.ozonStocked += stocked.size;
+        const toZero = [...stocked].filter((offerId) => !ozonEligible.has(offerId));
+        results.ozonToZero += toZero.length;
+        samples.ozon.push(...toZero.slice(0, 10));
+        if (!dryRun && toZero.length) {
+          await sendOzonExpressStocks(account, cfg.ozonWarehouseId, toZero.map((offerId) => ({ offerId, stock: 0 })), results);
         }
       }
-    } else {
-      results.zeroed += toZero.length; // in dry run, "zeroed" = would zero
     }
 
-    logger.info("zero_all_non_sorin_express_stock", {
-      account: account.id,
-      warehouseId: sorinExpressOzonWarehouseId,
-      total: offerIds.length,
-      skippedSorin: results.skippedSorin,
-      zeroed: results.zeroed,
-      failed: results.failed,
-      dryRun,
-    });
+    if (cfg.yandexCampaignId) {
+      const stocked = await listYandexExpressStockedOffers(cfg.yandexCampaignId);
+      if (stocked) {
+        const yandexEligible = eligible("yandex");
+        results.yandexStocked = stocked.size;
+        const toZero = [...stocked.keys()].filter((offerId) => !yandexEligible.has(offerId));
+        results.yandexToZero = toZero.length;
+        samples.yandex.push(...toZero.slice(0, 10));
+        if (!dryRun && toZero.length) {
+          await sendYandexExpressStocks(cfg.yandexCampaignId, toZero.map((offerId) => ({ offerId, stock: 0 })), results);
+        }
+      }
+    }
+    logger.info("express_enforce_complete", { ...results, samples });
+    return { status: "ok", ...results, samples };
+  } finally {
+    expressEnforceRunning = false;
   }
+}
 
-  return { status: "ok", ...results };
+// Manual endpoint (/api/ozon/zero-express-stock): same enforcement, on demand.
+async function zeroAllNonSorinExpressStock({ dryRun = false } = {}) {
+  if (!shouldUsePostgresStorage()) return { status: "postgres_disabled" };
+  return enforceExpressWarehouseStocks({ dryRun });
 }

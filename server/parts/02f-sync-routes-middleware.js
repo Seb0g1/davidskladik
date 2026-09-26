@@ -254,6 +254,10 @@ function startBackgroundSchedulers() {
       batchLimit: zeroStockSweepBatchLimit,
     });
   }
+  if (pmChangeWatchEnabled) {
+    schedulePmChangeWatch(30_000);
+    logger.info("pm change watcher enabled", { intervalSeconds: Math.round(pmChangeWatchIntervalMs / 1000) });
+  }
   startMarketplaceVerifyScheduler();
   if (snoozeSweepEnabled) {
     scheduleSnoozeSweep(5 * 60_000);

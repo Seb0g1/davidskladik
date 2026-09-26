@@ -68,10 +68,12 @@ async function runStockSweep({ source = "schedule" } = {}) {
     }
     if (!candidateIds.length) return { status: "ok", candidates: rows.length, sent: 0, cooldown: true };
 
-    // Resolve the supplier with a fresh build (snapshot pricing, not live) — productFromPostgres
-    // alone does NOT populate selectedSupplier. Products whose supplier disappeared come back
-    // without selectedSupplier and are dropped here (no-supplier automation zeroes those).
-    const builtProducts = await buildFreshWarehouseProducts(candidateIds, { livePriceMaster: false })
+    // Resolve the supplier with a fresh build from live PriceMaster (same server, batched) —
+    // productFromPostgres alone does NOT populate selectedSupplier, and the snapshot can lag the
+    // supplier's price list, which used to put stock back on products the supplier had just
+    // dropped. Products whose supplier disappeared come back without selectedSupplier and are
+    // dropped here (no-supplier automation zeroes those).
+    const builtProducts = await buildFreshWarehouseProducts(candidateIds, { livePriceMaster: true, batchPriceMaster: true, persistMutations: false })
       .catch((error) => {
         logger.warn("stock sweep build failed", { detail: error?.message || String(error) });
         return [];
