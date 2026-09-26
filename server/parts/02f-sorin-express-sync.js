@@ -200,12 +200,24 @@ async function resolveExpressEligibility() {
 async function sendOzonExpressStocks(account, warehouseId, rows, results, counterPrefix = "ozon") {
   for (const chunk of chunkArray(rows, 100)) {
     try {
-      await ozonRequest("/v2/products/stocks", {
+      const response = await ozonRequest("/v2/products/stocks", {
         stocks: chunk.map((r) => ({ offer_id: r.offerId, warehouse_id: Number(warehouseId), stock: r.stock })),
       }, account);
-      const zeroed = chunk.filter((s) => s.stock === 0).length;
-      results[`${counterPrefix}Sent`] += chunk.length - zeroed;
+      // Ozon answers 200 and reports refused items one by one (e.g. PRODUCT_IS_NOT_CREATED).
+      const refused = (response?.result || []).filter((item) => item.updated === false || (item.errors || []).length);
+      const refusedIds = new Set(refused.map((item) => cleanText(item.offer_id)));
+      const accepted = chunk.filter((r) => !refusedIds.has(r.offerId));
+      const zeroed = accepted.filter((s) => s.stock === 0).length;
+      results[`${counterPrefix}Sent`] += accepted.length - zeroed;
       results[`${counterPrefix}Zeroed`] += zeroed;
+      results[`${counterPrefix}Failed`] += refused.length;
+      if (refused.length) {
+        logger.warn("sorin_express_ozon_stock_refused", {
+          account: account.id,
+          items: refused.slice(0, 10).map((item) => `${item.offer_id}:${(item.errors || []).map((e) => e.code).join(",")}`),
+          count: refused.length,
+        });
+      }
     } catch (error) {
       results[`${counterPrefix}Failed`] += chunk.length;
       logger.warn("sorin_express_ozon_stock_failed", {
