@@ -74,7 +74,8 @@ async function fillOzonDescriptionsForYandexExport(products = [], { delayMs = 60
   const result = [];
   for (const product of products) {
     const ozon = product.ozon && typeof product.ozon === "object" ? product.ozon : {};
-    if (cleanText(ozon.description) || cleanText(product.yandex?.description) || apiErrors >= 10) {
+    const hasReal = (value) => !isPlaceholderYandexDescription(value, { name: ozon.name || product.name, offerId: product.offerId });
+    if (hasReal(ozon.description) || hasReal(product.yandex?.description) || apiErrors >= 10) {
       result.push(product);
       continue;
     }

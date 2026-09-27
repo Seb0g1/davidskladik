@@ -100,10 +100,11 @@ function buildYandexOfferMapping(product, overrides = {}) {
   // Description priority: manual yandex override → approved AI draft → Ozon description →
   // AI draft bullet points as fallback. Never fall back to product name — that produces
   // duplicate name/description pairs that Yandex penalises.
+  const realDescription = (value) => (isPlaceholderYandexDescription(value, { name, offerId }) ? "" : value);
   const descriptionRaw =
-    yandex.description ||
-    approvedDraft?.description ||
-    ozon.description ||
+    realDescription(yandex.description) ||
+    realDescription(approvedDraft?.description) ||
+    realDescription(ozon.description) ||
     (approvedDraft?.bulletPoints?.length ? approvedDraft.bulletPoints.join(". ") : "");
 
   // Only explicit, validated extras reach Market (internal bookkeeping stays local).

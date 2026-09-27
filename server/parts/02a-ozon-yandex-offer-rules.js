@@ -344,6 +344,15 @@ function parseYandexOfferMappingsResult(apiResult = {}) {
   return { errorsByOffer, warningsByOffer };
 }
 
+// A description that says nothing — empty, the card name or offerId repeated, or a stub like
+// «Для волос» / «#» (about 1.5k Market cards had one) — counts as missing and is replaced.
+function isPlaceholderYandexDescription(description = "", { name = "", offerId = "" } = {}) {
+  const text = String(description || "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (text.length < 20) return true;
+  const same = (value) => String(value || "").replace(/\s+/g, " ").trim().toLowerCase() === text;
+  return same(name) || same(offerId);
+}
+
 // The Ozon product and the Market card under the same offerId are the same product: the Market
 // name shares a meaningful word with the Ozon name and does not name another product kind.
 function yandexCardMatchesOzonProduct(marketName = "", ozonName = "", ruleCategoryId = 0) {

@@ -17,7 +17,7 @@ function loadRules(extra = {}) {
   vm.runInContext(`${part("02a-ozon-yandex-offer-rules.js")}
 this.api = { resolveYandexCategoryForOzonProduct, isValidGtin, pickYandexGtins, isPlaceholderVendor, yandexCountryName,
   resolveYandexOfferName, buildPerfumeVariantParameters, sanitizeYandexCommodityCodes, normalizeYandexCertificate,
-  sanitizeYandexShelfLife, diffYandexOfferForUpdate, parseYandexOfferMappingsResult, ozonAttributeValue };`, ctx);
+  sanitizeYandexShelfLife, diffYandexOfferForUpdate, parseYandexOfferMappingsResult, ozonAttributeValue, isPlaceholderYandexDescription };`, ctx);
   return ctx.api;
 }
 const r = loadRules();
@@ -187,24 +187,37 @@ test("export: missing descriptions are fetched from Ozon and saved; present ones
     ozonRequest: async (url, body) => {
       calls.push({ url, body });
       if (body.offer_id === "boom") throw new Error("ozon 500");
-      return { result: { description: body.offer_id === "empty" ? "" : `Описание ${body.offer_id}` } };
+      return { result: { description: body.offer_id === "empty" ? "" : `Настоящее описание товара ${body.offer_id} с Озона` } };
     },
+    isPlaceholderYandexDescription: r.isPlaceholderYandexDescription,
     getPrisma: () => ({ $executeRaw: (strings, ...values) => { saved.push(values); return Promise.resolve(1); } }),
   });
   vm.runInContext(`${part("02f-ozon-yandex-auto-import.js")}
 this.fill = fillOzonDescriptionsForYandexExport;`, ctx);
   const out = await ctx.fill([
     { offerId: "A1", productId: "11", target: "ozon", ozon: {} },
-    { offerId: "B2", target: "ozon", ozon: { description: "Уже есть" } },
+    { offerId: "B2", target: "ozon", ozon: { description: "Уже есть нормальное описание аромата" } },
+    { offerId: "C3", target: "ozon", ozon: { name: "Chanel Coco Noir Парфюмерная вода 35 мл", description: "Chanel Coco Noir Парфюмерная вода 35 мл" } },
     { offerId: "empty", target: "ozon", ozon: {} },
     { offerId: "boom", target: "ozon", ozon: {} },
   ], { delayMs: 0 });
-  assert.equal(out[0].ozon.description, "Описание A1");
-  assert.equal(out[1].ozon.description, "Уже есть");
-  assert.equal(out[2].ozon.description, undefined);
+  assert.equal(out[0].ozon.description, "Настоящее описание товара A1 с Озона");
+  assert.equal(out[1].ozon.description, "Уже есть нормальное описание аромата");
+  assert.equal(out[2].ozon.description, "Настоящее описание товара C3 с Озона");
   assert.equal(out[3].ozon.description, undefined);
-  assert.deepEqual(calls.map((c) => c.url), Array(3).fill("/v1/product/info/description"));
+  assert.equal(out[4].ozon.description, undefined);
+  assert.deepEqual(calls.map((c) => c.body.offer_id), ["A1", "C3", "empty", "boom"]);
   assert.deepEqual(arr(calls[0].body), { product_id: 11, offer_id: "A1" });
-  assert.equal(saved.length, 1);
-  assert.equal(JSON.parse(saved[0][0]), "Описание A1");
+  assert.equal(saved.length, 2);
+  assert.equal(JSON.parse(saved[0][0]), "Настоящее описание товара A1 с Озона");
+});
+
+test("description: name / offerId repeats and stubs count as missing", () => {
+  const ctx = { name: "Chanel Coco Noir Парфюмерная вода 35 мл", offerId: "00-00000749" };
+  assert.equal(r.isPlaceholderYandexDescription("", ctx), true);
+  assert.equal(r.isPlaceholderYandexDescription("Для волос", ctx), true);
+  assert.equal(r.isPlaceholderYandexDescription("#", ctx), true);
+  assert.equal(r.isPlaceholderYandexDescription("00-00000749", ctx), true);
+  assert.equal(r.isPlaceholderYandexDescription("chanel coco noir  Парфюмерная вода 35 мл", ctx), true);
+  assert.equal(r.isPlaceholderYandexDescription("Восточный аромат с нотами пачули и розы.", ctx), false);
 });
