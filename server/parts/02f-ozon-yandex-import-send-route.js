@@ -30,7 +30,11 @@ app.post("/api/ozon-yandex-import/send", requireAdmin, async (request, response,
     const selectedRows = eligibleRows.slice(0, sendLimit);
     const selectedIds = new Set(selectedRows.map((row) => row.id));
     const productsById = new Map(products.map((product) => [product.id, product]));
-    const selectedProducts = selectedRows.map((row) => productsById.get(row.id)).filter(Boolean);
+    // Real Ozon attributes (brand, type, barcodes, dims) and one spelling per brand; products
+    // that are not ready with them (category for manual review, no brand...) are not sent.
+    await loadYandexVendorCanonicalMap();
+    const selectedProducts = (await enrichOzonProductsForYandexExport(selectedRows.map((row) => productsById.get(row.id)).filter(Boolean)))
+      .filter((product) => buildYandexOfferMapping(normalizeWarehouseProduct(product)).ready);
     const offers = selectedProducts
       .map((product) => buildYandexOfferMapping(normalizeWarehouseProduct(product)).offer)
       .filter((offer) => offer?.offerId);

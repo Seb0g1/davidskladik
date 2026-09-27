@@ -1,3 +1,37 @@
+// One spelling per brand (normalized key → most common spelling in the catalog), loaded by
+// loadYandexVendorCanonicalMap before a transfer; empty until then.
+let yandexVendorCanonicalMap = new Map();
+
+async function loadYandexVendorCanonicalMap() {
+  const prisma = getPrisma();
+  if (!prisma) return yandexVendorCanonicalMap;
+  try {
+    const rows = await prisma.$queryRawUnsafe(`
+      SELECT normalized_brand AS key, display_brand AS brand, count(*)::int AS n
+      FROM brand_index_items GROUP BY 1, 2`);
+    const best = new Map();
+    for (const row of rows) {
+      const brand = cleanText(row.brand);
+      if (!brand || isPlaceholderVendor(brand)) continue;
+      const current = best.get(row.key);
+      const mixedCase = brand !== brand.toUpperCase();
+      const score = Number(row.n) * 2 + (mixedCase ? 1 : 0);
+      if (!current || score > current.score) best.set(row.key, { brand, score });
+    }
+    yandexVendorCanonicalMap = new Map(Array.from(best, ([key, value]) => [key, value.brand]));
+  } catch (error) {
+    logger.warn("yandex vendor canonical map load failed", { detail: error?.message || String(error) });
+  }
+  return yandexVendorCanonicalMap;
+}
+
+function canonicalYandexVendor(value = "") {
+  const brand = cleanText(value);
+  if (!brand || isPlaceholderVendor(brand)) return "";
+  const key = typeof normalizedBrandIndexKey === "function" ? normalizedBrandIndexKey(brand) : brand.toLowerCase();
+  return yandexVendorCanonicalMap.get(key) || brand;
+}
+
 function buildYandexOfferMapping(product, overrides = {}) {
   const normalized = normalizeWarehouseProduct(product);
   const ozon = normalized.ozon || {};
@@ -5,6 +39,8 @@ function buildYandexOfferMapping(product, overrides = {}) {
     ...(normalized.yandex || {}),
     ...(overrides.yandex || {}),
   };
+  const ozonAttributes = Array.isArray(ozon.attributes) ? ozon.attributes : [];
+  const offerId = cleanText(overrides.offerId || yandex.offerId || normalized.offerId);
 
   // Use approved AI content draft when available — provides better names and descriptions
   // than raw Ozon data. Inline lookup (latestAiContentDraft loads after this file).
@@ -21,7 +57,12 @@ function buildYandexOfferMapping(product, overrides = {}) {
       ...splitList(ozon.images),
     ].filter(Boolean)),
   );
-  const barcodes = Array.from(new Set([...splitList(yandex.barcodes), ...splitList(ozon.barcode), ...splitList(ozon.barcodes)]));
+  // Only real GTINs: Ozon codes (OZN…), internal 2/02 codes and articles make Market reject
+  // marked perfumery («Штрихкод производителя должен быть с GTIN»). None → field not sent.
+  const barcodes = pickYandexGtins(
+    [...splitList(yandex.barcodes), ...splitList(ozon.barcode), ...splitList(ozon.barcodes)],
+    { offerId },
+  );
   const price = Number(
     overrides.price ||
       yandex.price ||
@@ -32,9 +73,29 @@ function buildYandexOfferMapping(product, overrides = {}) {
       0,
   );
   const extra = parseJsonField(yandex.extra, {});
-  const { weightDimensions: _cachedDims, ...extraRest } = extra;
   const weightDimensions = resolveYandexWeightDimensionsFromProduct(normalized);
-  const vendor = resolveYandexVendorFromProduct(normalized) || "Без бренда";
+  // Brand: the Ozon «Бренд» attribute (no model), one spelling per brand, never a placeholder.
+  const vendor = canonicalYandexVendor(
+    ozonAttributeValue(ozonAttributes, OZON_ATTR_BRAND)
+    || yandex.vendor
+    || resolveYandexVendorFromProduct(normalized),
+  );
+  const name = resolveYandexOfferName({
+    candidates: [overrides.name, yandex.name, approvedDraft?.name, ozon.name, ozonAttributeValue(ozonAttributes, OZON_ATTR_NAME), normalized.name],
+    offerId,
+    vendor,
+  });
+  // Category from the Ozon product type / name; unknown → left for manual review (not guessed).
+  const category = resolveYandexCategoryForOzonProduct({ typeId: ozon.typeId, name: ozon.name || name });
+  const marketCategoryId = Number(overrides.marketCategoryId || category.categoryId || 0) || undefined;
+  const country = yandexCountryName(ozonAttributeValue(ozonAttributes, OZON_ATTR_COUNTRY));
+  const parameterValues = buildPerfumeVariantParameters({
+    categoryId: marketCategoryId,
+    vendor,
+    model: ozonAttributeValue(ozonAttributes, OZON_ATTR_MODEL),
+    kind: category.kind,
+    name,
+  });
 
   // Description priority: manual yandex override → approved AI draft → Ozon description →
   // AI draft bullet points as fallback. Never fall back to product name — that produces
@@ -45,24 +106,31 @@ function buildYandexOfferMapping(product, overrides = {}) {
     ozon.description ||
     (approvedDraft?.bulletPoints?.length ? approvedDraft.bulletPoints.join(". ") : "");
 
+  // Only explicit, validated extras reach Market (internal bookkeeping stays local).
   const offer = compactObject({
-    offerId: cleanText(overrides.offerId || yandex.offerId || normalized.offerId),
-    name: cleanText(overrides.name || yandex.name || approvedDraft?.name || ozon.name || normalized.name),
-    marketCategoryId: Number(yandex.marketCategoryId || 0) || undefined,
+    offerId,
+    name,
+    marketCategoryId,
     pictures,
-    vendor,
+    vendor: vendor || undefined,
     description: cleanText(descriptionRaw) || undefined,
-    barcodes,
+    barcodes: barcodes.length ? barcodes : undefined,
     weightDimensions,
+    manufacturerCountries: country ? [country] : undefined,
+    parameterValues: parameterValues.length ? parameterValues : undefined,
+    commodityCodes: sanitizeYandexCommodityCodes(extra.commodityCodes),
+    certificates: sanitizeYandexCertificates(extra.certificates),
+    shelfLife: sanitizeYandexShelfLife(extra.shelfLife),
+    vendorCode: cleanText(extra.vendorCode) || undefined,
     basicPrice: price > 0 ? { value: roundPrice(price), currencyId: "RUR" } : undefined,
-    ...extraRest,
   });
 
   const missing = [];
   if (!offer.offerId) missing.push("offerId");
   if (!offer.name) missing.push("name");
+  if (!offer.marketCategoryId) missing.push("marketCategoryId");
   if (!offer.pictures?.length) missing.push("pictures");
-  if (!offer.vendor || offer.vendor.toLowerCase() === "без бренда") missing.push("vendor");
+  if (!offer.vendor) missing.push("vendor");
   if (!offer.description) missing.push("description");
   if (!(Number(offer.weightDimensions?.length) > 0 && Number(offer.weightDimensions?.weight) > 0)) {
     missing.push("weightDimensions");
@@ -70,7 +138,7 @@ function buildYandexOfferMapping(product, overrides = {}) {
 
   // description is informational — Yandex doesn't require it, so don't block export.
   const blockingMissing = missing.filter((field) => field !== "description");
-  return { offer, missing, ready: blockingMissing.length === 0 };
+  return { offer, missing, ready: blockingMissing.length === 0, categoryReview: category.categoryId ? null : category.reason };
 }
 
 async function sendApprovedYandexProductContent(product = {}, options = {}) {

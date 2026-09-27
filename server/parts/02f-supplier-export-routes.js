@@ -63,12 +63,12 @@ app.post("/api/warehouse/products/:id/export", requireAdmin, async (request, res
         return response.status(400).json({ error: "Не хватает обязательных полей Yandex Market.", missing: built.missing });
       }
 
-      const result = await yandexRequest(
-        shop,
-        "POST",
-        `/v2/businesses/${shop.businessId}/offer-mappings/update`,
-        { offerMappings: [{ offer: built.offer }] },
-      );
+      await loadYandexVendorCanonicalMap();
+      // Same send path as the transfer: only changed fields for an existing card, per-offer errors.
+      const [result] = await sendYandexOfferMappings(shop, [built.offer]);
+      if (!result?.ok) {
+        return response.status(400).json({ error: `Yandex Market не принял карточку: ${result?.error || "unknown_error"}`, offer: built.offer, result });
+      }
       const exportState = {
         status: "sent",
         targetName: shop.name || "Yandex Market",

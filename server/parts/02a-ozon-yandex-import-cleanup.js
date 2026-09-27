@@ -126,13 +126,20 @@ function ozonYandexImportBlockReasons(product = {}, { manual = false } = {}) {
     reasons.push("Товар неактивен или статус Ozon не подтвержден");
   }
   if (lower.includes("отливант")) reasons.push("Название содержит «Отливант»");
+  // Testers are not imported to Yandex (import rule, together with < 20 ml and «Отливант»).
+  if (/тестер|tester/iu.test(lower)) reasons.push("Тестер не импортируется на Яндекс");
   if (isTrashNameProduct(lower)) reasons.push("Название-заглушка: товар помечен на удаление");
   if (/без\s+коробк/iu.test(lower)) reasons.push("Название содержит «без коробки»");
   const volumeText = collectYandexVolumeSearchText(product);
   const smallVolumeCheck = assessYandexSmallVolume(volumeText);
   if (smallVolumeCheck.blocked) reasons.push(smallVolumeCheck.reason);
   const volumes = extractOzonYandexImportVolumesMl(volumeText);
-  if (!manual && !volumes.length) reasons.push("В названии нет объема в мл");
+  // Non-perfume goods with a Market category from the transfer table (shower gel, shampoo,
+  // deodorant, body care, candle, diffuser, home perfume) are transferred too: the
+  // perfume-only checks (volume in ml, "category not for perfumery") do not apply to them.
+  const transferCategory = resolveYandexCategoryForOzonProduct({ typeId: product.ozon?.typeId, name: product.ozon?.name || name });
+  const nonPerfumeTransfer = Boolean(transferCategory.categoryId) && transferCategory.categoryId !== YANDEX_CATEGORY_PERFUMERY;
+  if (!manual && !volumes.length && !nonPerfumeTransfer) reasons.push("В названии нет объема в мл");
   const hugeVolumes = extractOzonYandexImportVolumesMl(volumeText).filter((value) => value > 500);
   if (hugeVolumes.length || /\d+\s+\d{3}\s*(?:мл|ml)(?![a-zа-я])/iu.test(name)) {
     reasons.push(`Подозрительный объем${hugeVolumes.length ? `: ${hugeVolumes.join(", ")} мл` : ""}`);
@@ -152,7 +159,7 @@ function ozonYandexImportBlockReasons(product = {}, { manual = false } = {}) {
     "дезодорант",
   ];
   const matchedCategory = blockedCategories.find((word) => lower.includes(word));
-  if (!manual && matchedCategory) reasons.push("Категория не подходит для импорта парфюмерии");
+  if (!manual && matchedCategory && !nonPerfumeTransfer) reasons.push("Категория не подходит для импорта парфюмерии");
   const genericNames = [
     "парфюмерная вода",
     "парфюмерная вода для мужчин",
@@ -193,6 +200,7 @@ function buildOzonYandexImportCandidate(product = {}, options = {}) {
     imageUrl,
     price: Number(built.offer?.basicPrice?.value || normalized.marketplacePrice || ozon.price || 0) || null,
     categoryId: built.offer?.marketCategoryId || null,
+    categoryReview: built.categoryReview || null,
     picturesCount: Array.isArray(built.offer?.pictures) ? built.offer.pictures.length : 0,
     hasDescription: Boolean(built.offer?.description),
     blockReasons,

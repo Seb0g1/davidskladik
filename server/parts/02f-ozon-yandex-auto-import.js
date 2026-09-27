@@ -16,12 +16,74 @@ let ozonYandexAutoImportRunning = false;
 let ozonYandexAutoImportNextRunAt = null;
 let ozonYandexAutoImportLastAt = 0;
 
+// Ozon attributes needed by the transfer rules (Бренд 85, модель 9048, страна 4389, название
+// 4180), real barcodes, type and package dimensions — read from /v4/product/info/attributes,
+// because the local copy of an Ozon product carries none of them.
+async function enrichOzonProductsForYandexExport(products = []) {
+  const list = Array.isArray(products) ? products : [];
+  const byTarget = new Map();
+  for (const product of list) {
+    const target = cleanText(product.target) || "ozon";
+    if (!byTarget.has(target)) byTarget.set(target, []);
+    byTarget.get(target).push(product);
+  }
+  const infoByKey = new Map();
+  for (const [target, items] of byTarget) {
+    const account = getOzonAccountByTarget(target);
+    if (!account) continue;
+    const offerIds = Array.from(new Set(items.map((item) => cleanText(item.offerId)).filter(Boolean)));
+    for (const chunk of chunkArray(offerIds, 1000)) {
+      try {
+        const data = await ozonRequest("/v4/product/info/attributes", { filter: { offer_id: chunk, visibility: "ALL" }, limit: 1000 }, account);
+        for (const item of data?.result || []) infoByKey.set(`${target}:${cleanText(item.offer_id).toLowerCase()}`, item);
+      } catch (error) {
+        logger.warn("ozon attributes for yandex export failed", { target, items: chunk.length, detail: error?.message || String(error) });
+      }
+    }
+  }
+  return list.map((product) => {
+    const info = infoByKey.get(`${cleanText(product.target) || "ozon"}:${cleanText(product.offerId).toLowerCase()}`);
+    if (!info) return product;
+    const ozon = product.ozon && typeof product.ozon === "object" ? product.ozon : {};
+    return {
+      ...product,
+      ozon: {
+        ...ozon,
+        attributes: Array.isArray(info.attributes) ? info.attributes : ozon.attributes,
+        typeId: Number(info.type_id) || ozon.typeId,
+        name: cleanText(info.name) || ozon.name,
+        barcodes: Array.from(new Set([...(Array.isArray(info.barcodes) ? info.barcodes : []), cleanText(info.barcode)].filter(Boolean))),
+        barcode: cleanText(info.barcode) || ozon.barcode,
+        depth: Number(info.depth) || ozon.depth,
+        width: Number(info.width) || ozon.width,
+        height: Number(info.height) || ozon.height,
+        dimensionUnit: cleanText(info.dimension_unit) || ozon.dimensionUnit,
+        weight: Number(info.weight) || ozon.weight,
+        weightUnit: cleanText(info.weight_unit) || ozon.weightUnit,
+      },
+    };
+  });
+}
+
 // Shared export pipeline: create Yandex cards for the given Ozon products, then send
 // prices + stocks and persist local yandex rows. Used by both the scheduled auto-import
 // and the manual import page. `products` are normalized warehouse products.
-async function exportOzonProductsToYandex(products = [], shops = null, { reason = "ozon_yandex_import" } = {}) {
+async function exportOzonProductsToYandex(inputProducts = [], shops = null, { reason = "ozon_yandex_import" } = {}) {
   const targetShops = Array.isArray(shops) && shops.length ? shops : uniqueYandexShopsByBusiness();
-  const offers = (Array.isArray(products) ? products : [])
+  await loadYandexVendorCanonicalMap();
+  const enriched = await enrichOzonProductsForYandexExport(inputProducts);
+  // Re-check readiness with the real Ozon attributes (brand, category, name).
+  const skipped = [];
+  const products = enriched.filter((product) => {
+    const built = buildYandexOfferMapping(product);
+    if (built.ready) return true;
+    skipped.push({ offerId: product.offerId, missing: built.missing, categoryReview: built.categoryReview });
+    return false;
+  });
+  if (skipped.length) {
+    logger.info("ozon yandex export: products left for manual review", { count: skipped.length, sample: skipped.slice(0, 20) });
+  }
+  const offers = products
     .map((product) => buildYandexOfferMapping(product).offer)
     .filter((offer) => offer?.offerId);
   if (!offers.length || !targetShops.length) {

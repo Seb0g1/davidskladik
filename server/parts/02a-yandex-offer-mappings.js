@@ -35,22 +35,32 @@ async function getYandexOfferMappings(shop, limit = Number.POSITIVE_INFINITY, op
   return items.slice(0, maxItems);
 }
 
-async function getYandexOfferMappingsByOfferIds(shop, offerIds = []) {
+// Archived cards are only returned with {"archived": true}, so both states are read: an
+// archived card is still an existing card (never re-created, never wiped).
+async function getYandexOfferMappingsByOfferIds(shop, offerIds = [], { includeArchived = true } = {}) {
   const ids = [...new Set((Array.isArray(offerIds) ? offerIds : [])
     .map(cleanText)
     .filter(Boolean))];
   const items = [];
   if (!ids.length) return items;
 
+  const seen = new Set();
   for (const chunk of chunkArray(ids, 100)) {
-    const body = { offerIds: chunk };
-    const data = await yandexRequest(
-      shop,
-      "POST",
-      `/v2/businesses/${shop.businessId}/offer-mappings`,
-      body,
-    );
-    items.push(...(data.result?.offerMappings || data.result?.offers || data.offerMappings || []));
+    for (const archived of includeArchived ? [false, true] : [null]) {
+      const body = archived === null ? { offerIds: chunk } : { offerIds: chunk, archived };
+      const data = await yandexRequest(
+        shop,
+        "POST",
+        `/v2/businesses/${shop.businessId}/offer-mappings`,
+        body,
+      );
+      for (const item of data.result?.offerMappings || data.result?.offers || data.offerMappings || []) {
+        const key = cleanText(item?.offer?.offerId || item?.offerId).toLowerCase();
+        if (key && seen.has(key)) continue;
+        if (key) seen.add(key);
+        items.push(archived ? { ...item, archived: true } : item);
+      }
+    }
   }
 
   return items;

@@ -59,7 +59,11 @@ function uniqueYandexShopsByBusiness(shops = null) {
   });
 }
 
-async function sendYandexOfferMappings(shop, offers = []) {
+// POST offer-mappings/update. New cards go out whole; for existing ones (archived included)
+// only changed fields are sent, and fields another system owns (GTIN, ТН ВЭД/ОКПД2,
+// documents, shelf life) are never overwritten. Market rejects the whole request when any
+// offer has results[].errors: those offers are dropped (logged per offerId) and the rest resent.
+async function sendYandexOfferMappings(shop, offers = [], { onlyChanged = true } = {}) {
   const results = [];
   const deduped = new Map();
   for (const offer of Array.isArray(offers) ? offers : []) {
@@ -85,64 +89,80 @@ async function sendYandexOfferMappings(shop, offers = []) {
   const prepared = Array.from(deduped.values());
   for (const chunk of chunkArray(prepared, 100)) {
     if (!chunk.length) continue;
-    try {
-      const apiResult = await yandexRequest(
-        shop,
-        "POST",
-        `/v2/businesses/${shop.businessId}/offer-mappings/update`,
-        { offerMappings: chunk.map((offer) => ({ offer })) },
-      );
-      const withPictures = chunk.filter((o) => Array.isArray(o.pictures) && o.pictures.length > 0).length;
-      const withContent = chunk.some((o) => o.name || o.vendor || o.description);
-      if (withPictures < chunk.length && withContent) {
-        logger.warn("yandex offer mappings: some offers sent without pictures", {
-          shop: shop.id,
-          total: chunk.length,
-          withPictures,
-          withoutPictures: chunk.length - withPictures,
-          offerIds: chunk.filter((o) => !o.pictures?.length).map((o) => o.offerId).slice(0, 10),
-        });
-      }
-      const rejected = Array.isArray(apiResult?.result?.rejectedOffers) ? apiResult.result.rejectedOffers : [];
-      if (rejected.length) {
-        logger.warn("yandex offer mappings: rejected offers in response", {
-          shop: shop.id,
-          rejected: rejected.slice(0, 10),
-        });
-      }
-      results.push(...chunk.map((offer) => ({ offerId: offer.offerId, ok: true })));
-    } catch (error) {
-      const detail = error?.message || "yandex_import_failed";
-      if (chunk.length === 1) {
-        results.push(...chunk.map((offer) => ({ offerId: offer.offerId, ok: false, error: detail })));
+    let current = new Map();
+    if (onlyChanged) {
+      try {
+        const mappings = await getYandexOfferMappingsByOfferIds(shop, chunk.map((offer) => offer.offerId));
+        current = new Map(mappings.map((item) => [cleanText(item?.offer?.offerId).toLowerCase(), item]));
+      } catch (error) {
+        // Without the current cards we cannot tell what changed: do not risk wiping data.
+        logger.warn("yandex offer mappings: current cards unavailable, chunk skipped", { shop: shop.id, detail: error?.message || String(error) });
+        results.push(...chunk.map((offer) => ({ offerId: offer.offerId, ok: false, error: "yandex_current_cards_unavailable" })));
         continue;
       }
-      logger.warn("yandex offer mappings chunk failed, retrying one by one", {
-        shop: shop.id,
-        businessId: shop.businessId,
-        items: chunk.length,
-        detail,
-      });
-      for (const offer of chunk) {
-        try {
-          await yandexRequest(
-            shop,
-            "POST",
-            `/v2/businesses/${shop.businessId}/offer-mappings/update`,
-            { offerMappings: [{ offer }] },
-          );
-          results.push({ offerId: offer.offerId, ok: true, recoveredFromChunkError: true });
-        } catch (singleError) {
-          results.push({
-            offerId: offer.offerId,
-            ok: false,
-            error: singleError?.message || detail,
-            chunkError: detail,
-          });
-        }
-      }
     }
+    const toSend = [];
+    for (const offer of chunk) {
+      const existing = current.get(offer.offerId.toLowerCase());
+      if (!existing) {
+        if (!offer.marketCategoryId) {
+          results.push({ offerId: offer.offerId, ok: false, error: "category_manual_review" });
+          continue;
+        }
+        toSend.push(offer);
+        continue;
+      }
+      const { basicPrice: _price, ...cardFields } = offer;
+      const update = diffYandexOfferForUpdate(cardFields, existing.offer || {}, existing.mapping?.marketCategoryId);
+      if (!update) {
+        results.push({ offerId: offer.offerId, ok: true, unchanged: true, existing: true });
+        continue;
+      }
+      toSend.push(update);
+    }
+    let pending = toSend;
+    for (let attempt = 0; pending.length && attempt < 5; attempt += 1) {
+      let apiResult;
+      try {
+        apiResult = await yandexRequest(
+          shop,
+          "POST",
+          `/v2/businesses/${shop.businessId}/offer-mappings/update`,
+          { offerMappings: pending.map((offer) => ({ offer })) },
+        );
+      } catch (error) {
+        const parsed = parseYandexOfferMappingsResult(error?.yandex || error?.body || {});
+        if (!parsed.errorsByOffer.size) {
+          const detail = error?.message || "yandex_import_failed";
+          logger.warn("yandex offer mappings request failed", { shop: shop.id, items: pending.length, detail });
+          results.push(...pending.map((offer) => ({ offerId: offer.offerId, ok: false, error: detail })));
+          pending = [];
+          break;
+        }
+        apiResult = error?.yandex || error?.body;
+      }
+      const { errorsByOffer, warningsByOffer } = parseYandexOfferMappingsResult(apiResult);
+      for (const [offerId, warnings] of warningsByOffer) {
+        logger.info("yandex offer mapping warning", { shop: shop.id, offerId, warnings: warnings.slice(0, 5) });
+      }
+      if (!errorsByOffer.size) {
+        results.push(...pending.map((offer) => ({ offerId: offer.offerId, ok: true, fields: Object.keys(offer).filter((key) => key !== "offerId") })));
+        pending = [];
+        break;
+      }
+      // One bad offer rejects the request: drop the offenders, resend the rest.
+      for (const [offerId, errors] of errorsByOffer) {
+        logger.warn("yandex offer mapping rejected", { shop: shop.id, offerId, errors: errors.slice(0, 5) });
+        results.push({
+          offerId,
+          ok: false,
+          error: errors.map((item) => `${item.type || "ERROR"}${item.parameterId ? `#${item.parameterId}` : ""}: ${item.message || ""}`).join("; "),
+        });
+      }
+      const rejected = new Set(Array.from(errorsByOffer.keys()).map((id) => id.toLowerCase()));
+      pending = pending.filter((offer) => !rejected.has(cleanText(offer.offerId).toLowerCase()));
+    }
+    if (pending.length) results.push(...pending.map((offer) => ({ offerId: offer.offerId, ok: false, error: "yandex_retry_limit" })));
   }
   return results;
 }
-
