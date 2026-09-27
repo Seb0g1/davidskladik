@@ -17,7 +17,7 @@ function loadRules(extra = {}) {
   vm.runInContext(`${part("02a-ozon-yandex-offer-rules.js")}
 this.api = { resolveYandexCategoryForOzonProduct, isValidGtin, pickYandexGtins, isPlaceholderVendor, yandexCountryName,
   resolveYandexOfferName, buildPerfumeVariantParameters, sanitizeYandexCommodityCodes, normalizeYandexCertificate,
-  sanitizeYandexShelfLife, diffYandexOfferForUpdate, parseYandexOfferMappingsResult, ozonAttributeValue, isPlaceholderYandexDescription };`, ctx);
+  sanitizeYandexShelfLife, diffYandexOfferForUpdate, parseYandexOfferMappingsResult, ozonAttributeValue, isPlaceholderYandexDescription, hasBrokenWaterWord };`, ctx);
   return ctx.api;
 }
 const r = loadRules();
@@ -220,4 +220,48 @@ test("description: name / offerId repeats and stubs count as missing", () => {
   assert.equal(r.isPlaceholderYandexDescription("00-00000749", ctx), true);
   assert.equal(r.isPlaceholderYandexDescription("chanel coco noir  Парфюмерная вода 35 мл", ctx), true);
   assert.equal(r.isPlaceholderYandexDescription("Восточный аромат с нотами пачули и розы.", ctx), false);
+});
+
+test("category: children's shampoo and shower gel go to manual review, kids perfume stays", () => {
+  assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 93950, name: "Baylis & Harding Goodness Kids Shampoo Детский шампунь 500 мл" }).categoryId, null);
+  assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 0, name: "HOBE PERGH шампунь для волос и тела для детей 200 мл" }).reason, "kids_manual_review");
+  assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 0, name: "Funky Farm Гель для душа детский 1000 мл" }).categoryId, null);
+  assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 93950, name: "DAVID MALLETT шампунь для окрашенных волос 250 мл" }).categoryId, 91183);
+  assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 93405, name: "Детская туалетная вода 50 мл" }).categoryId, 15927546);
+});
+
+test("name: bare «вода» or «вода50ML» is not used, the next candidate is", () => {
+  assert.equal(r.hasBrokenWaterWord("BENTLEY FOR MEN INTENSE - вода 100 мл"), true);
+  assert.equal(r.hasBrokenWaterWord("AJMAL BLU FEMME вода50ML"), true);
+  assert.equal(r.hasBrokenWaterWord("Kenzo Homme туалетная вода 100 мл"), false);
+  assert.equal(r.hasBrokenWaterWord("Chanel Coco Noir Парфюмерная вода 35 мл"), false);
+  assert.equal(r.hasBrokenWaterWord("Мицеллярная вода 400 мл"), false);
+  assert.equal(r.hasBrokenWaterWord("Водостойкая тушь"), false);
+  assert.equal(r.resolveYandexOfferName({ candidates: ["", "BENTLEY FOR MEN INTENSE - вода 100 мл", "Bentley For Men Intense Туалетная вода 100 мл"], offerId: "bently1" }),
+    "Bentley For Men Intense Туалетная вода 100 мл");
+  assert.equal(r.resolveYandexOfferName({ candidates: ["AJMAL BLU FEMME вода50ML"], offerId: "n21314s" }), "");
+});
+
+test("vendor: a brand guessed from the name keeps only its known-brand part", async () => {
+  const ctx = vm.createContext({
+    cleanText: (v) => String(v ?? "").replace(/\s+/g, " ").trim(),
+    isPlaceholderVendor: r.isPlaceholderVendor,
+    normalizedBrandIndexKey: (v) => String(v).toLowerCase().replace(/[^a-zа-яё0-9]+/gi, ""),
+    logger: { warn() {} },
+    getPrisma: () => ({ $queryRawUnsafe: async () => [
+      { key: "givenchy", brand: "Givenchy", n: 40 }, { key: "marcjacobs", brand: "Marc Jacobs", n: 12 },
+      { key: "creed", brand: "Creed", n: 30 }, { key: "ninaricci", brand: "Nina Ricci", n: 9 },
+    ] }),
+  });
+  vm.runInContext(`${part("02a-yandex-marketplace-send.js")}
+this.api = { loadYandexVendorCanonicalMap, knownYandexVendorPrefix };`, ctx);
+  await ctx.api.loadYandexVendorCanonicalMap();
+  const k = ctx.api.knownYandexVendorPrefix;
+  assert.equal(k("Givenchy AMARIGE"), "Givenchy");
+  assert.equal(k("GIVENCHY EAU DE"), "Givenchy");
+  assert.equal(k("CREED Aventus Парфюмированная"), "Creed");
+  assert.equal(k("Marc Jacobs Oh"), "Marc Jacobs");
+  assert.equal(k("NINA RICCI RICCI"), "Nina Ricci");
+  assert.equal(k("PAOMA Skin Reviver"), "");
+  assert.equal(k("Без бренда"), "");
 });

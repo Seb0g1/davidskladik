@@ -32,6 +32,21 @@ function canonicalYandexVendor(value = "") {
   return yandexVendorCanonicalMap.get(key) || brand;
 }
 
+// A brand guessed from the product name («CREED Aventus Парфюмированная», «Givenchy AMARIGE»)
+// often carries the model: keep only its longest leading part that is a known brand, else none.
+function knownYandexVendorPrefix(value = "") {
+  const brand = cleanText(value);
+  if (!brand || isPlaceholderVendor(brand)) return "";
+  if (!yandexVendorCanonicalMap.size) return brand;
+  const keyOf = (text) => (typeof normalizedBrandIndexKey === "function" ? normalizedBrandIndexKey(text) : text.toLowerCase());
+  const tokens = brand.split(/\s+/);
+  for (let count = tokens.length; count >= 1; count -= 1) {
+    const known = yandexVendorCanonicalMap.get(keyOf(tokens.slice(0, count).join(" ")));
+    if (known) return known;
+  }
+  return "";
+}
+
 function buildYandexOfferMapping(product, overrides = {}) {
   const normalized = normalizeWarehouseProduct(product);
   const ozon = normalized.ozon || {};
@@ -75,11 +90,8 @@ function buildYandexOfferMapping(product, overrides = {}) {
   const extra = parseJsonField(yandex.extra, {});
   const weightDimensions = resolveYandexWeightDimensionsFromProduct(normalized);
   // Brand: the Ozon «Бренд» attribute (no model), one spelling per brand, never a placeholder.
-  const vendor = canonicalYandexVendor(
-    ozonAttributeValue(ozonAttributes, OZON_ATTR_BRAND)
-    || yandex.vendor
-    || resolveYandexVendorFromProduct(normalized),
-  );
+  const vendor = canonicalYandexVendor(ozonAttributeValue(ozonAttributes, OZON_ATTR_BRAND))
+    || knownYandexVendorPrefix(yandex.vendor || resolveYandexVendorFromProduct(normalized));
   const name = resolveYandexOfferName({
     candidates: [overrides.name, yandex.name, approvedDraft?.name, ozon.name, ozonAttributeValue(ozonAttributes, OZON_ATTR_NAME), normalized.name],
     offerId,

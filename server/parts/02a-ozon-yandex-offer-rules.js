@@ -49,6 +49,8 @@ const YANDEX_NAME_CATEGORY_RULES = [
 // Words that mean the product is not a fragrance itself.
 const NOT_PERFUME_NAME_RE = /гель|крем|масл[оа]\s+для|мыл[оа]|шампун|бальзам|лосьон|дезодорант|заправк|скраб|пилинг|маск[аи]|сыворотк|для\s+волос|hair|body\s+(lotion|cream|wash)|свеч|диффузор|для\s+дома|спрей\s+для\s+тела|(?<![а-яё])мист|\bmist\b|body\s+(spray|mist)/i;
 
+const KIDS_NAME_RE = /детск|для\s+детей|малыш|младен|\bkids?\b|\bbaby\b|\bjunior\b/i;
+
 // A set of several products must not land in a single-product category.
 function isProductSetName(name = "") {
   const text = String(name || "");
@@ -65,6 +67,11 @@ function resolveYandexCategoryForOzonProduct({ typeId = 0, name = "" } = {}) {
   if (isProductSetName(text)) return { categoryId: null, reason: "set_manual_review" };
   const byType = OZON_TYPE_TO_YANDEX_CATEGORY.get(Number(typeId) || 0) || null;
   const byName = YANDEX_NAME_CATEGORY_RULES.find((rule) => rule.re.test(text)) || null;
+  // Market keeps children's care in its own categories: never file it under the adult ones.
+  const kidsCategory = (byType || byName)?.categoryId;
+  if (kidsCategory && kidsCategory !== YANDEX_CATEGORY_PERFUMERY && KIDS_NAME_RE.test(text)) {
+    return { categoryId: null, reason: "kids_manual_review" };
+  }
   if (byType) {
     // Ozon types are often wrong (a hand gel filed as "парфюмерная вода"): a perfumery type
     // whose name says it is another product is left for manual review.
@@ -197,8 +204,18 @@ function softenAllCapsName(name = "", { vendor = "" } = {}) {
   return text;
 }
 
+// «вода» without «парфюмерная» / «туалетная» before it, or glued to the volume («вода50ML»):
+// the kind of the product got lost, so the name is worse than none.
+function hasBrokenWaterWord(name = "") {
+  const text = String(name || "");
+  if (/(?<![а-яё])вода\d/i.test(text)) return true;
+  if (!/(?<![а-яё])вода(?![а-яё])/i.test(text)) return false;
+  return !/[а-яё]+(ая|aя)\s+вода(?![а-яё])/i.test(text);
+}
+
 function resolveYandexOfferName({ candidates = [], offerId = "", vendor = "" } = {}) {
-  const name = candidates.map((value) => String(value || "").trim()).find((value) => value && !looksLikeArticle(value, offerId)) || "";
+  const name = candidates.map((value) => String(value || "").trim())
+    .find((value) => value && !looksLikeArticle(value, offerId) && !hasBrokenWaterWord(value)) || "";
   return name ? softenAllCapsName(name, { vendor }) : "";
 }
 
