@@ -79,6 +79,10 @@ function resolveYandexCategoryForOzonProduct({ typeId = 0, name = "" } = {}) {
     if (byType.categoryId === 8475955 && /маск|антицеллюлит|загар|\bspf\b|\bsun\b/i.test(text)) {
       return { categoryId: null, reason: `body_care_special_manual_review:${byType.kind}` };
     }
+    // 8480725 is «Мужчинам / Дезодоранты»: only clearly men's deodorants go there.
+    if (byType.categoryId === 8480725 && !/муж|\bmen\b|\bman\b|homme|for\s+him|pour\s+lui/i.test(text)) {
+      return { categoryId: null, reason: "deodorant_not_mens_manual_review" };
+    }
     if (byType.nameRequired && !byType.nameRequired.test(text)) {
       return { categoryId: null, reason: `type_needs_name_confirmation:${byType.kind}` };
     }
@@ -346,7 +350,8 @@ function yandexCardMatchesOzonProduct(marketName = "", ozonName = "", ruleCatego
   const market = String(marketName || "").trim();
   if (!market || looksLikeArticle(market, "")) return false;
   const words = (value) => new Set((String(value || "").toLowerCase().match(/[\p{L}]{4,}/gu) || [])
-    .filter((word) => !["парфюмерная", "туалетная", "вода", "духи", "женская", "мужская", "унисекс", "женский", "мужской", "набор"].includes(word)));
+    .filter((word) => !["парфюмерная", "туалетная", "вода", "духи", "женская", "мужская", "унисекс", "женский", "мужской", "набор",
+      "волос", "тела", "лица", "рук", "кожи", "спрей", "крем", "гель", "масло", "для", "детский", "детская"].includes(word)));
   const ozonWords = words(ozonName);
   if (![...words(market)].some((word) => ozonWords.has(word))) return false;
   const byMarketName = resolveYandexCategoryForOzonProduct({ typeId: 0, name: market });

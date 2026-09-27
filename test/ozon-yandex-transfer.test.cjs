@@ -26,7 +26,8 @@ test("category: perfumery types, other kinds by the table", () => {
   assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 93403, name: "Guerlain Colours of Love Парфюмерная вода 50 мл" }).categoryId, 15927546);
   assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 93405, name: "Туалетная вода 50 мл" }).categoryId, 15927546);
   assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 93950, name: "Kerastase шампунь 250 мл" }).categoryId, 91183);
-  assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 93466, name: "YSL Y Дезодорант 75 гр" }).categoryId, 8480725);
+  assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 93466, name: "YSL Y Дезодорант мужской 75 гр" }).categoryId, 8480725);
+  assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 93466, name: "Armaf Odyssey Candee Женский Дезодорант 200ml" }).categoryId, null);
   assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 95741, name: "Diptyque Baies свеча 190 г" }).categoryId, 91304);
   assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 92718, name: "Диффузор 200 мл" }).categoryId, 61329715);
   assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 92721, name: "Спрей для дома" }).categoryId, 61343235);

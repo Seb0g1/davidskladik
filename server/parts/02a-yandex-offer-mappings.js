@@ -35,9 +35,9 @@ async function getYandexOfferMappings(shop, limit = Number.POSITIVE_INFINITY, op
   return items.slice(0, maxItems);
 }
 
-// Archived cards are only returned with {"archived": true}, so both states are read: an
-// archived card is still an existing card (never re-created, never wiped).
-async function getYandexOfferMappingsByOfferIds(shop, offerIds = [], { includeArchived = true } = {}) {
+// A lookup by offerIds returns archived cards too (offer.archived = true); Market forbids
+// combining offerIds with the {"archived"} filter, which only matters for full catalog scans.
+async function getYandexOfferMappingsByOfferIds(shop, offerIds = []) {
   const ids = [...new Set((Array.isArray(offerIds) ? offerIds : [])
     .map(cleanText)
     .filter(Boolean))];
@@ -46,8 +46,8 @@ async function getYandexOfferMappingsByOfferIds(shop, offerIds = [], { includeAr
 
   const seen = new Set();
   for (const chunk of chunkArray(ids, 100)) {
-    for (const archived of includeArchived ? [false, true] : [null]) {
-      const body = archived === null ? { offerIds: chunk } : { offerIds: chunk, archived };
+    for (const archived of [null]) {
+      const body = { offerIds: chunk };
       const data = await yandexRequest(
         shop,
         "POST",
