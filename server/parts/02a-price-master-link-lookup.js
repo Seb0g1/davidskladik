@@ -174,9 +174,18 @@ async function getLivePinnedPriceMasterMatches(pinnedLinks, ctx, { activeDocFilt
   const orderSql = " ORDER BY d.DocDate DESC, r.RowID DESC";
   const articles = Array.from(new Set(pinnedLinks.map((link) => link.article)));
   const fullLoad = articles.length >= livePinnedFullLoadMinPairs;
+  // Full-catalog builds walk ~190k rows and ~60k links: yield regularly so the worker's
+  // event loop (health checks, timers, HTTP) never stalls for the whole pass.
+  const yieldEvery = async (index, every) => {
+    if (index > 0 && index % every === 0) await new Promise((resolve) => setImmediate(resolve));
+  };
   if (fullLoad) {
     const [rows] = await pool.query({ sql: baseSql + orderSql, timeout: Math.max(queryTimeout, 15000) });
-    for (const row of rows || []) addRow(row);
+    const list = rows || [];
+    for (let index = 0; index < list.length; index += 1) {
+      await yieldEvery(index, 5000);
+      addRow(list[index]);
+    }
   } else {
     for (const batch of chunkArray(articles, 1000)) {
       const [rows] = await pool.query({
@@ -199,7 +208,9 @@ async function getLivePinnedPriceMasterMatches(pinnedLinks, ctx, { activeDocFilt
       .map((row) => livePriceMasterMatchFromRow(link, row, ctx)));
   };
   const needName = [];
-  for (const link of pinnedLinks) {
+  for (let index = 0; index < pinnedLinks.length; index += 1) {
+    await yieldEvery(index, 500);
+    const link = pinnedLinks[index];
     const result = pick(link, rowsByPair.get(pairKey(link.partnerId, link.article)) || []);
     map.set(link.id, result);
     if (pinnedLinkNeedsNameFallback(link, result)) needName.push(link);
@@ -223,7 +234,9 @@ async function getLivePinnedPriceMasterMatches(pinnedLinks, ctx, { activeDocFilt
       }
     }
   }
-  for (const link of needName) {
+  for (let index = 0; index < needName.length; index += 1) {
+    await yieldEvery(index, 500);
+    const link = needName[index];
     const nameRows = rowsByName.get(pairKey(link.partnerId, selectedRowPinnedName(link).toLowerCase())) || [];
     if (!nameRows.length) continue;
     map.set(link.id, pick(link, [...(rowsByPair.get(pairKey(link.partnerId, link.article)) || []), ...nameRows]));
@@ -309,7 +322,9 @@ async function getBatchPriceMasterMatchesForLinks(links, managedSuppliers = [], 
       rowsByArticle.get(article).push(row);
     }
   }
-  for (const link of articleLinks) {
+  for (let index = 0; index < articleLinks.length; index += 1) {
+    if (index > 0 && index % 500 === 0) await new Promise((resolve) => setImmediate(resolve));
+    const link = articleLinks[index];
     const matches = (rowsByArticle.get(link.article) || [])
       .filter((row) => priceMasterRowMatchesLink(row, link))
       .map((row) => livePriceMasterMatchFromRow(link, row, ctx));

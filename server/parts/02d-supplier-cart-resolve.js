@@ -600,6 +600,20 @@ function findSupplierCartWarehouseProduct(warehouse = {}, line = {}) {
   );
 }
 
+// One grouping index per warehouse snapshot for the whole cart build: expanding each order line
+// over the full catalog cost ~19 s of blocked event loop per line (the worker was restarted by
+// the health watchdog every ~7 min). Rebuilt when the products array changes or after 60 s.
+const supplierCartGroupingIndexes = new WeakMap();
+function supplierCartGroupingIndex(warehouse = {}) {
+  const products = Array.isArray(warehouse?.products) ? warehouse.products : [];
+  if (!warehouse || typeof warehouse !== "object") return null;
+  const cached = supplierCartGroupingIndexes.get(warehouse);
+  if (cached && cached.source === products && cached.length === products.length && Date.now() - cached.builtAt < 60_000) return cached;
+  const index = buildWarehouseGroupingIndex(products);
+  supplierCartGroupingIndexes.set(warehouse, index);
+  return index;
+}
+
 async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { preloadedMatches = null, preloadedUsdRate = null, pickedKeys = null, manualActiveOfferIds = null } = {}) {
   const normalizedLine = normalizeSupplierCartLine(line);
   const processed = state.processed?.[normalizedLine.key];
@@ -623,7 +637,7 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { p
       requestRowId: processed?.requestRowId,
     });
   }
-  const groupProducts = expandWarehouseProductsToGroups(warehouse.products || [], [product]);
+  const groupProducts = expandWarehouseProductsToGroups(warehouse.products || [], [product], { index: supplierCartGroupingIndex(warehouse) });
   const groupLinks = buildCommonWarehouseGroupLinks(groupProducts, []);
   if (!groupLinks.length) {
     return normalizeSupplierCartPreviewRow({

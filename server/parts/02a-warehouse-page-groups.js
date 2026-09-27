@@ -1,5 +1,5 @@
 function warehouseProductPageGroupKey(product = {}, groupContext = null) {
-  const normalized = normalizeWarehouseProduct(product);
+  const normalized = normalizeWarehouseProductForGrouping(product);
   const raw = normalized.raw && typeof normalized.raw === "object" && !Array.isArray(normalized.raw) ? normalized.raw : {};
   const manualGroupId = cleanText(normalized.manualGroupId || normalized.manual_group_id || raw.manualGroupId || raw.manual_group_id).toLowerCase();
   if (manualGroupId && !manualGroupId.startsWith("auto-pair-")) return `manual:${manualGroupId}`;
@@ -21,33 +21,60 @@ function warehouseProductPageGroupKey(product = {}, groupContext = null) {
 }
 
 function addWarehousePageGroupSiblings(sourceProducts = [], pageProducts = []) {
-  const groupContext = buildWarehouseCatalogGroupContext([...(pageProducts || []), ...(sourceProducts || [])]);
-  const { groupKeys, pairOzonIds } = collectWarehouseGroupExpansionKeys(pageProducts || [], groupContext);
+  // Grouping views of every product, built once for this call (see
+  // normalizeWarehouseProductForGrouping); the original objects are what gets returned.
+  const pageViews = (pageProducts || []).map(normalizeWarehouseProductForGrouping);
+  const sourceList = (sourceProducts || []).filter((product) => product?.id);
+  const sourceViews = sourceList.map(normalizeWarehouseProductForGrouping);
+  const groupContext = buildWarehouseCatalogGroupContext([...pageViews, ...sourceViews]);
+  const { groupKeys, pairOzonIds } = collectWarehouseGroupExpansionKeys(pageViews, groupContext);
   if (!groupKeys.size && !pairOzonIds.size) return pageProducts || [];
   const byId = new Map();
   for (const product of pageProducts || []) {
     if (product?.id) byId.set(String(product.id), product);
   }
-  for (const product of sourceProducts || []) {
-    if (!product?.id) continue;
-    if (warehouseProductSharesGroup(product, groupContext, groupKeys, pairOzonIds)) {
-      byId.set(String(product.id), product);
+  for (let index = 0; index < sourceList.length; index += 1) {
+    if (warehouseProductSharesGroup(sourceViews[index], groupContext, groupKeys, pairOzonIds)) {
+      byId.set(String(sourceList[index].id), sourceList[index]);
     }
   }
   return Array.from(byId.values());
 }
 
-function expandWarehouseProductsToGroups(sourceProducts = [], seedProducts = []) {
+// Grouping views of a whole catalog, built once and reused for many seeds (the autocart expands
+// every order line). Valid only for the same products array; see supplierCartGroupingIndex.
+function buildWarehouseGroupingIndex(sourceProducts = []) {
+  const source = Array.isArray(sourceProducts) ? sourceProducts : [];
+  const sourceList = source.filter((product) => product?.id);
+  const sourceViews = sourceList.map(normalizeWarehouseProductForGrouping);
+  return {
+    source,
+    length: source.length,
+    sourceList,
+    sourceViews,
+    sourceIds: new Set(sourceList.map((product) => String(product.id))),
+    groupContext: buildWarehouseCatalogGroupContext(sourceViews),
+    builtAt: Date.now(),
+  };
+}
+
+function expandWarehouseProductsToGroups(sourceProducts = [], seedProducts = [], { index = null } = {}) {
   const seeds = Array.isArray(seedProducts) ? seedProducts : [];
   const seedIds = new Set(seeds.map((product) => String(product?.id || "")).filter(Boolean));
-  const groupContext = buildWarehouseCatalogGroupContext([...seeds, ...(Array.isArray(sourceProducts) ? sourceProducts : [])]);
-  const { groupKeys, pairOzonIds } = collectWarehouseGroupExpansionKeys(seeds, groupContext);
+  // The prebuilt index applies when it was built from this very array and already contains the
+  // seeds (then its context is exactly the one built from seeds + source below).
+  const useIndex = Boolean(index && index.source === sourceProducts && index.length === (sourceProducts || []).length
+    && [...seedIds].every((id) => index.sourceIds.has(id)));
+  const sourceList = useIndex ? index.sourceList : (Array.isArray(sourceProducts) ? sourceProducts : []).filter((product) => product?.id);
+  const seedViews = seeds.map(normalizeWarehouseProductForGrouping);
+  const sourceViews = useIndex ? index.sourceViews : sourceList.map(normalizeWarehouseProductForGrouping);
+  const groupContext = useIndex ? index.groupContext : buildWarehouseCatalogGroupContext([...seedViews, ...sourceViews]);
+  const { groupKeys, pairOzonIds } = collectWarehouseGroupExpansionKeys(seedViews, groupContext);
   const byId = new Map();
-  for (const product of Array.isArray(sourceProducts) ? sourceProducts : []) {
-    if (!product?.id) continue;
-    const id = String(product.id);
-    if (seedIds.has(id) || warehouseProductSharesGroup(product, groupContext, groupKeys, pairOzonIds)) {
-      byId.set(id, product);
+  for (let index = 0; index < sourceList.length; index += 1) {
+    const id = String(sourceList[index].id);
+    if (seedIds.has(id) || warehouseProductSharesGroup(sourceViews[index], groupContext, groupKeys, pairOzonIds)) {
+      byId.set(id, sourceList[index]);
     }
   }
   return Array.from(byId.values());
@@ -56,9 +83,10 @@ function expandWarehouseProductsToGroups(sourceProducts = [], seedProducts = [])
 function warehouseProductsForGroupKey(sourceProducts = [], groupKey = "") {
   const key = cleanText(groupKey);
   if (!key) return [];
-  const groupContext = buildWarehouseCatalogGroupContext(sourceProducts);
-  return (Array.isArray(sourceProducts) ? sourceProducts : [])
-    .filter((product) => warehouseProductPageGroupKey(product, groupContext) === key);
+  const list = Array.isArray(sourceProducts) ? sourceProducts : [];
+  const views = list.map(normalizeWarehouseProductForGrouping);
+  const groupContext = buildWarehouseCatalogGroupContext(views);
+  return list.filter((product, index) => warehouseProductPageGroupKey(views[index], groupContext) === key);
 }
 
 function syncWarehouseProductGroupLinks(products = [], { now = new Date().toISOString(), username = "system" } = {}) {

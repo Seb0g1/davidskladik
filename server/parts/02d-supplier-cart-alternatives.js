@@ -17,7 +17,7 @@ async function listSupplierCartSupplierOptions(offerIdInput = "", { now = new Da
   const state = await readSupplierCartState();
   const product = findSupplierCartWarehouseProduct(warehouse, { offerId });
   if (!product) return { options: [], skipReason: "product_not_found" };
-  const groupProducts = expandWarehouseProductsToGroups(warehouse.products || [], [product]);
+  const groupProducts = expandWarehouseProductsToGroups(warehouse.products || [], [product], { index: supplierCartGroupingIndex(warehouse) });
   const groupLinks = buildCommonWarehouseGroupLinks(groupProducts, []);
   if (!groupLinks.length) return { options: [], skipReason: "no_pricemaster_link" };
   const usdRate = Number((await getUsdRate()).rate || process.env.DEFAULT_USD_RATE || 95);

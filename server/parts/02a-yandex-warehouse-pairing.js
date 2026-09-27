@@ -104,8 +104,21 @@ function extractOzonIdFromAutoPairGroupId(groupId = "") {
   return cleanText(normalized.slice("auto-pair-".length));
 }
 
+// Group membership (offer id, marketplace, manual group, Ozon pair id) never depends on the
+// product links, and normalizing links (compaction, deep clones of every link) was ~80% of the
+// autocart CPU: it expands every order line to its group over the whole ~28k catalog.
+// Normalize without links, and only once: objects produced here are marked and reused as is.
+const warehouseGroupingNormalized = Symbol("warehouseGroupingNormalized");
+
+function normalizeWarehouseProductForGrouping(product = {}) {
+  if (product && product[warehouseGroupingNormalized]) return product;
+  const normalized = normalizeWarehouseProduct({ ...(product || {}), links: [] });
+  Object.defineProperty(normalized, warehouseGroupingNormalized, { value: true });
+  return normalized;
+}
+
 function extractYandexSourceProductId(product = {}) {
-  const normalized = normalizeWarehouseProduct(product);
+  const normalized = normalizeWarehouseProductForGrouping(product);
   const raw = normalized.raw && typeof normalized.raw === "object" && !Array.isArray(normalized.raw) ? normalized.raw : {};
   const yandex = normalized.yandex && typeof normalized.yandex === "object" ? normalized.yandex : {};
   const rawYandex = raw.yandex && typeof raw.yandex === "object" ? raw.yandex : {};
@@ -117,7 +130,7 @@ function extractYandexSourceProductId(product = {}) {
 }
 
 function resolveWarehouseProductPairOzonId(product = {}) {
-  const normalized = normalizeWarehouseProduct(product);
+  const normalized = normalizeWarehouseProductForGrouping(product);
   const raw = normalized.raw && typeof normalized.raw === "object" && !Array.isArray(normalized.raw) ? normalized.raw : {};
   const manualGroupId = cleanText(normalized.manualGroupId || raw.manualGroupId || raw.manual_group_id).toLowerCase();
   if (manualGroupId.startsWith("auto-pair-")) {
@@ -133,7 +146,7 @@ function buildWarehouseCatalogGroupContext(products = []) {
   const ozonIdsReferencedByYandex = new Set();
   const offerIdMarketplaces = new Map();
   for (const product of Array.isArray(products) ? products : []) {
-    const normalized = normalizeWarehouseProduct(product);
+    const normalized = normalizeWarehouseProductForGrouping(product);
     const marketplace = cleanText(normalized.marketplace).toLowerCase();
     const offerId = cleanText(normalized.offerId || normalized.offer_id).toLowerCase();
     if (offerId) {
@@ -152,7 +165,7 @@ function buildWarehouseCatalogGroupContext(products = []) {
 }
 
 function warehouseProductSharesGroup(product = {}, groupContext = null, groupKeys = null, pairOzonIds = null) {
-  const normalized = normalizeWarehouseProduct(product);
+  const normalized = normalizeWarehouseProductForGrouping(product);
   const groupKey = warehouseProductPageGroupKey(normalized, groupContext);
   if (groupKeys && groupKey && groupKeys.has(groupKey)) return true;
   const pairId = resolveWarehouseProductPairOzonId(normalized);
@@ -171,7 +184,7 @@ function collectWarehouseGroupExpansionKeys(seedProducts = [], groupContext = nu
   const groupKeys = new Set();
   const pairOzonIds = new Set();
   for (const seed of Array.isArray(seedProducts) ? seedProducts : []) {
-    const normalized = normalizeWarehouseProduct(seed);
+    const normalized = normalizeWarehouseProductForGrouping(seed);
     const groupKey = warehouseProductPageGroupKey(normalized, groupContext);
     if (groupKey) groupKeys.add(groupKey);
     const pairId = resolveWarehouseProductPairOzonId(normalized);
