@@ -33,21 +33,21 @@ const OZON_TYPE_TO_YANDEX_CATEGORY = new Map([
 
 // Name keywords, in priority order (more specific first).
 const YANDEX_NAME_CATEGORY_RULES = [
-  { re: /парфюм\w*\s+для\s+дома|аромат\w*\s+для\s+дома|home\s+(fragrance|spray|perfume)/i, categoryId: 61343235, kind: "парфюм для дома" },
+  { re: /парфюм[a-zа-яё]*\s+для\s+дома|аромат[a-zа-яё]*\s+для\s+дома|home\s+(fragrance|spray|perfume)/i, categoryId: 61343235, kind: "парфюм для дома" },
   { re: /диффузор|diffuser/i, categoryId: 61329715, kind: "диффузор" },
   { re: /свеч[аиу]|candle/i, categoryId: 91304, kind: "свеча" },
   { re: /гель\s+для\s+душа|shower\s+gel/i, categoryId: 91176, kind: "гель для душа" },
   { re: /шампун|shampoo/i, categoryId: 91183, kind: "шампунь" },
   { re: /дезодорант|deodorant/i, categoryId: 8480725, kind: "дезодорант" },
   { re: /(крем|лосьон|масло|молочко)\s+для\s+тела|body\s+(cream|lotion|oil|milk)/i, categoryId: 8475955, kind: "уход за телом" },
-  { re: /парфюмерн\w*\s+вод|eau\s+de\s+parfum|\bedp\b/i, categoryId: YANDEX_CATEGORY_PERFUMERY, kind: "парфюмерная вода" },
-  { re: /туалетн\w*\s+вод|eau\s+de\s+toilette|\bedt\b/i, categoryId: YANDEX_CATEGORY_PERFUMERY, kind: "туалетная вода" },
+  { re: /парфюмерн[a-zа-яё]*\s+вод|eau\s+de\s+parfum|\bedp\b/i, categoryId: YANDEX_CATEGORY_PERFUMERY, kind: "парфюмерная вода" },
+  { re: /туалетн[a-zа-яё]*\s+вод|eau\s+de\s+toilette|\bedt\b/i, categoryId: YANDEX_CATEGORY_PERFUMERY, kind: "туалетная вода" },
   { re: /одеколон|eau\s+de\s+cologne|\bedc\b|cologne/i, categoryId: YANDEX_CATEGORY_PERFUMERY, kind: "одеколон" },
-  { re: /\bдухи\b|экстракт|extrait|\bparfum\b|perfume/i, categoryId: YANDEX_CATEGORY_PERFUMERY, kind: "духи" },
+  { re: /(?<![а-яё])духи(?![а-яё])|экстракт|extrait|\bparfum\b|perfume/i, categoryId: YANDEX_CATEGORY_PERFUMERY, kind: "духи" },
 ];
 
 // Words that mean the product is not a fragrance itself.
-const NOT_PERFUME_NAME_RE = /гел[ья]\b|гель|крем|масл[оа]\s+для|мыл[оа]|шампун|бальзам|лосьон|дезодорант|заправк|скраб|пилинг|маск[аи]|сыворотк|для\s+волос|hair|body\s+(lotion|cream|wash)|свеч|диффузор|для\s+дома/i;
+const NOT_PERFUME_NAME_RE = /гель|крем|масл[оа]\s+для|мыл[оа]|шампун|бальзам|лосьон|дезодорант|заправк|скраб|пилинг|маск[аи]|сыворотк|для\s+волос|hair|body\s+(lotion|cream|wash)|свеч|диффузор|для\s+дома|спрей\s+для\s+тела|(?<![а-яё])мист|\bmist\b|body\s+(spray|mist)/i;
 
 // A set of several products must not land in a single-product category.
 function isProductSetName(name = "") {
@@ -72,8 +72,12 @@ function resolveYandexCategoryForOzonProduct({ typeId = 0, name = "" } = {}) {
       return { categoryId: null, reason: `type_name_conflict:${byType.kind}/not_perfume` };
     }
     // Refills and spare parts are not the device itself.
-    if (/заправк|сменн\w*\s+блок|refill|запасн/i.test(text) && byType.categoryId !== YANDEX_CATEGORY_PERFUMERY) {
+    if (/заправк|сменн[a-zа-яё]*\s+блок|refill|запасн/i.test(text) && byType.categoryId !== YANDEX_CATEGORY_PERFUMERY) {
       return { categoryId: null, reason: `refill_manual_review:${byType.kind}` };
+    }
+    // Body masks, anti-cellulite and sun care are their own Market categories, not body cream.
+    if (byType.categoryId === 8475955 && /маск|антицеллюлит|загар|\bspf\b|\bsun\b/i.test(text)) {
+      return { categoryId: null, reason: `body_care_special_manual_review:${byType.kind}` };
     }
     if (byType.nameRequired && !byType.nameRequired.test(text)) {
       return { categoryId: null, reason: `type_needs_name_confirmation:${byType.kind}` };
@@ -334,4 +338,19 @@ function parseYandexOfferMappingsResult(apiResult = {}) {
     if (Array.isArray(item.warnings) && item.warnings.length) warningsByOffer.set(offerId, item.warnings);
   }
   return { errorsByOffer, warningsByOffer };
+}
+
+// The Ozon product and the Market card under the same offerId are the same product: the Market
+// name shares a meaningful word with the Ozon name and does not name another product kind.
+function yandexCardMatchesOzonProduct(marketName = "", ozonName = "", ruleCategoryId = 0) {
+  const market = String(marketName || "").trim();
+  if (!market || looksLikeArticle(market, "")) return false;
+  const words = (value) => new Set((String(value || "").toLowerCase().match(/[\p{L}]{4,}/gu) || [])
+    .filter((word) => !["парфюмерная", "туалетная", "вода", "духи", "женская", "мужская", "унисекс", "женский", "мужской", "набор"].includes(word)));
+  const ozonWords = words(ozonName);
+  if (![...words(market)].some((word) => ozonWords.has(word))) return false;
+  const byMarketName = resolveYandexCategoryForOzonProduct({ typeId: 0, name: market });
+  if (byMarketName.categoryId && Number(byMarketName.categoryId) !== Number(ruleCategoryId)) return false;
+  if (Number(ruleCategoryId) === YANDEX_CATEGORY_PERFUMERY && NOT_PERFUME_NAME_RE.test(market)) return false;
+  return true;
 }

@@ -156,3 +156,21 @@ test("category: wrong Ozon types, refills and '+ product' sets go to manual revi
   assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 93403, name: "BDK Rouge Smoking Hair Perfume Мист для волос 50 мл" }).categoryId, null);
   assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 93403, name: "Kilian Angels Share Парфюмерная вода 50 мл" }).categoryId, 15927546);
 });
+
+test("existing card is fixed only when Ozon and Market describe the same product", () => {
+  const ctx = vm.createContext({});
+  vm.runInContext(`${part("02a-ozon-yandex-offer-rules.js")}
+this.match = yandexCardMatchesOzonProduct;`, ctx);
+  assert.equal(ctx.match("KEUNE SEMI COLOR Краска для волос # 5.35, 60мл", "Majda Bekkali Fusion Sacree Clair Духи женские 2 мл", 15927546), false);
+  assert.equal(ctx.match("Lattafa Niche Emarati Zikra 100 мл парфюмерная вода", "Lattafa Shampoo Zikra 250 мл шампунь", 91183), false);
+  assert.equal(ctx.match("Дубль54", "Stella McCartney Lily 75 мл", 15927546), false);
+  assert.equal(ctx.match("AGENT PROVOCATEUR - MAITRESSE 25 мл", "Agent Provocateur Maitresse Парфюмерная вода 25 мл", 15927546), true);
+  assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 93403, name: "TOM FORD LOST CHERRY Спрей для тела 150 мл" }).categoryId, null);
+  assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 93873, name: "SWISS PERFECTION Антицеллюлитная маска для тела 500 мл" }).categoryId, null);
+});
+
+test("Cyrillic name rules actually match (no \b / \w next to Cyrillic)", () => {
+  assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 0, name: "Lattafa Zikra 100 мл парфюмерная вода" }).categoryId, 15927546);
+  assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 0, name: "Guerlain Shalimar духи 30 мл" }).categoryId, 15927546);
+  assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 93403, name: "Rudross SAFARI Парфюмерный мист 30 мл" }).categoryId, null);
+});
