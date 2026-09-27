@@ -4,6 +4,12 @@ function ozonUnarchiveDailyUsed(queue = {}, target = "", date = new Date()) {
   return Math.max(0, Number(queue.daily?.[key]?.[targetKey] || 0) || 0);
 }
 
+function ozonUnarchiveWindowClosed(queue = {}, target = "", date = new Date()) {
+  const key = ozonUnarchiveDateKey(date);
+  const targetKey = cleanText(target) || "default";
+  return Boolean(queue.daily?.[key]?.[`${targetKey}#closed`]);
+}
+
 function setOzonUnarchiveDailyUsed(queue = {}, target = "", used = 0, date = new Date()) {
   const key = ozonUnarchiveDateKey(date);
   const targetKey = cleanText(target) || "default";

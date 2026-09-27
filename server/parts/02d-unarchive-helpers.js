@@ -182,6 +182,8 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
         .map((item) => cleanText(item.target) || "default"));
       for (const [target, available] of availableByTarget.entries()) {
         if (available > 0 || !dueTargets.has(target)) continue;
+        // Ozon already answered "restore limit exceeded" in this window: nothing to probe.
+        if (ozonUnarchiveWindowClosed(queue, target)) continue;
         if (!ozonUnarchiveQuotaProbeAllowed(target)) continue;
         availableByTarget.set(target, ozonUnarchiveQuotaProbeLimit);
         markOzonUnarchiveQuotaProbe(target, { lastProbeAt: Date.now() });
@@ -229,6 +231,7 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
         const probeStillPossible = Array.from(new Set(quotaExhaustedItems
           .map((item) => cleanText(item.target) || "default")))
           .some((target) => {
+            if (ozonUnarchiveWindowClosed(queue, target)) return false;
             const state = ozonUnarchiveQuotaProbeState.get(target);
             return !(state && state.dateKey === todayKey && state.rejected);
           });
