@@ -148,3 +148,11 @@ test("send: existing card — only category fixed, barcodes and price untouched;
   assert.deepEqual(arr(t.calls[0].offerMappings[0].offer), { offerId: "OLD", marketCategoryId: 15927546 });
   assert.equal(results.find((item) => item.offerId === "NEW").error, "category_manual_review");
 });
+
+test("category: wrong Ozon types, refills and '+ product' sets go to manual review", () => {
+  assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 93403, name: "Memo Irish Leather Гель для очищения кожи рук 50 мл" }).categoryId, null);
+  assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 93405, name: "JACQUES BOGART туалетная вода 90 мл + бальзам после бритья 3 мл" }).categoryId, null);
+  assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 92718, name: "Nishane Mexican Woods Заправка для диффузора 200 мл" }).categoryId, null);
+  assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 93403, name: "BDK Rouge Smoking Hair Perfume Мист для волос 50 мл" }).categoryId, null);
+  assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 93403, name: "Kilian Angels Share Парфюмерная вода 50 мл" }).categoryId, 15927546);
+});

@@ -46,11 +46,15 @@ const YANDEX_NAME_CATEGORY_RULES = [
   { re: /\bдухи\b|экстракт|extrait|\bparfum\b|perfume/i, categoryId: YANDEX_CATEGORY_PERFUMERY, kind: "духи" },
 ];
 
+// Words that mean the product is not a fragrance itself.
+const NOT_PERFUME_NAME_RE = /гел[ья]\b|гель|крем|масл[оа]\s+для|мыл[оа]|шампун|бальзам|лосьон|дезодорант|заправк|скраб|пилинг|маск[аи]|сыворотк|для\s+волос|hair|body\s+(lotion|cream|wash)|свеч|диффузор|для\s+дома/i;
+
 // A set of several products must not land in a single-product category.
 function isProductSetName(name = "") {
   const text = String(name || "");
   return /набор|комплект|\bset\b|\bkit\b|gift\s*box|подарочн/i.test(text)
     || /\d+\s*(мл|ml)?\s*\+\s*\d+/i.test(text)
+    || /\d\s*(мл|ml|гр?|g)\s*\+\s*\p{L}/iu.test(text)
     || /\d+\s*[xх×*]\s*\d+\s*(мл|ml)/i.test(text)
     || /\d+\s*(мл|ml)\s*[xх×*]\s*\d+/i.test(text);
 }
@@ -62,6 +66,15 @@ function resolveYandexCategoryForOzonProduct({ typeId = 0, name = "" } = {}) {
   const byType = OZON_TYPE_TO_YANDEX_CATEGORY.get(Number(typeId) || 0) || null;
   const byName = YANDEX_NAME_CATEGORY_RULES.find((rule) => rule.re.test(text)) || null;
   if (byType) {
+    // Ozon types are often wrong (a hand gel filed as "парфюмерная вода"): a perfumery type
+    // whose name says it is another product is left for manual review.
+    if (byType.categoryId === YANDEX_CATEGORY_PERFUMERY && NOT_PERFUME_NAME_RE.test(text)) {
+      return { categoryId: null, reason: `type_name_conflict:${byType.kind}/not_perfume` };
+    }
+    // Refills and spare parts are not the device itself.
+    if (/заправк|сменн\w*\s+блок|refill|запасн/i.test(text) && byType.categoryId !== YANDEX_CATEGORY_PERFUMERY) {
+      return { categoryId: null, reason: `refill_manual_review:${byType.kind}` };
+    }
     if (byType.nameRequired && !byType.nameRequired.test(text)) {
       return { categoryId: null, reason: `type_needs_name_confirmation:${byType.kind}` };
     }
