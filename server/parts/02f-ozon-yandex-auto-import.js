@@ -41,7 +41,7 @@ async function enrichOzonProductsForYandexExport(products = []) {
       }
     }
   }
-  return list.map((product) => {
+  const withAttributes = list.map((product) => {
     const info = infoByKey.get(`${cleanText(product.target) || "ozon"}:${cleanText(product.offerId).toLowerCase()}`);
     if (!info) return product;
     const ozon = product.ozon && typeof product.ozon === "object" ? product.ozon : {};
@@ -63,6 +63,50 @@ async function enrichOzonProductsForYandexExport(products = []) {
       },
     };
   });
+  return fillOzonDescriptionsForYandexExport(withAttributes);
+}
+
+// The Ozon list import stores no descriptions, and /v4/product/info/attributes has none, so
+// without this every transferred card reached Market with an empty description. Missing ones
+// come from /v1/product/info/description (one product per call) and are saved on the Ozon row.
+async function fillOzonDescriptionsForYandexExport(products = [], { delayMs = 60 } = {}) {
+  let apiErrors = 0;
+  const result = [];
+  for (const product of products) {
+    const ozon = product.ozon && typeof product.ozon === "object" ? product.ozon : {};
+    if (cleanText(ozon.description) || cleanText(product.yandex?.description) || apiErrors >= 10) {
+      result.push(product);
+      continue;
+    }
+    const account = getOzonAccountByTarget(cleanText(product.target) || "ozon");
+    const offerId = cleanText(product.offerId);
+    let description = "";
+    if (account && offerId) {
+      try {
+        const body = product.productId ? { product_id: Number(product.productId) || undefined, offer_id: offerId } : { offer_id: offerId };
+        const data = await ozonRequest("/v1/product/info/description", body, account);
+        description = cleanText(data?.result?.description || "");
+      } catch (error) {
+        apiErrors += 1;
+        logger.warn("ozon description for yandex export failed", { offerId, detail: error?.message || String(error) });
+      }
+      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+    if (description) {
+      const prisma = getPrisma();
+      if (prisma) {
+        await prisma.$executeRaw`
+          UPDATE warehouse_products
+          SET raw = jsonb_set(raw, '{ozon,description}', ${JSON.stringify(description)}::jsonb, true)
+          WHERE marketplace = 'ozon' AND raw IS NOT NULL AND target = ${cleanText(product.target) || "ozon"} AND LOWER(offer_id) = LOWER(${offerId})
+        `.catch(() => {});
+      }
+      result.push({ ...product, ozon: { ...ozon, description } });
+    } else {
+      result.push(product);
+    }
+  }
+  return result;
 }
 
 // Shared export pipeline: create Yandex cards for the given Ozon products, then send

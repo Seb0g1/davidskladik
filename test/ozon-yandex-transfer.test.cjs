@@ -175,3 +175,36 @@ test("Cyrillic name rules actually match (no \b / \w next to Cyrillic)", () => {
   assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 0, name: "Guerlain Shalimar духи 30 мл" }).categoryId, 15927546);
   assert.equal(r.resolveYandexCategoryForOzonProduct({ typeId: 93403, name: "Rudross SAFARI Парфюмерный мист 30 мл" }).categoryId, null);
 });
+
+test("export: missing descriptions are fetched from Ozon and saved; present ones are kept", async () => {
+  const calls = [];
+  const saved = [];
+  const ctx = vm.createContext({
+    process: { env: {} }, path, dataDir: "/tmp", Math, Number, String, Array, Map, Set, JSON, Promise, setTimeout,
+    cleanText: (v) => String(v ?? "").replace(/\s+/g, " ").trim(),
+    logger: { warn() {}, info() {} },
+    getOzonAccountByTarget: (target) => ({ id: target }),
+    ozonRequest: async (url, body) => {
+      calls.push({ url, body });
+      if (body.offer_id === "boom") throw new Error("ozon 500");
+      return { result: { description: body.offer_id === "empty" ? "" : `Описание ${body.offer_id}` } };
+    },
+    getPrisma: () => ({ $executeRaw: (strings, ...values) => { saved.push(values); return Promise.resolve(1); } }),
+  });
+  vm.runInContext(`${part("02f-ozon-yandex-auto-import.js")}
+this.fill = fillOzonDescriptionsForYandexExport;`, ctx);
+  const out = await ctx.fill([
+    { offerId: "A1", productId: "11", target: "ozon", ozon: {} },
+    { offerId: "B2", target: "ozon", ozon: { description: "Уже есть" } },
+    { offerId: "empty", target: "ozon", ozon: {} },
+    { offerId: "boom", target: "ozon", ozon: {} },
+  ], { delayMs: 0 });
+  assert.equal(out[0].ozon.description, "Описание A1");
+  assert.equal(out[1].ozon.description, "Уже есть");
+  assert.equal(out[2].ozon.description, undefined);
+  assert.equal(out[3].ozon.description, undefined);
+  assert.deepEqual(calls.map((c) => c.url), Array(3).fill("/v1/product/info/description"));
+  assert.deepEqual(arr(calls[0].body), { product_id: 11, offer_id: "A1" });
+  assert.equal(saved.length, 1);
+  assert.equal(JSON.parse(saved[0][0]), "Описание A1");
+});

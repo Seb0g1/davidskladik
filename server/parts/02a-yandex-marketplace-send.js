@@ -113,7 +113,7 @@ function buildYandexOfferMapping(product, overrides = {}) {
     marketCategoryId,
     pictures,
     vendor: vendor || undefined,
-    description: cleanText(descriptionRaw) || undefined,
+    description: cleanText(descriptionRaw).slice(0, 6000) || undefined, // Market limit: 6000 chars
     barcodes: barcodes.length ? barcodes : undefined,
     weightDimensions,
     manufacturerCountries: country ? [country] : undefined,
