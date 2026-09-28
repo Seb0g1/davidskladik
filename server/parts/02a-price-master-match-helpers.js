@@ -85,6 +85,20 @@ function isTesterOrDecantSupplierRowName(name = "") {
   return /(^|[^a-zа-я])((tester|testr|testep|test|decant)(?![a-z])|тестер|отливант|распив|декант)/.test(text);
 }
 
+// A single sample vial («Chanel Chance 1.5 пробник»). Discovery sets of samples stay on sale,
+// and a sample given with a bottle («пробник в подарок», «+ пробник») is not a sample product.
+function isSingleSampleName(name = "") {
+  const text = String(name || "").toLowerCase().replace(/ё/g, "е")
+    .replace(/(\+|с)\s*пробник[а-я]*|пробник[а-я]*\s+в\s+подарок/g, " ");
+  if (!/(^|[^a-zа-я])((sample|vial)(?![a-z])|пробник|виал)/.test(text)) return false;
+  return !/набор|коллекц|(^|[^a-z])(set|kit|discovery|coffret|collection)(?![a-z])|\d\s*[xх×*]\s*\d|\d+\s*шт/.test(text);
+}
+
+// Supplier rows that must never sell on Yandex Market: testers, decants, single samples.
+function isNotForYandexSupplierRowName(name = "") {
+  return isTesterOrDecantSupplierRowName(name) || isSingleSampleName(name);
+}
+
 function priceMasterArticleCandidateScore(row = {}, productContext = {}) {
   const productName = cleanText(productContext.name || productContext.title || productContext.offerId || productContext.sku);
   const rowName = cleanText(row.name || row.NativeName || row.nativeName);

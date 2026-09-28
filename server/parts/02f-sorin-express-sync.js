@@ -158,7 +158,7 @@ async function fetchActiveExpressArticlesFromPm(articles) {
         const article = cleanText(String(row.article || ""));
         if (!key || !article) continue;
         active.add(`${key}|${article}`);
-        if (!isTesterOrDecantSupplierRowName(row.nativeName)) nonTester.add(`${key}|${article}`);
+        if (!isNotForYandexSupplierRowName(row.nativeName)) nonTester.add(`${key}|${article}`);
       }
     }
     return { all: active, nonTester };

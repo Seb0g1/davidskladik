@@ -87,10 +87,13 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
     const product = productsToBuild[_i];
     const productMarkupOverride = marketplaceProductMarkupOverride(product);
     const normalizedLinks = Array.isArray(product.links) ? product.links.map(normalizeWarehouseLink) : [];
-    // Yandex never sells testers / decants: such supplier rows give it neither price nor stock.
+    // Yandex never sells testers, decants or single samples: such supplier rows give it neither
+    // price nor stock, and a Yandex card that is itself a single sample gets no supplier at all.
+    const yandexSampleCard = product.marketplace === "yandex" && isSingleSampleName(product.name);
     const linkMatches = (link) => {
       const matched = matchMap.get(link.id) || [];
-      return product.marketplace === "yandex" ? matched.filter((match) => !isTesterOrDecantSupplierRowName(match.name)) : matched;
+      if (product.marketplace !== "yandex") return matched;
+      return yandexSampleCard ? [] : matched.filter((match) => !isNotForYandexSupplierRowName(match.name));
     };
     const rawSuppliers = normalizedLinks.flatMap((link) => {
       if (link.snooze?.snoozedUntil && new Date(link.snooze.snoozedUntil) > buildNow) return [];
