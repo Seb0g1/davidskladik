@@ -50,6 +50,8 @@ test("single samples are not sold on Yandex, sample sets and gifted samples are"
     "NICOLAI INCENSE OUD Парфюмерная вода унисекс 30мл пробник",
     "HFC Nirvanesque (Пробник) парфюмерная вода 75 мл",
     "BYBOZO Eternal Rainbow sample 75 мл парфюмерная вода женская",
+    "Atelier Cologne Emeraude Agar одеколон 1,7 мл. уни",
+    "GUERLAIN PATCHOULI PARIS (U) Парфюмерная вода 2 мл",
   ]) {
     assert.equal(ctx.isSample(name), true, name);
     assert.equal(ctx.notForYandex(name), true, name);
@@ -62,6 +64,9 @@ test("single samples are not sold on Yandex, sample sets and gifted samples are"
     "What We Do Is Secret Messy Sexy Just Rolled Out Of Bed edp 50ml (ПРОБНИК В ПОДАРОК)",
     "Dior Sauvage edt 100ml + пробник",
     "Chanel Chance edp 100ml",
+    "HOUSE OF SILLAGE HOLIDAY 8 ml PARFUM",
+    "Initio Parfums Prives Набор пробников 3Х1.5 мл (Rehab, Musk Therapy, Paragon)",
+    "Redken Краска - блеск без аммиака ШЕЙДС ИКЬЮ ГЛОСС 10Т 60мл",
   ]) assert.equal(ctx.isSample(name), false, name);
   assert.equal(ctx.notForYandex("CREED CENTAURUS 100 ml EDP TESTER"), true);
   assert.equal(ctx.notForYandex("Chanel Chance edp 100ml"), false);

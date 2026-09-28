@@ -85,13 +85,16 @@ function isTesterOrDecantSupplierRowName(name = "") {
   return /(^|[^a-zа-я])((tester|testr|testep|test|decant)(?![a-z])|тестер|отливант|распив|декант)/.test(text);
 }
 
-// A single sample vial («Chanel Chance 1.5 пробник»). Discovery sets of samples stay on sale,
-// and a sample given with a bottle («пробник в подарок», «+ пробник») is not a sample product.
+// A single sample vial («Chanel Chance 1.5 пробник», «Atelier Cologne одеколон 1,7 мл»): named
+// a sample or no bigger than 3 ml. Discovery sets of samples stay on sale, and a sample given
+// with a bottle («пробник в подарок», «+ пробник») is not a sample product.
 function isSingleSampleName(name = "") {
   const text = String(name || "").toLowerCase().replace(/ё/g, "е")
     .replace(/(\+|с)\s*пробник[а-я]*|пробник[а-я]*\s+в\s+подарок/g, " ");
-  if (!/(^|[^a-zа-я])((sample|vial)(?![a-z])|пробник|виал)/.test(text)) return false;
-  return !/набор|коллекц|(^|[^a-z])(set|kit|discovery|coffret|collection)(?![a-z])|\d\s*[xх×*]\s*\d|\d+\s*шт/.test(text);
+  if (/набор|коллекц|(^|[^a-z])(set|kit|discovery|coffret|collection)(?![a-z])|\d\s*[xх×*]\s*\d|\d+\s*шт/.test(text)) return false;
+  if (/(^|[^a-zа-я])((sample|vial)(?![a-z])|пробник|виал)/.test(text)) return true;
+  const volumes = (text.match(/\d+(?:[.,]\d+)?\s*(?:мл|ml)(?![a-zа-я])/g) || []).map((v) => parseFloat(v.replace(",", ".")));
+  return volumes.length > 0 && Math.max(...volumes) <= 3;
 }
 
 // Supplier rows that must never sell on Yandex Market: testers, decants, single samples.
