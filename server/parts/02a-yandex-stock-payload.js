@@ -3,6 +3,9 @@ function pickOzonProductStockForYandex(product = {}) {
   const stateCode = cleanText(state.code || state.state).toLowerCase();
   const visibility = cleanText(state.visibility || product.visibility).toUpperCase();
   if (stateCode === "archived" || visibility === "ARCHIVED" || state.archived || product.archived) return 0;
+  // Ozon may sell a tester; Yandex must not get stock from it.
+  const supplier = product.selectedSupplier || {};
+  if (isTesterOrDecantSupplierRowName(supplier.name || supplier.nativeName || "")) return 0;
   const direct = Number(state.stock ?? state.present ?? product.targetStock ?? 0);
   if (Number.isFinite(direct) && direct > 0) return Math.max(0, Math.round(direct));
   const warehouses = Array.isArray(state.warehouses) ? state.warehouses : [];

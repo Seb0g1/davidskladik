@@ -87,9 +87,14 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
     const product = productsToBuild[_i];
     const productMarkupOverride = marketplaceProductMarkupOverride(product);
     const normalizedLinks = Array.isArray(product.links) ? product.links.map(normalizeWarehouseLink) : [];
+    // Yandex never sells testers / decants: such supplier rows give it neither price nor stock.
+    const linkMatches = (link) => {
+      const matched = matchMap.get(link.id) || [];
+      return product.marketplace === "yandex" ? matched.filter((match) => !isTesterOrDecantSupplierRowName(match.name)) : matched;
+    };
     const rawSuppliers = normalizedLinks.flatMap((link) => {
       if (link.snooze?.snoozedUntil && new Date(link.snooze.snoozedUntil) > buildNow) return [];
-      return (matchMap.get(link.id) || []).map((match) => {
+      return linkMatches(link).map((match) => {
         const markupCoefficient = resolveMarkupCoefficient({
           productMarkup: productMarkupOverride,
           marketplace: product.marketplace,
@@ -113,7 +118,7 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
     });
     const hasSnoozedLinks = normalizedLinks.some((link) => link.snooze?.snoozedUntil && new Date(link.snooze.snoozedUntil) > buildNow);
     const links = normalizedLinks.map((link) => {
-      const matched = matchMap.get(link.id) || [];
+      const matched = linkMatches(link);
       const availableMatches = matched.filter((item) => item.available);
       return {
         ...link,

@@ -127,20 +127,22 @@ async function loadSorinLinkedProducts() {
   return (await loadExpressLinkedProducts()).filter((row) => row.supplierKey === "sorin");
 }
 
-// Какие артикулы сейчас активны у Сорина / «Нашего склада» в PriceMaster: Set "key|article".
+// Какие артикулы сейчас активны у Сорина / «Нашего склада» в PriceMaster: { all, nonTester } —
+// Set'ы "key|article"; nonTester без тестеров и отливантов (они не продаются на Яндексе).
 // null — PM недоступен (тогда ничего не зануляем, чтобы не было ложного нуля).
 async function fetchActiveExpressArticlesFromPm(articles) {
-  if (!articles.length) return new Set();
+  if (!articles.length) return { all: new Set(), nonTester: new Set() };
   try {
     await discoverOfferDocsActiveColumn();
     const activeDocFilter = offerDocsActiveColumn
       ? ` AND d.${offerDocsActiveColumn}${offerDocsActiveFilterSuffix}`
       : "";
     const active = new Set();
+    const nonTester = new Set();
     for (const batch of chunkArray(articles, 500)) {
       const placeholders = batch.map(() => "?").join(", ");
       const [rows] = await pool.query(
-        `SELECT DISTINCT p.PartnerName AS partnerName, TRIM(r.NativeID) AS article
+        `SELECT DISTINCT p.PartnerName AS partnerName, TRIM(r.NativeID) AS article, r.NativeName AS nativeName
          FROM OfferRows r
          JOIN OfferDocs d ON d.DocID = r.DocID
          JOIN Partners p ON p.PartnerID = d.PartnerID
@@ -154,10 +156,12 @@ async function fetchActiveExpressArticlesFromPm(articles) {
       for (const row of rows) {
         const key = expressSupplierKey(row.partnerName);
         const article = cleanText(String(row.article || ""));
-        if (key && article) active.add(`${key}|${article}`);
+        if (!key || !article) continue;
+        active.add(`${key}|${article}`);
+        if (!isTesterOrDecantSupplierRowName(row.nativeName)) nonTester.add(`${key}|${article}`);
       }
     }
-    return active;
+    return { all: active, nonTester };
   } catch (error) {
     logger.warn("sorin_express_pm_check_failed", { detail: error?.message || String(error) });
     return null;
@@ -188,7 +192,11 @@ async function resolveExpressEligibility() {
   const allArticles = [...new Set(products.flatMap((p) => [...p.linkKeys].map((k) => k.split("|").slice(1).join("|"))))];
   const activeKeys = await fetchActiveExpressArticlesFromPm(allArticles);
   const pmAvailable = activeKeys !== null;
-  const isActive = (p) => !pmAvailable || [...p.linkKeys].some((k) => activeKeys.has(k)) || (p.hasBareLink && !p.linkKeys.size);
+  const isActive = (p) => {
+    if (!pmAvailable) return true;
+    const keys = p.marketplace === "yandex" ? activeKeys.nonTester : activeKeys.all;
+    return [...p.linkKeys].some((k) => keys.has(k)) || (p.hasBareLink && !p.linkKeys.size);
+  };
   return {
     pmAvailable,
     products,

@@ -76,6 +76,15 @@ function priceMasterTesterFlag(value) {
   return /\b(test|tester|пробник|тестер)\b/i.test(text);
 }
 
+// Testers and decants are never sold on Yandex Market (Ozon keeps them). A supplier row that
+// only offers a tester to smell («есть тестер послушать») or a sample as a gift is a boxed product.
+function isTesterOrDecantSupplierRowName(name = "") {
+  const text = String(name || "").toLowerCase().replace(/ё/g, "е")
+    .replace(/(есть\s+|с\s+)?тестер[а-я]*\s+(послушать|понюхать)/g, " ")
+    .replace(/\+\s*пробник[а-я]*|пробник[а-я]*\s+в\s+подарок/g, " ");
+  return /(^|[^a-zа-я])((tester|testr|testep|test|decant)(?![a-z])|тестер|отливант|распив|декант)/.test(text);
+}
+
 function priceMasterArticleCandidateScore(row = {}, productContext = {}) {
   const productName = cleanText(productContext.name || productContext.title || productContext.offerId || productContext.sku);
   const rowName = cleanText(row.name || row.NativeName || row.nativeName);
