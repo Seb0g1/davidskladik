@@ -454,7 +454,9 @@ app.post("/api/supplier-picking-list/:key/supplier-return", requireStaff, async 
     const now = new Date();
     const username = requestUsername(request);
     // Amount in the supplier's own currency ($, or ₽ for Инна); without it the whole row's debt is returned.
-    const rawAmount = request.body?.amount ?? request.body?.amountRub;
+    // Older clients send `amountRub` — rubles, so it only counts for a RUB supplier.
+    const supplierCurrencyForReturn = await supplierLedgerCurrencyFor({ supplierName: current.supplierName, partnerId: current.partnerId });
+    const rawAmount = request.body?.amount ?? (supplierCurrencyForReturn === "RUB" ? request.body?.amountRub : null);
     const amountNative = rawAmount != null ? (normalizeFinanceMoney(rawAmount, 0) || null) : null;
     const note = cleanText(request.body?.note || "Возврат товара поставщику");
 
@@ -464,7 +466,7 @@ app.post("/api/supplier-picking-list/:key/supplier-return", requireStaff, async 
       const debtEntry = await getPrisma().supplierLedgerEntry.findFirst({
         where: { pickingKey: key, entryType: "purchase_debt", status: "active" },
       });
-      const supplierCurrency = await supplierLedgerCurrencyFor({ supplierName: current.supplierName, partnerId: current.partnerId });
+      const supplierCurrency = supplierCurrencyForReturn;
       // No amount → mirror the debt entry exactly, so the ledger cancels that row's debt in full.
       const creditAmount = amountNative != null ? Math.abs(amountNative) : (debtEntry ? Math.abs(Number(debtEntry.amount)) : 0);
       const creditCurrency = amountNative != null ? supplierCurrency : (debtEntry?.currency || "RUB");
