@@ -75,30 +75,26 @@ function supplierSearchText(supplier: Supplier) {
 }
 
 function supplierCurrencyOf(supplier: Supplier): "USD" | "RUB" {
-  return String(asRecord(supplier).priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD";
+  // The ledger summary carries the supplier's currency (USD, RUB for Инна) straight from the server.
+  const ledgerCurrency = String(asRecord(asRecord(supplier).ledger).currency || "").toUpperCase();
+  const currency = ledgerCurrency === "RUB" || ledgerCurrency === "USD" ? ledgerCurrency : String(asRecord(supplier).priceCurrency || "USD").toUpperCase();
+  return currency === "RUB" ? "RUB" : "USD";
 }
 
-// The server values every ledger entry in both currencies at the rate of its own moment;
-// the UI only picks the side matching the supplier currency and never recomputes balances.
-function ledgerInCurrency(ledgerValue: unknown, currency: "USD" | "RUB") {
+// The server keeps every supplier in its own currency with no exchange rates; the UI only shows it.
+function ledgerInCurrency(ledgerValue: unknown, _currency: "USD" | "RUB") {
   const ledger = asRecord(ledgerValue);
-  const usd = currency === "USD";
   return {
-    balance: Number((usd ? ledger.balanceUsd : ledger.balanceRub ?? ledger.balance) || 0),
-    debt: Number((usd ? ledger.debtTotalUsd : ledger.debtTotalRub ?? ledger.debtTotal) || 0),
-    paid: Number((usd ? ledger.paidTotalUsdEquiv : ledger.paidTotalRubEquiv ?? ledger.paidTotal) || 0),
-    returns: Number((usd ? ledger.returnsTotalUsd : ledger.returnsTotalRub) || 0),
-    corrections: Number((usd ? ledger.correctionsTotalUsd : ledger.correctionsTotalRub) || 0),
+    balance: Number(ledger.balance || 0),
+    debt: Number(ledger.debtTotal || 0),
+    paid: Number(ledger.paidTotal || 0),
+    returns: Number(ledger.returnsTotal || 0),
+    corrections: Number(ledger.correctionsTotal || 0),
   };
 }
 
 function supplierBalance(supplier: Supplier) {
   return ledgerInCurrency(asRecord(supplier).ledger, supplierCurrencyOf(supplier)).balance;
-}
-
-function supplierBalanceRub(supplier: Supplier) {
-  const ledger = asRecord(asRecord(supplier).ledger);
-  return Number(ledger.balanceRub ?? ledger.balance ?? 0);
 }
 
 function supplierIsActive(supplier: Supplier) {
@@ -330,7 +326,6 @@ export function SuppliersPage() {
 
   const suppliers = suppliersQuery.data?.suppliers || [];
   const sync = asRecord(suppliersQuery.data?.supplierSync);
-  const usdRate = suppliersQuery.data?.usdRate ?? 95;
   const activeCount = suppliers.filter(supplierIsActive).length;
   const inactiveCount = suppliers.length - activeCount;
   const articleCount = suppliers.reduce((sum, supplier) => sum + supplierArticles(supplier).length, 0);
@@ -348,7 +343,7 @@ export function SuppliersPage() {
       .filter((supplier) => !hasDebtFilter || supplierBalance(supplier) < -0.005)
       .sort((a, b) => {
         // Compare in RUB so USD and RUB suppliers rank on one scale.
-        if (sortBy === "debt") return supplierBalanceRub(a) - supplierBalanceRub(b);
+        if (sortBy === "debt") return supplierBalance(a) - supplierBalance(b);
         return String(a.name || "").localeCompare(String(b.name || ""), "ru");
       });
   }, [search, suppliers, view, sortBy, hasDebtFilter]);
@@ -705,7 +700,6 @@ export function SuppliersPage() {
                   value={drawerData.paymentAmount}
                   onChange={(event) => setPaymentDrafts((current) => ({ ...current, [drawerData.id]: event.target.value }))}
                 />
-                {drawerData.supplierCurrency === "USD" ? <span className="muted sp-rate-note">Курс: {usdRate}₽</span> : null}
                 <input
                   className="supplier-payment-note"
                   placeholder="Комментарий"
@@ -790,10 +784,7 @@ export function SuppliersPage() {
                     <span>Тип</span><span>Сумма</span><span>Дата</span><span>Заметка</span>
                   </div>
                   {drawerData.paymentEntries.map((entry) => {
-                    const entryRate = Number(asRecord(asRecord(entry).raw).usdRate || 0) || usdRate;
-                    const amountUsd = drawerData.supplierCurrency === "USD"
-                      ? (String(entry.currency || "RUB").toUpperCase() === "USD" ? entry.amount : entry.amount / entryRate)
-                      : null;
+                    const entryCurrency = String(entry.currency || "RUB").toUpperCase() === "USD" ? "USD" : "RUB";
                     const typeLabel = entry.entryType === "payment" ? "Оплата"
                       : entry.entryType === "balance_correction" ? "Корректировка"
                       : entry.entryType === "supplier_return" ? "Возврат"
@@ -803,9 +794,7 @@ export function SuppliersPage() {
                       <div className="supplier-order-row" key={entry.id}>
                         <div className="supplier-order-name"><span>{typeLabel}</span></div>
                         <span className="supplier-order-amount" style={{ color: isNeg ? "var(--danger, #f87171)" : "var(--success, #4ed39a)" }}>
-                          {drawerData.supplierCurrency === "USD" && amountUsd !== null
-                            ? moneySigned(amountUsd, "USD")
-                            : moneySigned(String(entry.currency || "RUB").toUpperCase() === "USD" ? entry.amount * entryRate : entry.amount, "RUB")}
+                          {moneySigned(entry.amount, entryCurrency)}
                         </span>
                         <span className="muted-note">{compactDate(entry.occurredAt ?? null)}</span>
                         <span className="muted-note sp-note-xs">{entry.note || ""}</span>

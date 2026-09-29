@@ -14,9 +14,16 @@ app.get("/api/finance/summary", requireAdmin, async (request, response, next) =>
       source: ordersResult.source === expensesResult.source ? ordersResult.source : "mixed",
       summary: {
         ...financeSummaryFromRows(ordersResult.orders, expensesResult.expenses),
+        // Suppliers are kept in their own currency (USD, RUB for Инна): totals are never mixed.
         supplierBalance: supplierLedgerResult.summary?.balance || 0,
         supplierDebt: supplierLedgerResult.summary?.debtTotal || 0,
         supplierPaid: supplierLedgerResult.summary?.paidTotal || 0,
+        supplierBalanceUsd: supplierLedgerResult.summary?.balanceUsd || 0,
+        supplierBalanceRub: supplierLedgerResult.summary?.balanceRub || 0,
+        supplierOwedUsd: supplierLedgerResult.summary?.owedUsd || 0,
+        supplierOwedRub: supplierLedgerResult.summary?.owedRub || 0,
+        supplierPaidUsd: supplierLedgerResult.summary?.paidTotalUsdEquiv || 0,
+        supplierPaidRub: supplierLedgerResult.summary?.paidTotalRubEquiv || 0,
       },
       updatedAt: new Date().toISOString(),
     });

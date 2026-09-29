@@ -133,10 +133,13 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
     const pricePaidRub = status === "picked" && request.body?.pricePaidRub != null
       ? (normalizeFinanceMoney(request.body.pricePaidRub, 0) || null)
       : null;
+    const pricePaid = status === "picked" && request.body?.pricePaid != null
+      ? (normalizeFinanceMoney(request.body.pricePaid, 0) || null)
+      : null;
     const nextRow = normalizeSupplierPickingRow({
       ...current,
       status,
-      ...(status === "picked" ? { pickedBy: username, pickedAt: now.toISOString(), pickedQuantity, pricePaidRub } : {}),
+      ...(status === "picked" ? { pickedBy: username, pickedAt: now.toISOString(), pickedQuantity, pricePaidRub, pricePaid } : {}),
       ...(status === "missing" ? {
         missingBy: username,
         missingAt: now.toISOString(),
@@ -150,6 +153,7 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
         pickedAt: null,
         pickedQuantity: null,
         pricePaidRub: null,
+        pricePaid: null,
         missingBy: "",
         missingAt: null,
         missingReason: "",
@@ -449,8 +453,9 @@ app.post("/api/supplier-picking-list/:key/supplier-return", requireStaff, async 
 
     const now = new Date();
     const username = requestUsername(request);
-    const rawAmount = request.body?.amountRub;
-    const amountRub = rawAmount != null ? (normalizeFinanceMoney(rawAmount, 0) || null) : null;
+    // Amount in the supplier's own currency ($, or ₽ for Инна); without it the whole row's debt is returned.
+    const rawAmount = request.body?.amount ?? request.body?.amountRub;
+    const amountNative = rawAmount != null ? (normalizeFinanceMoney(rawAmount, 0) || null) : null;
     const note = cleanText(request.body?.note || "Возврат товара поставщику");
 
     // Create supplier_return ledger entry (credit) if ledger available
@@ -459,7 +464,10 @@ app.post("/api/supplier-picking-list/:key/supplier-return", requireStaff, async 
       const debtEntry = await getPrisma().supplierLedgerEntry.findFirst({
         where: { pickingKey: key, entryType: "purchase_debt", status: "active" },
       });
-      const creditAmount = amountRub != null ? Math.abs(amountRub) : (debtEntry ? Math.abs(Number(debtEntry.amount)) : 0);
+      const supplierCurrency = await supplierLedgerCurrencyFor({ supplierName: current.supplierName, partnerId: current.partnerId });
+      // No amount → mirror the debt entry exactly, so the ledger cancels that row's debt in full.
+      const creditAmount = amountNative != null ? Math.abs(amountNative) : (debtEntry ? Math.abs(Number(debtEntry.amount)) : 0);
+      const creditCurrency = amountNative != null ? supplierCurrency : (debtEntry?.currency || "RUB");
       if (creditAmount > 0) {
         const entry = normalizeSupplierLedgerEntry({
           sourceKey: `supplier_return:picking:${key}`,
@@ -467,7 +475,7 @@ app.post("/api/supplier-picking-list/:key/supplier-return", requireStaff, async 
           supplierName: current.supplierName,
           partnerId: current.partnerId,
           amount: creditAmount,
-          currency: "RUB",
+          currency: creditCurrency,
           pickingKey: key,
           financeOrderId: debtEntry?.financeOrderId || null,
           orderId: current.orderId || current.postingNumber || key,
@@ -525,7 +533,7 @@ app.post("/api/supplier-picking-list/:key/supplier-return", requireStaff, async 
       status: "return_used",
       supplierReturnedBy: username,
       supplierReturnedAt: now.toISOString(),
-      supplierReturnAmountRub: amountRub,
+      supplierReturnAmountRub: amountNative,
     });
     state.rows[key] = nextRow;
     await writeSupplierPickingState(state, { onlyKeys: [key] });

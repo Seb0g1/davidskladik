@@ -2,6 +2,7 @@
 
 // Unit tests for supplierLedgerSummaryFromEntries (server/parts/02d-finance-supplier-ledger.js).
 // The part file is evaluated standalone in a VM context with tiny stubs for its helpers.
+// Model: every supplier is kept in its own currency (USD, RUB for Инна), no exchange rates.
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
@@ -10,6 +11,7 @@ const path = require("path");
 const vm = require("vm");
 
 const source = fs.readFileSync(path.join(__dirname, "..", "server", "parts", "02d-finance-supplier-ledger.js"), "utf8");
+const isInna = (name) => /инна/i.test(String(name || ""));
 const ctx = vm.createContext({
   process: { env: {} },
   cleanText: (value) => String(value ?? "").trim(),
@@ -18,113 +20,108 @@ const ctx = vm.createContext({
     const n = Number(value ?? fallback);
     return Number.isFinite(n) ? Number(n.toFixed(2)) : Number(fallback || 0);
   },
-  resolvePickingRowCurrency: (row) => String(row.priceCurrency || "USD").toUpperCase(),
+  isInnaSupplierName: isInna,
+  resolvePickingRowCurrency: (row) => (isInna(row.supplierName) ? "RUB" : String(row.priceCurrency || "USD").toUpperCase()),
 });
 vm.runInContext(`${source}
-this.api = { supplierLedgerSummaryFromEntries };`, ctx);
-const summarize = ctx.api.supplierLedgerSummaryFromEntries;
+this.api = { supplierLedgerSummaryFromEntries, supplierLedgerSummaryAcrossSuppliers, supplierLedgerCurrencyFromIndex };`, ctx);
+const { supplierLedgerSummaryFromEntries: summarize, supplierLedgerSummaryAcrossSuppliers: across } = ctx.api;
 
 let seq = 0;
 const at = (day, time = "12:00") => `2026-09-${String(day).padStart(2, "0")}T${time}:00.000Z`;
-const debt = (usd, { rate = 93, day = 10, key, partnerId = "109", pricePaidRub } = {}) => ({
+// Debts are stored in RUB (price × some rate) — the balance must ignore that and use the $ price.
+const debt = (usd, { day = 10, key, partnerId = "34", supplierName = "Santa", rate = 93, qty = 1, pickedQuantity, pricePaid, pricePaidRub, priceCurrency = "USD" } = {}) => ({
   id: `d${++seq}`,
   entryType: "purchase_debt",
   partnerId,
-  supplierName: "Виталий (приносит)",
-  amount: -(pricePaidRub || Math.round(usd * rate)),
+  supplierName,
+  amount: -Math.round(usd * rate * qty),
   currency: "RUB",
   pickingKey: key || `pk${seq}`,
   status: "active",
   occurredAt: at(day),
-  raw: { picking: { price: usd, quantity: 1, priceCurrency: "USD", pricePaidRub }, usdRate: rate },
+  raw: { picking: { price: usd, quantity: qty, pickedQuantity, priceCurrency, pricePaid, pricePaidRub } },
 });
-const payment = (amount, currency = "USD", { day = 11, rate, partnerId = "109" } = {}) => ({
-  id: `p${++seq}`,
-  entryType: "payment",
-  partnerId,
-  supplierName: "Виталий (приносит)",
-  amount,
-  currency,
-  status: "active",
-  occurredAt: at(day),
-  raw: rate ? { usdRate: rate } : {},
+const payment = (amount, currency = "USD", { day = 11, partnerId = "34", supplierName = "Santa", raw = {} } = {}) => ({
+  id: `p${++seq}`, entryType: "payment", partnerId, supplierName, amount, currency, status: "active", occurredAt: at(day), raw,
 });
 
-test("USD supplier: a 10.55 $ payment raises the balance by exactly 10.55 $", () => {
-  const entries = [debt(300), debt(145.83), payment(456.1)];
-  const before = summarize(entries, { usdRate: 93 });
-  const after = summarize([...entries, payment(10.55, "USD", { day: 21 })], { usdRate: 93 });
-  assert.equal(before.balanceUsd, 10.27);
-  assert.equal(after.balanceUsd, 20.82);
-  assert.equal(after.paidTotalUsdEquiv, 466.65);
-  assert.equal(after.debtTotalUsd, 445.83);
+test("Santa: 1285 $ picked, 1076.43 $ paid → −208.57 $, independent of any rate", () => {
+  const debts = [77, 7, 5, 34, 63, 119, 119, 8, 3, 23, 3, 4, 120, 57, 32, 3, 5, 399, 10, 52, 67, 75].map((usd, i) => debt(usd, { rate: 80 + i }));
+  const s = summarize([...debts, payment(124), payment(283), payment(669.43)], { currency: "USD" });
+  assert.equal(s.currency, "USD");
+  assert.equal(s.debtTotal, 1285);
+  assert.equal(s.paidTotal, 1076.43);
+  assert.equal(s.balance, -208.57);
+  assert.equal(s.balanceUsd, -208.57);
+  assert.equal(s.balanceRub, 0);
 });
 
-test("USD balance does not drift when today's rate changes", () => {
-  const entries = [debt(100, { rate: 90 }), payment(4500, "RUB", { rate: 90 }), payment(60)];
-  const a = summarize(entries, { usdRate: 90 });
-  const b = summarize(entries, { usdRate: 110 });
-  assert.equal(a.balanceUsd, 10);
-  assert.equal(b.balanceUsd, 10);
+test("a payment covers debt fully or partly, exactly by the amount entered", () => {
+  const entries = [debt(100), debt(50)];
+  assert.equal(summarize([...entries, payment(150)], { currency: "USD" }).balance, 0);
+  assert.equal(summarize([...entries, payment(40)], { currency: "USD" }).balance, -110);
+  assert.equal(summarize([...entries, payment(200)], { currency: "USD" }).balance, 50);
 });
 
-test("debt with an actual RUB amount paid is valued by that amount", () => {
-  const s = summarize([debt(100, { rate: 100, pricePaidRub: 9000 })], { usdRate: 100 });
-  assert.equal(s.debtTotalUsd, 90);
-  assert.equal(s.balanceRub, -9000);
+test("Инна is kept in rubles: price in ₽, payments in ₽", () => {
+  const inna = { partnerId: "60", supplierName: "Инна" };
+  const s = summarize([debt(5000, { ...inna, rate: 1, priceCurrency: "RUB" }), payment(3000, "RUB", inna)], { currency: "RUB" });
+  assert.equal(s.balance, -2000);
+  assert.equal(s.balanceRub, -2000);
+  assert.equal(s.balanceUsd, 0);
 });
 
-test("legacy 'Свести' entry sets the balance to its RUB target", () => {
-  const legacy = {
-    id: "c1", entryType: "balance_correction", partnerId: "109", amount: -1234.5, currency: "RUB", status: "active",
-    occurredAt: at(15), raw: { source: "balance_correction", currentBalance: 99, targetBalance: 930, delta: -1234.5 },
-  };
-  const s = summarize([debt(100), payment(50), legacy, payment(5, "USD", { day: 16 })], { usdRate: 93 });
-  assert.equal(s.balanceUsd, 15);
-  assert.equal(s.balanceRub, 1395);
+test("actual price entered at «Собрал» and partial quantity define the debt", () => {
+  assert.equal(summarize([debt(100, { pricePaid: 90 })], { currency: "USD" }).balance, -90);
+  assert.equal(summarize([debt(10, { qty: 3, pickedQuantity: 2 })], { currency: "USD" }).balance, -20);
+  // A legacy RUB «price paid» on a USD supplier is ignored — the $ price stands.
+  assert.equal(summarize([debt(90, { pricePaidRub: 7830 })], { currency: "USD" }).balance, -90);
 });
 
-test("new corrections are plain deltas in their own currency", () => {
-  const corr = {
-    id: "c2", entryType: "balance_correction", partnerId: "109", amount: 7.5, currency: "USD", status: "active",
-    occurredAt: at(15), raw: { source: "balance_correction", mode: "delta", targetBalance: -42.5, usdRate: 93 },
-  };
-  const s = summarize([debt(100), payment(50), corr], { usdRate: 93 });
-  assert.equal(s.balanceUsd, -42.5);
-  assert.equal(s.correctionsTotalUsd, 7.5);
-});
-
-test("full picking return cancels its debt exactly; partial return uses its own amount", () => {
+test("full return of a picked row cancels that row's debt exactly", () => {
   const d = debt(33.33, { key: "row-1", rate: 91 });
-  const fullReturn = { id: "r1", entryType: "supplier_return", partnerId: "109", amount: Math.abs(d.amount), currency: "RUB", pickingKey: "row-1", status: "active", occurredAt: at(12), raw: { usdRate: 95 } };
-  assert.equal(summarize([d, fullReturn], { usdRate: 95 }).balanceUsd, 0);
-  const partial = { ...fullReturn, id: "r2", amount: 950 };
-  assert.equal(summarize([d, partial], { usdRate: 95 }).balanceUsd, -23.33);
+  const ret = { id: "r1", entryType: "supplier_return", partnerId: "34", supplierName: "Santa", amount: Math.abs(d.amount), currency: "RUB", pickingKey: "row-1", status: "active", occurredAt: at(12), raw: {} };
+  assert.equal(summarize([d, ret], { currency: "USD" }).balance, 0);
+  const partial = { ...ret, id: "r2", amount: 10, currency: "USD" };
+  assert.equal(summarize([d, partial], { currency: "USD" }).balance, -23.33);
+});
+
+test("legacy 'Свести' sets the balance to its target in the supplier currency", () => {
+  const legacy = {
+    id: "c1", entryType: "balance_correction", partnerId: "34", amount: 63632, currency: "USD", status: "active",
+    occurredAt: at(12), raw: { source: "balance_correction", currentBalance: -63613, targetBalance: 19 },
+  };
+  const s = summarize([debt(500, { day: 5 }), legacy, debt(10, { day: 14 })], { currency: "USD" });
+  assert.equal(s.balance, 9);
+});
+
+test("new corrections are plain deltas", () => {
+  const corr = { id: "c2", entryType: "balance_correction", partnerId: "34", amount: 14.57, currency: "USD", status: "active", occurredAt: at(24), raw: { mode: "delta", targetBalance: 0 } };
+  assert.equal(summarize([debt(14.57), corr], { currency: "USD" }).balance, 0);
 });
 
 test("voided entries are ignored", () => {
-  const s = summarize([debt(10), { ...payment(10), status: "voided" }], { usdRate: 93 });
-  assert.equal(s.balanceUsd, -10);
+  const s = summarize([debt(10), { ...payment(10), status: "voided" }], { currency: "USD" });
+  assert.equal(s.balance, -10);
   assert.equal(s.entries, 1);
 });
 
-test("RUB supplier balance stays in rubles", () => {
-  const rubDebt = {
-    id: "rd", entryType: "purchase_debt", supplierName: "Инна", amount: -5000, currency: "RUB", status: "active",
-    occurredAt: at(10), raw: { picking: { price: 5000, quantity: 1, priceCurrency: "RUB" } },
-  };
-  const s = summarize([rubDebt, { ...payment(3000, "RUB"), partnerId: "", supplierName: "Инна" }], { usdRate: 100 });
-  assert.equal(s.balanceRub, -2000);
-  assert.equal(s.balance, -2000);
-  assert.equal(s.balanceUsd, -20);
+test("currency is inferred from picked rows when unknown", () => {
+  assert.equal(summarize([debt(10)]).currency, "USD");
+  assert.equal(summarize([debt(500, { supplierName: "Инна", partnerId: "60", priceCurrency: "RUB", rate: 1 })]).currency, "RUB");
 });
 
-test("perSupplier: a legacy checkpoint only resets its own supplier", () => {
-  const legacy = {
-    id: "c3", entryType: "balance_correction", partnerId: "109", amount: 1, currency: "RUB", status: "active",
-    occurredAt: at(15), raw: { targetBalance: 0 },
-  };
-  const other = debt(20, { partnerId: "200", day: 9 });
-  const s = summarize([debt(100), other, legacy], { usdRate: 93, perSupplier: true });
-  assert.equal(s.balanceUsd, -20);
+test("across suppliers: USD and RUB are never mixed; owed counts only debtors", () => {
+  const index = { byPartner: new Map([["34", "USD"], ["60", "RUB"], ["7", "USD"]]), byName: new Map() };
+  const entries = [
+    debt(100), payment(30),
+    debt(5000, { supplierName: "Инна", partnerId: "60", priceCurrency: "RUB", rate: 1 }),
+    payment(50, "USD", { partnerId: "7", supplierName: "DimaAmerika" }),
+  ];
+  const t = across(entries, index);
+  assert.equal(t.balanceUsd, -20);
+  assert.equal(t.balanceRub, -5000);
+  assert.equal(t.owedUsd, 70);
+  assert.equal(t.owedRub, 5000);
 });

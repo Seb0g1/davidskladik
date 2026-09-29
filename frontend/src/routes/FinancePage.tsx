@@ -14,6 +14,14 @@ const money = (value: unknown) => {
   return n ? `${Math.round(n).toLocaleString("ru-RU")} ₽` : "-";
 };
 
+// Supplier money is kept per currency (USD, RUB for Инна) and never converted.
+const dualCurrency = (usd: number, rub: number) => {
+  const parts = [];
+  if (Math.abs(usd) >= 0.005) parts.push(`${usd.toLocaleString("ru-RU", { maximumFractionDigits: 2 })} $`);
+  if (Math.abs(rub) >= 0.5) parts.push(`${Math.round(rub).toLocaleString("ru-RU")} ₽`);
+  return parts.length ? parts.join(" + ") : "-";
+};
+
 const text = (value: unknown) => String(value ?? "").trim();
 const FinanceOrderUpdateSchema = FinanceSummarySchema.pick({ ok: true }).extend({
   order: FinanceOrderSchema.optional(),
@@ -88,6 +96,9 @@ export function FinancePage() {
     onSettled: () => setSavingId(null),
   });
   const s = summary.data?.summary || {};
+  const supplierOwesUsd = Number(s.supplierOwedUsd || 0);
+  const supplierOwesRub = Number(s.supplierOwedRub || 0);
+  const supplierDebtText = dualCurrency(supplierOwesUsd, supplierOwesRub);
   const refresh = () => {
     void summary.refetch();
     void orders.refetch();
@@ -126,7 +137,7 @@ export function FinancePage() {
         <Stat label="Чистая прибыль" value={money(s.netProfit)} tone={Number(s.netProfit || 0) >= 0 ? "success" : "warn"} icon={<TrendingUp size={18} />} />
         <Stat label="Выручка МП" value={money(s.orderIncome)} tone="accent" icon={<ShoppingCart size={18} />} />
         <Stat label="Заказов" value={Number(s.orders || 0)} tone="accent" icon={<Package size={18} />} />
-        <Stat label="Долг поставщикам" value={money(s.supplierDebt)} tone={Number(s.supplierDebt || 0) > 0 ? "warn" : "success"} icon={<CreditCard size={18} />} />
+        <Stat label="Долг поставщикам" value={supplierDebtText} tone={supplierOwesUsd > 0 || supplierOwesRub > 0 ? "warn" : "success"} icon={<CreditCard size={18} />} />
       </section>
 
       <div className="summary-grid">
@@ -134,7 +145,7 @@ export function FinancePage() {
         <SummaryCard label="Ручные закупки" value={money(s.manualExpenses)} />
         <SummaryCard label="Закупочная цена" value={money(s.purchaseCost)} />
         <SummaryCard label="Комиссии/налоги" value={money(Number(s.fees || 0) + Number(s.tax || 0))} />
-        <SummaryCard label="Оплачено поставщикам" value={money(s.supplierPaid)} />
+        <SummaryCard label="Оплачено поставщикам" value={dualCurrency(Number(s.supplierPaidUsd || 0), Number(s.supplierPaidRub || 0))} />
       </div>
 
       <section className="settings-panel settings-panel-wide">

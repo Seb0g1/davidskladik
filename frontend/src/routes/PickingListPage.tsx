@@ -244,7 +244,7 @@ export function PickingListPage() {
   const [allKnownSuppliers, setAllKnownSuppliers] = useState<string[]>([]);
 
   const updateMutation = useMutation({
-    mutationFn: ({ key, nextStatus, snoozeDays, permanent, pickedQuantity, pricePaidRub }: { key: string; nextStatus: string; snoozeDays?: number; permanent?: boolean; pickedQuantity?: number; pricePaidRub?: number }) => {
+    mutationFn: ({ key, nextStatus, snoozeDays, permanent, pickedQuantity, pricePaidRub, pricePaid }: { key: string; nextStatus: string; snoozeDays?: number; permanent?: boolean; pickedQuantity?: number; pricePaidRub?: number; pricePaid?: number }) => {
       setPendingPickKeys((prev) => new Set(prev).add(key));
       return fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}`, SupplierPickingUpdateSchema, patchBody({
         status: nextStatus,
@@ -252,6 +252,7 @@ export function PickingListPage() {
         ...(permanent ? { permanent: true } : {}),
         ...(pickedQuantity != null ? { pickedQuantity } : {}),
         ...(pricePaidRub != null ? { pricePaidRub } : {}),
+        ...(pricePaid != null ? { pricePaid } : {}),
       }));
     },
     onSuccess: (_data, variables) => {
@@ -294,13 +295,13 @@ export function PickingListPage() {
     },
   });
   const pickAllMutation = useMutation({
-    mutationFn: async (rows: Array<{ key: string; pricePaidRub?: number }>) => {
-      for (const { key, pricePaidRub } of rows) {
+    mutationFn: async (rows: Array<{ key: string; pricePaidRub?: number; pricePaid?: number }>) => {
+      for (const { key, pricePaidRub, pricePaid } of rows) {
         setPendingPickKeys((prev) => new Set(prev).add(key));
         await fetchJson(
           `/api/supplier-picking-list/${encodeURIComponent(key)}`,
           SupplierPickingUpdateSchema,
-          patchBody({ status: "picked", ...(pricePaidRub != null ? { pricePaidRub } : {}) })
+          patchBody({ status: "picked", ...(pricePaidRub != null ? { pricePaidRub } : {}), ...(pricePaid != null ? { pricePaid } : {}) })
         );
         setPendingPickKeys((prev) => { const next = new Set(prev); next.delete(key); return next; });
       }
@@ -357,8 +358,8 @@ export function PickingListPage() {
   });
 
   const supplierReturnMutation = useMutation({
-    mutationFn: ({ key, amountRub }: { key: string; amountRub?: number }) =>
-      fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}/supplier-return`, SupplierPickingUpdateSchema, mutationBody({ amountRub })),
+    mutationFn: ({ key, amount }: { key: string; amount?: number }) =>
+      fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}/supplier-return`, SupplierPickingUpdateSchema, mutationBody({ amount })),
     onSuccess: () => {
       setSupplierReturnConfirm(null);
       void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
@@ -1753,15 +1754,16 @@ export function PickingListPage() {
               const draftNote = paymentNotes[supplierName] || "";
               const total = currentGroupTotal(supplierRows);
               const totalRub = currentGroupTotalRub(supplierRows, usdRate);
-              const supplierCurrency = String(supplierRows[0]?.priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD";
+              // The server knows the supplier's currency (USD, RUB for Инна); rows are only a fallback.
+              const supplierCurrency = String((ledger as Record<string, unknown>).currency || supplierRows[0]?.priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD";
               const totalQtyAll = supplierRows.reduce((s, r) => s + (r.quantity || 1), 0);
               const hasReseller = supplierRows.some(r => r.reseller);
               // Balances come ready from the server (same function as the suppliers page).
               const ledgerRecord = ledger as Record<string, unknown>;
               const isUsdSupplier = supplierCurrency === "USD";
-              const balanceNative = Number((isUsdSupplier ? ledgerRecord.balanceUsd : ledgerRecord.balanceRub ?? ledgerRecord.balance) || 0);
-              const debtNative = Number((isUsdSupplier ? ledgerRecord.debtTotalUsd : ledgerRecord.debtTotalRub ?? ledgerRecord.debtTotal) || 0);
-              const paidNative = Number((isUsdSupplier ? ledgerRecord.paidTotalUsdEquiv : ledgerRecord.paidTotalRubEquiv ?? ledgerRecord.paidTotal) || 0);
+              const balanceNative = Number(ledgerRecord.balance || 0);
+              const debtNative = Number(ledgerRecord.debtTotal || 0);
+              const paidNative = Number(ledgerRecord.paidTotal || 0);
               const isOverpaid = balanceNative >= 0.005;
               const isInDebt = balanceNative <= -0.005;
               return (
@@ -1945,7 +1947,8 @@ export function PickingListPage() {
                                                       const pricePaidRub = finalPrice != null && finalPrice > 0
                                                         ? (pickAllConfirm.isUsd ? Math.round(finalPrice * usdRate) : finalPrice)
                                                         : undefined;
-                                                      const toPickRows = openRows.filter(r => !pendingPickKeys.has(r.key)).map(r => ({ key: r.key, pricePaidRub }));
+                                                      const pricePaid = finalPrice != null && finalPrice > 0 ? finalPrice : undefined;
+                                                      const toPickRows = openRows.filter(r => !pendingPickKeys.has(r.key)).map(r => ({ key: r.key, pricePaidRub, pricePaid }));
                                                       if (toPickRows.length) { pickAllMutation.mutate(toPickRows); setPickAllConfirm(null); }
                                                     }
                                                   }}
@@ -1972,7 +1975,8 @@ export function PickingListPage() {
                                                 const pricePaidRub = finalPrice != null && finalPrice > 0
                                                   ? (pickAllConfirm.isUsd ? Math.round(finalPrice * usdRate) : finalPrice)
                                                   : undefined;
-                                                const toPickRows = openRows.filter(r => !pendingPickKeys.has(r.key)).map(r => ({ key: r.key, pricePaidRub }));
+                                                const pricePaid = finalPrice != null && finalPrice > 0 ? finalPrice : undefined;
+                                                      const toPickRows = openRows.filter(r => !pendingPickKeys.has(r.key)).map(r => ({ key: r.key, pricePaidRub, pricePaid }));
                                                 if (toPickRows.length === 0) return;
                                                 pickAllMutation.mutate(toPickRows);
                                                 setPickAllConfirm(null);
@@ -2105,7 +2109,7 @@ export function PickingListPage() {
                                             : undefined;
                                           navigator.vibrate?.(80);
                                           currentSupplierRef.current = row.supplierName || null;
-                                          updateMutation.mutate({ key: row.key, nextStatus: "picked", pickedQuantity: qty, pricePaidRub });
+                                          updateMutation.mutate({ key: row.key, nextStatus: "picked", pickedQuantity: qty, pricePaidRub, pricePaid: priceRaw && priceRaw > 0 ? priceRaw : undefined });
                                         }}
                                       >
                                         {pendingPickKeys.has(row.key) ? <Loader2 size={15} className="spin" /> : <Check size={16} />} Собрал
@@ -2141,7 +2145,7 @@ export function PickingListPage() {
                                           placeholder={isUsd ? (row.price ? `${row.price} $` : "Сумма, $") : (priceRub ? `${priceRub.toLocaleString("ru-RU")} ₽` : "Сумма, ₽")}
                                           value={priceDrafts[row.key] || ""}
                                           onChange={(e) => setPriceDrafts((p) => ({ ...p, [row.key]: e.target.value }))}
-                                          title={isUsd ? "Сумма в USD — автоматически конвертируется в рубли" : "Фактическая цена товара у поставщика (₽)"}
+                                          title={isUsd ? "Фактическая цена за штуку, $ — в долг поставщику идёт она" : "Фактическая цена за штуку, ₽"}
                                         />
                                       </div>
                                     ) : null}
@@ -2161,7 +2165,7 @@ export function PickingListPage() {
                                         type="button"
                                         disabled={supplierReturnMutation.isPending}
                                         onClick={() => {
-                                          const defaultAmount = row.pricePaidRub ?? (row.price > 0 ? Math.round(row.price * usdRate) : 0);
+                                          const defaultAmount = Number(row.pricePaid || row.price || 0) * Math.max(1, Number(row.pickedQuantity || row.quantity || 1));
                                           setSupplierReturnConfirm({ key: row.key, amountDraft: defaultAmount > 0 ? String(defaultAmount) : "", supplierName: row.supplierName, productName: row.productName || row.offerId, defaultAmount });
                                         }}
                                       >
@@ -2186,7 +2190,7 @@ export function PickingListPage() {
                                       ) : null}
                                       {row.status === "returned" && !row.supplierReturnedAt ? (
                                         <button className="secondary-action" type="button" disabled={supplierReturnMutation.isPending} onClick={() => {
-                                          const defaultAmount = row.pricePaidRub ?? (row.price > 0 ? Math.round(row.price * usdRate) : 0);
+                                          const defaultAmount = Number(row.pricePaid || row.price || 0) * Math.max(1, Number(row.pickedQuantity || row.quantity || 1));
                                           setSupplierReturnConfirm({ key: row.key, amountDraft: defaultAmount > 0 ? String(defaultAmount) : "", supplierName: row.supplierName, productName: row.productName || row.offerId, defaultAmount });
                                           setOpenActionMenu(null);
                                         }}>
@@ -2242,7 +2246,7 @@ export function PickingListPage() {
                                           <RotateCcw size={14} /> Возврат поставщику: {supplierReturnConfirm.productName}
                                         </div>
                                         <div className="supplier-return-confirm-row">
-                                          <label className="supplier-return-confirm-label">Сумма возврата, ₽</label>
+                                          <label className="supplier-return-confirm-label">Сумма возврата, {currencySymbol(supplierCurrency)}</label>
                                           <input
                                             className="supplier-return-confirm-input"
                                             type="number"
@@ -2253,18 +2257,18 @@ export function PickingListPage() {
                                             autoFocus
                                             onChange={(e) => setSupplierReturnConfirm((p) => p ? { ...p, amountDraft: e.target.value } : p)}
                                             onKeyDown={(e) => {
-                                              if (e.key === "Enter" && amt > 0) supplierReturnMutation.mutate({ key: row.key, amountRub: amt });
+                                              if (e.key === "Enter" && amt > 0) supplierReturnMutation.mutate({ key: row.key, amount: amt });
                                               if (e.key === "Escape") setSupplierReturnConfirm(null);
                                             }}
                                           />
                                         </div>
-                                        {amt > 0 ? <div className="supplier-return-confirm-result">Кредит поставщику: +{amt.toLocaleString("ru-RU")} ₽</div> : null}
+                                        {amt > 0 ? <div className="supplier-return-confirm-result">Долг поставщику уменьшится на {amt.toLocaleString("ru-RU")} {currencySymbol(supplierCurrency)}</div> : null}
                                         <div className="supplier-return-confirm-actions">
                                           <button
                                             className="primary-action"
                                             type="button"
                                             disabled={supplierReturnMutation.isPending || !(amt > 0)}
-                                            onClick={() => supplierReturnMutation.mutate({ key: row.key, amountRub: amt })}
+                                            onClick={() => supplierReturnMutation.mutate({ key: row.key, amount: amt })}
                                           >
                                             {supplierReturnMutation.isPending ? <><Loader2 className="spin" size={14} /> Сохраняю…</> : <><Check size={14} /> Записать возврат</>}
                                           </button>

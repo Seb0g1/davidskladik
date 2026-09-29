@@ -44,6 +44,8 @@ function normalizeSupplierPickingRow(input = {}) {
     requestRowId: cleanText(input.requestRowId || input.rowId),
     pickedQuantity: input.pickedQuantity != null ? Math.max(1, Math.round(Number(input.pickedQuantity) || 1)) : null,
     pricePaidRub: input.pricePaidRub != null ? (normalizeFinanceMoney(input.pricePaidRub, 0) || null) : null,
+    // Actual unit price the picker paid, in the supplier's own currency ($, or ₽ for Инна).
+    pricePaid: input.pricePaid != null ? (normalizeFinanceMoney(input.pricePaid, 0) || null) : null,
     status,
     createdAt: input.createdAt || new Date().toISOString(),
     createdBy: cleanText(input.createdBy || input.committedBy),

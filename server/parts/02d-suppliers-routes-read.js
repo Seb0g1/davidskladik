@@ -173,7 +173,8 @@ app.post("/api/supplier-ledger/payments", requireStaff, async (request, response
     const amount = normalizeFinanceMoney(request.body?.amount, 0);
     if (!supplierName && !partnerId) return response.status(400).json({ error: "supplierName or partnerId is required.", code: "supplier_ledger_identity_required" });
     if (!(amount > 0)) return response.status(400).json({ error: "Payment amount must be greater than zero.", code: "supplier_ledger_amount_required" });
-    const currency = supplierLedgerRequestCurrency(request.body?.currency);
+    // Always the supplier's own currency (USD, or RUB for Инна): whatever the client sent.
+    const currency = await supplierLedgerCurrencyFor({ supplierName, partnerId });
     const usdRate = await supplierLedgerCurrentUsdRate();
     const entry = normalizeSupplierLedgerEntry({
       sourceKey: `payment:${crypto.randomUUID()}`,
@@ -327,6 +328,10 @@ app.post("/api/supplier-ledger/fix-rub-amounts", requireAdmin, async (request, r
     const supplierName = cleanText(request.body?.supplierName || "");
     const partnerId = cleanText(request.body?.partnerId || "");
     if (!supplierName && !partnerId) return response.status(400).json({ error: "supplierName or partnerId is required." });
+    // Relabelling prices as RUB is only right for a RUB supplier; on a USD one it would turn 75 $ into 75 ₽.
+    if (await supplierLedgerCurrencyFor({ supplierName, partnerId }) !== "RUB") {
+      return response.status(409).json({ error: "Поставщик ведётся в долларах — пересчёт в рубли не нужен.", code: "supplier_not_rub" });
+    }
     // Load all active purchase_debt entries for this supplier
     const where = {
       AND: [
@@ -375,9 +380,10 @@ app.post("/api/supplier-ledger/fix-rub-amounts", requireAdmin, async (request, r
 });
 
 // Конвертация старых RUB-платежей USD-поставщиков обратно в USD.
-// Платежи хранились как Math.round(usd × rate) — делим на текущий курс и округляем до 2 знаков.
-// Поддерживает пересчёт ранее мигрированных записей (raw._migratedFromRub) при смене курса.
-// Параметр rate в body/query переопределяет getUsdRate().
+// Платежи хранились как Math.round(usd × rate) — делим на курс, записанный в самой записи
+// (raw.usdRate), а если его нет — на текущий.
+// Уже мигрированные записи больше не пересчитываются — повторный пересчёт по новому курсу и был дрейфом.
+// Параметр rate в body/query явно задаёт курс для всех записей.
 app.post("/api/supplier-ledger/migrate-usd-payments", requireAdmin, async (request, response, next) => {
   try {
     if (!shouldUsePostgresStorage()) {
@@ -403,7 +409,7 @@ app.post("/api/supplier-ledger/migrate-usd-payments", requireAdmin, async (reque
       where: { currency: "RUB", amount: { gt: 0 }, status: "active" },
     });
     let migrated = 0;
-    let remigrated = 0;
+    const remigrated = 0;
     let skipped = 0;
     const details = [];
     for (const entry of rubEntries) {
@@ -412,49 +418,22 @@ app.post("/api/supplier-ledger/migrate-usd-payments", requireAdmin, async (reque
       const isUsd = (pid && usdPartnerIds.has(pid)) || (sname && usdNames.has(sname));
       if (!isUsd) { skipped++; continue; }
       const amountRub = Number(entry.amount);
-      let amountUsd = Math.round((amountRub / usdRate) * 100) / 100;
-      if (Math.abs(amountUsd - Math.round(amountUsd)) < 0.5) amountUsd = Math.round(amountUsd);
+      const entryRate = rateOverride > 0 ? rateOverride : (Number(entry.raw?.usdRate || 0) || usdRate);
+      let amountUsd = Math.round((amountRub / entryRate) * 100) / 100;
+      // Snap only rounding noise (e.g. 49.99 → 50), not real cents.
+      if (Math.abs(amountUsd - Math.round(amountUsd)) < 0.02) amountUsd = Math.round(amountUsd);
       if (!dryRun) {
         await prisma.supplierLedgerEntry.update({
           where: { id: entry.id },
           data: {
             amount: amountUsd,
             currency: "USD",
-            raw: { ...(entry.raw && typeof entry.raw === "object" ? entry.raw : {}), _migratedFromRub: amountRub, _migratedAt: new Date().toISOString(), _migratedRate: usdRate },
+            raw: { ...(entry.raw && typeof entry.raw === "object" ? entry.raw : {}), usdRate: entryRate, _migratedFromRub: amountRub, _migratedAt: new Date().toISOString(), _migratedRate: entryRate },
           },
         });
       }
-      details.push({ id: entry.id, supplierName: entry.supplierName, entryType: entry.entryType, amountRub, amountUsd, rate: usdRate, phase: "new" });
+      details.push({ id: entry.id, supplierName: entry.supplierName, entryType: entry.entryType, amountRub, amountUsd, rate: entryRate, phase: "new" });
       migrated++;
-    }
-
-    // Phase 2: уже мигрированные USD-записи с _migratedFromRub → пересчитать по новому курсу
-    const usdEntries = await prisma.supplierLedgerEntry.findMany({
-      where: { currency: "USD", amount: { gt: 0 }, status: "active" },
-    });
-    for (const entry of usdEntries) {
-      const raw = entry.raw && typeof entry.raw === "object" ? entry.raw : {};
-      const migratedFromRub = Number(raw._migratedFromRub || 0);
-      if (!(migratedFromRub > 0)) continue;
-      const pid = cleanText(entry.partnerId || "");
-      const sname = cleanText(entry.supplierName || "").toLowerCase();
-      const isUsd = (pid && usdPartnerIds.has(pid)) || (sname && usdNames.has(sname));
-      if (!isUsd) continue;
-      const oldUsd = Number(entry.amount);
-      let amountUsd = Math.round((migratedFromRub / usdRate) * 100) / 100;
-      if (Math.abs(amountUsd - Math.round(amountUsd)) < 0.5) amountUsd = Math.round(amountUsd);
-      if (Math.abs(amountUsd - oldUsd) < 0.01) continue; // уже верно
-      if (!dryRun) {
-        await prisma.supplierLedgerEntry.update({
-          where: { id: entry.id },
-          data: {
-            amount: amountUsd,
-            raw: { ...raw, _migratedAt: new Date().toISOString(), _migratedRate: usdRate, _prevUsd: oldUsd },
-          },
-        });
-      }
-      details.push({ id: entry.id, supplierName: entry.supplierName, entryType: entry.entryType, amountRub: migratedFromRub, amountUsd, oldUsd, rate: usdRate, phase: "remigrate" });
-      remigrated++;
     }
 
     suppliersListCache = null;
@@ -526,13 +505,14 @@ app.post("/api/supplier-ledger/adjust", requireAdmin, async (request, response, 
     const targetRaw = rawTarget === undefined || rawTarget === null || rawTarget === "" ? NaN : Number(rawTarget);
     const note = cleanText(request.body?.note || "");
     // targetBalance is in the supplier's own currency; the correction is stored in it too.
-    const currency = supplierLedgerRequestCurrency(request.body?.currency);
+    // Always the supplier's own currency (USD, or RUB for Инна): whatever the client sent.
+    const currency = await supplierLedgerCurrencyFor({ supplierName, partnerId });
     if (!supplierName && !partnerId) return response.status(400).json({ error: "supplierName or partnerId is required.", code: "supplier_ledger_identity_required" });
     if (!Number.isFinite(targetRaw)) return response.status(400).json({ error: "targetBalance is required.", code: "target_balance_required" });
     const targetBalance = normalizeFinanceMoney(targetRaw, 0);
     const usdRate = await supplierLedgerCurrentUsdRate();
     const current = await listSupplierLedgerEntries({ supplierName, partnerId, status: "active", limit: 1000, period: "all" });
-    const currentBalance = normalizeFinanceMoney(currency === "USD" ? current.summary.balanceUsd : current.summary.balanceRub, 0);
+    const currentBalance = normalizeFinanceMoney(current.summary.balance, 0);
     const delta = normalizeFinanceMoney(targetBalance - currentBalance, 0);
     if (Math.abs(delta) < 0.005) {
       return response.json({ ok: true, skipped: true, currency, currentBalance, targetBalance, delta: 0, message: "Баланс уже совпадает, корректировка не нужна." });
@@ -589,7 +569,8 @@ app.post("/api/supplier-ledger/returns", requireAdmin, async (request, response,
     const amount = normalizeFinanceMoney(request.body?.amount, 0);
     if (!supplierName && !partnerId) return response.status(400).json({ error: "supplierName or partnerId is required.", code: "supplier_ledger_identity_required" });
     if (!(amount > 0)) return response.status(400).json({ error: "Return amount must be greater than zero.", code: "supplier_ledger_amount_required" });
-    const currency = supplierLedgerRequestCurrency(request.body?.currency);
+    // Always the supplier's own currency (USD, or RUB for Инна): whatever the client sent.
+    const currency = await supplierLedgerCurrencyFor({ supplierName, partnerId });
     const usdRate = await supplierLedgerCurrentUsdRate();
     const entry = normalizeSupplierLedgerEntry({
       sourceKey: `supplier_return:${crypto.randomUUID()}`,
