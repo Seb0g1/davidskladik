@@ -159,7 +159,11 @@ function supplierLedgerSummaryFromEntries(entries = [], { currency = "" } = {}) 
   for (const entry of active) {
     let value;
     if (isLegacySupplierBalanceCheckpoint(entry)) {
-      value = Number(entry.raw.targetBalance) - balance;
+      // The target is in the entry's currency; one written in the other currency is converted
+      // like any other legacy leftover.
+      const target = supplierLedgerEntryNative({ ...entry, entryType: "balance_correction", amount: entry.raw.targetBalance }, cur, debtNativeByKey);
+      value = target.value - balance;
+      if (target.foreign) foreignEntries += 1;
     } else {
       const native = supplierLedgerEntryNative(entry, cur, debtNativeByKey);
       value = native.value;

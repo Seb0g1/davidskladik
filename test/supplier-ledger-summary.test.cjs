@@ -96,6 +96,16 @@ test("legacy 'Свести' sets the balance to its target in the supplier curre
   assert.equal(s.balance, 9);
 });
 
+test("legacy 'Свести' written in rubles for a dollar supplier converts its target, not reads it as dollars", () => {
+  const legacy = {
+    id: "c3", entryType: "balance_correction", partnerId: "34", amount: 209971.51, currency: "RUB", status: "active",
+    occurredAt: at(14), raw: { source: "balance_correction", currentBalance: 4617.49, targetBalance: 9500 },
+  };
+  const s = summarize([debt(500, { day: 5 }), legacy], { currency: "USD" });
+  assert.equal(s.balance, 100);
+  assert.equal(s.foreignEntries, 1);
+});
+
 test("new corrections are plain deltas", () => {
   const corr = { id: "c2", entryType: "balance_correction", partnerId: "34", amount: 14.57, currency: "USD", status: "active", occurredAt: at(24), raw: { mode: "delta", targetBalance: 0 } };
   assert.equal(summarize([debt(14.57), corr], { currency: "USD" }).balance, 0);
