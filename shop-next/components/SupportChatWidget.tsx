@@ -1,19 +1,20 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import ConsentCheck from "@/components/ConsentCheck";
 import { MessageCircleHeart, X, Send, ChevronDown, Loader2, CheckCheck, Clock } from "lucide-react";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_BASE ?? "") + "/api/shop/support";
 
 const S = {
-  bg:          "#0E0D0B",
-  surface:     "#161512",
-  surface2:    "#1D1C18",
-  border:      "rgba(255,252,245,0.07)",
-  borderMd:    "rgba(255,252,245,0.13)",
-  text:        "#F4EFE6",
-  muted:       "rgba(244,239,230,0.48)",
-  accent:      "#C9A96E",
-  accentLight: "#D9BF8F",
+  bg:          "var(--surface)",
+  surface:     "var(--surface)",
+  surface2:    "var(--surface)",
+  border:      "rgba(var(--ink-rgb),0.056)",
+  borderMd:    "rgba(var(--ink-rgb),0.104)",
+  text:        "var(--ink)",
+  muted:       "rgba(var(--ink-rgb),0.55)",
+  accent:      "var(--accent)",
+  accentLight: "var(--accent2)",
 };
 
 type Msg = { id: string; role: "user" | "admin"; body: string; createdAt: string };
@@ -25,6 +26,7 @@ export default function SupportChatWidget() {
   const [phase, setPhase] = useState<Phase>("closed");
   const [categories, setCategories] = useState<string[]>([]);
   const [name, setName] = useState("");
+  const [consent, setConsent] = useState(false);
   const [category, setCategory] = useState("");
   const [firstMsg, setFirstMsg] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -92,6 +94,7 @@ export default function SupportChatWidget() {
   async function handleStart(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim() || !category || !firstMsg.trim()) { setError("Заполните все поля"); return; }
+    if (!consent) { setError("Отметьте согласие на обработку персональных данных"); return; }
     setSubmitting(true); setError("");
     try {
       const r = await fetch(`${API_BASE}/chats`, {
@@ -151,8 +154,8 @@ export default function SupportChatWidget() {
           style={{
             position: "fixed", bottom: fabBottom, right: fabRight, zIndex: 9999,
             width: 56, height: 56, borderRadius: "50%",
-            background: "linear-gradient(135deg, #C9A96E, #B89050)",
-            boxShadow: "0 8px 32px rgba(0,0,0,0.45), 0 2px 8px rgba(0,0,0,0.3)",
+            background: "linear-gradient(135deg, var(--accent), var(--accent))",
+            boxShadow: "0 8px 32px rgba(var(--ink-rgb),0.158), 0 2px 8px rgba(var(--ink-rgb),0.105)",
             border: "none", cursor: "pointer",
             display: "flex", alignItems: "center", justifyContent: "center",
             transition: "transform 0.2s ease, box-shadow 0.2s ease",
@@ -164,7 +167,7 @@ export default function SupportChatWidget() {
           {unread && (
             <span style={{
               position: "absolute", top: 4, right: 4, width: 12, height: 12,
-              borderRadius: "50%", background: "#f43f5e", border: "2px solid #0E0D0B",
+              borderRadius: "50%", background: "var(--danger)", border: "2px solid var(--surface)",
             }} />
           )}
         </button>
@@ -178,17 +181,17 @@ export default function SupportChatWidget() {
           display: "flex", flexDirection: "column",
           background: S.surface, borderRadius: 20,
           border: `1px solid ${S.borderMd}`,
-          boxShadow: "0 24px 64px rgba(0,0,0,0.5), 0 4px 16px rgba(201,169,110,0.1)",
+          boxShadow: "0 24px 64px rgba(var(--ink-rgb),0.175), 0 4px 16px rgba(var(--accent-rgb),0.1)",
           overflow: "hidden",
         }}>
           {/* Header */}
           <div style={{
             display: "flex", alignItems: "center", gap: 10, padding: "12px 16px",
-            background: "rgba(201,169,110,0.08)", borderBottom: `1px solid ${S.border}`, flexShrink: 0,
+            background: "rgba(var(--accent-rgb),0.08)", borderBottom: `1px solid ${S.border}`, flexShrink: 0,
           }}>
             <div style={{
               width: 36, height: 36, borderRadius: 12, flexShrink: 0,
-              background: "linear-gradient(135deg, #C9A96E, #B89050)",
+              background: "linear-gradient(135deg, var(--accent), var(--accent))",
               display: "flex", alignItems: "center", justifyContent: "center",
             }}>
               <MessageCircleHeart size={18} style={{ color: "#fff" }} />
@@ -198,7 +201,7 @@ export default function SupportChatWidget() {
               <div style={{ fontSize: 11, color: S.muted }}>Обычно отвечаем в течение часа</div>
             </div>
             <button type="button" onClick={closeWidget} style={{
-              padding: 6, borderRadius: 8, background: "rgba(255,255,255,0.06)", border: "none",
+              padding: 6, borderRadius: 8, background: "rgba(var(--ink-rgb),0.048)", border: "none",
               color: S.muted, cursor: "pointer", display: "flex",
             }}>
               <ChevronDown size={16} />
@@ -221,7 +224,7 @@ export default function SupportChatWidget() {
                       background: S.surface2, border: `1.5px solid ${S.border}`, color: S.text,
                       outline: "none", fontFamily: "inherit", boxSizing: "border-box",
                     }}
-                    onFocus={e => (e.target.style.borderColor = "rgba(201,169,110,0.45)")}
+                    onFocus={e => (e.target.style.borderColor = "rgba(var(--accent-rgb),0.45)")}
                     onBlur={e => (e.target.style.borderColor = S.border)}
                   />
                 </div>
@@ -235,7 +238,7 @@ export default function SupportChatWidget() {
                       outline: "none", fontFamily: "inherit", cursor: "pointer", boxSizing: "border-box",
                       appearance: "none",
                     }}
-                    onFocus={e => (e.target.style.borderColor = "rgba(201,169,110,0.45)")}
+                    onFocus={e => (e.target.style.borderColor = "rgba(var(--accent-rgb),0.45)")}
                     onBlur={e => (e.target.style.borderColor = S.border)}
                   >
                     <option value="">Выберите категорию</option>
@@ -252,17 +255,18 @@ export default function SupportChatWidget() {
                       background: S.surface2, border: `1.5px solid ${S.border}`, color: S.text,
                       outline: "none", fontFamily: "inherit", resize: "none", boxSizing: "border-box",
                     }}
-                    onFocus={e => (e.target.style.borderColor = "rgba(201,169,110,0.45)")}
+                    onFocus={e => (e.target.style.borderColor = "rgba(var(--accent-rgb),0.45)")}
                     onBlur={e => (e.target.style.borderColor = S.border)}
                   />
                 </div>
-                {error && <p style={{ fontSize: 12, color: "#f87171" }}>{error}</p>}
+                <ConsentCheck kind="pd" compact checked={consent} onChange={setConsent} />
+                {error && <p style={{ fontSize: 12, color: "var(--danger)" }}>{error}</p>}
                 <button
-                  type="submit" disabled={submitting}
+                  type="submit" disabled={submitting || !consent}
                   style={{
                     padding: "11px", borderRadius: 12, fontSize: 13, fontWeight: 700, color: "#fff",
-                    background: "linear-gradient(135deg, #C9A96E, #B89050)", border: "none", cursor: "pointer",
-                    opacity: submitting ? 0.6 : 1,
+                    background: "linear-gradient(135deg, var(--accent), var(--accent))", border: "none", cursor: "pointer",
+                    opacity: submitting || !consent ? 0.6 : 1,
                     display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
                   }}
                 >
@@ -285,7 +289,7 @@ export default function SupportChatWidget() {
                     {msg.role === "admin" && (
                       <div style={{
                         width: 24, height: 24, borderRadius: "50%", flexShrink: 0, marginRight: 6, marginTop: 2,
-                        background: "linear-gradient(135deg, #C9A96E, #B89050)",
+                        background: "linear-gradient(135deg, var(--accent), var(--accent))",
                         display: "flex", alignItems: "center", justifyContent: "center",
                       }}>
                         <MessageCircleHeart size={12} style={{ color: "#fff" }} />
@@ -294,11 +298,11 @@ export default function SupportChatWidget() {
                     <div style={{
                       maxWidth: "78%", padding: "9px 12px",
                       borderRadius: msg.role === "user" ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
-                      background: msg.role === "user" ? "linear-gradient(135deg, #C9A96E, #B89050)" : S.surface2,
+                      background: msg.role === "user" ? "linear-gradient(135deg, var(--accent), var(--accent))" : S.surface2,
                       border: msg.role === "admin" ? `1px solid ${S.border}` : "none",
                     }}>
                       <p style={{ fontSize: 13, color: S.text, lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word", margin: 0 }}>{msg.body}</p>
-                      <p style={{ fontSize: 10, color: msg.role === "user" ? "rgba(255,255,255,0.5)" : S.muted, marginTop: 3, display: "flex", alignItems: "center", gap: 3 }}>
+                      <p style={{ fontSize: 10, color: msg.role === "user" ? "rgba(var(--ink-rgb),0.57)" : S.muted, marginTop: 3, display: "flex", alignItems: "center", gap: 3 }}>
                         <Clock size={9} />
                         {new Date(msg.createdAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
                         {msg.role === "user" && <CheckCheck size={10} style={{ marginLeft: 2 }} />}
@@ -327,12 +331,12 @@ export default function SupportChatWidget() {
                       background: S.surface2, border: `1.5px solid ${S.border}`, color: S.text,
                       outline: "none", fontFamily: "inherit",
                     }}
-                    onFocus={e => (e.target.style.borderColor = "rgba(201,169,110,0.45)")}
+                    onFocus={e => (e.target.style.borderColor = "rgba(var(--accent-rgb),0.45)")}
                     onBlur={e => (e.target.style.borderColor = S.border)}
                   />
                   <button type="submit" disabled={!reply.trim() || sending} style={{
                     padding: "9px 10px", borderRadius: 10, border: "none", cursor: "pointer",
-                    background: "linear-gradient(135deg, #C9A96E, #B89050)",
+                    background: "linear-gradient(135deg, var(--accent), var(--accent))",
                     display: "flex", alignItems: "center", justifyContent: "center",
                     opacity: (!reply.trim() || sending) ? 0.4 : 1, flexShrink: 0,
                   }}>
@@ -343,7 +347,7 @@ export default function SupportChatWidget() {
                 <div style={{ padding: "10px 12px", borderTop: `1px solid ${S.border}`, flexShrink: 0 }}>
                   <button type="button" onClick={startNew} style={{
                     width: "100%", padding: "9px", borderRadius: 10, fontSize: 12, fontWeight: 600,
-                    color: S.accentLight, background: "rgba(201,169,110,0.08)", border: "1px solid rgba(201,169,110,0.2)",
+                    color: S.accentLight, background: "rgba(var(--accent-rgb),0.08)", border: "1px solid rgba(var(--accent-rgb),0.2)",
                     cursor: "pointer",
                   }}>
                     Открыть новое обращение

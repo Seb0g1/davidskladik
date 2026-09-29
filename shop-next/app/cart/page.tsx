@@ -1,23 +1,25 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { productImg, productImgSet } from "@/lib/img";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Minus, Plus, Trash2, ShoppingBag, ArrowRight, Package } from "lucide-react";
 import { useCart } from "@/components/CartContext";
+import { OzonPayLogo } from "@/components/OzonPay";
 import { ruPlural } from "@/lib/utils";
 import { toProductSlug } from "@/lib/slug";
 
 const S = {
-  bg:      "#0E0D0B",
-  surface: "#161512",
-  surface2:"#1D1C18",
-  border:  "rgba(255,252,245,0.07)",
-  borderMd:"rgba(255,252,245,0.13)",
-  text:    "#F4EFE6",
-  muted:   "rgba(244,239,230,0.48)",
-  subtle:  "rgba(244,239,230,0.22)",
-  accent:  "#C9A96E",
-  accent3: "#EDD9B0",
+  bg:      "var(--surface)",
+  surface: "var(--surface)",
+  surface2:"var(--surface)",
+  border:  "rgba(var(--ink-rgb),0.056)",
+  borderMd:"rgba(var(--ink-rgb),0.104)",
+  text:    "var(--ink)",
+  muted:   "rgba(var(--ink-rgb),0.55)",
+  subtle:  "rgba(var(--ink-rgb),0.45)",
+  accent:  "var(--accent)",
+  accent3: "var(--accent2)",
 };
 
 export default function CartPage() {
@@ -30,7 +32,7 @@ export default function CartPage() {
         <div style={{ textAlign: "center", padding: "80px 20px" }}>
           <div style={{
             width: 72, height: 72, borderRadius: 24, display: "flex", alignItems: "center", justifyContent: "center",
-            margin: "0 auto 24px", background: "rgba(201,169,110,0.1)", border: "1px solid rgba(201,169,110,0.2)",
+            margin: "0 auto 24px", background: "rgba(var(--accent-rgb),0.1)", border: "1px solid rgba(var(--accent-rgb),0.2)",
           }}>
             <ShoppingBag size={32} style={{ color: S.accent3 }} strokeWidth={1.5} />
           </div>
@@ -44,7 +46,24 @@ export default function CartPage() {
     );
   }
 
-  const total = totalRub;
+  // delivery tariff from the shop settings (davidsklad → Магазин → Настройки), final price at checkout
+  // with the Ozon-tariff mode the price depends on the city → «от N ₽» here, exact price at checkout
+  const [tariff, setTariff] = useState<{ price: number; freeFrom: number; byCity: boolean } | null>(null);
+  const cartKey = items.map((i) => `${i.product.offerId}:${i.quantity}`).join(",");
+  useEffect(() => {
+    if (!cartKey) return;
+    fetch(`${process.env.NEXT_PUBLIC_API_BASE ?? "https://davidsklad.ru"}/api/shop/checkout/delivery-mode`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: items.map((i) => ({ offerId: i.product.offerId, quantity: i.quantity })), goodsRub: totalRub }),
+    })
+      .then((r) => r.json())
+      .then((d) => setTariff({ price: Math.max(0, Number(d.needCity ? d.fromRub : d.deliveryRub) || 0), freeFrom: Math.max(0, Number(d.freeDeliveryFrom) || 0), byCity: Boolean(d.needCity) }))
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cartKey]);
+  const deliveryRub = tariff?.price ?? 0;
+  const toFree = tariff && deliveryRub > 0 && tariff.freeFrom > 0 ? tariff.freeFrom - totalRub : 0;
+  const total = totalRub + deliveryRub;
 
   return (
     <div style={{ background: S.bg, minHeight: "100vh" }}>
@@ -71,7 +90,7 @@ export default function CartPage() {
                     background: S.surface2, display: "flex", alignItems: "center", justifyContent: "center", textDecoration: "none" }}>
                   {product.images[0]
                     // eslint-disable-next-line @next/next/no-img-element
-                    ? <img src={product.images[0]} alt={product.name} style={{ width: "100%", height: "100%", objectFit: "contain", padding: 6 }} />
+                    ? <img src={productImg(product.images[0], 160)} alt={product.name} style={{ width: "100%", height: "100%", objectFit: "contain", background: "#fff" }} />
                     : <span style={{ fontSize: 22, fontWeight: 700, color: S.subtle }}>{product.brand?.[0] ?? "?"}</span>
                   }
                 </Link>
@@ -102,7 +121,7 @@ export default function CartPage() {
 
                     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                       <span style={{ fontSize: 16, fontWeight: 700, color: S.text }}>
-                        {(product.priceRub * quantity).toLocaleString("ru-RU")} ₽
+                        {(product.priceRub * quantity).toLocaleString("ru-RU")} ₽
                       </span>
                       <button onClick={() => remove(product.offerId)}
                         style={{ padding: 12, background: "none", border: "none", color: S.subtle, cursor: "pointer", borderRadius: 10 }}>
@@ -122,18 +141,25 @@ export default function CartPage() {
             <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 20 }}>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: S.muted }}>
                 <span>Товары · {items.reduce((s, i) => s + i.quantity, 0)} шт.</span>
-                <span style={{ color: S.text, fontWeight: 500 }}>{totalRub.toLocaleString("ru-RU")} ₽</span>
+                <span style={{ color: S.text, fontWeight: 500 }}>{totalRub.toLocaleString("ru-RU")} ₽</span>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: S.muted }}>
-                <span>Доставка Ozon</span>
-                <span style={{ color: "#4ade80", fontWeight: 600 }}>Бесплатно</span>
+                <span>Доставка</span>
+                {!tariff ? <span>…</span> : deliveryRub > 0
+                  ? <span style={{ color: S.text, fontWeight: 500 }}>{tariff.byCity ? "от " : ""}{deliveryRub.toLocaleString("ru-RU")} ₽</span>
+                  : <span style={{ color: "var(--success)", fontWeight: 600 }}>Бесплатно</span>}
               </div>
+              {toFree > 0 && (
+                <div style={{ fontSize: 12, lineHeight: 1.45, color: S.muted, background: "rgba(var(--ink-rgb),0.04)", borderRadius: 12, padding: "8px 10px" }}>
+                  Добавьте товаров ещё на <b style={{ color: S.text }}>{toFree.toLocaleString("ru-RU")} ₽</b> — доставка станет бесплатной
+                </div>
+              )}
             </div>
 
             <div style={{ borderTop: `1px solid ${S.border}`, paddingTop: 16, marginBottom: 20 }}>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 18, fontWeight: 700, color: S.text }}>
                 <span>К оплате</span>
-                <span>{total.toLocaleString("ru-RU")} ₽</span>
+                <span>{tariff?.byCity ? "от " : ""}{total.toLocaleString("ru-RU")} ₽</span>
               </div>
             </div>
 
@@ -144,6 +170,10 @@ export default function CartPage() {
             <div style={{ marginTop: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 11, color: S.subtle }}>
               <Package size={11} />
               <span>Доставка через Ozon · Оригинальная продукция</span>
+            </div>
+            <div style={{ marginTop: 10, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 11, color: S.muted }}>
+              <OzonPayLogo height={16} />
+              <span>Картой, СБП или в рассрочку</span>
             </div>
           </div>
         </div>

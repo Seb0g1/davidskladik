@@ -1,4 +1,4 @@
-import type { ShopProduct, ShopBanner, ShopCategory, ShopSettings, CatalogResponse, BlogPost, TelegramNewsPost, ShopReview, MarketplaceReview, ProductQAItem, FragranceNotes } from "./types";
+import type { ShopContest, ShopProduct, ShopBanner, ShopCategory, ShopSettings, CatalogResponse, BlogPost, TelegramNewsPost, ShopReview, MarketplaceReview, ProductQAItem, FragranceNotes } from "./types";
 
 // Server-side API base — not exposed to browser
 const API_HOST = process.env.API_BASE ?? "https://davidsklad.ru";
@@ -21,7 +21,13 @@ export interface CatalogParams {
   category?: string;
   q?: string;
   inStock?: boolean;
-  sort?: "price_asc" | "price_desc" | "name";
+  sort?: "price_asc" | "price_desc" | "name" | "new" | "popular";
+  gender?: string;
+  line?: string;
+  group?: string;
+  priceMin?: number;
+  priceMax?: number;
+  volume?: number;
 }
 
 export async function fetchCatalog(params: CatalogParams = {}): Promise<CatalogResponse> {
@@ -33,6 +39,8 @@ export async function fetchCatalog(params: CatalogParams = {}): Promise<CatalogR
   if (params.q) qs.set("q", params.q);
   if (params.inStock) qs.set("inStock", "true");
   if (params.sort) qs.set("sort", params.sort);
+  for (const k of ["gender", "line", "group"] as const) if (params[k]) qs.set(k, params[k]!);
+  for (const k of ["priceMin", "priceMax", "volume"] as const) if (params[k]) qs.set(k, String(params[k]));
   return get<CatalogResponse>(`/catalog?${qs}`, { next: { revalidate: 120 } });
 }
 
@@ -49,11 +57,19 @@ export async function fetchCategories(): Promise<ShopCategory[]> {
 }
 
 export async function fetchSettings(): Promise<ShopSettings> {
-  return get<ShopSettings>("/settings", { next: { revalidate: 3600 } });
+  // 5 min: section toggles and delivery prices from the admin show up quickly
+  return get<ShopSettings>("/settings", { next: { revalidate: 300 } });
 }
 
-export async function fetchBrands(): Promise<{ name: string; count: number }[]> {
-  return get<{ name: string; count: number }[]>("/brands", { next: { revalidate: 3600 } });
+export interface ProductVariant { offerId: string; slug: string; volume: string; priceRub: number; inStock: boolean; current: boolean }
+
+export async function fetchVariants(offerId: string): Promise<ProductVariant[]> {
+  return (await get<{ variants: ProductVariant[] }>(`/variants/${encodeURIComponent(offerId)}`, { next: { revalidate: 600 } })).variants ?? [];
+}
+
+export interface BrandInfo { name: string; count: number; inStock?: number; minPrice?: number; image?: string | null }
+export async function fetchBrands(): Promise<BrandInfo[]> {
+  return get<BrandInfo[]>("/brands", { next: { revalidate: 600 } });
 }
 
 export async function fetchPopular(limit = 8): Promise<{ products: ShopProduct[] }> {
@@ -117,4 +133,8 @@ export async function fetchSitemapProducts(): Promise<{ products: { offerId: str
 
 export async function fetchAutoCategories(): Promise<import("./types").AutoCategory[]> {
   return get<import("./types").AutoCategory[]>("/auto-categories", { next: { revalidate: 3600 } });
+}
+
+export async function fetchContests(): Promise<ShopContest[]> {
+  return get<ShopContest[]>("/contests", { next: { revalidate: 60 } });
 }

@@ -44,10 +44,10 @@ function SprayIcon() {
 }
 
 const VARIANTS = {
-  idle:      { backgroundColor: "transparent",           borderColor: "rgba(201,162,94,0.4)",   color: "#d9c79c" },
-  hover:     { backgroundColor: "#c9a25e",               borderColor: "#c9a25e",                color: "#14120f" },
-  launching: { backgroundColor: "rgba(201,162,94,0.15)", borderColor: "rgba(201,162,94,0.8)",   color: "#e9d2a0" },
-  added:     { backgroundColor: "rgba(90,185,110,0.09)", borderColor: "rgba(90,185,110,0.35)",  color: "#7ecb8a" },
+  idle:      { backgroundColor: "transparent",           borderColor: "rgba(var(--accent-rgb),0.4)",   color: "var(--accent2)" },
+  hover:     { backgroundColor: "var(--accent)",               borderColor: "var(--accent)",                color: "var(--paper)" },
+  launching: { backgroundColor: "rgba(var(--accent-rgb),0.15)", borderColor: "rgba(var(--accent-rgb),0.8)",   color: "var(--accent2)" },
+  added:     { backgroundColor: "rgba(var(--success-rgb),0.09)", borderColor: "rgba(var(--success-rgb),0.35)",  color: "var(--success)" },
 }
 
 interface Props {
@@ -133,8 +133,8 @@ export default function AddToCartButton({ product, size = "sm" }: Props) {
           rotate: flyRotate,
           pointerEvents: "none",
           zIndex: 30,
-          color: "#e9d2a0",
-          filter: "drop-shadow(0 0 4px rgba(201,162,94,0.6))",
+          color: "var(--accent2)",
+          filter: "drop-shadow(0 0 4px rgba(var(--accent-rgb),0.6))",
         }}
       >
         <SprayIcon />
@@ -160,8 +160,8 @@ export default function AddToCartButton({ product, size = "sm" }: Props) {
             width: p.size,
             height: p.size,
             borderRadius: "50%",
-            background: "radial-gradient(circle, #f0dcae 0%, #c9a25e 100%)",
-            boxShadow: "0 0 4px rgba(201,162,94,0.6)",
+            background: "radial-gradient(circle, var(--accent2) 0%, var(--accent) 100%)",
+            boxShadow: "0 0 4px rgba(var(--accent-rgb),0.6)",
             pointerEvents: "none",
             zIndex: 20,
             marginLeft: -(p.size / 2),
@@ -184,8 +184,8 @@ export default function AddToCartButton({ product, size = "sm" }: Props) {
         style={{
           height: h,
           padding: `0 ${px}px`,
-          borderRadius: 2,
-          border: "1px solid rgba(201,162,94,0.4)",
+          borderRadius: 10,
+          border: "1px solid rgba(var(--accent-rgb),0.4)",
           fontSize: fs,
           letterSpacing: "0.1em",
           textTransform: "uppercase",
@@ -214,7 +214,7 @@ export default function AddToCartButton({ product, size = "sm" }: Props) {
               inset: 0,
               width: "52%",
               background:
-                "linear-gradient(90deg, transparent, rgba(240,220,174,0.45), transparent)",
+                "linear-gradient(90deg, transparent, rgba(var(--ink-rgb),0.52), transparent)",
               transform: "skewX(-18deg)",
               pointerEvents: "none",
               zIndex: 1,

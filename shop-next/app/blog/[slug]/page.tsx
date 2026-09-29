@@ -16,7 +16,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   try {
     const { post } = await fetchBlogPost(decodeURIComponent(slug));
     return {
-      title: `${post.title} | ${SITE_NAME}`,
+      title: `${post.title}`,
       description: post.excerpt ?? post.title,
       alternates: { canonical: `/blog/${post.slug}` },
       openGraph: {
@@ -55,7 +55,7 @@ export default async function BlogPostPage({ params }: Props) {
     description: post.excerpt ?? undefined,
     image: post.coverUrl ?? undefined,
     datePublished: post.publishedAt ?? post.createdAt,
-    publisher: { "@type": "Organization", name: SITE_NAME, logo: `${SITE_URL}/favicon.svg` },
+    publisher: { "@type": "Organization", name: SITE_NAME, logo: `${SITE_URL}/brand/logo/logo-mark-dark.png` },
     url: `${SITE_URL}/blog/${post.slug}`,
   };
 
@@ -65,22 +65,22 @@ export default async function BlogPostPage({ params }: Props) {
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(articleLd) }} />
 
       <article style={{ maxWidth: 760, margin: "0 auto", padding: "clamp(24px,3vw,48px) clamp(18px,4vw,56px)" }}>
-        <nav style={{ fontSize: 12, color: "rgba(245,244,240,0.45)", marginBottom: 24 }}>
-          <Link href="/" style={{ color: "rgba(245,244,240,0.45)", textDecoration: "none" }}>Главная</Link> /{" "}
-          <Link href="/blog" style={{ color: "rgba(245,244,240,0.45)", textDecoration: "none" }}>Блог</Link> /{" "}
-          <span style={{ color: "#f5f4f0" }}>{post.title}</span>
+        <nav style={{ fontSize: 12, color: "rgba(var(--ink-rgb),0.52)", marginBottom: 24 }}>
+          <Link href="/" style={{ color: "rgba(var(--ink-rgb),0.52)", textDecoration: "none" }}>Главная</Link> /{" "}
+          <Link href="/blog" style={{ color: "rgba(var(--ink-rgb),0.52)", textDecoration: "none" }}>Блог</Link> /{" "}
+          <span style={{ color: "var(--ink)" }}>{post.title}</span>
         </nav>
 
         {post.tags.length > 0 && (
           <div style={{ display: "flex", gap: 6, marginBottom: 20, flexWrap: "wrap" }}>
-            {post.tags.map(t => <span key={t} style={{ fontSize: 10, padding: "3px 10px", borderRadius: 20, border: "1px solid rgba(201,162,94,0.25)", color: "rgba(201,162,94,0.7)", letterSpacing: "0.1em" }}>{t}</span>)}
+            {post.tags.map(t => <span key={t} style={{ fontSize: 10, padding: "3px 10px", borderRadius: 20, border: "1px solid rgba(var(--accent-rgb),0.25)", color: "rgba(var(--accent-rgb),0.7)", letterSpacing: "0.1em" }}>{t}</span>)}
           </div>
         )}
 
-        <h1 style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", fontWeight: 300, fontSize: "clamp(28px,5vw,52px)", color: "#f5f4f0", margin: "0 0 24px", lineHeight: 1.1 }}>{post.title}</h1>
+        <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 300, fontSize: "clamp(28px,5vw,52px)", color: "var(--ink)", margin: "0 0 24px", lineHeight: 1.1 }}>{post.title}</h1>
 
         {(post.publishedAt || post.createdAt) && (
-          <time dateTime={post.publishedAt ?? post.createdAt} style={{ fontSize: 12, color: "rgba(245,244,240,0.35)", display: "block", marginBottom: 32 }}>
+          <time dateTime={post.publishedAt ?? post.createdAt} style={{ fontSize: 12, color: "rgba(var(--ink-rgb),0.45)", display: "block", marginBottom: 32 }}>
             {new Date(post.publishedAt ?? post.createdAt!).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })}
           </time>
         )}
@@ -96,13 +96,13 @@ export default async function BlogPostPage({ params }: Props) {
         )}
 
         {post.content ? (
-          <div className="blog-content" style={{ fontSize: 15, lineHeight: 1.9, color: "rgba(245,244,240,0.7)" }} dangerouslySetInnerHTML={{ __html: post.content }} />
+          <div className="blog-content" style={{ fontSize: 15, lineHeight: 1.9, color: "rgba(var(--ink-rgb),0.8)" }} dangerouslySetInnerHTML={{ __html: post.content }} />
         ) : post.excerpt ? (
-          <p style={{ fontSize: 15, lineHeight: 1.9, color: "rgba(245,244,240,0.7)", margin: 0 }}>{post.excerpt}</p>
+          <p style={{ fontSize: 15, lineHeight: 1.9, color: "rgba(var(--ink-rgb),0.8)", margin: 0 }}>{post.excerpt}</p>
         ) : null}
 
-        <div style={{ marginTop: 48, paddingTop: 24, borderTop: "1px solid rgba(255,255,255,0.07)" }}>
-          <Link href="/blog" style={{ fontSize: 12, color: "rgba(201,162,94,0.7)", textDecoration: "none", letterSpacing: "0.1em" }}>← Все статьи</Link>
+        <div style={{ marginTop: 48, paddingTop: 24, borderTop: "1px solid rgba(var(--ink-rgb),0.056)" }}>
+          <Link href="/blog" style={{ fontSize: 12, color: "rgba(var(--accent-rgb),0.7)", textDecoration: "none", letterSpacing: "0.1em" }}>← Все статьи</Link>
         </div>
       </article>
     </>

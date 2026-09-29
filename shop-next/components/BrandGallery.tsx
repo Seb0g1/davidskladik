@@ -1,6 +1,7 @@
 "use client";
 import { useRef, useState } from "react";
 import Link from "next/link";
+import { brandHref } from "@/lib/landings";
 
 const BRANDS = ["Chanel","Dior","Tom Ford","Hermès","Byredo","Jo Malone","Creed","Guerlain","Givenchy","Prada","Valentino","Burberry","Versace","Montale","Kilian","YSL","Bvlgari","Lancôme","Amouage","Xerjoff","Maison Margiela","Acqua di Parma"];
 
@@ -56,8 +57,8 @@ export default function BrandGallery() {
 
   return (
     <div style={{ position: "relative" }}>
-      <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 80, background: "linear-gradient(to right, #0b0b0b, transparent)", zIndex: 10, pointerEvents: "none" }} />
-      <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 80, background: "linear-gradient(to left, #0b0b0b, transparent)", zIndex: 10, pointerEvents: "none" }} />
+      <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 80, background: "linear-gradient(to right, var(--paper), transparent)", zIndex: 10, pointerEvents: "none" }} />
+      <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 80, background: "linear-gradient(to left, var(--paper), transparent)", zIndex: 10, pointerEvents: "none" }} />
       <div
         ref={trackRef}
         onMouseDown={onMouseDown} onMouseMove={onMouseMove} onMouseUp={onMouseUp}
@@ -67,17 +68,17 @@ export default function BrandGallery() {
         {BRANDS.map((brand) => (
           <Link
             key={brand}
-            href={`/catalog?brand=${encodeURIComponent(brand)}`}
+            href={brandHref(brand)}
             draggable={false}
             onMouseEnter={e => { setHovered(brand); setPos({ x: e.clientX, y: e.clientY }); }}
             onMouseLeave={() => setHovered(null)}
             onMouseMove={e => setPos({ x: e.clientX, y: e.clientY })}
             style={{
-              flexShrink: 0, padding: "12px 28px", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 2,
-              background: hovered === brand ? "rgba(201,162,94,0.08)" : "transparent",
-              borderColor: hovered === brand ? "rgba(201,162,94,0.4)" : "rgba(255,255,255,0.07)",
-              fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", fontSize: 18,
-              color: hovered === brand ? "#e8d5a3" : "#4a473f", whiteSpace: "nowrap", textDecoration: "none",
+              flexShrink: 0, padding: "12px 28px", border: "1px solid rgba(var(--ink-rgb),0.056)", borderRadius: 10,
+              background: hovered === brand ? "rgba(var(--accent-rgb),0.08)" : "transparent",
+              borderColor: hovered === brand ? "rgba(var(--accent-rgb),0.4)" : "rgba(var(--ink-rgb),0.056)",
+              fontFamily: "var(--font-display)", fontSize: 18,
+              color: hovered === brand ? "var(--accent2)" : "rgba(var(--ink-rgb),0.45)", whiteSpace: "nowrap", textDecoration: "none",
               transition: "background 0.3s, border-color 0.3s, color 0.3s",
             }}
           >
@@ -86,9 +87,9 @@ export default function BrandGallery() {
         ))}
       </div>
       {hovered && BRAND_NOTES[hovered] && (
-        <div style={{ position: "fixed", left: pos.x + 14, top: pos.y - 48, pointerEvents: "none", zIndex: 1000, background: "#0f0f0f", border: "1px solid rgba(201,162,94,0.3)", borderRadius: 3, padding: "10px 16px", maxWidth: 260, boxShadow: "0 8px 24px rgba(0,0,0,0.6)" }}>
-          <p style={{ margin: "0 0 4px", fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", fontSize: 15, color: "#f5f4f0" }}>{hovered}</p>
-          <p style={{ margin: 0, fontSize: 11.5, color: "#8b8880", lineHeight: 1.5 }}>{BRAND_NOTES[hovered]}</p>
+        <div style={{ position: "fixed", left: pos.x + 14, top: pos.y - 48, pointerEvents: "none", zIndex: 1000, background: "var(--surface)", border: "1px solid rgba(var(--accent-rgb),0.3)", borderRadius: 14, padding: "10px 16px", maxWidth: 260, boxShadow: "0 8px 24px rgba(var(--ink-rgb),0.21)" }}>
+          <p style={{ margin: "0 0 4px", fontFamily: "var(--font-display)", fontSize: 15, color: "var(--ink)" }}>{hovered}</p>
+          <p style={{ margin: 0, fontSize: 11.5, color: "rgba(var(--ink-rgb),0.66)", lineHeight: 1.5 }}>{BRAND_NOTES[hovered]}</p>
         </div>
       )}
     </div>

@@ -1,4 +1,5 @@
 import type { ShopOrderPayload, ShopOrder } from "./types";
+import { CONSENT_VERSION } from "./legal";
 
 const BASE = (process.env.NEXT_PUBLIC_API_BASE ?? "") + "/api/shop";
 
@@ -64,10 +65,18 @@ export async function getLoyalty(token: string): Promise<LoyaltyData & { ok: boo
 }
 
 export async function stockAlert(offerId: string, email: string): Promise<{ ok: boolean }> {
-  return req<{ ok: boolean }>("/stock-alert", { method: "POST", body: JSON.stringify({ offerId, email }) });
+  return req<{ ok: boolean }>("/stock-alert", { method: "POST", body: JSON.stringify({ offerId, email, consents: { pd: true, version: CONSENT_VERSION } }) });
 }
 
-export async function aiSearch(query: string): Promise<{ ok: boolean; label: string; terms: string[]; notes: string[]; accords: string[]; products: { id: string; offerId: string; name: string; brand: string; priceRub: number; images: string[]; inStock: boolean; _matchTerm?: string }[] }> {
+export type AiProduct = { id: string; offerId: string; name: string; brand: string; priceRub: number; images: string[]; inStock: boolean; _why?: string[]; _match?: number; _notes?: string[] };
+export type AiSearchResult = {
+  ok: boolean; label: string; products: AiProduct[];
+  understood?: { kind: "ref" | "gender" | "note" | "mood" | "neg" | "brand" | "price"; text: string }[];
+  refinements?: string[]; relaxed?: boolean;
+  reference?: { offerId: string; name: string; short: string; brand: string; priceRub: number; images: string[] } | null;
+};
+
+export async function aiSearch(query: string): Promise<AiSearchResult> {
   return req("/ai-search", { method: "POST", body: JSON.stringify({ query }) });
 }
 
@@ -97,13 +106,15 @@ export async function uploadMedia(file: File): Promise<{ ok: boolean; url: strin
   return res.json();
 }
 
-export async function emailSubscribe(email: string, source = "popup"): Promise<{ ok: boolean }> {
-  return req<{ ok: boolean }>("/email-subscribe", { method: "POST", body: JSON.stringify({ email, source }) });
+// only called after both boxes (personal data + ads, 38-ФЗ) are ticked
+export async function emailSubscribe(email: string, source = "popup", quizCategory?: string): Promise<{ ok: boolean }> {
+  return req<{ ok: boolean }>("/email-subscribe", { method: "POST", body: JSON.stringify({ email, source, quizCategory, consents: { pd: true, ads: true, version: CONSENT_VERSION } }) });
 }
 
 export interface CatalogFetchParams {
   category?: string; q?: string; brand?: string;
   page?: number; pageSize?: number; inStock?: boolean; sort?: string;
+  gender?: string; line?: string; group?: string; priceMin?: number; priceMax?: number; volume?: number;
 }
 
 export async function catalogFetch(params: CatalogFetchParams): Promise<{ products: import("./types").ShopProduct[]; total: number; brands: string[] }> {
@@ -115,6 +126,8 @@ export async function catalogFetch(params: CatalogFetchParams): Promise<{ produc
   if (params.pageSize) qs.set("pageSize", String(params.pageSize));
   if (params.inStock) qs.set("inStock", "true");
   if (params.sort) qs.set("sort", params.sort);
+  for (const k of ["gender", "line", "group"] as const) if (params[k]) qs.set(k, params[k]!);
+  for (const k of ["priceMin", "priceMax", "volume"] as const) if (params[k]) qs.set(k, String(params[k]));
   return req(`/catalog?${qs}`);
 }
 

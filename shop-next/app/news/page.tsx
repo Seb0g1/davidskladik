@@ -5,10 +5,10 @@ import { Newspaper, Calendar } from "lucide-react";
 import { fetchNews } from "@/lib/api";
 import { breadcrumbJsonLd, SITE_URL, SITE_NAME } from "@/lib/seo";
 
-export const revalidate = 1800;
+export const revalidate = 300; // news is polled from Telegram every 15 min
 
 export const metadata: Metadata = {
-  title: `Новости Magic Vibes — новинки парфюмерии и акции | ${SITE_NAME}`,
+  title: `Новости Magic Vibes — новинки парфюмерии и акции`,
   description: "Последние новости Magic Vibes: новинки парфюмерии, специальные предложения, скидки и акции. Будьте в курсе лучших ароматов сезона.",
   alternates: { canonical: "/news" },
   openGraph: { title: "Новости — Magic Vibes", url: `${SITE_URL}/news` },
@@ -16,15 +16,15 @@ export const metadata: Metadata = {
 };
 
 const S = {
-  bg:      "#0E0D0B",
-  surface: "#161512",
-  surface2:"#1D1C18",
-  border:  "rgba(255,252,245,0.07)",
-  borderMd:"rgba(255,252,245,0.13)",
-  text:    "#F4EFE6",
-  muted:   "rgba(244,239,230,0.48)",
-  subtle:  "rgba(244,239,230,0.22)",
-  accent:  "#C9A96E",
+  bg:      "var(--surface)",
+  surface: "var(--surface)",
+  surface2:"var(--surface)",
+  border:  "rgba(var(--ink-rgb),0.056)",
+  borderMd:"rgba(var(--ink-rgb),0.104)",
+  text:    "var(--ink)",
+  muted:   "rgba(var(--ink-rgb),0.55)",
+  subtle:  "rgba(var(--ink-rgb),0.45)",
+  accent:  "var(--accent)",
 };
 
 export default async function NewsPage() {
@@ -39,6 +39,7 @@ export default async function NewsPage() {
   return (
     <>
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumb) }} />
+      <style>{`.news-card:hover{border-color:${S.borderMd}!important}`}</style>
 
       <div style={{ background: S.bg, minHeight: "100vh" }}>
         <div style={{ maxWidth: 800, margin: "0 auto", padding: "64px clamp(18px,4vw,40px) 96px" }}>
@@ -51,12 +52,12 @@ export default async function NewsPage() {
 
           {/* Header */}
           <div style={{ textAlign: "center", marginBottom: 64 }}>
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 10, marginBottom: 20, padding: "6px 16px", borderRadius: 999, border: `1px solid ${S.borderMd}`, background: "rgba(201,169,110,0.06)" }}>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 10, marginBottom: 20, padding: "6px 16px", borderRadius: 999, border: `1px solid ${S.borderMd}`, background: "rgba(var(--accent-rgb),0.06)" }}>
               <Newspaper size={13} style={{ color: S.accent }} />
               <span style={{ fontSize: 12, letterSpacing: "0.12em", textTransform: "uppercase", color: S.accent }}>Новости</span>
             </div>
             <h1 style={{
-              fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", fontWeight: 600,
+              fontFamily: "var(--font-display)", fontWeight: 600,
               fontSize: "clamp(28px,5vw,42px)", color: S.text, margin: "0 0 16px",
             }}>Magic Vibes</h1>
             <div style={{ width: 48, height: 1, background: S.accent, margin: "0 auto 16px" }} />
@@ -77,17 +78,14 @@ export default async function NewsPage() {
             <>
               <div style={{ display: "flex", flexDirection: "column", gap: 32 }}>
                 {posts.map((post) => (
-                  <article key={post.id} style={{
+                  <article key={post.id} className="news-card" style={{
                     borderRadius: 16, border: `1px solid ${S.border}`,
                     background: S.surface, overflow: "hidden",
                     transition: "border-color 0.2s",
-                  }}
-                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = S.borderMd; }}
-                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = S.border; }}
-                  >
+                  }}>
                     {post.photoUrl && (
                       <div style={{ width: "100%", aspectRatio: "16/9", overflow: "hidden", position: "relative" }}>
-                        <Image src={post.photoUrl} alt="" fill sizes="(max-width: 768px) 100vw, 680px" style={{ objectFit: "cover" }} />
+                        <Image src={post.photoUrl} alt="" fill sizes="(max-width: 768px) 100vw, 680px" style={{ objectFit: "cover" }} unoptimized={!post.photoUrl.includes("davidsklad.ru")} />
                       </div>
                     )}
                     <div style={{ padding: "24px 28px" }}>

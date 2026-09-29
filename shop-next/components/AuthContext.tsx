@@ -46,7 +46,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       window.history.replaceState({}, "", window.location.pathname);
       setYandexLoading(true);
       apiPost("/yandex/callback", { code, state })
-        .then((d) => { localStorage.setItem("mv_token", d.token); setToken(d.token); setCustomer(d.customer); })
+        .then((d) => {
+          localStorage.setItem("mv_token", d.token); setToken(d.token); setCustomer(d.customer);
+          let next = "/account";
+          try { next = sessionStorage.getItem("mv_login_next") || next; sessionStorage.removeItem("mv_login_next"); } catch {}
+          if (next.startsWith("/") && !next.startsWith("//")) window.location.replace(next);
+        })
         .catch((e: Error) => setYandexError(e.message))
         .finally(() => { setYandexLoading(false); setLoading(false); });
       return;
@@ -75,8 +80,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
   const startYandexLogin = useCallback(async () => {
     const res = await fetch(API_BASE + "/yandex/start");
-    const { url } = await res.json();
-    window.location.href = url;
+    const d = await res.json().catch(() => ({}));
+    if (!res.ok || !d.url) throw new Error(d.error || "Яндекс ID недоступен");
+    // Yandex redirects back to the site root; remember where the user was going
+    try { sessionStorage.setItem("mv_login_next", new URLSearchParams(window.location.search).get("next") || "/account"); } catch {}
+    window.location.href = d.url;
   }, []);
   const clearYandexError = useCallback(() => setYandexError(null), []);
   const logout = useCallback(() => { localStorage.removeItem("mv_token"); setToken(null); setCustomer(null); }, []);

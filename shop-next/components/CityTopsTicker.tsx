@@ -16,7 +16,7 @@ export default function CityTopsTicker({ entries }: { entries?: Entry[] }) {
   const doubled = [...items, ...items];
 
   return (
-    <div style={{ overflow: "hidden", borderTop: "1px solid rgba(255,255,255,0.05)", borderBottom: "1px solid rgba(255,255,255,0.05)", padding: "12px 0", background: "rgba(201,162,94,0.02)" }}>
+    <div style={{ overflow: "hidden", borderTop: "1px solid rgba(var(--ink-rgb),0.04)", borderBottom: "1px solid rgba(var(--ink-rgb),0.04)", padding: "12px 0", background: "rgba(var(--accent-rgb),0.02)" }}>
       <style>{`
         @keyframes ticker-scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
         .city-ticker-track { display: flex; animation: ticker-scroll 32s linear infinite; width: max-content; }
@@ -24,12 +24,12 @@ export default function CityTopsTicker({ entries }: { entries?: Entry[] }) {
       `}</style>
       <div className="city-ticker-track">
         {doubled.map((e, i) => (
-          <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "0 32px", flexShrink: 0, fontSize: 12, color: "rgba(242,237,230,0.55)", letterSpacing: "0.04em", whiteSpace: "nowrap" }}>
-            <span style={{ color: "rgba(201,162,94,0.7)", fontSize: 10, fontWeight: 700, letterSpacing: "0.16em", textTransform: "uppercase" }}>в {e.city}</span>
-            <span style={{ color: "rgba(255,255,255,0.12)" }}>·</span>
-            {e.brand && <span style={{ color: "rgba(201,162,94,0.55)" }}>{e.brand}</span>}
+          <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "0 32px", flexShrink: 0, fontSize: 12, color: "rgba(var(--ink-rgb),0.63)", letterSpacing: "0.04em", whiteSpace: "nowrap" }}>
+            <span style={{ color: "rgba(var(--accent-rgb),0.7)", fontSize: 11, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase" }}>в {e.city}</span>
+            <span style={{ color: "rgba(var(--ink-rgb),0.096)" }}>·</span>
+            {e.brand && <span style={{ color: "rgba(var(--accent-rgb),0.55)" }}>{e.brand}</span>}
             <span>{e.name}</span>
-            <span style={{ color: "rgba(255,255,255,0.08)", margin: "0 8px" }}>✦</span>
+            <span style={{ color: "rgba(var(--ink-rgb),0.064)", margin: "0 8px" }}>✦</span>
           </span>
         ))}
       </div>

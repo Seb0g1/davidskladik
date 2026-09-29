@@ -1,14 +1,10 @@
-"use client";
-import { useState, useRef } from "react";
-import Link from "next/link";
-import { usePathname } from "next/navigation";
+// Site navigation — shared by the header drawer, search overlay and footer.
+export interface MegaCol { title: string; items: { label: string; href: string }[] }
+export interface MegaGroup { id: string; label: string; href: string; shot: string; columns: MegaCol[] }
 
-interface MegaCol { title: string; items: { label: string; href: string }[] }
-interface MegaGroup { id: string; label: string; href: string; columns: MegaCol[] }
-
-const GROUPS: MegaGroup[] = [
+export const GROUPS: MegaGroup[] = [
   {
-    id: "perfume", label: "Парфюмерия", href: "/catalog?view=grid",
+    id: "perfume", shot: "/brand/shots/her.jpg?v=3", label: "Парфюмерия", href: "/catalog?view=grid",
     columns: [
       { title: "Для кого", items: [
         { label: "Женская",  href: "/catalog?q=женская" },
@@ -43,7 +39,7 @@ const GROUPS: MegaGroup[] = [
     ],
   },
   {
-    id: "makeup", label: "Макияж", href: "/catalog?q=макияж",
+    id: "makeup", shot: "/brand/shots/gift.jpg?v=3", label: "Макияж", href: "/catalog?q=макияж",
     columns: [
       { title: "Лицо", items: [
         { label: "Тональные средства", href: "/catalog?q=тональный" },
@@ -71,7 +67,7 @@ const GROUPS: MegaGroup[] = [
     ],
   },
   {
-    id: "care", label: "Уход", href: "/catalog?category=body",
+    id: "care", shot: "/brand/shots/fresh.jpg?v=3", label: "Уход", href: "/catalog?category=body",
     columns: [
       { title: "Лицо", items: [
         { label: "Очищение",              href: "/catalog?q=очищение лицо" },
@@ -96,7 +92,7 @@ const GROUPS: MegaGroup[] = [
     ],
   },
   {
-    id: "hair", label: "Для волос", href: "/catalog?q=шампунь",
+    id: "hair", shot: "/brand/shots/citrus.jpg?v=3", label: "Для волос", href: "/catalog?q=шампунь",
     columns: [
       { title: "Уход", items: [
         { label: "Шампуни",     href: "/catalog?q=шампунь" },
@@ -116,7 +112,7 @@ const GROUPS: MegaGroup[] = [
     ],
   },
   {
-    id: "men", label: "Для мужчин", href: "/catalog?q=мужская",
+    id: "men", shot: "/brand/shots/him.jpg?v=3", label: "Для мужчин", href: "/catalog?q=мужская",
     columns: [
       { title: "Парфюмерия", items: [
         { label: "Все мужские ароматы", href: "/catalog?q=мужская" },
@@ -141,7 +137,7 @@ const GROUPS: MegaGroup[] = [
     ],
   },
   {
-    id: "gifts", label: "Подарки", href: "/gift",
+    id: "gifts", shot: "/brand/shots/gift.jpg?v=3", label: "Подарки", href: "/collections/nabory",
     columns: [
       { title: "Для неё", items: [
         { label: "Женские ароматы",    href: "/catalog?q=женская" },
@@ -161,7 +157,7 @@ const GROUPS: MegaGroup[] = [
     ],
   },
   {
-    id: "home", label: "Для дома", href: "/catalog?category=home",
+    id: "home", shot: "/brand/shots/oriental.jpg?v=3", label: "Для дома", href: "/catalog?category=home",
     columns: [
       { title: "Ароматы для дома", items: [
         { label: "Все товары",         href: "/catalog?category=home" },
@@ -174,102 +170,20 @@ const GROUPS: MegaGroup[] = [
   },
 ];
 
-const MEGA_STYLE = `
-.mega-tab {
-  position: relative; padding: 12px 16px;
-  font-size: 12.5px; letter-spacing: 0.07em; text-transform: uppercase;
-  color: rgba(245,244,240,0.56); text-decoration: none; white-space: nowrap;
-  transition: color 0.25s; background: transparent; border: none;
-  font-family: inherit; cursor: pointer;
-}
-.mega-tab:hover, .mega-tab.active { color: #f5f4f0; }
-.mega-tab::after {
-  content: ''; position: absolute; bottom: 0; left: 16px; right: 16px;
-  height: 1px; background: #c9a25e;
-  transform: scaleX(0); transition: transform 0.3s cubic-bezier(0.16,1,0.3,1);
-}
-.mega-tab:hover::after, .mega-tab.active::after { transform: scaleX(1); }
-.mega-dropdown-item {
-  display: block; font-size: 13px; color: rgba(245,244,240,0.5);
-  text-decoration: none; padding: 5px 0; letter-spacing: 0.03em;
-  line-height: 1.5; transition: color 0.2s;
-}
-.mega-dropdown-item:hover { color: #f5f4f0; }
-`;
+/** Plain links shown under the groups in the menu drawer. */
+export const EXTRA_LINKS = [
+  { label: "Бренды", href: "/brands" },
+  { label: "Новинки", href: "/new" },
+  { label: "✦ AI-подбор", href: "/find" },
+  { label: "Карта ароматов", href: "/world" },
+];
 
-export default function MegaMenu() {
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pathname = usePathname();
+export const SERVICE_LINKS = [
+  { label: "Доставка и оплата", href: "/delivery" },
+  { label: "Гарантия оригинала", href: "/warranty" },
+  { label: "Вопросы и ответы", href: "/faq" },
+  { label: "Блог", href: "/blog" },
+  { label: "Новости", href: "/news" },
+];
 
-  const scheduleClose = () => { closeTimer.current = setTimeout(() => setActiveId(null), 140); };
-  const cancelClose = () => { if (closeTimer.current) clearTimeout(closeTimer.current); };
-  const openGroup = (id: string) => { cancelClose(); setActiveId(id); };
-
-  const activeGroup = GROUPS.find(g => g.id === activeId);
-
-  return (
-    <>
-      <style>{MEGA_STYLE}</style>
-      <div className="hidden md:block" style={{ position: "relative", borderTop: "1px solid rgba(255,255,255,0.05)" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 0, padding: "0 clamp(10px,2vw,32px)", overflowX: "auto" }}>
-          {GROUPS.map(group => (
-            <Link
-              key={group.id}
-              href={group.href}
-              className={`mega-tab${pathname.startsWith(group.href.split("?")[0]) && group.href !== "/" ? " active" : ""}`}
-              onMouseEnter={() => openGroup(group.id)}
-              onMouseLeave={scheduleClose}
-            >
-              {group.label}
-            </Link>
-          ))}
-          <Link href="/brands" className={`mega-tab${pathname === "/brands" ? " active" : ""}`}>Бренды</Link>
-          <Link href="/new"    className={`mega-tab${pathname === "/new"    ? " active" : ""}`}>Новинки</Link>
-          <Link href="/find"   className="mega-tab" style={{ color: "#c9a25e" }}>✦ AI-подбор</Link>
-        </div>
-
-        {activeGroup && (
-          <div
-            onMouseEnter={cancelClose}
-            onMouseLeave={scheduleClose}
-            className="anim-fade-in"
-            style={{
-              position: "absolute", left: 0, right: 0, top: "100%", zIndex: 50,
-              background: "rgba(10,10,10,0.98)",
-              backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)",
-              borderBottom: "1px solid rgba(201,162,94,0.18)",
-              boxShadow: "0 24px 64px rgba(0,0,0,0.75)",
-              animationDuration: "0.18s",
-            }}
-          >
-            <div style={{
-              maxWidth: 1240, margin: "0 auto",
-              display: "grid",
-              gridTemplateColumns: `repeat(${activeGroup.columns.length}, 1fr)`,
-              gap: "32px 48px",
-              padding: "32px clamp(18px,4vw,56px) 36px",
-            }}>
-              {activeGroup.columns.map(col => (
-                <div key={col.title}>
-                  <p style={{ margin: "0 0 14px", fontSize: 9.5, fontWeight: 400, letterSpacing: "0.28em", textTransform: "uppercase", color: "#c9a25e" }}>
-                    {col.title}
-                  </p>
-                  <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-                    {col.items.map(item => (
-                      <li key={item.href}>
-                        <Link href={item.href} className="mega-dropdown-item" onClick={() => setActiveId(null)}>
-                          {item.label}
-                        </Link>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-    </>
-  );
-}
+export const POPULAR_QUERIES = ["Tom Ford", "Montale", "Byredo", "Kilian", "Dior Sauvage", "Chanel", "арабская", "нишевая", "пробники", "подарочный набор"];

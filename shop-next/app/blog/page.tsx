@@ -8,7 +8,7 @@ import BlogClient from "./BlogClient";
 export const revalidate = 600;
 
 export const metadata: Metadata = {
-  title: `Блог о парфюмерии | ${SITE_NAME}`,
+  title: `Блог о парфюмерии`,
   description: "Статьи о парфюмерии: гиды по выбору аромата, обзоры брендов, нотные пирамиды, тренды и советы от Magic Vibes.",
   alternates: { canonical: "/blog" },
   openGraph: { title: "Блог о парфюмерии — Magic Vibes", url: `${SITE_URL}/blog` },
@@ -16,11 +16,11 @@ export const metadata: Metadata = {
 };
 
 const S = {
-  bg:     "#09090b",
-  border: "rgba(255,255,255,0.07)",
-  text:   "#f2ede6",
-  muted:  "rgba(242,237,230,0.45)",
-  gold:   "#c9a25e",
+  bg:     "var(--paper)",
+  border: "rgba(var(--ink-rgb),0.056)",
+  text:   "var(--ink)",
+  muted:  "rgba(var(--ink-rgb),0.52)",
+  gold:   "var(--accent)",
 };
 
 export default async function BlogPage() {
@@ -53,11 +53,11 @@ export default async function BlogPage() {
 
           {/* Header */}
           <div style={{ textAlign: "center", marginBottom: 56 }}>
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 10, marginBottom: 20, padding: "6px 18px", borderRadius: 999, border: `1px solid rgba(201,162,94,0.22)`, background: "rgba(201,162,94,0.05)" }}>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 10, marginBottom: 20, padding: "6px 18px", borderRadius: 999, border: `1px solid rgba(var(--accent-rgb),0.22)`, background: "rgba(var(--accent-rgb),0.05)" }}>
               <BookOpen size={13} style={{ color: S.gold }} />
               <span style={{ fontSize: 11, letterSpacing: "0.14em", textTransform: "uppercase", color: S.gold }}>Журнал</span>
             </div>
-            <h1 style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", fontWeight: 400, fontSize: "clamp(32px,5vw,52px)", color: S.text, margin: "0 0 14px", lineHeight: 1.15 }}>
+            <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: "clamp(32px,5vw,52px)", color: S.text, margin: "0 0 14px", lineHeight: 1.15 }}>
               Блог о парфюмерии
             </h1>
             <div style={{ width: 48, height: 1, background: S.gold, margin: "0 auto 14px" }} />

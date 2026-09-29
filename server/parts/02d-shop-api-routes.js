@@ -7,12 +7,44 @@ const shopLoginLimiter = rateLimit({
   max: 20,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req, res) => {
+  validate: { keyGeneratorIpFallback: false },
+  keyGenerator: (req) => {
     const email = cleanText((req.body?.email || "")).toLowerCase().slice(0, 100);
-    return `${_shopIpKeyGenerator(req, res)}:${email}`;
+    return `${_shopIpKeyGenerator(String(req.ip || ""))}:${email}`;
   },
   handler: (_req, res) => res.status(429).json({ error: "Слишком много попыток. Попробуйте через 15 минут." }),
 });
+// Per-IP limits for the public shop endpoints (bots, order / e-mail flooding, abuse of the paid
+// carrier and geocoder APIs). Real client IPs come from nginx (PROXY protocol → X-Forwarded-For).
+// The server itself (Next.js SSR, 127.0.0.1 / own public IP) is never limited.
+const SHOP_LIMIT_EXEMPT = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1", ...String(process.env.SHOP_RATE_LIMIT_EXEMPT_IPS || "81.17.154.153").split(",").map((s) => s.trim()).filter(Boolean)]);
+function shopRateLimit(windowMs, max, message = "Слишком много запросов. Подождите немного и попробуйте снова.") {
+  return rateLimit({
+    windowMs, max, standardHeaders: true, legacyHeaders: false,
+    // the key does go through ipKeyGenerator (IPv6 /56); the library only greps the function text
+    validate: { keyGeneratorIpFallback: false },
+    skip: (req) => SHOP_LIMIT_EXEMPT.has(req.ip) || SHOP_LIMIT_EXEMPT.has(String(req.ip || "").replace(/^::ffff:/, "")),
+    keyGenerator: (req) => _shopIpKeyGenerator(String(req.ip || "")),
+    handler: (_req, res) => res.status(429).json({ error: message }),
+  });
+}
+const _shopLimits = [
+  [["/api/shop/orders"], shopRateLimit(10 * 60e3, 20, "Слишком много заказов подряд. Подождите 10 минут.")],
+  [["/api/shop/auth/send-code"], shopRateLimit(10 * 60e3, 10, "Слишком много запросов кода. Подождите 10 минут.")],
+  [["/api/shop/auth/verify-code", "/api/shop/auth/yandex/callback"], shopRateLimit(10 * 60e3, 40)],
+  [["/api/shop/auth/register"], shopRateLimit(60 * 60e3, 10)],
+  [["/api/shop/geo"], shopRateLimit(60e3, 120)],
+  [["/api/shop/checkout", "/api/shop/delivery"], shopRateLimit(60e3, 150)],
+  [["/api/shop/ai-search"], shopRateLimit(60e3, 30)],
+  [["/api/shop/email-subscribe", "/api/shop/stock-alert", "/api/shop/unboxings", "/api/shop/upload-media",
+    "/api/shop/promo/validate", "/api/shop/referral/validate", "/api/shop/push/subscribe"], shopRateLimit(10 * 60e3, 30)],
+  [["/api/shop/support/chats"], shopRateLimit(10 * 60e3, 120)],
+];
+for (const [paths, limiter] of _shopLimits) {
+  // only writes and the expensive lookups; catalog/product GETs stay unlimited here (nginx caps floods)
+  app.use(paths, (req, res, next) => (req.method === "OPTIONS" || (req.method === "GET" && !/\/geo|\/checkout|\/delivery/.test(req.baseUrl)) ? next() : limiter(req, res, next)));
+}
+
 const _shopScryptAsync = require("util").promisify(_shopCrypto.scrypt);
 
 async function _shopHashPassword(pw) {
@@ -42,8 +74,12 @@ function verifyShopToken(token) {
   if (parts.length !== 3) return null;
   const [h, b, sig] = parts;
   const expected = createHmac("sha256", secret).update(h + "." + b).digest("base64url");
-  if (sig !== expected) return null;
-  try { return JSON.parse(Buffer.from(b, "base64url").toString()); } catch { return null; }
+  if (typeof sig !== "string" || sig.length !== expected.length || !_shopCrypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+  let payload;
+  try { payload = JSON.parse(Buffer.from(b, "base64url").toString()); } catch { return null; }
+  // a stolen token must not work forever: sessions last 180 days
+  if (!payload || !(Number(payload.iat) > 0) || Date.now() - Number(payload.iat) > 180 * 864e5) return null;
+  return payload;
 }
 async function requireShopAuth(request, response, next) {
   const auth = request.headers.authorization || "";
@@ -266,6 +302,72 @@ function defaultShopSettings() {
   };
 }
 
+// Retail price for the shop. Currency comes from the product link (what the warehouse uses);
+// PriceMaster snapshots of some suppliers (e.g. «Инна») say USD for rouble prices, which turned
+// 34 470 ₽ into 6.7 M ₽. Guard: a non-RUB result above 3× the marketplace price is a currency
+// mix-up → price it as roubles.
+function shopRetailPrice({ snapPrice, snapCurrency, linkCurrency, currentPrice, markup, usdRate }) {
+  const current = Number(currentPrice || 0);
+  if (!(snapPrice > 0)) return current > 0 ? current : 0;
+  const cur = String(linkCurrency || snapCurrency || "USD").toUpperCase();
+  if (cur === "RUB") return Math.round(snapPrice * markup);
+  const rub = Math.round(snapPrice * usdRate * markup);
+  if (current > 0 && rub > current * 3) return Math.round(snapPrice * markup);
+  return rub;
+}
+
+// PriceMaster rows belong to a partner: the same article code is a different product at another
+// supplier (19-69 L'Air Barbès at «Инна» shares its code with an Elizabeth Arden tester at another
+// partner → the shop sold it for 192 ₽). Match (partner, article) like the warehouse does
+// (02a-price-master-link-lookup pairKey); article-only only for the few links without a partner.
+const shopPmKey = (partnerId, article) => `${cleanText(partnerId || "")}|${cleanText(article || "")}`;
+function shopPmIndex(snaps) {
+  const map = new Map();
+  for (const s of snaps || []) {
+    for (const k of [shopPmKey(s.partnerId, s.article), shopPmKey("", s.article)]) {
+      const cur = map.get(k);
+      if (!cur || Number(s.price) < Number(cur.price)) map.set(k, s);
+    }
+  }
+  return map;
+}
+function shopPmLookup(pmMap, link) {
+  return pmMap.get(shopPmKey(link.partnerId ? link.partnerId : "", link.supplierArticle)) || null;
+}
+
+// Struck-through price = the real price of the same product on Ozon (or Yandex Market): shown only
+// when it is ≥ 10 % above the site price and not a "blocking" price. Never sent as <oldprice> in the YML.
+function shopMarketplaceOldPrice(priceRub, marketplacePrice) {
+  const mp = Number(marketplacePrice || 0);
+  if (!(priceRub > 0) || !(mp > 0) || mp >= 150000) return undefined;
+  if (mp < priceRub * 1.1 || mp > priceRub * 3) return undefined;
+  return Math.round(mp);
+}
+
+// Cheapest supplier offer across ALL links of a product. Using only links[0] fell back to the
+// marketplace "blocking" price (e.g. 971 011 ₽) whenever the first supplier had no snapshot.
+function shopPriceFromLinks(links, pmMap, { currentPrice, defaultMarkup, rules, usdRate }) {
+  let best = 0;
+  // Sanity band against the marketplace price (site prices are ~0.5–0.7 of it): a wrong link to another
+  // product or a tiny tester price produced 169 ₽ Fidji and 24 031 ₽ Burberry Hero. Blocking marketplace
+  // prices (> 150 000 ₽ = "not for sale") give no reference.
+  const ref = Number(currentPrice || 0);
+  const band = ref > 0 && ref < 150000;
+  for (const link of links || []) {
+    const snap = shopPmLookup(pmMap, link);
+    const snapPrice = snap ? Number(snap.price || 0) : 0;
+    if (!(snapPrice > 1)) continue; // 0 / 1 are placeholders in some price lists («Наш склад»)
+    // rules are "from X USD": a rouble price list is looked up by its USD equivalent
+    const cur = String(link.priceCurrency || snap.currency || "USD").toUpperCase();
+    const markup = resolveShopMarkup(cur === "RUB" ? snapPrice / usdRate : snapPrice, defaultMarkup, rules);
+    const rub = shopRetailPrice({ snapPrice, snapCurrency: snap.currency, linkCurrency: link.priceCurrency, currentPrice, markup, usdRate });
+    if (band && (rub < ref * 0.35 || rub > ref * 2)) continue;
+    if (rub > 0 && (!best || rub < best)) best = rub;
+  }
+  const current = Number(currentPrice || 0);
+  return { priceRub: best || (current > 0 ? current : 0), fromSupplier: best > 0 };
+}
+
 function resolveShopMarkup(priceUsd, defaultMarkup, rules) {
   if (!Array.isArray(rules) || !rules.length || !(priceUsd > 0)) return defaultMarkup;
   const sorted = [...rules].filter(r => Number(r.coefficient) > 0).sort((a, b) => b.minUsd - a.minUsd);
@@ -349,7 +451,134 @@ function nanoid8() {
 
 // ── price calculation ──────────────────────────────────────────────────────
 
-async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page, pageSize, createdAfter }) {
+// ── Shop "collections": menu words that are not in product names ────────────
+// q=элитная / нишевая / арабская / цветочный … used to search names literally and
+// always returned 0. Each collection maps to brand prefixes, name keywords and
+// fragranceNotes accords.
+const SHOP_ARABIC_BRANDS = [
+  "Lattafa", "Rasasi", "Ajmal", "Armaf", "Afnan", "Al Haramain", "Al-Jazeera", "Alhambra", "Maison Alhambra",
+  "Arabian Oud", "Arabian wind", "Ard Al Zaafaran", "Swiss Arabian", "Nabeel", "Fragrance World", "Zimaya",
+  "Khadlaj", "Paris Corner", "Al Rehab", "Orientica", "Aj Arabia", "Alghabra", "Asdaaf", "Arabesque",
+  "Amouroud", "Emir", "French Avenue", "Riiffs", "Nusuk", "Ibraheem Al Qurashi", "Abdul Samad Al Qurashi",
+  "Al Wataniah", "Anfar", "Hamidi", "My Perfumes", "Otoori",
+];
+const SHOP_NICHE_BRANDS = [
+  "Amouage", "Byredo", "Creed", "Kilian", "Initio", "Parfums de Marly", "Maison Francis Kurkdjian", "Xerjoff",
+  "Nishane", "Memo", "Le Labo", "Diptyque", "Frederic Malle", "Serge Lutens", "Penhaligon", "Juliette Has a Gun",
+  "Escentric Molecules", "Zarkoperfume", "Ex Nihilo", "Tiziana Terenzi", "Orto Parisi", "Nasomatto", "Mancera",
+  "Montale", "Atelier Cologne", "Acqua di Parma", "Atelier des Ors", "Vilhelm", "Maison Margiela", "Replica",
+  "Boadicea", "Clive Christian", "Roja", "Bdk", "BDK Parfums", "Goldfield", "Kajal", "Sospiro", "Mind Games",
+  "3Mind Games", "Profumum", "Etat Libre", "Heeley", "Histoires de Parfums", "L'Artisan", "Carner",
+  "Arte Profumi", "Arteolfatto", "Alyson Oldoini", "12 Parfumeurs", "Aedes de Venustas", "Affinessence",
+  "Maison Crivelli", "Parle Moi de Parfum", "Masque Milano", "Fueguia", "Frapin", "Marc-Antoine Barrois",
+  "Louis Vuitton", "Essential Parfums", "Ormonde Jayne", "Room 1015", "Stephane Humbert Lucas", "Nishane",
+  "Unique'e Luxury", "Vertus", "Zoologist", "Jovoy", "Bond No. 9", "Bond No 9", "Electimuss", "Lorenzo Pazzaglia",
+  "Filippo Sorcinelli", "Andy Tauer", "Mona di Orio", "Olfactive Studio", "Parfums MDCI", "Hermetica",
+];
+const SHOP_LUXURY_BRANDS = [
+  "Chanel", "Dior", "Christian Dior", "Tom Ford", "Guerlain", "Yves Saint Laurent", "YSL", "Giorgio Armani", "Armani",
+  "Hermes", "Hermès", "Givenchy", "Prada", "Gucci", "Versace", "Dolce", "Valentino", "Lancome", "Lancôme",
+  "Cartier", "Bvlgari", "Bulgari", "Chloe", "Chloé", "Burberry", "Carolina Herrera", "Jo Malone", "Narciso Rodriguez",
+  "Viktor", "Jean Paul Gaultier", "Paco Rabanne", "Rabanne", "Mugler", "Thierry Mugler", "Balenciaga",
+  "Celine", "Louis Vuitton", "Van Cleef", "Boucheron", "Montblanc", "Kenzo", "Marc Jacobs", "Loewe",
+  "Salvatore Ferragamo", "Bottega Veneta", "Chopard", "Elie Saab", "Escada", "Moschino", "Hugo Boss", "Boss",
+  "Kilian", "Creed", "Parfums de Marly", "Maison Francis Kurkdjian", "Xerjoff", "Clive Christian", "Roja",
+];
+const SHOP_QUERY_COLLECTIONS = [
+  { match: /^(элитн|люкс|премиум|luxury|premium)/i, brands: SHOP_LUXURY_BRANDS },
+  { match: /^(нишев|ниша|niche)/i, brands: SHOP_NICHE_BRANDS },
+  { match: /^(арабск|восточная ?\/ ?арабская|arab)/i, brands: SHOP_ARABIC_BRANDS, names: [" oud", "oud ", " уд ", "attar", "bakhoor", "бахур"] },
+  { match: /^женск/i, names: ["женск", "for women", "pour femme", "for her"], gender: "female" },
+  { match: /^мужск/i, names: ["мужск", "for men", "pour homme", "for him"], gender: "male" },
+  { match: /^унисекс|^unisex/i, names: ["унисекс", "unisex"], gender: "unisex" },
+  { match: /^детск/i, names: ["детск", "для детей", "kids", "children"] },
+  { match: /^миниатюр/i, names: ["миниатюр", "mini ", " мини", "travel", "10 мл", "5 мл", "7.5 мл", "7,5 мл"] },
+  { match: /^цветоч|^floral/i, accords: ["Floral", "White Floral", "Rose"],
+    names: ["rose", "роза", "jasmin", "жасмин", "fleur", "flower", "bloom", "пион", "peony", "iris", "ирис", "tuberose", "тубероз", "lily", "лили", "magnolia", "gardenia", "violet", "фиалк", "orchid", "орхиде", "neroli", "нероли", "blossom", "petal", "garden"] },
+  { match: /^древес|^woody/i, accords: ["Woody", "Woody Oriental"],
+    names: ["wood", "дерев", "cedar", "кедр", "santal", "сандал", "vetiver", "ветивер", "oud", "уд ", "bois", "patchouli", "пачули", "forest", "лес", "birch", "берез", "cypress"] },
+  { match: /^цитрус|^citrus/i, accords: ["Citrus", "Fresh Citrus"],
+    names: ["citrus", "цитрус", "lemon", "лимон", "bergamot", "бергамот", "orange", "апельсин", "mandarin", "мандарин", "grapefruit", "грейпфрут", "lime", "лайм", "yuzu", "юдзу", "neroli", "нероли", "agrumi", "limone", "bigarade"] },
+  { match: /^мускус|^musk/i, accords: ["Musky", "Musk"],
+    names: ["musk", "мускус", "musc", "skin", "молекул", "molecule", "cashmere", "кашемир", "cotton", "clean"] },
+  { match: /^восточн|^oriental|^amber/i, accords: ["Oriental", "Amber", "Spicy", "Warm Spicy", "Balsamic"],
+    names: ["oud", "уд ", "amber", "амбр", "ambre", "oriental", "восточ", "spice", "прян", "incense", "ладан", "saffron", "шафран", "vanill", "ванил", "tobacco", "табак", "bakhoor", "бахур", "myrrh", "мирр"] },
+  { match: /^свеж|^fresh/i, accords: ["Fresh", "Aquatic", "Marine", "Ozonic", "Green", "Fresh Spicy"],
+    names: ["fresh", "свеж", "aqua", "аква", "acqua", "water", "eau fraiche", "marine", "морск", "ocean", "океан", "sea ", "breeze", "blue", "bleu", "sport", "cool", "ice", "green", "зелен", "mint", "мят"] },
+  { match: /^фужер|^fougere/i, accords: ["Aromatic", "Fougere", "Lavender"],
+    names: ["fougere", "фужер", "lavender", "лаванд", "lavande", "geranium", "герань", "sage", "шалфей", "rosemary", "розмарин", "barber", "tonka", "тонка", "moss", "мох"] },
+  { match: /^(сладк|гурман|gourmand)/i, accords: ["Sweet", "Gourmand", "Vanilla"],
+    names: ["vanill", "ванил", "caramel", "карамел", "sugar", "candy", "chocolate", "шоколад", "honey", "мёд", "gourmand", "praline", "пралине", "cake", "cookie", "cherry", "вишн", "coffee", "кофе"] },
+  { match: /^шипр|^chypre/i, accords: ["Chypre", "Mossy"],
+    names: ["chypre", "шипр", "moss", "мох", "oakmoss", "patchouli", "пачули", "labdanum", "лабданум", "leather", "кож"] },
+];
+
+function resolveShopQueryCollection(q) {
+  const s = cleanText(q || "").toLowerCase();
+  if (!s || s.length > 40) return null;
+  return SHOP_QUERY_COLLECTIONS.find((c) => c.match.test(s)) || null;
+}
+
+// Rule-based reading of a free-text wish ("свежий морской для офиса, мужской")
+// when the LLM is unavailable: stems → collection queries understood above.
+const SHOP_AI_FALLBACK_RULES = [
+  { re: /морск|океан|аква|свеж|лёгк|легк|летн|лето|спорт|офис|работ|днев|утр|чист/i, q: "свежий", label: "свежий" },
+  { re: /цвет|роз|жасмин|пион|нежн|романт|весенн|весна|весной/i, q: "цветочный", label: "цветочный" },
+  { re: /дерев|древес|кедр|сандал|ветивер|лес/i, q: "древесный", label: "древесный" },
+  { re: /цитрус|лимон|апельсин|бергамот|грейпфрут|мандарин/i, q: "цитрусовый", label: "цитрусовый" },
+  { re: /слад|ванил|гурман|карамел|шоколад|десерт|кофе|вишн|мёд|медов/i, q: "сладкий", label: "сладкий" },
+  { re: /тёпл|тепл|прян|восточ|(^|\s)уд(\s|$)|амбр|ладан|вечер|ноч|соблазн|зим|осен|шлейф/i, q: "восточный", label: "тёплый восточный" },
+  { re: /мускус|уют|кож[аи]|пудр/i, q: "мускусный", label: "мускусный" },
+  { re: /лаванд|фужер|барбер/i, q: "фужерный", label: "фужерный" },
+  { re: /шипр|мох|пачул/i, q: "шипровый", label: "шипровый" },
+  { re: /араб/i, q: "арабская", label: "арабский" },
+  { re: /ниш|редк|необычн/i, q: "нишевая", label: "нишевый" },
+  { re: /элит|люкс|дорог|статус|премиум/i, q: "элитная", label: "элитный" },
+];
+
+function parseShopAiQueryFallback(query) {
+  const text = cleanText(query || "").toLowerCase();
+  const collections = [];
+  const labels = [];
+  for (const rule of SHOP_AI_FALLBACK_RULES) {
+    if (rule.re.test(text) && !collections.includes(rule.q)) { collections.push(rule.q); labels.push(rule.label); }
+  }
+  let gender = "any";
+  if (/мужч|мужск|(^|\s)муж|парн|для него|папе|пап[аы]|отц|брат|сын/i.test(text)) gender = "male";
+  else if (/женщ|женск|девушк|для неё|для нее|мам[аеыу]|сестр|подруг|дочер|(^|\s)жен[аеуы](\s|,|$)/i.test(text)) gender = "female";
+  else if (/унисекс/i.test(text)) gender = "unisex";
+  const genderLabel = gender === "male" ? "мужской" : gender === "female" ? "женский" : "";
+  const label = [labels.slice(0, 2).join(", "), genderLabel].filter(Boolean).join(" · ") || text.slice(0, 60);
+  return { collections: collections.slice(0, 4), gender, label: label.charAt(0).toUpperCase() + label.slice(1) };
+}
+
+// Collections are perfume groupings: without this, "древесный" also found hair dye
+// shades named "Сандаловое"/"Кедр" and creams "с ароматом розы".
+const SHOP_PERFUME_NAME_WORDS = ["парфюм", "туалетн", "духи", "одеколон", "eau de", "parfum", "extrait", "edp", "edt", "аромат для", "отливант", "пробник"];
+const SHOP_NON_PERFUME_WORDS = ["краск", "крем", "шампун", "бальзам", "маск", "гель", "лосьон", "мыло", "свеч", "оттен", "окрашив", "тонер", "сыворот"];
+
+function buildShopPerfumeOnlyCondition() {
+  return {
+    OR: SHOP_PERFUME_NAME_WORDS.map((w) => ({ name: { contains: w, mode: "insensitive" } })),
+    NOT: SHOP_NON_PERFUME_WORDS.map((w) => ({ name: { contains: w, mode: "insensitive" } })),
+  };
+}
+
+// Prisma OR-conditions for a collection. Brands are prefix-matched because the
+// brand field often contains "Brand + model" ("ALHAMBRA DARK AOUD").
+function buildShopCollectionConditions(col) {
+  const or = [];
+  for (const b of col.brands || []) {
+    or.push({ brand: { startsWith: b, mode: "insensitive" } });
+    or.push({ name: { startsWith: b, mode: "insensitive" } });
+  }
+  for (const n of col.names || []) or.push({ name: { contains: n, mode: "insensitive" } });
+  for (const a of col.accords || []) or.push({ fragranceNotes: { path: ["accords"], array_contains: a } });
+  if (col.gender) or.push({ fragranceNotes: { path: ["gender"], equals: col.gender } });
+  return or;
+}
+
+async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page, pageSize, createdAfter, andQ, perfumeOnly }) {
   const prisma = getPrisma();
   if (!prisma) return { products: [], total: 0, brands: [] };
 
@@ -372,12 +601,15 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
     links: { some: {} },
     ...(createdAfter ? { createdAt: { gte: createdAfter } } : {}),
   };
+  const _collection = q ? resolveShopQueryCollection(q) : null;
   if (q) {
     where.OR = [
       { name: { contains: q, mode: "insensitive" } },
       { brand: { contains: q, mode: "insensitive" } },
       { offerId: { contains: q, mode: "insensitive" } },
+      ...(_collection ? buildShopCollectionConditions(_collection) : []),
     ];
+    if (_collection) where.AND = [...(where.AND || []), buildShopPerfumeOnlyCondition()];
   }
   if (brand) {
     where.OR = [
@@ -393,8 +625,17 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
     const _catDef = SHOP_CATEGORIES.find((c) => c.slug === category);
     if (_catDef && _catDef.keywords.length) {
       const _catOr = _catDef.keywords.map((kw) => ({ name: { contains: kw, mode: "insensitive" } }));
-      where.AND = [{ OR: _catOr }];
+      where.AND = [...(where.AND || []), { OR: _catOr }];
     }
+  }
+
+  // perfumeOnly: gift configurator etc. — no hair dye / creams in "choose a fragrance"
+  if (perfumeOnly) where.AND = [...(where.AND || []), buildShopPerfumeOnlyCondition()];
+
+  // andQ narrows results to a second collection (AI search: "свежий" AND "мужская")
+  const _andCollection = andQ ? resolveShopQueryCollection(andQ) : null;
+  if (_andCollection) {
+    where.AND = [...(where.AND || []), { OR: buildShopCollectionConditions(_andCollection) }];
   }
 
   // De-duplicate by offerId: prefer Ozon over Yandex
@@ -406,7 +647,7 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
         id: true, offerId: true, name: true, brand: true, marketplace: true,
         images: true, raw: true, currentPrice: true, targetStock: true, status: true,
         marketplaceState: true,
-        links: { take: 2, select: { supplierArticle: true } },
+        links: { take: 5, select: { supplierArticle: true, priceCurrency: true, partnerId: true } },
       },
       orderBy: [
         { marketplace: "asc" }, // ozon < yandex — ensures ozon version wins de-dup
@@ -439,7 +680,7 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
   const [pmSnaps, reviewGroups] = await Promise.all([
     articles.length ? prisma.priceMasterSnapshotItem.findMany({
       where: { article: { in: articles }, active: true },
-      select: { article: true, price: true, currency: true },
+      select: { article: true, price: true, currency: true, partnerId: true },
     }) : [],
     dedupedOfferIds.length ? prisma.shopReview.groupBy({
       by: ["offerId"],
@@ -449,12 +690,7 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
     }) : [],
   ]);
 
-  const pmMap = new Map();
-  for (const snap of pmSnaps) {
-    const cur = pmMap.get(snap.article);
-    const price = Number(snap.price || 0);
-    if (!cur || price < Number(cur.price)) pmMap.set(snap.article, snap);
-  }
+  const pmMap = shopPmIndex(pmSnaps);
 
   const reviewMap = new Map();
   for (const g of reviewGroups) {
@@ -464,18 +700,8 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
   // Build shop products
   const products = deduped.map((p) => {
     const images = extractImages(p);
-    const link = p.links[0];
-    const snap = link ? pmMap.get(cleanText(link.supplierArticle)) : null;
-    const snapPrice = snap ? Number(snap.price || 0) : 0;
-    // currency field is fetched — must honour it, otherwise RUB-priced items get inflated by ~usdRate×markup
-    const snapCurrency = snap ? String(snap.currency || "USD").toUpperCase() : "USD";
     const currentPriceNum = Number(p.currentPrice || 0);
-    const markup = resolveShopMarkup(snapPrice, defaultMarkup, shopMarkupRules);
-    const priceRub = snapPrice > 0
-      ? snapCurrency === "RUB"
-        ? Math.round(snapPrice * markup)
-        : Math.round(snapPrice * usdRate * markup)
-      : currentPriceNum > 0 ? currentPriceNum : 0;
+    const { priceRub } = shopPriceFromLinks(p.links, pmMap, { currentPrice: currentPriceNum, defaultMarkup, rules: shopMarkupRules, usdRate });
 
     const stockQty = p.targetStock ?? 0;
     const name = normalizeProductName(cleanText(p.name || ""));
@@ -495,6 +721,7 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
       description: "",
       images,
       priceRub,
+      oldPriceRub: shopMarketplaceOldPrice(priceRub, currentPriceNum),
       inStock: stockQty > 0 || (p.status !== "archived" && currentPriceNum > 0),
       stockQty: Math.max(0, stockQty),
       volume: extractVolume(name || p.name || ""),
@@ -521,7 +748,7 @@ const SHOP_CATEGORIES = [
   { slug: "testers", label: "Тестеры и отливанты", pattern: /тестер|tester|отливант|decant|пробник/i,                    keywords: ["тестер", "tester", "отливант", "decant", "пробник"] },
   { slug: "parfum",  label: "Духи",               pattern: /духи|extrait|pure[\s-]parfum/i,                              keywords: ["духи", "extrait", "pure parfum"] },
   { slug: "edp",     label: "Парфюмерная вода",   pattern: /парфюм[\s-]?(ерная)?\s*вода|eau[\s-]de[\s-]parfum|\bedp\b/i, keywords: ["парфюмерная вода", "eau de parfum"] },
-  { slug: "edt",    label: "Туалетная вода",    pattern: /туалет\w*\s*вода|eau[\s-]de[\s-]toilette|\bedt\b/i,           keywords: ["туалетная вода", "eau de toilette"] },
+  { slug: "edt",    label: "Туалетная вода",    pattern: /туалетн\S*\s*вода|eau[\s-]de[\s-]toilette|\bedt\b/i,           keywords: ["туалетная вода", "eau de toilette"] },
   { slug: "edc",    label: "Одеколон",          pattern: /одеколон|eau[\s-]de[\s-]cologne|\bedc\b/i,                    keywords: ["одеколон", "eau de cologne"] },
   { slug: "deo",    label: "Дезодоранты",       pattern: /дезодорант|антиперспирант|deodorant/i,                        keywords: ["дезодорант", "антиперспирант", "deodorant"] },
   { slug: "home",   label: "Ароматы для дома",  pattern: /свеч[аи]|аромасвеч|candle/i,                                 keywords: ["свеча", "свечи", "аромасвеча", "candle"] },
@@ -530,7 +757,8 @@ const SHOP_CATEGORIES = [
 ];
 
 function extractVolume(name = "") {
-  const m = name.match(/(\d+\s*(?:мл|ml|г|g|oz)\b)/i);
+  // no \b after "мл": JS word boundaries don't see Cyrillic letters, so "50 мл" never matched
+  const m = name.match(/(\d+(?:[.,]\d+)?\s*(?:мл|ml|г|g|oz))(?![a-zа-яё])/i);
   return m ? m[1] : undefined;
 }
 
@@ -558,7 +786,7 @@ function normalizeProductName(name) {
   return s;
 }
 
-async function findShopProductByOfferId(offerId) {
+async function findShopProductByOfferId(offerId, { fast = false } = {}) {
   const prisma = getPrisma();
   if (!prisma) return null;
 
@@ -575,7 +803,7 @@ async function findShopProductByOfferId(offerId) {
       id: true, offerId: true, name: true, brand: true, marketplace: true,
       images: true, raw: true, currentPrice: true, targetStock: true, status: true,
       marketplaceState: true,
-      links: { take: 3, select: { supplierArticle: true } },
+      links: { take: 5, select: { supplierArticle: true, priceCurrency: true, partnerId: true } },
     },
     take: 5,
   });
@@ -583,42 +811,41 @@ async function findShopProductByOfferId(offerId) {
   if (!products.length) return null;
 
   // prefer Ozon
-  const p = products.find((pr) => pr.marketplace === "ozon") || products[0];
-  const images = extractImages(p);
+  // prefer Ozon, unless its listing was anonymised («парфюмерная вода» + a blank-bottle photo) — then Yandex
+  const usable = products.filter((pr) => !shopNameMasked(pr.name) && !_shopPlaceholderImgs.has(shopFirstImage(pr)));
+  const p = usable.find((pr) => pr.marketplace === "ozon") || usable[0] || products.find((pr) => pr.marketplace === "ozon") || products[0];
+  // fast (YCP, 5 s budget): only already-known image hashes, no downloads
+  const images = await stripMarketplaceOnlyImages(extractImages(p), { fetchMissing: !fast });
 
   let description = "";
   try {
     const state = p.marketplaceState && typeof p.marketplaceState === "object" ? p.marketplaceState : {};
     description = cleanText(state.description || state.desc || state.productDescription || "");
-    if (!description) {
-      const raw = p.raw && typeof p.raw === "object" ? p.raw : {};
+    // Ozon rows rarely carry a description; the Yandex Market row of the same offerId almost always does
+    for (const row of [p, ...products.filter((x) => x !== p)]) {
+      if (description) break;
+      const raw = row.raw && typeof row.raw === "object" ? row.raw : {};
       description = cleanText(raw.ozon?.description || raw.yandex?.description || "");
     }
   } catch (_) {}
-
-  const articles = p.links.map((l) => cleanText(l.supplierArticle)).filter(Boolean);
-  let snapPriceSingle = 0;
-  let snapCurrencySingle = "USD";
-  if (articles.length) {
-    const snaps = await prisma.priceMasterSnapshotItem.findMany({
-      where: { article: { in: articles }, active: true },
-      select: { price: true, currency: true },
-      orderBy: { price: "asc" },
-      take: 1,
-    });
-    if (snaps[0]) {
-      snapPriceSingle = Number(snaps[0].price || 0);
-      snapCurrencySingle = String(snaps[0].currency || "USD").toUpperCase();
+  let brandResolved = cleanText(p.brand || "");
+  if (!brandResolved) {
+    for (const row of products) {
+      const v = cleanText(row.raw?.yandex?.vendor || "");
+      if (v) { brandResolved = v; break; }
     }
   }
 
+  const articles = p.links.map((l) => cleanText(l.supplierArticle)).filter(Boolean);
+  const snapsSingle = articles.length ? await prisma.priceMasterSnapshotItem.findMany({
+    where: { article: { in: articles }, active: true },
+    select: { article: true, price: true, currency: true, partnerId: true },
+  }) : [];
   const currentPriceNum = Number(p.currentPrice || 0);
-  const resolvedMarkup = resolveShopMarkup(snapPriceSingle, defaultMarkupSingle, shopMarkupRulesSingle);
-  const priceRub = snapPriceSingle > 0
-    ? snapCurrencySingle === "RUB"
-      ? Math.round(snapPriceSingle * resolvedMarkup)
-      : Math.round(snapPriceSingle * usdRate * resolvedMarkup)
-    : currentPriceNum > 0 ? currentPriceNum : 0;
+  // same rule as the catalog and the feed, so the card, the cart and the order agree
+  const { priceRub } = shopPriceFromLinks(p.links, shopPmIndex(snapsSingle), {
+    currentPrice: currentPriceNum, defaultMarkup: defaultMarkupSingle, rules: shopMarkupRulesSingle, usdRate,
+  });
   const normalizedName = normalizeProductName(cleanText(p.name || ""));
   const _pCat = extractProductCategory(normalizedName);
 
@@ -640,10 +867,11 @@ async function findShopProductByOfferId(offerId) {
     id: p.id,
     offerId: p.offerId,
     name: normalizedName || cleanText(p.offerId),
-    brand: cleanText(p.brand || ""),
-    description,
+    brand: brandResolved,
+    description: shopCleanDescription(description),
     images,
     priceRub,
+    oldPriceRub: shopMarketplaceOldPrice(priceRub, currentPriceNum),
     inStock: (p.targetStock ?? 0) > 0 || (p.status !== "archived" && currentPriceNum > 0),
     stockQty: Math.max(0, p.targetStock ?? 0),
     volume: extractVolume(normalizedName || p.name || ""),
@@ -660,6 +888,115 @@ app.use("/api/shop", shopCors);
 
 // ── Public routes ─────────────────────────────────────────────────────────
 
+// ── Catalog over the cached feed ─────────────────────────────────────────────
+// The DB path filtered «в наличии» per page only (total never changed), sorted by the marketplace
+// price instead of the shop price, listed brands of the current page only and took 10 s for
+// «женская + парфюмерная вода». The feed (getShopFeedProducts, 1 h) already has shop prices,
+// resolved brands, volumes and categories, so every filter here is exact and in-memory.
+// Collections (женская, нишевая, цветочный…) need fragrance notes → one offerId query per
+// collection, cached for an hour.
+const _shopCollectionIds = new Map(); // key → { at, ids:Set }
+async function shopCollectionOfferIds(key) {
+  const col = resolveShopQueryCollection(key);
+  if (!col) return null;
+  const hit = _shopCollectionIds.get(key);
+  if (hit && Date.now() - hit.at < SHOP_FEED_TTL) return hit.ids;
+  const prisma = getPrisma();
+  if (!prisma) return new Set();
+  const rows = await prisma.warehouseProduct.findMany({
+    where: { archived: false, OR: buildShopCollectionConditions(col), AND: [buildShopPerfumeOnlyCondition()] },
+    select: { offerId: true },
+  });
+  const ids = new Set(rows.map((r) => cleanText(r.offerId).toLowerCase()));
+  _shopCollectionIds.set(key, { at: Date.now(), ids });
+  return ids;
+}
+
+const SHOP_PERFUME_RE = new RegExp(SHOP_PERFUME_NAME_WORDS.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "i");
+const SHOP_NON_PERFUME_RE = new RegExp(SHOP_NON_PERFUME_WORDS.join("|"), "i");
+const shopNorm = (x) => String(x || "").toLowerCase().replace(/ё/g, "е");
+const shopMl = (v) => {
+  const m = String(v || "").match(/(\d+(?:[.,]\d+)?)\s*(мл|ml)/i);
+  return m ? Math.round(parseFloat(m[1].replace(",", ".")) * 10) / 10 : null;
+};
+
+async function buildShopCatalogFromFeed(opts) {
+  const { q, brand, category, inStock, sort, page, pageSize, perfumeOnly, priceMin, priceMax, volume, tags } = opts;
+  const feed = await getShopFeedProducts();
+
+  // collection filters: q itself when it is a collection word, plus gender / line / group params
+  const colKeys = [...new Set([...(resolveShopQueryCollection(q) ? [q.toLowerCase()] : []), ...tags.map((t) => t.toLowerCase())])]
+    .filter((k) => resolveShopQueryCollection(k));
+  const colSets = await Promise.all(colKeys.map(shopCollectionOfferIds));
+  const textTerms = resolveShopQueryCollection(q) ? [] : shopNorm(q).split(/\s+/).filter((t) => t.length > 0).slice(0, 6);
+  const brandN = shopNorm(brand);
+
+  const base = feed.filter((p) => {
+    if (colSets.length && !colSets.every((set) => set?.has(p.offerId.toLowerCase()))) return false;
+    if (textTerms.length) {
+      const hay = shopNorm(`${p.name} ${p.brand} ${p.offerId}`);
+      if (!textTerms.every((t) => hay.includes(t))) return false;
+    }
+    if (category && category !== "parfumery" && p.category !== category) return false;
+    // collections are perfume groupings (the DB query already asks for it; hair dye slipped through by notes)
+    if ((perfumeOnly || colSets.length) && (!SHOP_PERFUME_RE.test(p.name) || SHOP_NON_PERFUME_RE.test(p.name))) return false;
+    if (inStock && !p.inStock) return false;
+    return true;
+  });
+
+  // facets are counted without their own filter (like marketplaces: brand list ignores the chosen brand)
+  // brands come from the same resolution as /api/shop/brands → exact match; legacy long names
+  // ("12 Parfumeurs Francais") still find their products by the name prefix
+  const byBrand = (p) => !brandN || shopNorm(p.brand) === brandN || shopNorm(p.name).startsWith(brandN) || (brandN.startsWith(shopNorm(p.brand) + " ") && shopNorm(p.name).startsWith(shopNorm(p.brand)));
+  const byPrice = (p) => (!priceMin || p.priceRub >= priceMin) && (!priceMax || p.priceRub <= priceMax);
+  const byVolume = (p) => !volume || shopMl(p.volume) === volume;
+
+  const brandCount = new Map();
+  const volCount = new Map();
+  let pMin = Infinity, pMax = 0;
+  for (const p of base) {
+    const okB = byBrand(p), okP = byPrice(p), okV = byVolume(p);
+    if (okP && okV && p.brand) {
+      const k = p.brand.toUpperCase();
+      const cur = brandCount.get(k);
+      brandCount.set(k, { name: cur?.name || p.brand, count: (cur?.count || 0) + 1 });
+    }
+    if (okB && okP) { const ml = shopMl(p.volume); if (ml) volCount.set(ml, (volCount.get(ml) || 0) + 1); }
+    if (okB && okV) { if (p.priceRub < pMin) pMin = p.priceRub; if (p.priceRub > pMax) pMax = p.priceRub; }
+  }
+  const list = base.filter((p) => byBrand(p) && byPrice(p) && byVolume(p));
+
+  const collator = new Intl.Collator("ru");
+  if (sort === "price_asc") list.sort((a, b) => a.priceRub - b.priceRub);
+  else if (sort === "price_desc") list.sort((a, b) => b.priceRub - a.priceRub);
+  else if (sort === "new") list.sort((a, b) => String(b.lastmod || "").localeCompare(String(a.lastmod || "")));
+  else if (sort === "name") list.sort((a, b) => collator.compare(a.name, b.name));
+  else {
+    // «Популярные» (default): reviews, rating, then perfume with photos before dyes / creams / photo-less rows
+    const score = (p) => (SHOP_PERFUME_RE.test(p.name) && !SHOP_NON_PERFUME_RE.test(p.name) ? 2 : 0) + (p.images?.length ? 1 : 0) + (p.inStock ? 1 : 0);
+    list.sort((a, b) => (b.reviewCount - a.reviewCount) || (b.rating - a.rating) || (score(b) - score(a)) || collator.compare(a.name, b.name));
+  }
+
+  const products = list.slice((page - 1) * pageSize, page * pageSize).map((p) => ({
+    id: p.id || p.offerId, offerId: p.offerId, name: p.name, brand: p.brand, description: "",
+    images: p.images, priceRub: p.priceRub, oldPriceRub: p.oldPriceRub, inStock: p.inStock, stockQty: p.stockQty || 0,
+    volume: p.volume || undefined, category: p.category, categoryLabel: p.categoryLabel, tags: [],
+    rating: p.rating || 0, reviewCount: p.reviewCount || 0,
+  }));
+  const brandsFacet = [...brandCount.values()].sort((a, b) => b.count - a.count || collator.compare(a.name, b.name)).slice(0, 300);
+  return {
+    products,
+    total: list.length,
+    brands: brandsFacet.map((b) => b.name),
+    facets: {
+      brands: brandsFacet,
+      volumes: [...volCount.entries()].filter(([, n]) => n >= 2).sort((a, b) => b[1] - a[1]).slice(0, 14)
+        .map(([ml, count]) => ({ ml, count })).sort((a, b) => a.ml - b.ml),
+      price: { min: Number.isFinite(pMin) ? pMin : 0, max: pMax },
+    },
+  };
+}
+
 app.get("/api/shop/catalog", shopCors, async (request, response, next) => {
   try {
     const page = Math.max(1, Number(request.query.page || 1) || 1);
@@ -668,9 +1005,21 @@ app.get("/api/shop/catalog", shopCors, async (request, response, next) => {
     const brand = cleanText(request.query.brand || "");
     const category = cleanText(request.query.category || "");
     const inStock = request.query.inStock === "true";
-    const sort = ["price_asc", "price_desc", "name"].includes(request.query.sort) ? request.query.sort : "name";
+    const perfumeOnly = request.query.perfumeOnly === "true";
+    const sort = ["price_asc", "price_desc", "name", "new", "popular"].includes(request.query.sort) ? request.query.sort : "popular";
+    const priceMin = Math.max(0, Number(request.query.priceMin) || 0);
+    const priceMax = Math.max(0, Number(request.query.priceMax) || 0);
+    const volume = Number(String(request.query.volume || "").replace(",", ".")) || 0;
+    // collection filters on top of q: gender / line / group (женская, нишевая, цветочный…)
+    const tags = ["gender", "line", "group"].map((k) => cleanText(request.query[k] || "")).filter(Boolean);
 
-    const result = await buildShopProductsFromDb({ q, brand, category, inStock, sort, page, pageSize });
+    // feed not built yet (cold start) → old DB path, and start the build
+    if (!_shopFeedCache) {
+      getShopFeedProducts().catch(() => {});
+      const result = await buildShopProductsFromDb({ q: q || tags[0] || "", brand, category, inStock, sort: ["new", "popular"].includes(sort) ? "name" : sort, page, pageSize, perfumeOnly });
+      return response.json({ ok: true, ...result, page, pageSize });
+    }
+    const result = await buildShopCatalogFromFeed({ q, brand, category, inStock, sort, page, pageSize, perfumeOnly, priceMin, priceMax, volume, tags });
     response.json({ ok: true, ...result, page, pageSize });
   } catch (error) {
     next(error);
@@ -694,135 +1043,11 @@ app.post("/api/shop/ai-search", shopCors, async (request, response, next) => {
   try {
     const query = cleanText(request.body?.query || "").slice(0, 400);
     if (!query) return response.status(400).json({ error: "query is required" });
-
-    const aiSettings = await readEffectiveAiSettings();
-    if (!isOpenAiDirectConfigured(aiSettings)) {
-      return response.status(503).json({ error: "AI не настроен", ok: false });
-    }
-
-    const client = getOpenAiClient(aiSettings);
-
-    // Step 1: LLM extracts fragrance notes + keyword terms from user query
-    const systemPrompt = `Ты эксперт парфюмерии. Пользователь описывает желаемый аромат на русском.
-Извлеки из описания структурированные данные для семантического поиска парфюмов.
-Верни JSON:
-{
-  "terms": [...],
-  "notes": [...],
-  "accords": [...],
-  "gender": "male|female|unisex|any",
-  "label": "..."
-}
-- terms: 3-6 слов/фраз, которые реально встречаются в названиях парфюмов в каталоге: названия брендов (например "Tom Ford", "Dior", "Mugler", "Montale", "Byredo"), ключевые слова названий ("Noir", "Oud", "Rose", "Aqua", "Sport", "Intense", "Neroli", "Vanilla"), типы ("eau de cologne", "eau de toilette", "туалетная вода", "парфюмерная вода"). Не используй описательные прилагательные (свежий, тёплый) — только то, что есть в реальных названиях.
-- notes: 3-6 конкретных нот аромата на английском (e.g. "Vanilla","Amber","Musk","Bergamot","Sandalwood")
-- accords: 2-4 общих аккорда на английском (e.g. "Oriental","Woody","Aromatic","Floral")
-- gender: если явно указан пол — "male"/"female", иначе "any"
-- label: одна фраза описания итогового аромата, до 60 символов
-Примеры нот: Vanilla, Musk, Amber, Sandalwood, Rose, Jasmine, Bergamot, Lemon, Cedar, Oud, Patchouli, Iris, Vetiver
-Примеры аккордов: Oriental, Woody, Aromatic, Floral, Fresh, Citrus, Powdery, Spicy, Gourmand`;
-
-    let terms = [];
-    let notes = [];
-    let accords = [];
-    let gender = "any";
-    let label = query.slice(0, 60);
-    try {
-      const completion = await createOpenAiChatCompletionWithFallback(client, {
-        model: aiSettings.textModel || "gpt-4o-mini",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: query },
-        ],
-        max_tokens: 400,
-        temperature: 0.2,
-        response_format: { type: "json_object" },
-      });
-      const parsed = extractJsonObjectFromText(completion.choices[0]?.message?.content || "{}");
-      if (Array.isArray(parsed.terms)) terms = parsed.terms.filter((t) => typeof t === "string" && t.length > 0).slice(0, 5);
-      if (Array.isArray(parsed.notes)) notes = parsed.notes.filter((t) => typeof t === "string").slice(0, 8);
-      if (Array.isArray(parsed.accords)) accords = parsed.accords.filter((t) => typeof t === "string").slice(0, 5);
-      if (parsed.gender && ["male", "female", "unisex"].includes(parsed.gender)) gender = parsed.gender;
-      if (parsed.label && typeof parsed.label === "string") label = cleanText(parsed.label).slice(0, 80);
-    } catch (_aiErr) {
-      terms = [query];
-    }
-
-    if (!terms.length) terms = [query];
-
-    const seenIds = new Set();
-    const results = [];
-
-    // Step 2a: Notes-based search via JSONB — exact semantic match (runs if DB has notes data)
-    if ((notes.length > 0 || accords.length > 0) && results.length < 12) {
-      try {
-        const prisma = getPrisma();
-        if (prisma) {
-          // Build a broad OR query matching any note or accord
-          const noteConditions = [
-            ...notes.map((n) => ({ fragranceNotes: { path: ["topNotes"], array_contains: n } })),
-            ...notes.map((n) => ({ fragranceNotes: { path: ["middleNotes"], array_contains: n } })),
-            ...notes.map((n) => ({ fragranceNotes: { path: ["baseNotes"], array_contains: n } })),
-            ...accords.map((a) => ({ fragranceNotes: { path: ["accords"], array_contains: a } })),
-          ];
-          const genderFilter = gender !== "any" ? { fragranceNotes: { path: ["gender"], equals: gender } } : {};
-
-          const where = {
-            archived: false,
-            targetStock: { gt: 0 },
-            fragranceNotes: { not: null },
-            OR: noteConditions,
-            ...genderFilter,
-          };
-
-          const dbResults = await prisma.warehouseProduct.findMany({
-            where,
-            select: { id: true, offerId: true, name: true, brand: true, images: true, marketplaceState: true, currentPrice: true },
-            take: 12,
-            orderBy: { updatedAt: "desc" },
-          });
-
-          for (const wp of dbResults) {
-            if (seenIds.has(wp.id)) continue;
-            const priceRub = wp.currentPrice || (wp.marketplaceState?.priceRub) || 0;
-            if (!priceRub) continue;
-            const images = Array.isArray(wp.images) ? wp.images : [];
-            seenIds.add(wp.id);
-            results.push({
-              id: wp.id,
-              offerId: wp.offerId,
-              name: wp.name,
-              brand: wp.brand || "",
-              description: "",
-              images,
-              priceRub,
-              inStock: true,
-              stockQty: 1,
-              _matchTerm: notes[0] || accords[0] || "notes",
-            });
-            if (results.length >= 12) break;
-          }
-        }
-      } catch (_dbErr) { /* non-fatal */ }
-    }
-
-    // Step 2b: Keyword search in product name/brand — uses terms + note names (many appear in product titles)
-    // inStock:false to maximise coverage; note names like "Rose", "Oud", "Vanilla" appear in actual product names
-    const keywordsToSearch = [...new Set([...terms, ...notes.slice(0, 5)])];
-    for (const term of keywordsToSearch) {
-      if (results.length >= 10) break;
-      const { products } = await buildShopProductsFromDb({
-        q: term, page: 1, pageSize: 8, inStock: false, sort: "name",
-      });
-      for (const p of products) {
-        if (!seenIds.has(p.id)) {
-          seenIds.add(p.id);
-          results.push({ ...p, _matchTerm: term });
-          if (results.length >= 10) break;
-        }
-      }
-    }
-
-    response.json({ ok: true, label, terms, notes, accords, products: results.slice(0, 10) });
+    // own scent engine (02d-shop-scent-engine.js): notes/accords index + query parsing, no external LLM
+    // (OpenAI answers 403 from the RU server, and the old path returned alphabetical keyword hits)
+    const result = await shopScentSearch(query);
+    logger.info("shop_ai_search", { q: query.slice(0, 120), n: result.products.length, label: result.label });
+    response.json(result);
   } catch (error) { next(error); }
 });
 
@@ -995,7 +1220,7 @@ app.get("/api/shop/popular", shopCors, async (request, response, next) => {
         id: true, offerId: true, name: true, brand: true, marketplace: true,
         images: true, raw: true, currentPrice: true, targetStock: true, status: true,
         marketplaceState: true,
-        links: { take: 1, select: { supplierArticle: true } },
+        links: { take: 5, select: { supplierArticle: true, priceCurrency: true, partnerId: true } },
       },
       orderBy: [{ marketplace: "asc" }],
     });
@@ -1014,13 +1239,9 @@ app.get("/api/shop/popular", shopCors, async (request, response, next) => {
     const arts = deduped.flatMap((p) => p.links.map((l) => cleanText(l.supplierArticle))).filter(Boolean);
     const snaps = arts.length ? await prisma.priceMasterSnapshotItem.findMany({
       where: { article: { in: arts }, active: true },
-      select: { article: true, price: true, currency: true },
+      select: { article: true, price: true, currency: true, partnerId: true },
     }) : [];
-    const pmMap2 = new Map();
-    for (const s of snaps) {
-      const cur = pmMap2.get(s.article);
-      if (!cur || Number(s.price) < Number(cur.price)) pmMap2.set(s.article, s);
-    }
+    const pmMap2 = shopPmIndex(snaps);
 
     // Ratings
     const offerIdsForRatings = deduped.map((p) => p.offerId).filter(Boolean);
@@ -1038,14 +1259,8 @@ app.get("/api/shop/popular", shopCors, async (request, response, next) => {
     const products = deduped
       .map((p) => {
         const images = extractImages(p);
-        const link = p.links[0];
-        const snap = link ? pmMap2.get(cleanText(link.supplierArticle)) : null;
-        const priceUsd = snap ? Number(snap.price || 0) : 0;
         const currentPriceNum = Number(p.currentPrice || 0);
-        const markup = resolveShopMarkup(priceUsd, defaultMarkup, shopMarkupRules);
-        const priceRub = priceUsd > 0
-          ? Math.round(priceUsd * usdRate * markup)
-          : currentPriceNum > 0 ? currentPriceNum : 0;
+        const { priceRub } = shopPriceFromLinks(p.links, pmMap2, { currentPrice: currentPriceNum, defaultMarkup, rules: shopMarkupRules, usdRate });
         const stockQty = p.targetStock ?? 0;
         const name = cleanText(p.name || "");
         const _cat = extractProductCategory(name);
@@ -1057,7 +1272,7 @@ app.get("/api/shop/popular", shopCors, async (request, response, next) => {
           id: p.id, offerId: p.offerId,
           name: name || cleanText(p.offerId),
           brand: cleanText(p.brand || ""),
-          description: "", images, priceRub,
+          description: "", images, priceRub, oldPriceRub: shopMarketplaceOldPrice(priceRub, currentPriceNum),
           inStock: stockQty > 0 || (p.status !== "archived" && currentPriceNum > 0),
           stockQty: Math.max(0, stockQty),
           volume: extractVolume(p.name || ""),
@@ -1218,8 +1433,11 @@ app.get("/api/shop/product-notes", shopCors, async (request, response, next) => 
     if (data) {
       // Persist to DB for future requests
       if (prisma) {
+        // Only this product: the old brand-wide update stamped one perfume's notes on the whole brand.
         await prisma.warehouseProduct.updateMany({
-          where: { brand: { equals: brand, mode: "insensitive" }, archived: false },
+          where: offerId
+            ? { offerId: { equals: offerId, mode: "insensitive" }, archived: false }
+            : { brand: { equals: brand, mode: "insensitive" }, name: { contains: name, mode: "insensitive" }, archived: false },
           data: { fragranceNotes: { ...data, source: "fragrantica" } },
         }).catch(() => {});
       }
@@ -1315,46 +1533,431 @@ app.get("/api/shop/product-qa", shopCors, async (request, response, next) => {
 });
 
 // Sitemap-only endpoint: returns all published product slugs + dates without count limit
+// ── Shop feed: every product the shop actually shows (same filter as the catalog),
+// one entry per offerId (Ozon preferred), priced like the storefront. Feeds the
+// sitemap (/api/shop/sitemap-products) and the Yandex YML feed (/api/shop/yml.xml).
+const SHOP_FEED_TTL = 60 * 60 * 1000;
+let _shopFeedCache = null;
+let _shopFeedCacheAt = 0;
+let _shopFeedBuilding = null;
+
+const _SLUG_TRANSLIT = {
+  "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "yo", "ж": "zh", "з": "z", "и": "i", "й": "y",
+  "к": "k", "л": "l", "м": "m", "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f",
+  "х": "kh", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "shch", "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
+};
+// must stay identical to shop-next/lib/slug.ts toProductSlug()
+function shopProductSlug(name, offerId) {
+  const nameSlug = String(name || "").toLowerCase().split("").map((c) => _SLUG_TRANSLIT[c] ?? c).join("")
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").substring(0, 80).replace(/-+$/, "");
+  return `${nameSlug}--${encodeURIComponent(offerId)}`;
+}
+
+function shopFeedDescription(p, name, category) {
+  const ms = p.marketplaceState && typeof p.marketplaceState === "object" ? p.marketplaceState : {};
+  const text = cleanText(ms.description || ms.desc || ms.productDescription || "");
+  if (text.length >= 40) return text;
+  // generated fallback: Yandex rejects offers without a description
+  const vol = extractVolume(name);
+  return [
+    `${name}${p.brand ? ` от ${cleanText(p.brand)}` : ""} — ${category.label.toLowerCase()}${vol ? `, объём ${vol}` : ""}.`,
+    "Оригинальная продукция с гарантией подлинности.",
+    "Доставка по всей России через Ozon за 1–5 дней, оплата картой или СБП через Ozon Pay.",
+  ].join(" ");
+}
+
+// Ozon listings that were "anonymised" after brand complaints: the name became just «парфюмерная вода»
+// and the photo a blank bottle shared by dozens of products (ir.ozone.ru/…/7844840592.jpg on 86 items).
+// The Yandex Market row of the same article keeps the real name and photos → the site uses it;
+// with no usable row at all the product is left out of the site.
+const SHOP_GENERIC_NAME_RE = /(парфюм\S*|туалетн\S*|вод[аы]|духи|одеколон|для|мужчин\S*|женщин\S*|унисекс|мужск\S*|женск\S*|набор\S*|пробник\S*|отливант\S*|тестер\S*|мини|eau|de|du|parfum|toilette|cologne|edp|edt|мл|ml|\d+(?:[.,]\d+)?)/gi;
+function shopNameMasked(name) {
+  const n = cleanText(name || "");
+  const rest = n.replace(SHOP_GENERIC_NAME_RE, " ").replace(/[^a-zа-яё]+/gi, " ").trim();
+  if (rest.length < 3) return true;
+  // «помада», «жидкое мыло», «свеча ароматическая»: a bare lower-case Russian category, no brand/model/volume
+  return /^[а-яё]/.test(n) && !/[a-z\d]/i.test(n) && n.split(/\s+/).length <= 3;
+}
+let _shopPlaceholderImgs = new Set(); // refreshed on every feed build
+const shopFirstImage = (p) => extractImages(p)[0] || "";
+
+async function buildShopFeedProducts() {
+  const prisma = getPrisma();
+  if (!prisma) return [];
+  const shopSettings = await readShopSettings();
+  const defaultMarkup = shopSettings.markup || 2.2;
+  const markupRules = shopSettings.markupRules || [];
+  let usdRate = Number(process.env.DEFAULT_USD_RATE || 95);
+  try { const r = await getUsdRate(); usdRate = Number(r?.rate || r || 95); } catch (_) {}
+  if (!usdRate || usdRate < 1) usdRate = Number(process.env.DEFAULT_USD_RATE || 95);
+
+  const rows = await prisma.warehouseProduct.findMany({
+    where: { archived: false, marketplace: { in: ["ozon", "yandex"] }, NOT: { status: "deleted" }, currentPrice: { gt: 0 }, links: { some: {} } },
+    select: {
+      id: true, offerId: true, name: true, brand: true, marketplace: true, images: true, currentPrice: true,
+      targetStock: true, status: true, marketplaceState: true, updatedAt: true,
+      links: { take: 5, select: { supplierArticle: true, priceCurrency: true, partnerId: true } },
+    },
+    orderBy: [{ marketplace: "asc" }, { updatedAt: "desc" }], // ozon < yandex → Ozon copy wins the dedupe
+  });
+
+  // one row per article: Ozon first, unless its name was anonymised — then the Yandex row
+  const byKey = new Map();
+  for (const p of rows) {
+    const key = cleanText(p.offerId).toLowerCase();
+    if (!key) continue;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(p);
+  }
+  const unique = [];
+  const altRows = new Map(); // key → the other rows, for the photo check below
+  for (const [key, list] of byKey) {
+    const good = list.filter((r) => !shopNameMasked(r.name));
+    if (!good.length) continue; // only anonymised rows → not on the site
+    unique.push(good[0]);
+    altRows.set(key, good.slice(1));
+  }
+
+  // images column empty → the raw marketplace payload has them (fetched only for those rows)
+  const needRaw = unique.filter((p) => !extractImages(p).length).map((p) => p.id);
+  const rawById = new Map();
+  for (let i = 0; i < needRaw.length; i += 1000) {
+    const chunk = await prisma.warehouseProduct.findMany({ where: { id: { in: needRaw.slice(i, i + 1000) } }, select: { id: true, raw: true } });
+    for (const r of chunk) rawById.set(r.id, r.raw);
+  }
+
+  // placeholder photos = the photos of the anonymised rows (a shared photo alone is normal: sample vials,
+  // a brand line shot — a "≥ 5 articles" rule hid 314 good products)
+  const maskedIds = rows.filter((r) => shopNameMasked(r.name)).map((r) => r.id);
+  // …and only a photo shared by ≥ 3 anonymised articles: some anonymised rows kept their real photo
+  const maskedUse = new Map();
+  for (let i = 0; i < maskedIds.length; i += 1000) {
+    for (const r of await prisma.warehouseProduct.findMany({ where: { id: { in: maskedIds.slice(i, i + 1000) } }, select: { offerId: true, images: true, raw: true } })) {
+      const img = shopFirstImage(r);
+      if (!img) continue;
+      if (!maskedUse.has(img)) maskedUse.set(img, new Set());
+      maskedUse.get(img).add(cleanText(r.offerId).toLowerCase());
+    }
+  }
+  _shopPlaceholderImgs = new Set([...maskedUse].filter(([, ids]) => ids.size >= 3).map(([u]) => u));
+  if (_shopPlaceholderImgs.size) {
+    const altIds = [];
+    for (const p of unique) {
+      const img = shopFirstImage(rawById.has(p.id) ? { ...p, raw: rawById.get(p.id) } : p);
+      if (_shopPlaceholderImgs.has(img)) altIds.push(...(altRows.get(cleanText(p.offerId).toLowerCase()) || []).map((r) => r.id));
+    }
+    let swapped = 0, dropped = 0;
+    const altRaw = new Map();
+    for (let i = 0; i < altIds.length; i += 1000) {
+      for (const r of await prisma.warehouseProduct.findMany({ where: { id: { in: altIds.slice(i, i + 1000) } }, select: { id: true, raw: true } })) altRaw.set(r.id, r.raw);
+    }
+    for (let i = unique.length - 1; i >= 0; i--) {
+      const p = unique[i];
+      const img = shopFirstImage(rawById.has(p.id) ? { ...p, raw: rawById.get(p.id) } : p);
+      if (!_shopPlaceholderImgs.has(img)) continue;
+      const alt = (altRows.get(cleanText(p.offerId).toLowerCase()) || []).find((r) => {
+        const im = shopFirstImage(altRaw.has(r.id) ? { ...r, raw: altRaw.get(r.id) } : r);
+        return im && !_shopPlaceholderImgs.has(im);
+      });
+      if (alt) { if (altRaw.has(alt.id)) rawById.set(alt.id, altRaw.get(alt.id)); unique[i] = alt; swapped++; }
+      else { unique.splice(i, 1); dropped++; }
+    }
+    logger.info("shop feed placeholder photos", { urls: [..._shopPlaceholderImgs].slice(0, 20), swapped, dropped });
+  }
+
+  // descriptions / vendors live mostly on the Yandex Market row of the same offerId
+  const textByOffer = new Map();
+  const offerIds = unique.map((p) => cleanText(p.offerId)).filter(Boolean);
+  for (let i = 0; i < offerIds.length; i += 5000) {
+    const chunk = offerIds.slice(i, i + 5000);
+    const rows = await prisma.$queryRaw`
+      SELECT offer_id,
+             max(raw#>>'{ozon,description}') AS ozon_desc,
+             max(raw#>>'{yandex,description}') AS ym_desc,
+             max(raw#>>'{yandex,vendor}') AS ym_vendor
+      FROM warehouse_products
+      WHERE offer_id = ANY(${chunk}) AND archived = false
+      GROUP BY offer_id`;
+    for (const r of rows) {
+      const desc = [r.ozon_desc, r.ym_desc].map((x) => shopCleanDescription(x || "")).find((x) => x.length >= 40) || "";
+      textByOffer.set(cleanText(r.offer_id), { desc, vendor: cleanText(r.ym_vendor || "") });
+    }
+  }
+
+  const articles = [...new Set(unique.flatMap((p) => p.links.map((l) => cleanText(l.supplierArticle))).filter(Boolean))];
+  const allSnaps = [];
+  for (let i = 0; i < articles.length; i += 5000) {
+    allSnaps.push(...await prisma.priceMasterSnapshotItem.findMany({
+      where: { article: { in: articles.slice(i, i + 5000) }, active: true },
+      select: { article: true, price: true, currency: true, partnerId: true },
+    }));
+  }
+  const pmMap = shopPmIndex(allSnaps);
+
+  // Brand: the column is empty for most rows or holds "brand + model". Take the shortest known
+  // brand (seen on >= 3 rows) that prefixes the name or the stored brand.
+  const brandCount = new Map();
+  for (const p of unique) {
+    const b = cleanText(p.brand || "");
+    if (b) brandCount.set(b.toUpperCase(), { name: b, n: (brandCount.get(b.toUpperCase())?.n || 0) + 1 });
+  }
+  const curated = [
+    ...SHOP_LUXURY_BRANDS, ...SHOP_NICHE_BRANDS, ...SHOP_ARABIC_BRANDS,
+    "Guess", "Michael Kors", "Pepe Jeans", "Lacoste", "Calvin Klein", "Davidoff", "Hugo Boss", "Antonio Banderas",
+    "Jimmy Choo", "Tommy Hilfiger", "Nina Ricci", "Issey Miyake", "Azzaro", "Cacharel", "Lanvin", "Trussardi", "Zara",
+    "Clinique", "Estee Lauder", "Shiseido", "Police", "Mexx", "Adidas", "Ariana Grande", "Britney Spears", "Juicy Couture",
+    "Elizabeth Arden", "Lalique", "Rochas", "Diesel", "Dsquared2", "Emporio Armani", "Laura Biagiotti", "Roberto Cavalli",
+    "Coach", "Dolce & Gabbana", "Dolce&Gabbana", "Sisley", "Clarins", "Lancome", "Byredo", "Maison Margiela", "Juliette Has A Gun",
+    "Zadig & Voltaire", "Kenzo", "Givenchy", "Chloe", "Escada", "Moschino", "Versace", "Valentino", "Hermes", "Guerlain",
+    "Jo Malone", "Frederic Malle", "Initio", "Nishane", "Memo", "Xerjoff", "Amouage", "Creed", "Kilian", "Mancera", "Montale",
+    "Ex Nihilo", "Tiziana Terenzi", "Orto Parisi", "Nasomatto", "Atelier Cologne", "Acqua di Parma", "Aesop", "Diptyque", "Le Labo",
+  ];
+  for (const b of curated) if (!brandCount.has(b.toUpperCase())) brandCount.set(b.toUpperCase(), { name: b, n: 99 });
+  const knownBrands = [...brandCount.entries()].filter(([, v]) => v.n >= 3).map(([up, v]) => ({ up, name: v.name }))
+    .sort((a, b) => a.up.length - b.up.length);
+  const resolveBrand = (name, stored) => {
+    const N = name.toUpperCase(), S = stored.toUpperCase();
+    const hit = knownBrands.find((b) => N.startsWith(b.up + " ") || N.startsWith(b.up + "-") || (S && (S === b.up || S.startsWith(b.up + " "))));
+    if (hit) return hit.name;
+    if (stored) return stored;
+    return name.match(/^([^-–—(]{2,40}?)\s+[-–—]\s+/)?.[1]?.trim() || "";
+  };
+
+  const out = [];
+  for (const p of unique) {
+    const currentPriceNum = Number(p.currentPrice || 0);
+    const { priceRub, fromSupplier } = shopPriceFromLinks(p.links, pmMap, { currentPrice: currentPriceNum, defaultMarkup, rules: markupRules, usdRate });
+    // no supplier price + a huge marketplace price = a "do not sell" placeholder, keep it out of feeds
+    if (!fromSupplier && priceRub > 150000) continue;
+    const name = normalizeProductName(cleanText(p.name || ""));
+    if (!(priceRub > 0) || name.length < 2) continue; // same rule as the catalog
+    // feed: only hashes already known (product pages fill the cache) — no 15k downloads here
+    const images = (await stripMarketplaceOnlyImages(extractImages(rawById.has(p.id) ? { ...p, raw: rawById.get(p.id) } : p), { fetchMissing: false }))
+      .filter((u) => /^https:\/\//.test(u) && !_shopPlaceholderImgs.has(u)).slice(0, 10);
+    const category = extractProductCategory(name);
+    const stock = p.targetStock ?? 0;
+    out.push({
+      offerId: cleanText(p.offerId),
+      slug: shopProductSlug(name, cleanText(p.offerId)),
+      name,
+      brand: resolveBrand(name, cleanText(p.brand || "") || textByOffer.get(cleanText(p.offerId))?.vendor || ""),
+      priceRub,
+      images,
+      category: category.slug,
+      categoryLabel: category.label,
+      volume: extractVolume(name) || "",
+      inStock: stock > 0 || (p.status !== "archived" && currentPriceNum > 0),
+      description: textByOffer.get(cleanText(p.offerId))?.desc || shopFeedDescription(p, name, category),
+      lastmod: p.updatedAt ? p.updatedAt.toISOString().slice(0, 10) : null,
+      id: p.id,
+      oldPriceRub: shopMarketplaceOldPrice(priceRub, currentPriceNum),
+      stockQty: Math.max(0, stock),
+      rating: Math.round((Number(p.marketplaceState?.ozonRating) || 0) * 10) / 10,
+      reviewCount: Number(p.marketplaceState?.ozonReviewCount) || 0,
+    });
+  }
+  // "brand + model" left in the brand column («Chanel Allure», «CHANEL BLEU DE») → the base brand that
+  // prefixes it («Chanel»), so the brand list, the brand page and the catalog filter agree
+  const brandN = new Map();
+  for (const o of out) { const k = o.brand.toUpperCase(); if (k) brandN.set(k, (brandN.get(k) || 0) + 1); }
+  const bases = [...brandN.entries()].filter(([, n]) => n >= 3).map(([k]) => k).sort((a, b) => a.length - b.length);
+  const baseName = new Map();
+  for (const o of out) { const k = o.brand.toUpperCase(); if (!baseName.has(k)) baseName.set(k, o.brand); }
+  for (const o of out) {
+    const k = o.brand.toUpperCase();
+    const base = k && bases.find((b) => b !== k && k.startsWith(b + " "));
+    if (base) o.brand = baseName.get(base) || o.brand;
+  }
+  // one name per house (after folding: «Christian Dior Sauvage» → «Christian Dior» → «Dior»)
+  const ALIASES = {
+    "CHRISTIAN DIOR": "Dior", "C.DIOR": "Dior", "YSL": "Yves Saint Laurent", "YVES SAINT-LAURENT": "Yves Saint Laurent",
+    "D&G": "Dolce & Gabbana", "DOLCE&GABBANA": "Dolce & Gabbana", "DOLCE AND GABBANA": "Dolce & Gabbana",
+    "LANCOME": "Lancôme", "GIORGIO ARMANI": "Giorgio Armani", "ARMANI": "Giorgio Armani", "EMPORIO ARMANI": "Emporio Armani",
+    "HERMES": "Hermès", "CHLOE": "Chloé", "MAISON FRANCIS KURKDJIAN": "Maison Francis Kurkdjian", "MFK": "Maison Francis Kurkdjian",
+    "FRANCIS KURKDJIAN": "Maison Francis Kurkdjian", "PARFUMS DE MARLY": "Parfums de Marly", "BY KILIAN": "Kilian", "KILIAN PARIS": "Kilian",
+    "ESTEE LAUDER": "Estée Lauder", "JO MALONE LONDON": "Jo Malone", "CAROLINA HERRERA": "Carolina Herrera", "CK": "Calvin Klein",
+  };
+  // lines / typos that start with the house name
+  const PREFIX_ALIASES = [["CHRISTIAN DIOR", "Dior"], ["DOLCE", "Dolce & Gabbana"], ["HERMESSENCE", "Hermès"], ["HERMES ", "Hermès"],
+    ["YSL", "Yves Saint Laurent"], ["LANCME", "Lancôme"], ["LANCOME ", "Lancôme"], ["MONT BLANC", "Montblanc"], ["MONTBLANC ", "Montblanc"]];
+  for (const o of out) {
+    const k = o.brand.toUpperCase();
+    const a = ALIASES[k] || PREFIX_ALIASES.find(([p]) => k === p.trim() || k.startsWith(p))?.[1];
+    if (a) o.brand = a;
+  }
+  return out;
+}
+
+async function getShopFeedProducts() {
+  if (_shopFeedCache && Date.now() - _shopFeedCacheAt < SHOP_FEED_TTL) return _shopFeedCache;
+  if (!_shopFeedBuilding) {
+    _shopFeedBuilding = buildShopFeedProducts()
+      .then((list) => { _shopFeedCache = list; _shopFeedCacheAt = Date.now(); return list; })
+      .finally(() => { _shopFeedBuilding = null; });
+  }
+  // serve the stale copy while a rebuild runs
+  return _shopFeedCache || _shopFeedBuilding;
+}
+
+function xmlEsc(s) {
+  return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;")
+    // control characters are illegal in XML 1.0
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
+}
+
+// Yandex YML categories: one root + the storefront categories
+const SHOP_YML_CATEGORIES = [
+  { id: 1, slug: "parfumery", name: "Парфюмерия" },
+  ...SHOP_CATEGORIES.map((c, i) => ({ id: 10 + i, slug: c.slug, name: c.label, parentId: ["deo", "home", "body", "sets"].includes(c.slug) ? null : 1 })),
+];
+
+function shopYmlOfferId(offerId) {
+  // YML offer id: latin letters and digits only, up to 20 chars
+  const clean = offerId.replace(/[^A-Za-z0-9]/g, "");
+  return clean.length && clean.length <= 20 ? clean : require("crypto").createHash("md5").update(offerId).digest("hex").slice(0, 20);
+}
+
+async function buildShopYml() {
+  const site = process.env.SHOP_SITE_URL || "https://magicvibes.ru";
+  const products = await getShopFeedProducts();
+  const catId = new Map(SHOP_YML_CATEGORIES.map((c) => [c.slug, c.id]));
+  const used = new Set();
+  const offers = [];
+  for (const p of products) {
+    if (!p.images.length) continue; // Yandex requires a picture
+    let id = shopYmlOfferId(p.offerId);
+    while (used.has(id)) id = id.slice(0, 18) + Math.floor(Math.random() * 90 + 10);
+    used.add(id);
+    const params = [];
+    if (p.volume) params.push(`<param name="Объём">${xmlEsc(p.volume)}</param>`);
+    if (p.categoryLabel) params.push(`<param name="Тип">${xmlEsc(p.categoryLabel)}</param>`);
+    offers.push(`<offer id="${id}" available="${p.inStock ? "true" : "false"}">
+<url>${xmlEsc(`${site}/product/${p.slug}`)}</url>
+<price>${p.priceRub}</price>
+<currencyId>RUB</currencyId>
+<categoryId>${catId.get(p.category) || 1}</categoryId>
+${p.images.slice(0, 5).map((u) => `<picture>${xmlEsc(u)}</picture>`).join("\n")}
+<name>${xmlEsc(p.name)}</name>
+${p.brand ? `<vendor>${xmlEsc(p.brand)}</vendor>` : ""}
+<vendorCode>${xmlEsc(p.offerId)}</vendorCode>
+<description><![CDATA[${String(p.description).replace(/]]>/g, "]] >").slice(0, 3000)}]]></description>
+<sales_notes>Оплата картой или СБП через Ozon Pay</sales_notes>
+<delivery>true</delivery>
+<pickup>true</pickup>
+<manufacturer_warranty>true</manufacturer_warranty>
+${params.join("\n")}
+</offer>`.replace(/\n{2,}/g, "\n"));
+  }
+  const date = new Date().toISOString().slice(0, 16).replace("T", " ");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<yml_catalog date="${date}">
+<shop>
+<name>Magic Vibes</name>
+<company>Magic Vibes</company>
+<url>${site}</url>
+<platform>Next.js</platform>
+<email>noreply@magicvibes.ru</email>
+<currencies><currency id="RUB" rate="1"/></currencies>
+<categories>
+${SHOP_YML_CATEGORIES.map((c) => `<category id="${c.id}"${c.parentId ? ` parentId="${c.parentId}"` : ""}>${xmlEsc(c.name)}</category>`).join("\n")}
+</categories>
+<delivery-options><option cost="0" days="1-5"/></delivery-options>
+<pickup-options><option cost="0" days="1-5"/></pickup-options>
+<offers>
+${offers.join("\n")}
+</offers>
+</shop>
+</yml_catalog>
+`;
+}
+
+let _shopYmlCache = null;
+let _shopYmlCacheAt = 0;
+
+app.get("/api/shop/yml.xml", shopCors, async (_request, response, next) => {
+  try {
+    if (!_shopYmlCache || Date.now() - _shopYmlCacheAt > SHOP_FEED_TTL) {
+      _shopYmlCache = await buildShopYml();
+      _shopYmlCacheAt = Date.now();
+    }
+    response.set("Content-Type", "application/xml; charset=utf-8");
+    response.set("Cache-Control", "public, max-age=1800");
+    response.send(_shopYmlCache);
+  } catch (error) { next(error); }
+});
+
 app.get("/api/shop/sitemap-products", shopCors, async (_request, response, next) => {
   try {
-    const prisma = getPrisma();
-    if (!prisma) return response.json({ products: [] });
-    const rows = await prisma.warehouseProduct.findMany({
-      where: { archived: false, NOT: { status: "deleted" }, currentPrice: { gt: 0 } },
-      select: { offerId: true, name: true, updatedAt: true },
-      orderBy: { updatedAt: "desc" },
+    const products = await getShopFeedProducts();
+    response.json({
+      products: products.map((p) => ({ offerId: p.offerId, slug: p.slug, name: p.name, image: p.images[0] || null, lastmod: p.lastmod })),
     });
-    const products = rows
-      .filter((r) => r.offerId && r.offerId.trim())
-      .map((r) => ({
-        offerId: r.offerId.trim(),
-        name: r.name ?? "",
-        lastmod: r.updatedAt ? r.updatedAt.toISOString().slice(0, 10) : null,
-      }));
-    response.json({ products });
+  } catch (error) { next(error); }
+});
+
+// "Другие объёмы": same brand + name once the volume is stripped (EDP/EDT stay distinct — different scents)
+const _shopVariantIndex = new WeakMap();
+function shopVariantKey(p) {
+  const name = String(p.name || "").toLowerCase()
+    .replace(/\(?\s*\d+(?:[.,]\d+)?\s*(?:мл|ml|г|g|oz)(?![a-zа-яё])\s*\)?/gi, " ")
+    .replace(/[^a-zа-яё0-9]+/gi, " ").replace(/\s+/g, " ").trim();
+  return `${String(p.brand || "").toLowerCase()}|${name}`;
+}
+app.get("/api/shop/variants/:offerId", shopCors, async (request, response, next) => {
+  try {
+    const products = await getShopFeedProducts();
+    let index = _shopVariantIndex.get(products);
+    if (!index) {
+      index = new Map();
+      for (const p of products) {
+        if (!p.volume) continue;
+        const k = shopVariantKey(p);
+        if (!index.has(k)) index.set(k, []);
+        index.get(k).push(p);
+      }
+      _shopVariantIndex.set(products, index);
+    }
+    const offerId = cleanText(request.params.offerId || "").toLowerCase();
+    const self = products.find((p) => p.offerId.toLowerCase() === offerId);
+    const group = self?.volume ? index.get(shopVariantKey(self)) || [] : [];
+    // one entry per volume — the cheapest in-stock offer wins
+    const byVol = new Map();
+    for (const p of group) {
+      const v = p.volume.replace(",", ".").replace(/\s+/g, " ").toLowerCase();
+      const cur = byVol.get(v);
+      if (!cur || (p.inStock && !cur.inStock) || (p.inStock === cur.inStock && p.priceRub < cur.priceRub)) byVol.set(v, p);
+    }
+    if (self) byVol.set(self.volume.replace(",", ".").replace(/\s+/g, " ").toLowerCase(), self);
+    const variants = [...byVol.values()]
+      .sort((a, b) => parseFloat(a.volume.replace(",", ".")) - parseFloat(b.volume.replace(",", ".")))
+      .map((p) => ({ offerId: p.offerId, slug: p.slug, volume: p.volume, priceRub: p.priceRub, inStock: p.inStock, current: p === self }));
+    response.set("Cache-Control", "public, max-age=600");
+    response.json({ variants: variants.length > 1 ? variants : [] });
   } catch (error) { next(error); }
 });
 
 app.get("/api/shop/brands", shopCors, async (_request, response, next) => {
   try {
-    const prisma = getPrisma();
-    if (!prisma) return response.json([]);
-    const rows = await prisma.warehouseProduct.findMany({
-      where: { archived: false, marketplace: { in: ["ozon", "yandex"] }, NOT: { status: "deleted" }, currentPrice: { gt: 0 }, links: { some: {} }, brand: { not: null } },
-      select: { offerId: true, brand: true },
-    });
-    const seen = new Set();
-    const counts = {};
-    for (const p of rows) {
-      const key = (p.offerId || "").trim().toLowerCase();
-      if (!key || seen.has(key) || !p.brand) continue;
-      seen.add(key);
-      const b = cleanText(p.brand).trim();
-      if (b) counts[b] = (counts[b] || 0) + 1;
+    // Same brand resolution as the catalog (feed): the old list came from the raw brand column
+    // («12 Parfumeurs Francais»), the catalog filters by the resolved brand («12 Parfumeurs») → 0 items.
+    const feed = await getShopFeedProducts();
+    const groups = new Map();
+    for (const p of feed) {
+      const b = cleanText(p.brand || "");
+      if (!b) continue;
+      const up = b.toUpperCase();
+      const g = groups.get(up) || { count: 0, inStock: 0, minPrice: 0, spellings: new Map(), image: null };
+      g.count += 1;
+      if (p.inStock) g.inStock += 1;
+      if (p.priceRub > 0 && (!g.minPrice || p.priceRub < g.minPrice)) g.minPrice = p.priceRub;
+      if (!g.image && p.images?.[0]) g.image = p.images[0];
+      g.spellings.set(b, (g.spellings.get(b) || 0) + 1);
+      groups.set(up, g);
     }
-    const brands = Object.entries(counts)
-      .map(([name, count]) => ({ name, count }))
+    const brands = [...groups.values()]
+      .map((g) => ({ name: [...g.spellings.entries()].sort((a, b) => b[1] - a[1])[0][0], count: g.count, inStock: g.inStock, minPrice: g.minPrice, image: g.image }))
       .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+    response.set("Cache-Control", "public, max-age=600");
     response.json(brands);
   } catch (error) { next(error); }
 });
@@ -1364,7 +1967,10 @@ app.get("/api/shop/settings", shopCors, async (_request, response, next) => {
     const settings = await readShopSettings();
     // Don't expose sensitive fields
     const { shopName, shopDescription, contactEmail, contactPhone, deliveryDays, deliveryDaysMin, deliveryPriceRub, freeDeliveryFrom } = settings;
-    response.json({ shopName, shopDescription, contactEmail, contactPhone, deliveryDays, deliveryDaysMin, deliveryPriceRub, freeDeliveryFrom });
+    // switchable storefront sections; off unless enabled in the admin
+    const features = { giftBuilder: Boolean(settings.features?.giftBuilder), vipClub: Boolean(settings.features?.vipClub) };
+    const deliveryMode = settings.deliveryRules?.mode === "ozon" ? "ozon" : "fixed";
+    response.json({ shopName, shopDescription, contactEmail, contactPhone, deliveryDays, deliveryDaysMin, deliveryPriceRub, freeDeliveryFrom, features, deliveryMode });
   } catch (error) {
     next(error);
   }
@@ -1665,11 +2271,27 @@ app.get("/api/shop/delivery/pvz", shopCors, async (request, response, next) => {
       }
       const inBox = allPoints.filter(p => p.lat && p.lng && p.lat >= bboxS && p.lat <= bboxN && p.lng >= bboxW && p.lng <= bboxE);
       if (!inBox.length) return response.json({ pvz: [], city, error: "no_pvz_in_city", _allLoaded: allPoints.length });
-      // Равномерная сетка — 200 точек по всему городу
-      nearby = _gridSamplePvz(inBox, bboxS, bboxN, bboxW, bboxE, 200);
+      // Равномерная сетка — 200 точек по всему городу, список — от центра к окраинам
+      // (bbox Москвы включает Новую Москву до Калужской обл. — без сортировки список начинался с Жуковского)
+      // Nominatim даёт центр Москвы по площади вместе с Новой Москвой (≈ Чертаново) — берём Кремль
+      const isMoscow = /^москва$/i.test(city.replace(/^г\.?\s*/i, "")) || /^Москва,/.test(String(g.display_name || ""));
+      const cLat = isMoscow ? 55.7520 : parseFloat(g.lat), cLng = isMoscow ? 37.6175 : parseFloat(g.lon);
+      const cosC = Math.cos((cLat * Math.PI) / 180);
+      const distC = (p) => Math.pow(p.lat - cLat, 2) + Math.pow((p.lng - cLng) * cosC, 2);
+      if (Number.isFinite(cLat) && Number.isFinite(cLng)) {
+        // 120 ближайших к центру (сетка там слишком редкая) + 80 по сетке для охвата окраин
+        const core = [...inBox].sort((x, y) => distC(x) - distC(y)).slice(0, 120);
+        const coreIds = new Set(core.map((p) => p.id));
+        const spread = _gridSamplePvz(inBox.filter((p) => !coreIds.has(p.id)), bboxS, bboxN, bboxW, bboxE, 80);
+        nearby = [...core, ...spread].sort((x, y) => distC(x) - distC(y));
+      } else {
+        nearby = _gridSamplePvz(inBox, bboxS, bboxN, bboxW, bboxE, 200);
+      }
     }
 
-    const pvz = await _fetchOzonPvzDetails(nearby.map(p => p.id));
+    const order = new Map(nearby.map((p, i) => [String(p.id), i]));
+    const pvz = (await _fetchOzonPvzDetails(nearby.map(p => p.id)))
+      .sort((x, y) => (order.get(String(x.id)) ?? 1e9) - (order.get(String(y.id)) ?? 1e9));
     const extra = pvz.length === 0 ? { _debug: { allPoints: allPoints.length, nearbyRaw: nearby.length } } : {};
     response.json({ pvz, city, count: pvz.length, source: "ozon", ...extra });
   } catch (error) {
@@ -1692,53 +2314,310 @@ function _ozonPayNotificationSign({ accessKey, orderID, transactionID, extOrderI
   return require("crypto").createHash("sha256").update(fingerprint).digest("hex");
 }
 
-async function _ozonPayCreateOrder({ orderId, totalRub, email, paymentMethod = "ozon_pay" }) {
+// Cart → Acquiring items (MODE_FULL). The order discount is spread over the lines so that
+// sum(price × qty) equals the charged amount exactly (Ozon rejects a mismatch).
+function _ozonPayItems(items, totalRub) {
+  const vat = process.env.OZON_PAY_VAT || "VAT_NONE"; // УСН → «без НДС»
+  const baseKop = items.reduce((s, i) => s + Math.round(i.priceRub * 100) * i.quantity, 0);
+  const totalKop = Math.round(totalRub * 100);
+  const lines = items.map((i) => ({
+    extId: i.offerId, // seller article — Ozon Delivery matches the product by it
+    // Ozon rejects an empty name ("некорректное название товара")
+    name: cleanText(`${i.brand && i.name && !i.name.toUpperCase().startsWith(i.brand.toUpperCase()) ? `${i.brand} ` : ""}${i.name || ""}`).slice(0, 128) || `Товар ${i.offerId}`,
+    quantity: i.quantity,
+    unitKop: baseKop > 0 ? Math.floor((Math.round(i.priceRub * 100) * totalKop) / baseKop) : 0,
+  }));
+  // rounding remainder: a qty-1 line absorbs it exactly, otherwise split it off as its own line
+  const rest = totalKop - lines.reduce((s, l) => s + l.unitKop * l.quantity, 0);
+  if (rest > 0) {
+    const one = lines.find((l) => l.quantity === 1);
+    if (one) one.unitKop += rest;
+    else {
+      const l = lines[0];
+      l.quantity -= 1;
+      lines.push({ ...l, quantity: 1, unitKop: l.unitKop + rest });
+    }
+  }
+  return lines.filter((l) => l.quantity > 0).map((l) => ({
+    extId: l.extId, name: l.name, quantity: l.quantity, type: "TYPE_PRODUCT", vat, needMark: false,
+    price: { currencyCode: "643", value: String(l.unitKop) },
+  }));
+}
+
+// Ozon Delivery via Acquiring: every article must be listed in our Ozon store
+async function shopOzonDeliveryEligible(offerIds) {
+  if (process.env.OZON_PAY_DELIVERY === "false" || !process.env.OZON_PAY_ACCESS_KEY) return false;
+  const ids = [...new Set(offerIds.map((x) => cleanText(x || "")).filter(Boolean))];
+  const prisma = getPrisma();
+  if (!ids.length || !prisma) return false;
+  const onOzon = await prisma.warehouseProduct.findMany({
+    where: { marketplace: "ozon", archived: false, offerId: { in: ids } }, select: { offerId: true },
+  }).catch(() => []);
+  return new Set(onOzon.map((r) => r.offerId)).size === ids.length;
+}
+
+// ── Delivery price ─────────────────────────────────────────────────────────────
+// settings.deliveryRules (davidsklad → Магазин → Настройки → «Доставка: правила»):
+//   mode "fixed" — the old flat «Стоимость доставки» (deliveryPriceRub);
+//   mode "ozon"  — cost-covering price from the Ozon Доставка tariffs (lib/ozon-logistics-tariffs.js):
+//     обработка отправления + доставка до места выдачи + Σ товаров × (логистика по объёму и кластерам
+//     + выдача в ПВЗ) + заложенные невыкупы (обратная логистика = тариф логистики + обработка возврата)
+//     + комиссия Ozon Pay (с суммы доставки или всего заказа), затем наценка, округление вверх, мин/макс.
+//   «Бесплатная доставка от» (freeDeliveryFrom) works in both modes.
+const OZON_TARIFFS = require("./lib/ozon-logistics-tariffs");
+const OZON_CITY_CLUSTERS = require("./lib/ozon-city-clusters");
+
+const SHOP_DELIVERY_DEFAULTS = {
+  mode: "fixed",
+  senderCluster: "Москва, МО и Дальние регионы",
+  handlingRub: 10,          // обработка отправления в ПВЗ/ППЗ
+  lastMileRub: 25,          // доставка до места выдачи (не больше 25 ₽)
+  issuePerItemRub: 30,      // выдача товара в партнёрском ПВЗ, за товар
+  returnRatePct: 5,         // доля невыкупов и отмен
+  returnProcessingRub: 15,  // обработка невыкупа, за товар
+  acquiringPct: 2.2,        // Ozon Pay: 2,2% карта / Ozon Банк, 0,7% СБП — берём худший случай
+  acquiringBase: "order",   // "order" — комиссия со всего заказа, "delivery" — только с доставки, "none"
+  packMlFactor: 4,          // объём упаковки, л = мл флакона × factor / 1000 + packBaseL
+  packBaseL: 0.15,
+  defaultItemL: 0.6,        // товар без объёма в названии
+  extraRub: 0,              // наценка к доставке, ₽
+  extraPct: 0,              // наценка к доставке, %
+  roundTo: 10,
+  minRub: 0,
+  maxRub: 0,                // 0 = без ограничения
+  unknownCity: "max",       // город не распознан: "max" — самый дорогой кластер, "universal" — универсальный тариф
+  cityClusters: [],         // [{ match: "Балашиха", cluster: "Москва, МО и Дальние регионы" }]
+  cityRules: [],            // [{ match: "Москва" | cluster name, addRub?: number, fixedRub?: number }]
+};
+
+function shopDeliveryRules(settings) {
+  const r = { ...SHOP_DELIVERY_DEFAULTS, ...(settings?.deliveryRules || {}) };
+  for (const k of Object.keys(SHOP_DELIVERY_DEFAULTS)) {
+    if (typeof SHOP_DELIVERY_DEFAULTS[k] === "number") r[k] = Math.max(0, Number(r[k]) || 0);
+  }
+  if (!Array.isArray(r.cityClusters)) r.cityClusters = [];
+  if (!Array.isArray(r.cityRules)) r.cityRules = [];
+  return r;
+}
+
+const _wordStart = (hay, pattern) => new RegExp(`(?:^|[^а-яёa-z0-9])(?:${pattern})`, "i").test(hay);
+function shopCityCluster(city, rules) {
+  const hay = cleanText(city || "").toLowerCase().replace(/ё/g, "е");
+  if (!hay) return null;
+  for (const c of rules.cityClusters) {
+    const m = cleanText(c?.match || "").toLowerCase().replace(/ё/g, "е");
+    if (m && hay.includes(m) && OZON_TARIFFS.clusters.includes(c.cluster)) return c.cluster;
+  }
+  for (const [pattern, cluster] of OZON_CITY_CLUSTERS) {
+    if (_wordStart(hay, pattern.replace(/ё/g, "е"))) return cluster;
+  }
+  return null;
+}
+
+function shopItemLitres(item, rules) {
+  const m = String(item.volume || item.name || "").match(/(\d+(?:[.,]\d+)?)\s*(мл|ml)(?![a-zа-яё])/i);
+  const ml = m ? parseFloat(m[1].replace(",", ".")) : 0;
+  return ml > 0 ? ml * rules.packMlFactor / 1000 + rules.packBaseL : rules.defaultItemL;
+}
+
+function _ozonBand(litres) {
+  const i = OZON_TARIFFS.volumesL.findIndex((u) => u == null || litres <= u + 1e-9);
+  return i < 0 ? OZON_TARIFFS.volumesL.length - 1 : i;
+}
+
+// logistics tariff for one item; destination null → per rules.unknownCity
+function _ozonLogistics(litres, sender, dest, rules) {
+  const band = _ozonBand(litres);
+  const row = OZON_TARIFFS.matrix[sender] || OZON_TARIFFS.matrix[SHOP_DELIVERY_DEFAULTS.senderCluster] || {};
+  if (dest && row[dest]?.[band] != null) return row[dest][band];
+  if (!dest && rules.unknownCity === "max") {
+    const all = Object.values(row).map((r) => r[band]).filter((x) => x != null);
+    if (all.length) return Math.max(...all);
+  }
+  return OZON_TARIFFS.universal[band] ?? 0;
+}
+
+/**
+ * items: [{ offerId, name, volume, quantity, priceRub }], goodsRub = goods after discounts.
+ * Returns { priceRub, cluster, free, mode, breakdown }.
+ */
+function shopDeliveryQuote({ items = [], goodsRub = 0, city = "", settings }) {
+  const rules = shopDeliveryRules(settings);
+  const freeFrom = Math.max(0, Number(settings?.freeDeliveryFrom) || 0);
+  const isFree = freeFrom > 0 && goodsRub >= freeFrom;
+  if (rules.mode !== "ozon") {
+    const price = Math.max(0, Math.round(Number(settings?.deliveryPriceRub) || 0));
+    return { priceRub: isFree ? 0 : price, free: isFree, mode: "fixed", cluster: null, breakdown: null };
+  }
+  const cluster = shopCityCluster(city, rules);
+  const units = items.reduce((n, i) => n + Math.max(1, Number(i.quantity) || 1), 0) || 1;
+  let logistics = 0;
+  for (const it of items.length ? items : [{ quantity: 1 }]) {
+    logistics += _ozonLogistics(shopItemLitres(it, rules), rules.senderCluster, cluster, rules) * Math.max(1, Number(it.quantity) || 1);
+  }
+  const forward = rules.handlingRub + rules.lastMileRub + logistics + units * rules.issuePerItemRub;
+  // a refused / cancelled parcel costs the way back (reverse logistics = the same tariff) + processing
+  const returns = (rules.returnRatePct / 100) * (logistics + units * rules.returnProcessingRub + rules.lastMileRub);
+  let cost = forward + returns;
+  cost = cost * (1 + rules.extraPct / 100) + rules.extraRub;
+  // Ozon Pay commission is taken from the whole payment: solve D so that D − a·(base) covers the cost
+  const a = Math.min(0.2, rules.acquiringPct / 100);
+  let price = rules.acquiringBase === "order" ? (cost + a * goodsRub) / (1 - a)
+    : rules.acquiringBase === "delivery" ? cost / (1 - a) : cost;
+  const step = rules.roundTo > 0 ? rules.roundTo : 1;
+  price = Math.ceil(price / step) * step;
+  if (rules.minRub > 0) price = Math.max(price, rules.minRub);
+  if (rules.maxRub > 0) price = Math.min(price, rules.maxRub);
+  // manual city / cluster rules: fixed price or a surcharge
+  const hay = cleanText(city || "").toLowerCase().replace(/ё/g, "е");
+  for (const cr of rules.cityRules) {
+    const m = cleanText(cr?.match || "").toLowerCase().replace(/ё/g, "е");
+    if (!m || !(hay.includes(m) || (cluster && cluster.toLowerCase() === m))) continue;
+    if (Number(cr.fixedRub) >= 0 && cr.fixedRub !== "" && cr.fixedRub != null) price = Math.round(Number(cr.fixedRub));
+    else if (Number(cr.addRub)) price += Math.round(Number(cr.addRub));
+    break;
+  }
+  const r2 = (x) => Math.round(x * 100) / 100;
+  return {
+    priceRub: isFree ? 0 : Math.max(0, price),
+    free: isFree,
+    mode: "ozon",
+    cluster,
+    breakdown: { logistics: r2(logistics), handling: rules.handlingRub, lastMile: rules.lastMileRub, issue: r2(units * rules.issuePerItemRub), returns: r2(returns), acquiring: r2(price - cost), units, sender: rules.senderCluster, raw: Math.round(price) },
+  };
+}
+
+// cheapest possible price for the cart (for «доставка от … ₽» before the city is known)
+function shopDeliveryQuoteFrom({ items, goodsRub, settings }) {
+  const rules = shopDeliveryRules(settings);
+  if (rules.mode !== "ozon") return shopDeliveryQuote({ items, goodsRub, settings }).priceRub;
+  let best = Infinity;
+  for (const dest of OZON_TARIFFS.clusters) {
+    if (!(OZON_TARIFFS.matrix[rules.senderCluster] || {})[dest]) continue;
+    const q = shopDeliveryQuote({ items, goodsRub, settings: { ...settings, deliveryRules: { ...rules, cityClusters: [{ match: "__probe__", cluster: dest }] } }, city: "__probe__" });
+    if (q.priceRub < best) best = q.priceRub;
+  }
+  return Number.isFinite(best) ? best : 0;
+}
+
+// checkout asks up front: with Ozon Delivery the address is picked on the Ozon Pay form (the API
+// takes no address), so the site asks only for the city — it decides the Ozon cluster and the price.
+// Body: { offerIds? , items?: [{ offerId, quantity }], city?, goodsRub? } (goodsRub = after the buyer's promo)
+app.post("/api/shop/checkout/delivery-mode", shopCors, async (request, response, next) => {
+  try {
+    const body = request.body || {};
+    const raw = Array.isArray(body.items) ? body.items : (Array.isArray(body.offerIds) ? body.offerIds.map((offerId) => ({ offerId, quantity: 1 })) : []);
+    const items = [];
+    for (const it of raw.slice(0, 50)) {
+      const offerId = cleanText(it?.offerId || "");
+      if (!offerId) continue;
+      const p = await findShopProductByOfferId(offerId, { fast: true }).catch(() => null);
+      items.push({ offerId, name: p?.name || "", volume: p?.volume || "", quantity: Math.min(10, Math.max(1, Number(it.quantity) || 1)), priceRub: Number(p?.priceRub) || 0 });
+    }
+    const settings = await readShopSettings();
+    const goodsList = items.reduce((s2, i) => s2 + i.priceRub * i.quantity, 0);
+    const goodsRub = Number(body.goodsRub) > 0 ? Math.min(goodsList || Infinity, Number(body.goodsRub)) : goodsList;
+    const city = cleanText(body.city || "").slice(0, 120);
+    const quote = shopDeliveryQuote({ items, goodsRub, city, settings });
+    response.json({
+      ozonDelivery: await shopOzonDeliveryEligible(items.map((i) => i.offerId)),
+      deliveryRub: quote.priceRub,
+      fromRub: city ? quote.priceRub : shopDeliveryQuoteFrom({ items, goodsRub, settings }),
+      needCity: quote.mode === "ozon",
+      cluster: quote.cluster,
+      free: quote.free,
+      // legacy fields (flat tariff) for old clients
+      deliveryPriceRub: Math.max(0, Math.round(Number(settings.deliveryPriceRub) || 0)),
+      freeDeliveryFrom: Math.max(0, Number(settings.freeDeliveryFrom) || 0),
+    });
+  } catch (error) { next(error); }
+});
+
+// admin preview of the rules: GET /api/shop/admin/delivery-preview?city=…&ml=100&qty=1&goods=5000
+app.post("/api/shop/admin/delivery-preview", requireAdmin, async (request, response, next) => {
+  try {
+    const body = request.body || {};
+    const settings = { ...(await readShopSettings()), ...(body.settings || {}) };
+    const items = (Array.isArray(body.items) && body.items.length ? body.items : [{ volume: "100 мл", quantity: 1 }])
+      .slice(0, 20).map((i) => ({ volume: cleanText(i.volume || ""), quantity: Math.max(1, Number(i.quantity) || 1) }));
+    const goodsRub = Math.max(0, Number(body.goodsRub) || 0);
+    const cities = (Array.isArray(body.cities) && body.cities.length ? body.cities : ["Москва", "Санкт-Петербург", "Казань", "Екатеринбург", "Новосибирск", "Краснодар", "Владивосток", ""]).slice(0, 12);
+    response.json({
+      clusters: OZON_TARIFFS.clusters,
+      senders: OZON_TARIFFS.senders,
+      rows: cities.map((city) => ({ city: city || "город не указан", ...shopDeliveryQuote({ items, goodsRub, city: cleanText(city), settings }) })),
+    });
+  } catch (error) { next(error); }
+});
+
+// goodsRub = goods after discounts; deliveryRub = shop tariff for this order.
+// Ozon Delivery: Ozon rejects extra lines, so the price goes to deliverySettings.fixedPrice and
+// the order amount is the goods. Own delivery: «Доставка» is a separate service line in the receipt.
+// Returns the Acquiring order ({ id, payLink, status, … }) or null. `extId` defaults to the shop order
+// id; a repeat call with the same extId returns the order Ozon already has (used by «Оплатить» again).
+async function _ozonPayCreateOrder({ orderId, extId = orderId, goodsRub, deliveryRub = 0, email, items = [], ozonDelivery = false }) {
   const accessKey = process.env.OZON_PAY_ACCESS_KEY;
   const secretKey = process.env.OZON_PAY_SECRET_KEY;
   if (!accessKey || !secretKey) return null;
 
-  const extId = orderId;
-  const paymentAlgorithm = paymentMethod === "sbp" ? "PAY_ALGO_SBP" : "PAY_ALGO_SMS";
+  // only SMS/DMS exist; card / SBP / Ozon Card is chosen by the buyer on the Ozon Pay form
+  const paymentAlgorithm = "PAY_ALGO_SMS";
   const currencyCode = "643";
-  const value = String(Math.round(totalRub * 100));
+  const vat = process.env.OZON_PAY_VAT || "VAT_NONE";
+  const kop = (rub) => String(Math.round(rub * 100));
 
-  const requestSign = _ozonPayRequestSign(accessKey, "", extId, "", paymentAlgorithm, currencyCode, value, secretKey);
-
-  const successUrl = `${_ozonPayShopBase()}/order-success?id=${encodeURIComponent(orderId)}`;
-  const failUrl = `${_ozonPayShopBase()}/order-failed?id=${encodeURIComponent(orderId)}`;
-  const notificationUrl = `${_ozonPayApiBase()}/api/shop/payment/notification`;
-
-  const reqBody = {
-    accessKey,
-    amount: { currencyCode, value },
-    extId,
-    paymentAlgorithm,
-    mode: "MODE_SHORTENED",
-    enableFiscalization: false,
-    successUrl,
-    failUrl,
-    notificationUrl,
-    requestSign,
+  const build = (withDelivery) => {
+    const goods = _ozonPayItems(items, goodsRub);
+    const lines = withDelivery || !(deliveryRub > 0) ? goods : [...goods, {
+      extId: "delivery", name: "Доставка", quantity: 1, type: "TYPE_SERVICE", vat, needMark: false,
+      price: { currencyCode, value: kop(deliveryRub) },
+    }];
+    const value = withDelivery ? kop(goodsRub) : kop(goodsRub + deliveryRub);
+    const body = {
+      accessKey,
+      amount: { currencyCode, value },
+      extId,
+      paymentAlgorithm,
+      mode: "MODE_FULL",
+      items: lines,
+      enableFiscalization: false,
+      successUrl: `${_ozonPayShopBase()}/order-success?id=${encodeURIComponent(orderId)}`,
+      failUrl: `${_ozonPayShopBase()}/order-failed?id=${encodeURIComponent(orderId)}`,
+      notificationUrl: `${_ozonPayApiBase()}/api/shop/payment/notification`,
+      requestSign: _ozonPayRequestSign(accessKey, "", extId, "", paymentAlgorithm, currencyCode, value, secretKey),
+    };
+    if (withDelivery) body.deliverySettings = { isEnabled: true, fixedPrice: { currencyCode, value: kop(deliveryRub) } };
+    if (email) body.receiptEmail = cleanText(email);
+    return body;
   };
-  if (email) reqBody.receiptEmail = cleanText(email);
 
+  const post = (body) => fetch(`${_ozonPayBaseUrl}/v1/createOrder`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(15000),
+  });
   try {
-    const res = await fetch(`${_ozonPayBaseUrl}/v1/createOrder`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(reqBody),
-      signal: AbortSignal.timeout(15000),
-    });
-    const data = await res.json().catch(() => ({}));
+    let res = await post(build(ozonDelivery));
+    let data = await res.json().catch(() => ({}));
+    if (!res.ok && ozonDelivery && res.status === 400) {
+      // Ozon refused the delivery part — the order is not created, the same extId is free
+      logger.warn("ozon pay delivery refused, retrying without it", { extId, detail: JSON.stringify(data?.details || data).slice(0, 300) });
+      res = await post(build(false));
+      data = await res.json().catch(() => ({}));
+    }
     if (!res.ok) {
       logger.warn("ozon pay createOrder failed", {
-        status: res.status, extId, detail: data?.message || JSON.stringify(data).slice(0, 200),
+        status: res.status, extId, detail: JSON.stringify(data?.details || data?.message || data).slice(0, 300),
       });
       return null;
     }
-    const payLink = data?.order?.payLink || null;
-    if (payLink) logger.info("ozon pay order created", { extId });
-    return payLink;
+    if (data?.order?.payLink) {
+      logger.info("ozon pay order created", {
+        extId, acquiringId: data.order.id, status: data.order.status, delivery: Boolean(data.order.deliverySettings?.isEnabled), deliveryRub, testMode: Boolean(data.order.isTestMode),
+      });
+    }
+    return data?.order || null;
   } catch (error) {
     logger.warn("ozon pay createOrder error", { extId, detail: error?.message || String(error) });
     return null;
@@ -1749,23 +2628,50 @@ app.post("/api/shop/orders", shopCors, async (request, response, next) => {
   try {
     const prisma = getPrisma();
     const body = request.body || {};
-    const items = Array.isArray(body.items) ? body.items : [];
+    const clientItems = Array.isArray(body.items) ? body.items.slice(0, 50) : [];
     const delivery = body.delivery || {};
 
-    if (!items.length) return response.status(400).json({ error: "Корзина пуста" });
-    if (!delivery.firstName || !delivery.phone || !delivery.email) {
+    if (!clientItems.length) return response.status(400).json({ error: "Корзина пуста" });
+    if (!cleanText(delivery.firstName || "") || !delivery.phone || !delivery.email) {
       return response.status(400).json({ error: "Заполните обязательные поля" });
     }
-
-    // Server-side price sanity: each item must have a positive price above floor.
-    // Prevents client-side price tampering (e.g., changing priceRub in localStorage to 1).
-    const SHOP_MIN_ITEM_PRICE_RUB = 50;
-    for (const i of items) {
-      const price = Number(i.priceRub);
-      if (!Number.isFinite(price) || price < SHOP_MIN_ITEM_PRICE_RUB) {
-        return response.status(400).json({ error: "Некорректная цена товара в корзине" });
-      }
+    if (String(delivery.phone).replace(/\D/g, "").length < 10) return response.status(400).json({ error: "Укажите телефон полностью" });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanText(String(delivery.email)))) return response.status(400).json({ error: "Проверьте email" });
+    // 152-ФЗ: separate consent to personal data; 38-ФЗ: optional ads opt-in — both stored with the order
+    const consentsIn = body.consents || {};
+    if (consentsIn.pd !== true) {
+      return response.status(400).json({ error: "Отметьте согласие на обработку персональных данных" });
     }
+    const consentAt = new Date().toISOString();
+    const orderConsents = {
+      version: cleanText(String(consentsIn.version || "")).slice(0, 20),
+      pd: true, pdAt: consentAt,
+      ads: consentsIn.ads === true, ...(consentsIn.ads === true ? { adsAt: consentAt } : {}),
+      // request.ip = the address nginx saw (trust proxy); the first X-Forwarded-For entry is client-controlled
+      ip: String(request.ip || "").replace(/^::ffff:/, "").slice(0, 64),
+    };
+
+    // Prices, names and photos come from the database, never from the browser
+    // (the cart lives in localStorage and could be edited to any price).
+    const items = [];
+    for (const ci of clientItems) {
+      const offerId = cleanText(ci?.offerId || "");
+      if (!offerId) continue;
+      const product = await findShopProductByOfferId(offerId);
+      if (!product || !(product.priceRub > 0)) {
+        return response.status(409).json({ error: `Товар «${cleanText(ci?.name || offerId)}» больше недоступен — удалите его из корзины` });
+      }
+      items.push({
+        offerId: product.offerId,
+        name: product.name,
+        brand: product.brand || "",
+        image: product.images?.[0] || null,
+        volume: product.volume || null,
+        quantity: Math.min(10, Math.max(1, Math.round(Number(ci.quantity) || 1))),
+        priceRub: product.priceRub,
+      });
+    }
+    if (!items.length) return response.status(400).json({ error: "Корзина пуста" });
     const baseTotal = items.reduce((s, i) => {
       const price = Number(i.priceRub);
       const qty = Math.max(1, Number(i.quantity) || 1);
@@ -1789,13 +2695,14 @@ app.post("/api/shop/orders", shopCors, async (request, response, next) => {
     // Apply referral discount if valid code provided
     const refCode = cleanText(body.refCode || "").toUpperCase() || null;
     let refDiscountApplied = false;
-    let referrerId = null;
     if (refCode && prisma) {
-      const referrer = await prisma.shopCustomer.findUnique({ where: { referralCode: refCode }, select: { id: true } });
-      if (referrer && referrer.id !== customerId) {
-        refDiscountApplied = true;
-        referrerId = referrer.id;
-      }
+      const referrer = await prisma.shopCustomer.findUnique({ where: { referralCode: refCode }, select: { id: true, email: true, phone: true } });
+      // no self-referral: neither from the same account nor as a guest with the owner's e-mail / phone
+      const digits = (s) => String(s || "").replace(/\D/g, "").slice(-10);
+      const self = referrer && (referrer.id === customerId
+        || (referrer.email && referrer.email.toLowerCase() === cleanText(delivery.email || "").toLowerCase())
+        || (digits(referrer.phone).length === 10 && digits(referrer.phone) === digits(delivery.phone)));
+      if (referrer && !self) refDiscountApplied = true;
     }
 
     // Apply promo code discount
@@ -1809,22 +2716,49 @@ app.post("/api/shop/orders", shopCors, async (request, response, next) => {
         promoDiscountApplied = true;
         promoDiscountPct = promo.discountPct;
         appliedPromoCode = promo.code;
-        // Increment usage count — wrapped in lock to prevent lost updates on concurrent orders
-        await withShopPromoLock(async () => {
-          const codes = await readShopPromoCodes();
-          const idx = codes.findIndex(c => c.id === promo.id);
-          if (idx >= 0) {
-            codes[idx] = { ...codes[idx], usageCount: (codes[idx].usageCount || 0) + 1 };
-            await writeShopPromoCodes(codes);
-          }
-        });
+        // the usage is counted when the order is paid (payment notification), not here:
+        // abandoned or scripted unpaid orders must not use up a limited promo code
       }
     }
 
     const discountFactor = refDiscountApplied ? (1 - _REFERRAL_DISCOUNT)
       : promoDiscountApplied ? (1 - promoDiscountPct / 100)
       : 1;
-    const totalRub = Math.round(baseTotal * discountFactor);
+    const goodsRub = Math.round(baseTotal * discountFactor);
+    // СДЭК / Яндекс / Достависта (02d-shop-delivery-carriers.js): цену выбранного варианта считаем заново на сервере
+    let carrierOpt = null;
+    if (["cdek", "yandex", "dostavista"].includes(delivery.carrier)) {
+      const method = cleanText(delivery.method || "");
+      const pvzId = cleanText(delivery.pvzId || "");
+      // город и регион — из самого пункта (карта), для курьера — из адреса, найденного на карте
+      let city = cleanText(delivery.city || ""), region = cleanText(delivery.region || "");
+      if (pvzId && delivery.carrier === "cdek" && typeof cdekPointById === "function") {
+        // the CDEK price depends on the city: take it from the real point, never from the browser
+        const pt = await cdekPointById(pvzId);
+        if (!pt) return response.status(400).json({ error: "Пункт выдачи СДЭК не найден — выберите его на карте ещё раз" });
+        city = pt.city; region = pt.region;
+      }
+      if (pvzId && delivery.carrier === "yandex" && typeof _yaById !== "undefined" && _yaById.get(pvzId)) { const pt = _yaById.get(pvzId); city = pt.city || city; region = pt.region || region; }
+      delivery.city = city; delivery.region = region;
+      // same address string as the price quote (/checkout/quote): without a leading «<city>, »
+      // (village addresses are «Хлопово, 10В»), otherwise the courier gets «Хлопово, Хлопово, 10В»
+      if (!pvzId && city && delivery.address) {
+        const esc = city.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        delivery.address = cleanText(delivery.address).replace(new RegExp(`^${esc},\\s*`, "i"), "");
+      }
+      const r = await shopCarrierOptions({ items, goodsRub, city, region, address: cleanText(delivery.address || ""), pointId: pvzId, only: method });
+      carrierOpt = r.options.find((o) => o.id === method) || null;
+      if (!carrierOpt) return response.status(400).json({ error: "Этот способ доставки сейчас недоступен — выберите другой" });
+      if (carrierOpt.needs === "point" && !pvzId) return response.status(400).json({ error: "Выберите пункт выдачи" });
+      if (carrierOpt.needs === "address" && !cleanText(delivery.address || "")) return response.status(400).json({ error: "Укажите адрес доставки" });
+      if (method === "dostavista_slot" && !(carrierOpt.intervals || []).some((iv) => iv.from === delivery.dvFrom && iv.to === delivery.dvTo)) {
+        return response.status(400).json({ error: "Выберите время доставки курьером ещё раз — интервал уже недоступен" });
+      }
+    }
+    const ozonDelivery = carrierOpt ? false : await shopOzonDeliveryEligible(items.map((i) => i.offerId));
+    const deliveryQuote = carrierOpt ? { priceRub: carrierOpt.priceRub, cluster: null } : shopDeliveryQuote({ items, goodsRub, city: cleanText(delivery.city || ""), settings: await readShopSettings() });
+    const deliveryRub = deliveryQuote.priceRub;
+    const totalRub = goodsRub + deliveryRub;
 
     // Save order to DB
     if (prisma) {
@@ -1834,27 +2768,47 @@ app.post("/api/shop/orders", shopCors, async (request, response, next) => {
           customerId,
           status: "pending",
           items: items,
-          delivery: delivery,
+          // whitelist: the delivery object comes from the browser
+          delivery: {
+            ...Object.fromEntries(
+              ["type", "firstName", "lastName", "phone", "email", "city", "region", "address", "postalCode", "pvzId", "pvzName",
+                "flat", "entrance", "floor", "intercom", "addrComment", "lat", "lng", "dvFrom", "dvTo"]
+                .filter((k) => delivery[k] != null && delivery[k] !== "")
+                .map((k) => [k, cleanText(String(delivery[k])).slice(0, 300)]),
+            ),
+            // Ozon Delivery: address and point are chosen on the Ozon Pay form, not here
+            ...(ozonDelivery ? { type: "ozon_pay", provider: "ozon" } : {}),
+            ...(carrierOpt ? {
+              type: carrierOpt.kind === "courier" ? "courier" : "pickup", carrier: carrierOpt.carrier, provider: carrierOpt.carrier,
+              method: carrierOpt.id, kind: carrierOpt.kind, carrierTitle: carrierOpt.title, carrierRawRub: carrierOpt.rawRub,
+              ...(carrierOpt.tariffCode ? { tariffCode: carrierOpt.tariffCode, cityCode: carrierOpt.cityCode } : {}),
+              daysMin: carrierOpt.daysMin, daysMax: carrierOpt.daysMax,
+              ...(carrierOpt.vehicleTypeId ? { vehicleTypeId: carrierOpt.vehicleTypeId } : {}),
+            } : {}),
+            priceRub: deliveryRub,
+            ...(deliveryQuote.cluster ? { cluster: deliveryQuote.cluster } : {}),
+            consents: orderConsents,
+          },
           totalRub,
           comment: body.comment ? cleanText(body.comment) : null,
           refCode: refDiscountApplied ? refCode : null,
           promoCode: promoDiscountApplied ? appliedPromoCode : null,
         },
       });
-      // Award points to referrer (both ops must succeed together — use a transaction)
-      if (refDiscountApplied && referrerId) {
-        prisma.$transaction([
-          prisma.shopPointTransaction.create({
-            data: { customerId: referrerId, points: _REFERRAL_POINTS_FOR_REFERRER, reason: `Реферальный заказ ${orderId}`, refId: orderId },
-          }),
-          prisma.shopCustomer.update({
-            where: { id: referrerId },
-            data: { loyaltyPoints: { increment: _REFERRAL_POINTS_FOR_REFERRER } },
-          }),
-        ]).catch((err) => {
-          logger.warn("referral points award failed", { referrerId, orderId, detail: err?.message || String(err) });
-        });
-      }
+      // the referrer's points are awarded once the order is paid (shopOrderPaidRewards)
+    }
+
+    if (customerId && prisma) {
+      prisma.shopCustomer.findUnique({ where: { id: customerId }, select: { firstName: true, lastName: true, phone: true } })
+        .then((c) => {
+          if (!c) return null;
+          const data = {};
+          if (!c.firstName && delivery.firstName) data.firstName = cleanText(delivery.firstName).slice(0, 60);
+          if (!c.lastName && delivery.lastName) data.lastName = cleanText(delivery.lastName).slice(0, 60);
+          if (!c.phone && delivery.phone) data.phone = cleanText(delivery.phone).slice(0, 30);
+          return Object.keys(data).length ? prisma.shopCustomer.update({ where: { id: customerId }, data }) : null;
+        })
+        .catch(() => {});
     }
 
     logger.info("shop order created", {
@@ -1863,19 +2817,10 @@ app.post("/api/shop/orders", shopCors, async (request, response, next) => {
       phone: cleanText(delivery.phone || "").replace(/\d{4}$/, "****"),
     });
 
-    // Fire Day 1 email (order confirmation + fragrance story)
-    if (typeof sendOrderSequenceEmail === "function") {
-      sendOrderSequenceEmail({
-        orderId,
-        email: cleanText(delivery.email || ""),
-        firstName: cleanText(delivery.firstName || ""),
-        items,
-        totalRub: Math.round(totalRub),
-      }).catch(() => {});
-    }
+    // «Заказ принят» e-mail is sent from /api/shop/payment/notification once Ozon Pay confirms
+    // the payment — not here, where the buyer can still abandon or cancel the payment.
 
-    const paymentMethod = ["ozon_pay", "sbp"].includes(body.paymentMethod) ? body.paymentMethod : "ozon_pay";
-    const paymentUrl = await _ozonPayCreateOrder({ orderId, totalRub, email: cleanText(delivery.email || ""), paymentMethod });
+    const paymentUrl = (await _ozonPayCreateOrder({ orderId, goodsRub, deliveryRub, email: cleanText(delivery.email || ""), items, ozonDelivery }))?.payLink || null;
     if (paymentUrl && prisma) {
       await prisma.shopOrder.update({ where: { id: orderId }, data: { status: "payment_pending" } }).catch(() => {});
     } else if (!paymentUrl && prisma) {
@@ -1883,11 +2828,138 @@ app.post("/api/shop/orders", shopCors, async (request, response, next) => {
       logger.warn("shop order payment link failed — marked payment_failed", { orderId, totalRub });
     }
 
-    response.json({ ok: true, id: orderId, status: paymentUrl ? "payment_pending" : "pending", totalRub, paymentUrl: paymentUrl || null, refDiscountApplied, promoDiscountApplied, promoDiscountPct: promoDiscountApplied ? promoDiscountPct : 0 });
+    response.json({ ok: true, id: orderId, status: paymentUrl ? "payment_pending" : "pending", totalRub, deliveryRub, ozonDelivery, paymentUrl: paymentUrl || null, refDiscountApplied, promoDiscountApplied, promoDiscountPct: promoDiscountApplied ? promoDiscountPct : 0 });
   } catch (error) {
     next(error);
   }
 });
+
+// «Оплатить» from the cabinet: back to the Ozon Pay page of an unpaid order (the pickup point /
+// courier address is chosen there). Ozon returns the same payment for the same extId; an expired or
+// cancelled one gets a new attempt "<id>-R<n>" that the notification maps back to the order.
+app.post("/api/shop/auth/orders/:id/pay", shopCors, requireShopAuth, async (request, response, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return response.status(503).json({ error: "База данных недоступна" });
+    const order = await prisma.shopOrder.findUnique({ where: { id: cleanText(request.params.id || "") } });
+    if (!order || order.customerId !== request.shopCustomer.customerId) return response.status(404).json({ error: "Заказ не найден" });
+    if (!["pending", "payment_pending", "payment_failed"].includes(order.status)) {
+      return response.status(409).json({ error: order.status === "paid" ? "Заказ уже оплачен" : "Этот заказ нельзя оплатить" });
+    }
+    const d = order.delivery && typeof order.delivery === "object" ? order.delivery : {};
+    const items = (Array.isArray(order.items) ? order.items : [])
+      .map((i) => ({ offerId: cleanText(i.offerId || ""), name: cleanText(i.name || ""), brand: cleanText(i.brand || ""), quantity: Math.max(1, Number(i.quantity) || 1), priceRub: Number(i.priceRub) || 0 }))
+      .filter((i) => i.offerId && i.priceRub > 0);
+    if (!items.length) return response.status(409).json({ error: "В заказе нет товаров" });
+    // Re-price from the catalogue: an unpaid order must not be paid at a stale price (e.g. the
+    // 2026-09-28 cross-supplier price bug). Missing names of old orders are filled in on the way.
+    const oldBase = items.reduce((sum, i) => sum + i.priceRub * i.quantity, 0);
+    for (const it of items) {
+      const p = await findShopProductByOfferId(it.offerId, { fast: true }).catch(() => null);
+      if (!p || !(p.priceRub > 0)) return response.status(409).json({ error: `Товар «${it.name || it.offerId}» больше недоступен — оформите заказ заново` });
+      if (!it.name) { it.name = cleanText(p.name || ""); it.brand = cleanText(p.brand || ""); }
+      it.priceRub = p.priceRub;
+    }
+    const oldDelivery = Math.max(0, Number(d.priceRub) || 0);
+    // keep the order's promo / referral discount as a ratio
+    const factor = oldBase > 0 ? Math.min(1, (order.totalRub - oldDelivery) / oldBase) : 1;
+    const goodsRub = Math.round(items.reduce((sum, i) => sum + i.priceRub * i.quantity, 0) * factor);
+    // СДЭК / Яндекс / Достависта: the buyer already chose the point or address and its price — keep
+    // that price and never switch the order to Ozon Delivery. The Ozon/flat rules only apply to the rest.
+    const ownCarrier = ["cdek", "yandex", "dostavista"].includes(d.carrier);
+    const deliveryRub = ownCarrier ? oldDelivery : shopDeliveryQuote({ items, goodsRub, city: cleanText(d.city || ""), settings: await readShopSettings() }).priceRub;
+    const ozonDelivery = ownCarrier ? false : d.type === "ozon_pay" || d.provider === "ozon" ? await shopOzonDeliveryEligible(items.map((i) => i.offerId)) : false;
+    let attempt = Math.max(1, Number(d.payAttempt) || 1);
+    if (goodsRub + deliveryRub !== order.totalRub) {
+      // amount changed → the existing Ozon payment (fixed amount) can't be reused: new attempt id
+      attempt += 1;
+      const priced = (Array.isArray(order.items) ? order.items : []).map((raw) => {
+        const it = items.find((x) => x.offerId === cleanText(raw.offerId || ""));
+        return it ? { ...raw, name: it.name, brand: it.brand, priceRub: it.priceRub } : raw;
+      });
+      await prisma.shopOrder.update({ where: { id: order.id }, data: { items: priced, totalRub: goodsRub + deliveryRub, delivery: { ...d, priceRub: deliveryRub, payAttempt: attempt } } });
+      logger.info("shop order repriced before payment", { orderId: order.id, from: order.totalRub, to: goodsRub + deliveryRub });
+      d.payAttempt = attempt;
+      d.priceRub = deliveryRub; // later delivery updates below spread `d`
+    }
+    const args = { orderId: order.id, goodsRub, deliveryRub, email: cleanText(d.email || ""), items, ozonDelivery };
+
+    let extId = attempt > 1 ? `${order.id}-R${attempt}` : order.id;
+    let acq = await _ozonPayCreateOrder({ ...args, extId });
+    if (acq && ["STATUS_PAID", "STATUS_AUTHORIZED"].includes(acq.status)) {
+      // paid, the notification just hasn't arrived — the notification handler sends the e-mail
+      const upd = await prisma.shopOrder.updateMany({ where: { id: order.id, status: { in: ["pending", "payment_pending", "payment_failed"] } }, data: { status: "paid" } });
+      // this call made the transition, so the notification will find the order already paid
+      if (upd.count > 0) await shopOrderOnPaid(order.id);
+      return response.json({ ok: true, paid: true });
+    }
+    if (!acq?.payLink || !["STATUS_NEW", "STATUS_PAYMENT_PENDING"].includes(acq.status)) {
+      extId = `${order.id}-R${attempt + 1}`;
+      acq = await _ozonPayCreateOrder({ ...args, extId });
+      if (acq?.payLink) {
+        await prisma.shopOrder.update({ where: { id: order.id }, data: { delivery: { ...d, payAttempt: attempt + 1 } } }).catch(() => {});
+      }
+    }
+    if (!acq?.payLink) return response.status(502).json({ error: "Не удалось получить ссылку на оплату — попробуйте позже" });
+    if (order.status !== "payment_pending") {
+      await prisma.shopOrder.update({ where: { id: order.id }, data: { status: "payment_pending" } }).catch(() => {});
+    }
+    logger.info("shop order payment reopened", { orderId: order.id, extId, acqStatus: acq.status });
+    response.json({ ok: true, paymentUrl: acq.payLink });
+  } catch (error) { next(error); }
+});
+
+// Everything that must happen once an order becomes "paid" — called only by whoever made the
+// transition (payment notification or «Оплатить» finding the payment already done).
+async function shopOrderOnPaid(orderId) {
+  const prisma = getPrisma();
+  if (!prisma) return;
+  const order = await prisma.shopOrder.findUnique({ where: { id: orderId } }).catch(() => null);
+  if (!order) return;
+  const d = order.delivery && typeof order.delivery === "object" ? order.delivery : {};
+  if (d.email && typeof sendOrderSequenceEmail === "function") {
+    sendOrderSequenceEmail({
+      orderId: order.id,
+      email: cleanText(d.email),
+      firstName: cleanText(d.firstName || ""),
+      items: Array.isArray(order.items) ? order.items : [],
+      totalRub: order.totalRub,
+    }).catch((err) => logger.warn("order confirmation e-mail failed", { orderId, detail: err?.message }));
+  }
+  // promo usage is counted for paid orders only
+  if (order.promoCode) {
+    await withShopPromoLock(async () => {
+      const codes = await readShopPromoCodes();
+      const idx = codes.findIndex((c) => String(c.code || "").toUpperCase() === String(order.promoCode).toUpperCase());
+      if (idx >= 0) {
+        codes[idx] = { ...codes[idx], usageCount: (codes[idx].usageCount || 0) + 1 };
+        await writeShopPromoCodes(codes);
+      }
+    }).catch((err) => logger.warn("promo usage count failed", { orderId, detail: err?.message }));
+  }
+  // referrer's points — for a paid order, once per order
+  if (order.refCode) {
+    try {
+      const referrer = await prisma.shopCustomer.findUnique({ where: { referralCode: order.refCode }, select: { id: true } });
+      const already = referrer ? await prisma.shopPointTransaction.findFirst({ where: { customerId: referrer.id, refId: order.id }, select: { id: true } }) : null;
+      if (referrer && referrer.id !== order.customerId && !already) {
+        await prisma.$transaction([
+          prisma.shopPointTransaction.create({
+            data: { customerId: referrer.id, points: _REFERRAL_POINTS_FOR_REFERRER, reason: `Реферальный заказ ${order.id}`, refId: order.id },
+          }),
+          prisma.shopCustomer.update({ where: { id: referrer.id }, data: { loyaltyPoints: { increment: _REFERRAL_POINTS_FOR_REFERRER } } }),
+        ]);
+      }
+    } catch (err) {
+      logger.warn("referral points award failed", { orderId, detail: err?.message || String(err) });
+    }
+  }
+  // СДЭК / Яндекс / Достависта: отправка сразу после оплаты, если включено в настройках доставки
+  if (["cdek", "yandex", "dostavista"].includes(d.carrier) && typeof shopCarrierCreateShipment === "function") {
+    readShopSettings().then((st) => (st?.carriers?.autoCreateShipment ? shopCarrierCreateShipment(order.id) : null))
+      .catch((err) => logger.warn("auto shipment failed", { orderId, detail: err?.message }));
+  }
+}
 
 app.post("/api/shop/payment/notification", async (request, response, next) => {
   try {
@@ -1917,22 +2989,38 @@ app.post("/api/shop/payment/notification", async (request, response, next) => {
       return response.status(400).json({ error: "Bad signature" });
     }
 
-    const { extOrderID, status, orderID } = body;
+    const { status, orderID } = body;
+    // a repeated payment attempt goes out as "<order id>-R<n>" (see /pay below)
+    const extOrderID = cleanText(body.extOrderID || "").replace(/-R\d+$/, "");
     logger.info("ozon pay notification", {
       extOrderID, orderID, status, amount: body.amount, method: body.paymentMethod,
     });
 
-    if (extOrderID && status === "Completed") {
+    // Completed = captured; Authorized = funds held (two-stage payment) — both mean the buyer paid
+    if (extOrderID && (status === "Completed" || status === "Authorized")) {
       const prisma = getPrisma();
       if (prisma) {
         const updated = await prisma.shopOrder.updateMany({
-          where: { id: extOrderID, status: { not: "paid" } },
+          where: { id: extOrderID, status: { notIn: ["paid", "shipped", "delivered", "cancelled"] } },
           data: { status: "paid" },
         }).catch((err) => {
           logger.warn("ozon pay order status update failed", { extOrderID, detail: err?.message });
           return null;
         });
-        if (updated?.count > 0) logger.info("shop order paid via ozon pay", { extOrderID });
+        if (updated?.count > 0) {
+          logger.info("shop order paid via ozon pay", { extOrderID, status });
+          // amounts are signed by Ozon, but an old payment link of a since-repriced order could still be
+          // paid — flag a short payment for the manager instead of trusting it silently
+          const order = await prisma.shopOrder.findUnique({ where: { id: extOrderID } }).catch(() => null);
+          const paidRub = Number(body.amount) / 100;
+          if (order && Number.isFinite(paidRub) && paidRub > 0 && paidRub + 1 < Number(order.totalRub)) {
+            logger.warn("ozon pay: paid less than the order total", { extOrderID, paidRub, totalRub: order.totalRub });
+            const d0 = order.delivery && typeof order.delivery === "object" ? order.delivery : {};
+            await prisma.shopOrder.update({ where: { id: order.id }, data: { delivery: { ...d0, paidRub, underpaid: true } } }).catch(() => {});
+          }
+          // first transition to "paid" only → e-mail, rewards and shipment happen exactly once
+          await shopOrderOnPaid(extOrderID);
+        }
       }
     }
 
@@ -1959,13 +3047,19 @@ function shopOtpRedis() {
 }
 
 // Minimal SMTPS (port 465, implicit TLS) client — no external deps
-function shopSendEmail({ to, subject, html }) {
+// account "shop" → buyers' mail (noreply@magicvibes.ru, SHOP_SMTP_*);
+// account "supplier" → cancellations to suppliers, must keep coming from the warehouse Gmail
+// (SUPPLIER_SMTP_*; falls back to SHOP_SMTP_* only while the supplier box is not configured).
+function shopSendEmail({ to, subject, html, marketing = false, account = "shop" }) {
   return new Promise((resolve, reject) => {
     const tls = require("tls");
-    const host = process.env.SHOP_SMTP_HOST;
-    const port = Number(process.env.SHOP_SMTP_PORT || 465);
-    const user = process.env.SHOP_SMTP_USER;
-    const pass = process.env.SHOP_SMTP_PASS;
+    const env = process.env;
+    const sup = account === "supplier" && env.SUPPLIER_SMTP_USER && env.SUPPLIER_SMTP_PASS;
+    const host = sup ? (env.SUPPLIER_SMTP_HOST || "smtp.gmail.com") : env.SHOP_SMTP_HOST;
+    const port = Number((sup ? env.SUPPLIER_SMTP_PORT : env.SHOP_SMTP_PORT) || 465);
+    const user = sup ? env.SUPPLIER_SMTP_USER : env.SHOP_SMTP_USER;
+    const pass = sup ? env.SUPPLIER_SMTP_PASS : env.SHOP_SMTP_PASS;
+    const fromName = (sup ? env.SUPPLIER_SMTP_FROM_NAME : env.SHOP_SMTP_FROM_NAME) || "Magic Vibes";
     if (!host || !user || !pass) return reject(new Error("SMTP not configured"));
 
     const b64 = (s) => Buffer.from(s).toString("base64");
@@ -2006,16 +3100,20 @@ function shopSendEmail({ to, subject, html }) {
       }
       if (code === 354) {
         const body = [
-          `From: "Magic Vibes" <${user}>`,
+          `From: =?UTF-8?B?${Buffer.from(fromName, "utf8").toString("base64")}?= <${user}>`,
+          // Date + Message-ID: their absence is a spam signal for Gmail / Mail.ru / Yandex
+          `Date: ${new Date().toUTCString().replace("GMT", "+0000")}`,
+          `Message-ID: <${Date.now().toString(36)}.${_shopCrypto.randomBytes(8).toString("hex")}@${String(user).split("@")[1] || "magicvibes.ru"}>`,
           `To: ${to}`,
-          `Subject: ${subject}`,
+          `Subject: =?UTF-8?B?${Buffer.from(subject, "utf8").toString("base64")}?=`,
           `MIME-Version: 1.0`,
           `Content-Type: text/html; charset=utf-8`,
           `X-Mailer: Magic Vibes Shop`,
-          `List-Unsubscribe: <mailto:${user}?subject=unsubscribe>`,
-          `List-Unsubscribe-Post: List-Unsubscribe=One-Click`,
+          ...(marketing ? [`List-Unsubscribe: <mailto:${user}?subject=unsubscribe>`] : []),
+          `Content-Transfer-Encoding: base64`,
           ``,
-          html,
+          // base64 keeps long HTML lines within SMTP limits and makes dot-stuffing unnecessary
+          Buffer.from(html, "utf8").toString("base64").replace(/.{1,76}/g, "$&\r\n").trimEnd(),
           `.`,
         ].join("\r\n");
         sock.write(body + "\r\n");
@@ -2039,30 +3137,108 @@ function shopSendEmail({ to, subject, html }) {
   });
 }
 
+// ── Branded e-mail layout (magicvibes.ru design: paper, ink, lime, pink) ─────
+// Table layout + inline styles only: Gmail / Mail.ru / Yandex strip <style> and web fonts,
+// so display type falls back from Unbounded to Arial Black.
+const MV_MAIL = {
+  site: "https://magicvibes.ru",
+  logo: "https://magicvibes.ru/brand/logo/logo-email.png",
+  ink: "#121212", paper: "#f5f2ec", lime: "#d9f84a", pink: "#ff3d7f", violet: "#4b3cff", muted: "#6b6860",
+  display: "'Unbounded','Arial Black','Helvetica Neue',Arial,sans-serif",
+  body: "'Onest','Helvetica Neue',Arial,sans-serif",
+};
+
+function mvEsc(v) {
+  return String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function mvEmailButton(label, href, tone = "ink") {
+  const bg = tone === "lime" ? MV_MAIL.lime : MV_MAIL.ink;
+  const fg = tone === "lime" ? MV_MAIL.ink : "#ffffff";
+  return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:8px 0 4px;"><tr>
+<td bgcolor="${bg}" style="border-radius:999px;background:${bg};">
+<a href="${href}" target="_blank" style="display:inline-block;padding:16px 30px;font-family:${MV_MAIL.body};font-size:15px;font-weight:700;color:${fg};text-decoration:none;border-radius:999px;">${label}&nbsp;&nbsp;&#8599;</a>
+</td></tr></table>`;
+}
+
+/** Big highlighted value (login code, promo code) on a lime tile. */
+function mvEmailCodeTile(value, caption) {
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:26px 0 22px;"><tr>
+<td align="center" bgcolor="${MV_MAIL.lime}" style="background:${MV_MAIL.lime};border-radius:22px;padding:26px 16px 22px;">
+<div style="font-family:${MV_MAIL.display};font-size:38px;line-height:1;font-weight:800;letter-spacing:8px;color:${MV_MAIL.ink};mso-line-height-rule:exactly;">${mvEsc(value)}</div>
+${caption ? `<div style="font-family:${MV_MAIL.body};font-size:13px;color:rgba(18,18,18,0.62);margin-top:12px;">${caption}</div>` : ""}
+</td></tr></table>`;
+}
+
+/**
+ * Full e-mail. opts: { preheader, kicker, title, script, intro, content, cta: {label, href}, note, marketing }
+ * `content` / `intro` / `note` are trusted HTML built by our templates (escape user data before passing).
+ */
+function mvEmailLayout(opts = {}) {
+  const { preheader = "", kicker = "", title = "", script = "", intro = "", content = "", cta = null, note = "", marketing = false } = opts;
+  const unsub = marketing
+    ? `<br><a href="mailto:${mvEsc(process.env.SHOP_SMTP_USER || "")}?subject=unsubscribe" style="color:rgba(245,242,236,0.55);text-decoration:underline;">Отписаться от писем</a>`
+    : "";
+  return `<!DOCTYPE html>
+<html lang="ru" xmlns="http://www.w3.org/1999/xhtml"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="x-apple-disable-message-reformatting">
+<meta name="color-scheme" content="light only"><meta name="supported-color-schemes" content="light">
+<title>Magic Vibes</title>
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@800&family=Onest:wght@400;600;700&family=Marck+Script&display=swap&subset=cyrillic" rel="stylesheet">
+</head>
+<body style="margin:0;padding:0;background:${MV_MAIL.paper};-webkit-text-size-adjust:100%;">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">${mvEsc(preheader)}&#8199;&#847;&#8199;&#847;&#8199;&#847;&#8199;&#847;</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${MV_MAIL.paper}" style="background:${MV_MAIL.paper};">
+<tr><td align="center" style="padding:28px 12px 36px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;">
+
+<!-- logo -->
+<tr><td style="padding:0 8px 18px;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+<td align="left"><a href="${MV_MAIL.site}" target="_blank"><img src="${MV_MAIL.logo}" width="176" height="40" alt="MAGIC vibes" style="display:block;border:0;width:176px;height:auto;"></a></td>
+<td align="right" style="font-family:${MV_MAIL.body};font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;color:${MV_MAIL.muted};">Оригинальная<br>парфюмерия</td>
+</tr></table>
+</td></tr>
+
+<!-- card -->
+<tr><td bgcolor="#ffffff" style="background:#ffffff;border-radius:28px;padding:36px 32px 34px;">
+${kicker ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td bgcolor="${MV_MAIL.ink}" style="background:${MV_MAIL.ink};border-radius:999px;padding:6px 12px;font-family:${MV_MAIL.body};font-size:11px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;color:${MV_MAIL.paper};">&#10022;&nbsp;${kicker}</td></tr></table>` : ""}
+${title ? `<h1 style="margin:18px 0 0;font-family:${MV_MAIL.display};font-size:30px;line-height:1.05;font-weight:800;letter-spacing:-0.5px;text-transform:uppercase;color:${MV_MAIL.ink};">${title}</h1>` : ""}
+${script ? `<div style="margin:6px 0 0;font-family:'Marck Script','Segoe Script',Georgia,cursive;font-style:italic;font-size:22px;line-height:1.2;color:${MV_MAIL.pink};">${script}</div>` : ""}
+${intro ? `<p style="margin:18px 0 0;font-family:${MV_MAIL.body};font-size:16px;line-height:1.6;color:#2b2a27;">${intro}</p>` : ""}
+${content}
+${cta ? mvEmailButton(cta.label, cta.href) : ""}
+${note ? `<p style="margin:26px 0 0;padding-top:20px;border-top:1px solid #ece8e0;font-family:${MV_MAIL.body};font-size:13px;line-height:1.6;color:${MV_MAIL.muted};">${note}</p>` : ""}
+</td></tr>
+
+<!-- footer -->
+<tr><td style="padding:14px 0 0;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+<td bgcolor="${MV_MAIL.ink}" style="background:${MV_MAIL.ink};border-radius:28px;padding:26px 32px;">
+<div style="font-family:${MV_MAIL.display};font-size:17px;line-height:1.2;font-weight:800;text-transform:uppercase;color:${MV_MAIL.paper};">22&nbsp;000+ оригинальных ароматов</div>
+<div style="font-family:'Marck Script','Segoe Script',Georgia,cursive;font-style:italic;font-size:17px;color:${MV_MAIL.lime};margin-top:4px;">с доставкой по всей России</div>
+<div style="margin-top:16px;font-family:${MV_MAIL.body};font-size:13px;line-height:2;">
+<a href="${MV_MAIL.site}/catalog" style="color:${MV_MAIL.paper};text-decoration:none;font-weight:600;">Каталог</a>&nbsp;&nbsp;<span style="color:${MV_MAIL.pink};">&#10022;</span>&nbsp;&nbsp;<a href="${MV_MAIL.site}/find" style="color:${MV_MAIL.paper};text-decoration:none;font-weight:600;">AI-подбор</a>&nbsp;&nbsp;<span style="color:${MV_MAIL.pink};">&#10022;</span>&nbsp;&nbsp;<a href="${MV_MAIL.site}/account" style="color:${MV_MAIL.paper};text-decoration:none;font-weight:600;">Кабинет</a>
+</div>
+<div style="margin-top:12px;font-family:${MV_MAIL.body};font-size:11px;line-height:1.6;color:rgba(245,242,236,0.55);">&copy; Magic Vibes &middot; <a href="${MV_MAIL.site}" style="color:rgba(245,242,236,0.75);text-decoration:none;">magicvibes.ru</a>${unsub}</div>
+</td></tr></table>
+</td></tr>
+
+</table>
+</td></tr></table>
+</body></html>`;
+}
+
 function shopOtpEmailHtml(code) {
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="margin:0;padding:0;background:#f5f5f7;font-family:-apple-system,BlinkMacSystemFont,'Inter',sans-serif;">
-<table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f5f7;padding:40px 16px;">
-<tr><td align="center">
-<table width="480" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:20px;overflow:hidden;box-shadow:0 2px 16px rgba(0,0,0,0.08);">
-<tr><td style="background:linear-gradient(135deg,#7c3aed,#9333ea);padding:32px 40px;text-align:center;">
-  <div style="font-size:26px;font-weight:800;color:#fff;letter-spacing:-0.5px;">Magic Vibes</div>
-  <div style="font-size:13px;color:rgba(255,255,255,0.75);margin-top:4px;">Парфюмерия</div>
-</td></tr>
-<tr><td style="padding:40px 40px 32px;">
-  <div style="font-size:22px;font-weight:700;color:#1d1d1f;margin-bottom:8px;">Ваш код для входа</div>
-  <div style="font-size:15px;color:#6e6e73;line-height:1.5;margin-bottom:28px;">Введите этот код на сайте. Код действителен 10 минут.</div>
-  <div style="text-align:center;margin:28px 0;">
-    <div style="display:inline-block;background:#f5f3ff;border-radius:16px;padding:24px 48px;border:2px solid #ede9fe;">
-      <span style="font-size:42px;font-weight:800;letter-spacing:10px;color:#7c3aed;font-variant-numeric:tabular-nums;">${code}</span>
-    </div>
-  </div>
-  <div style="font-size:13px;color:#aeaeb2;border-top:1px solid #f0f0f2;padding-top:24px;margin-top:8px;">Если вы не запрашивали этот код — просто проигнорируйте это письмо.</div>
-</td></tr>
-<tr><td style="background:#f9f9fb;padding:20px 40px;text-align:center;">
-  <div style="font-size:12px;color:#aeaeb2;">© Magic Vibes · <a href="https://magicvibes.ru" style="color:#7c3aed;text-decoration:none;">magicvibes.ru</a></div>
-</td></tr>
-</table></td></tr></table></body></html>`;
+  return mvEmailLayout({
+    preheader: `Код для входа: ${code}. Действует 10 минут.`,
+    kicker: "Вход в кабинет",
+    title: "Ваш код",
+    script: "для входа на Magic Vibes",
+    intro: "Введите его на странице входа. Код действует <b>10 минут</b>.",
+    content: mvEmailCodeTile(code, "Никому не сообщайте этот код"),
+    note: "Если вы не запрашивали вход — просто проигнорируйте письмо, аккаунт в безопасности.",
+  });
 }
 
 app.post("/api/shop/auth/send-code", shopCors, async (request, response, next) => {
@@ -2083,7 +3259,7 @@ app.post("/api/shop/auth/send-code", shopCors, async (request, response, next) =
     const rl = await redis.get(rateLimitKey);
     if (rl) return response.status(429).json({ error: "Подождите 60 секунд перед повторной отправкой", retryAfter: 60 });
 
-    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const code = String(_shopCrypto.randomInt(100000, 1000000));
     await redis.set(emailKey, JSON.stringify({ code, attempts: 0 }), "EX", 600);
     await redis.set(rateLimitKey, "1", "EX", 60);
 
@@ -2222,9 +3398,67 @@ app.get("/api/shop/auth/orders", shopCors, requireShopAuth, async (request, resp
     const orders = await prisma.shopOrder.findMany({
       where: { customerId: request.shopCustomer.customerId },
       orderBy: { createdAt: "desc" },
-      take: 20,
+      take: 50,
     });
-    response.json({ ok: true, orders });
+    // Old orders stored only offerId/price from the browser → fill name/photo for the cabinet
+    const missing = [...new Set(orders.flatMap((o) => (Array.isArray(o.items) ? o.items : [])
+      .filter((i) => i && (!i.name || !i.image)).map((i) => cleanText(i.offerId))).filter(Boolean))].slice(0, 60);
+    const info = new Map();
+    await Promise.all(missing.map(async (id) => {
+      const p = await findShopProductByOfferId(id).catch(() => null);
+      if (p) info.set(id, { name: p.name, brand: p.brand, image: p.images?.[0] || null, slug: shopProductSlug(p.name, p.offerId) });
+    }));
+    const enriched = orders.map((o) => ({
+      ...o,
+      ...(o.delivery?.shipment?.id && typeof shopTrackUrl === "function" ? { trackUrl: shopTrackUrl(o.id).replace(/^https?:\/\/[^/]+/, "") } : {}),
+      items: (Array.isArray(o.items) ? o.items : []).map((i) => {
+        const extra = info.get(cleanText(i.offerId)) || {};
+        return { ...extra, ...Object.fromEntries(Object.entries(i).filter(([, v]) => v != null && v !== "")), slug: i.slug || extra.slug || null };
+      }),
+    }));
+    const paidLike = ["paid", "confirmed", "picking", "shipped", "delivered"];
+    const stats = {
+      orders: orders.length,
+      paidOrders: orders.filter((o) => paidLike.includes(o.status)).length,
+      spentRub: orders.filter((o) => paidLike.includes(o.status)).reduce((s, o) => s + (o.totalRub || 0), 0),
+    };
+    response.json({ ok: true, orders: enriched, stats });
+  } catch (error) { next(error); }
+});
+
+// Saved delivery addresses = distinct pickup points / courier addresses from the customer's orders
+// (the way Ozon / WB / Market remember them), newest first.
+app.get("/api/shop/auth/addresses", shopCors, requireShopAuth, async (request, response, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return response.status(503).json({ error: "База данных недоступна" });
+    const orders = await prisma.shopOrder.findMany({
+      where: { customerId: request.shopCustomer.customerId },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+      select: { delivery: true, createdAt: true },
+    });
+    const seen = new Set();
+    const addresses = [];
+    let contact = null;
+    for (const o of orders) {
+      const d = o.delivery && typeof o.delivery === "object" ? o.delivery : {};
+      if (!contact && d.phone) contact = { firstName: d.firstName || "", lastName: d.lastName || "", phone: d.phone || "", email: d.email || "" };
+      const type = d.type === "courier" ? "courier" : "pickup";
+      const address = cleanText(d.address || "");
+      if (!address) continue;
+      const key = type === "pickup" && d.pvzId ? `pvz:${d.pvzId}` : `${type}:${address.toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      addresses.push({
+        id: key, type, pvzId: d.pvzId || null, name: cleanText(d.pvzName || ""), address,
+        city: cleanText(d.city || ""), postalCode: cleanText(d.postalCode || ""), lastUsed: o.createdAt,
+        ...(d.carrier ? { carrier: d.carrier, method: d.method || null, region: d.region || "", lat: Number(d.lat) || undefined, lng: Number(d.lng) || undefined,
+          flat: d.flat || "", entrance: d.entrance || "", floor: d.floor || "", intercom: d.intercom || "", addrComment: d.addrComment || "" } : {}),
+      });
+      if (addresses.length >= 8) break;
+    }
+    response.json({ ok: true, addresses, contact });
   } catch (error) { next(error); }
 });
 
@@ -2303,11 +3537,14 @@ app.get("/api/shop/auth/vip", shopCors, requireShopAuth, async (request, respons
   try {
     const prisma = getPrisma();
     if (!prisma) return response.json({ ok: true, eligible: false, ordersCount: 0, vipLink: null });
-    const customerId = request.shopCustomer.id;
+    const settings = await readShopSettings();
+    // switched off in the admin (Магазин → Настройки → Разделы сайта)
+    if (!settings.features?.vipClub) return response.json({ ok: true, disabled: true, eligible: false, ordersCount: 0, vipLink: null });
+    // the token carries customerId (".id" was undefined → Prisma counted every buyer's orders)
+    const customerId = request.shopCustomer.customerId;
     const ordersCount = await prisma.shopOrder.count({
       where: { customerId, status: { in: ["completed", "delivered", "shipped"] } },
     });
-    const settings = await readShopSettings();
     const vipLink = cleanText(settings.vipTelegramLink || "") || null;
     response.json({ ok: true, eligible: ordersCount >= _VIP_ORDER_THRESHOLD, ordersCount, vipLink });
   } catch (error) { next(error); }
@@ -2584,7 +3821,7 @@ app.get("/api/shop/admin/settings", requireAdmin, async (_request, response, nex
 app.patch("/api/shop/admin/settings", requireAdmin, async (request, response, next) => {
   try {
     const current = await readShopSettings();
-    const allowed = ["markup", "markupRules", "shopName", "shopDescription", "contactEmail", "contactPhone", "deliveryDays", "deliveryDaysMin", "deliveryPriceRub", "freeDeliveryFrom", "vipTelegramLink", "aromaMesyatsa", "contest"];
+    const allowed = ["markup", "markupRules", "shopName", "shopDescription", "contactEmail", "contactPhone", "deliveryDays", "deliveryDaysMin", "deliveryPriceRub", "freeDeliveryFrom", "deliveryRules", "carriers", "features", "vipTelegramLink", "aromaMesyatsa", "contest"];
     const updates = {};
     for (const k of allowed) {
       if (request.body[k] !== undefined) updates[k] = request.body[k];
@@ -2632,6 +3869,7 @@ app.patch("/api/shop/admin/orders/:id", requireAdmin, async (request, response, 
       where: { id: request.params.id },
       data: { status },
     });
+    logger.info("shop order status set by admin", { orderId: order.id, status, by: request.session?.user?.username || request.user?.username || null });
     response.json({ ok: true, order });
   } catch (error) { next(error); }
 });
@@ -2693,6 +3931,8 @@ app.post("/api/shop/stock-alert", shopCors, async (request, response, next) => {
     const email = cleanText(request.body?.email || "").toLowerCase();
     if (!offerId) return response.status(400).json({ error: "offerId обязателен" });
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return response.status(400).json({ error: "Некорректный email" });
+    if (request.body?.consents?.pd !== true) return response.status(400).json({ error: "Отметьте согласие на обработку персональных данных" });
+    logger.info("shop_consent", { kind: "stock_alert", email, version: cleanText(String(request.body.consents.version || "")).slice(0, 20), ip: String(request.ip || "").replace(/^::ffff:/, "").slice(0, 64) });
     await db.stockAlert.upsert({
       where: { offerId_email: { offerId, email } },
       create: { offerId, email },
@@ -2735,16 +3975,23 @@ app.get("/api/shop/unboxings", shopCors, async (_req, res, next) => {
 app.post("/api/shop/unboxings", shopCors, async (req, res, next) => {
   try {
     const all = await readUnboxings();
+    // only http(s) media links (no javascript:/data: URLs rendered on the site after approval)
+    const mediaUrl = cleanText(req.body?.mediaUrl || "").slice(0, 500);
+    if (mediaUrl && !/^https:\/\/[^\s"'<>]+$/i.test(mediaUrl)) return res.status(400).json({ error: "Некорректная ссылка на фото или видео" });
     const entry = {
       id: nanoid8(),
-      name: cleanText(req.body.name || "Аноним").slice(0, 100),
-      mediaUrl: cleanText(req.body.mediaUrl || "").slice(0, 500),
-      text: cleanText(req.body.text || "").slice(0, 1000),
+      name: cleanText(req.body?.name || "Аноним").slice(0, 100),
+      mediaUrl,
+      text: cleanText(req.body?.text || "").slice(0, 1000),
       approved: false,
       createdAt: new Date().toISOString(),
     };
     all.unshift(entry);
-    await writeShopData(SHOP_UNBOXINGS_KEY, all);
+    // the list lives in the shared app settings: a flood of anonymous posts must not grow it without
+    // bound — keep every approved entry and the 100 newest ones waiting for moderation
+    let pending = 0;
+    const kept = all.filter((u) => u.approved || ++pending <= 100);
+    await writeShopData(SHOP_UNBOXINGS_KEY, kept);
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
@@ -2997,3 +4244,205 @@ app.get("/api/shop/admin/email-subscribers-list", requireAdmin, async (req, res,
     res.json({ ok: true, subscribers, total });
   } catch (e) { next(e); }
 });
+
+// ── Shop description backfill (worker only) ─────────────────────────────────
+// Shop products whose Ozon row has no description and whose Yandex Market twin has none
+// either: fetch it from Ozon /v1/product/info/description and keep it on the Ozon row
+// (raw.ozon.description — the same place the Avito / Market exports read from).
+const SHOP_DESC_BACKFILL_BATCH = Math.max(0, Number(process.env.SHOP_DESCRIPTION_BACKFILL_BATCH ?? 200) || 0);
+let _shopDescBackfillRunning = false;
+
+async function backfillShopDescriptionsFromOzon({ limit = SHOP_DESC_BACKFILL_BATCH, delayMs = 150 } = {}) {
+  if (_shopDescBackfillRunning || !(limit > 0)) return { status: "skipped" };
+  const prisma = getPrisma();
+  if (!prisma) return { status: "no_db" };
+  _shopDescBackfillRunning = true;
+  let updated = 0, failed = 0;
+  try {
+    const rows = await prisma.$queryRaw`
+      SELECT w.offer_id, w.target, w.product_id
+      FROM warehouse_products w
+      WHERE w.marketplace = 'ozon' AND w.archived = false AND w.current_price > 0
+        AND coalesce(length(w.raw#>>'{ozon,description}'), 0) < 40
+        AND coalesce((w.raw#>>'{ozon,_shopDescChecked}')::boolean, false) = false
+        AND NOT EXISTS (
+          SELECT 1 FROM warehouse_products y
+          WHERE y.marketplace = 'yandex' AND lower(y.offer_id) = lower(w.offer_id)
+            AND coalesce(length(y.raw#>>'{yandex,description}'), 0) >= 40)
+      ORDER BY w.updated_at DESC
+      LIMIT ${limit}`;
+    for (const r of rows) {
+      const offerId = cleanText(r.offer_id);
+      const target = cleanText(r.target) || "ozon";
+      const account = typeof getOzonAccountByTarget === "function" ? getOzonAccountByTarget(target) : null;
+      if (!account || !offerId) continue;
+      let description = "";
+      try {
+        const body = r.product_id ? { product_id: Number(r.product_id) || undefined, offer_id: offerId } : { offer_id: offerId };
+        const data = await ozonRequest("/v1/product/info/description", body, account);
+        description = cleanText(data?.result?.description || "");
+      } catch (error) {
+        failed += 1;
+        if (failed >= 10) break; // API trouble: stop this run
+      }
+      // remember "checked" so products without any description on Ozon aren't re-queried every run
+      const patch = description ? { description } : { _shopDescChecked: true };
+      await prisma.$executeRaw`
+        UPDATE warehouse_products
+        SET raw = coalesce(raw, '{}'::jsonb) || jsonb_build_object('ozon', coalesce(raw->'ozon', '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb)
+        WHERE marketplace = 'ozon' AND target = ${target} AND lower(offer_id) = lower(${offerId})`.catch(() => {});
+      if (description) updated += 1;
+      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+    logger.info("shop description backfill", { checked: rows.length, updated, failed });
+    return { status: "ok", checked: rows.length, updated, failed };
+  } finally {
+    _shopDescBackfillRunning = false;
+  }
+}
+
+if (backgroundJobsEnabled && SHOP_DESC_BACKFILL_BATCH > 0) {
+  setTimeout(() => { backfillShopDescriptionsFromOzon().catch((e) => logger.warn("shop description backfill failed", { detail: e?.message })); }, 90 * 1000);
+  setInterval(() => { backfillShopDescriptionsFromOzon().catch((e) => logger.warn("shop description backfill failed", { detail: e?.message })); }, 30 * 60 * 1000).unref?.();
+}
+
+// ── Marketplace-only images (infographic cards, branding slides) ───────────────
+// The warehouse appends up to 2 "extra cards" + shop stub slides to every marketplace card.
+// Marketplaces re-host them (each product gets its own URL), so they are recognised by a
+// perceptual hash of the picture and hidden on magicvibes.ru.
+const _mpOnlyHashCache = new Map(); // image url → 64-bit dHash (BigInt) | null
+let _mpOnlyRefs = null;
+let _mpOnlyRefsAt = 0;
+
+async function _dHashFromBuffer(buf) {
+  const { data } = await sharp(buf, { failOn: "none" }).flatten({ background: "#ffffff" }).grayscale()
+    .resize(9, 8, { fit: "fill" }).raw().toBuffer({ resolveWithObject: true });
+  let h = 0n;
+  for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) h = (h << 1n) | (data[y * 9 + x] > data[y * 9 + x + 1] ? 1n : 0n);
+  return h;
+}
+
+async function _imageHash(url) {
+  if (_mpOnlyHashCache.has(url)) return _mpOnlyHashCache.get(url);
+  let hash = null;
+  try {
+    const local = typeof localPublicFilePathFromUrl === "function" ? localPublicFilePathFromUrl(url, null) : null;
+    let buf = null;
+    if (local && require("fs").existsSync(local)) buf = require("fs").readFileSync(local);
+    else if (/^https?:\/\//.test(url)) {
+      const r = await fetch(url, { signal: AbortSignal.timeout(6000) });
+      if (r.ok) buf = Buffer.from(await r.arrayBuffer());
+    }
+    if (buf) hash = await _dHashFromBuffer(buf);
+  } catch (_) { hash = null; }
+  if (_mpOnlyHashCache.size > 60000) _mpOnlyHashCache.clear();
+  _mpOnlyHashCache.set(url, hash);
+  return hash;
+}
+
+// dHashes of slides found repeated at the end of hundreds of Ozon galleries (checked by eye,
+// 2026-09-27): «поделитесь впечатлениями», «индивидуальное послание», «добавьте в избранное»
+// (Magic Stick), two AURA slides, «спасибо, что выбираете нас», «секреты нанесения».
+// Product photos repeated across volumes (e.g. Mancera) and brand slides are NOT in this list.
+const SHOP_MP_ONLY_HASHES = [
+  "71e8ccb296d4e870", "11e8d0f071cc4002", "84222b396d698775", "363079ccd4fcd0d3",
+  "9233a8e8687931b2", "8e0b5d59193a35c4", "f0f0d6b6b217a6b2",
+].map((h) => BigInt("0x" + h));
+
+async function _mpOnlyReferenceHashes() {
+  if (_mpOnlyRefs && Date.now() - _mpOnlyRefsAt < 60 * 60 * 1000) return _mpOnlyRefs;
+  const settings = await readAppSettings();
+  const urls = new Set();
+  for (const mp of ["ozon", "yandex"]) {
+    const b = typeof brandingForMarketplace === "function" ? brandingForMarketplace(settings, mp) : {};
+    for (const c of Array.isArray(b.extraCards) ? b.extraCards : []) if (c?.url) urls.add(cleanText(c.url));
+  }
+  for (const entry of Object.values(settings?.shopStubs || {})) {
+    for (const u of Array.isArray(entry?.stubUrls) ? entry.stubUrls : []) if (u) urls.add(cleanText(u));
+  }
+  const hashes = [...SHOP_MP_ONLY_HASHES];
+  for (const u of urls) { const h = await _imageHash(u); if (h != null) hashes.push(h); }
+  _mpOnlyRefs = hashes;
+  _mpOnlyRefsAt = Date.now();
+  return hashes;
+}
+
+function _hamming(a, b) { let x = a ^ b, n = 0; while (x) { n += Number(x & 1n); x >>= 1n; } return n; }
+
+/** Drops marketplace-only slides from the tail of a product gallery (never the first photo). */
+async function stripMarketplaceOnlyImages(images, { fetchMissing = true } = {}) {
+  if (!Array.isArray(images) || images.length < 2) return images || [];
+  const refs = await _mpOnlyReferenceHashes().catch(() => []);
+  if (!refs.length) return images;
+  const tailStart = Math.max(1, images.length - 4);
+  const drop = new Set();
+  await Promise.all(images.slice(tailStart).map(async (url, i) => {
+    const h = fetchMissing ? await _imageHash(url) : (_mpOnlyHashCache.get(url) ?? null);
+    if (h != null && refs.some((r) => _hamming(r, h) <= 8)) drop.add(tailStart + i);
+  }));
+  return images.filter((_, i) => !drop.has(i));
+}
+
+// Marketplace descriptions come with HTML (<br/>, <p>, <li>, &nbsp; — sometimes HTML-escaped twice).
+// Plain text with paragraph breaks for the site / feed.
+function shopCleanDescription(raw) {
+  const decode = (s) => s
+    .replace(/&nbsp;/gi, " ").replace(/&quot;/gi, '"').replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/&amp;/gi, "&");
+  let s = decode(decode(String(raw || ""))); // escaped twice on some cards
+  s = s
+    .replace(/<\s*br\s*\/?\s*>/gi, "\n")
+    .replace(/<\s*li[^>]*>/gi, "\n• ")
+    .replace(/<\/\s*(p|div|li|ul|ol|h[1-6]|tr)\s*>/gi, "\n")
+    .replace(/<[^>]*>/g, "")
+    .replace(/\r/g, "");
+  return s
+    .split("\n").map((l) => l.replace(/[ \t\u00a0]+/g, " ").trim()).join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/\n+• /g, "\n• ")
+    .trim();
+}
+
+// ── IndexNow: tell Yandex (and IndexNow partners) about new / changed product pages ─────
+// Key file: magicvibes.ru/d85bbe1d86b5212d7862d0c51bdd5e30.txt (shop-next/public). Full list was submitted once on
+// 2026-09-27; this worker job sends products updated in the last 2 days every 6 hours.
+const SHOP_INDEXNOW_KEY = process.env.SHOP_INDEXNOW_KEY || "d85bbe1d86b5212d7862d0c51bdd5e30";
+const SHOP_INDEXNOW_HOST = "magicvibes.ru";
+
+async function shopIndexNowSubmit(urls) {
+  const list = [...new Set(urls)].filter(Boolean);
+  const results = [];
+  for (const ep of ["https://yandex.com/indexnow", "https://api.indexnow.org/indexnow"]) {
+    for (let i = 0; i < list.length; i += 10000) {
+      try {
+        const r = await fetch(ep, {
+          method: "POST",
+          headers: { "Content-Type": "application/json; charset=utf-8" },
+          body: JSON.stringify({ host: SHOP_INDEXNOW_HOST, key: SHOP_INDEXNOW_KEY, keyLocation: `https://${SHOP_INDEXNOW_HOST}/${SHOP_INDEXNOW_KEY}.txt`, urlList: list.slice(i, i + 10000) }),
+          signal: AbortSignal.timeout(30000),
+        });
+        results.push({ ep, status: r.status });
+      } catch (e) {
+        results.push({ ep, error: e?.message || String(e) });
+      }
+    }
+  }
+  return { count: list.length, results };
+}
+
+async function shopIndexNowRecent() {
+  const products = await getShopFeedProducts();
+  const since = new Date(Date.now() - 2 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+  const urls = products.filter((p) => p.lastmod && p.lastmod >= since).map((p) => `https://${SHOP_INDEXNOW_HOST}/product/${p.slug}`);
+  if (!urls.length) return { count: 0 };
+  const res = await shopIndexNowSubmit(urls);
+  logger.info("shop indexnow submitted", { count: res.count, results: res.results });
+  return res;
+}
+
+if (backgroundJobsEnabled) {
+  setInterval(() => { shopIndexNowRecent().catch((e) => logger.warn("shop indexnow failed", { detail: e?.message })); }, 6 * 60 * 60 * 1000).unref?.();
+}

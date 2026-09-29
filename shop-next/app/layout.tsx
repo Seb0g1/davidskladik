@@ -1,10 +1,14 @@
 import type { Metadata } from "next";
+import "./fonts.css";
 import "./globals.css";
 import Providers from "@/components/Providers";
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
 import SupportChatWidget from "@/components/SupportChatWidget";
 import PopupPromo from "@/components/PopupPromo";
+import CookieBanner from "@/components/CookieBanner";
+import YandexMetrika from "@/components/YandexMetrika";
+import { Suspense } from "react";
 import { SITE_NAME, SITE_URL, DEFAULT_DESC } from "@/lib/seo";
 
 export const metadata: Metadata = {
@@ -29,7 +33,6 @@ export const metadata: Metadata = {
   },
   manifest: "/manifest.webmanifest",
   robots: { index: true, follow: true, googleBot: { index: true, follow: true, "max-snippet": -1, "max-image-preview": "large" } },
-  alternates: { canonical: SITE_URL, languages: { "ru": SITE_URL, "x-default": SITE_URL } },
   other: {
     "geo.region": "RU",
     "geo.placename": "Россия",
@@ -41,9 +44,9 @@ const ORG_SCHEMA = {
   "@type": "Organization",
   name: SITE_NAME,
   url: SITE_URL,
-  logo: `${SITE_URL}/favicon.svg`,
+  logo: `${SITE_URL}/brand/logo/logo-mark-dark.png`,
   description: "Оригинальная парфюмерия мировых брендов с доставкой по России",
-  contactPoint: { "@type": "ContactPoint", contactType: "customer service", email: "info@magicvibes.ru", availableLanguage: "Russian" },
+  contactPoint: { "@type": "ContactPoint", contactType: "customer service", email: "noreply@magicvibes.ru", availableLanguage: "Russian" },
   sameAs: ["https://t.me/magicvibes_ru"],
 };
 
@@ -59,15 +62,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="ru">
       <head>
+        {/* one logo everywhere: ico for Yandex/old clients, 512 PNG (multiple of 48) for Google, SVG for browsers */}
+        <link rel="icon" href="/favicon.ico" sizes="48x48" />
+        <link rel="icon" type="image/png" sizes="512x512" href="/favicon.png" />
         <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-        <link rel="icon" type="image/png" href="/favicon.png" />
-        <link rel="apple-touch-icon" href="/favicon.png" />
-        <meta name="theme-color" content="#09090b" />
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,300;1,400;1,500&family=Jost:wght@200;300;400;500&display=swap" />
-        <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,300;1,400;1,500&family=Jost:wght@200;300;400;500&display=swap" />
-        <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+        <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+        <meta name="theme-color" content="#f5f2ec" />
+        {/* fonts are self-hosted (app/fonts.css); preload the two cyrillic files the first screen needs */}
+        <link rel="preload" href="/fonts/c86556796966.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
+        <link rel="preload" href="/fonts/4c756272dc0a.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(ORG_SCHEMA) }} />
         <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(WEBSITE_SCHEMA) }} />
       </head>
@@ -80,6 +83,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </div>
           <SupportChatWidget />
           <PopupPromo />
+          <CookieBanner />
+          <Suspense fallback={null}><YandexMetrika /></Suspense>
         </Providers>
       </body>
     </html>

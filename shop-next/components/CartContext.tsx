@@ -1,6 +1,7 @@
 "use client";
 import { createContext, useContext, useReducer, useCallback, useEffect, useState, type ReactNode } from "react";
 import type { CartItem, ShopProduct } from "@/lib/types";
+import { ymGoal } from "@/lib/metrika";
 
 const CART_KEY = "mv_cart_v1";
 
@@ -44,6 +45,8 @@ function loadCart(): { items: CartItem[] } {
 
 interface CartCtx {
   items: CartItem[];
+  /** false until the saved cart is read from localStorage (first client render) */
+  hydrated: boolean;
   totalItems: number;
   totalRub: number;
   add: (product: ShopProduct, qty?: number) => void;
@@ -71,7 +74,10 @@ export function CartProvider({ children }: { children: ReactNode }) {
     try { localStorage.setItem(CART_KEY, JSON.stringify({ items: state.items })); } catch { /* ignore */ }
   }, [state.items, hydrated]);
 
-  const add = useCallback((product: ShopProduct, qty?: number) => dispatch({ type: "ADD", product, qty }), []);
+  const add = useCallback((product: ShopProduct, qty?: number) => {
+    dispatch({ type: "ADD", product, qty });
+    ymGoal("add_to_cart", { offerId: product.offerId, price: product.priceRub });
+  }, []);
   const remove = useCallback((offerId: string) => dispatch({ type: "REMOVE", offerId }), []);
   const setQty = useCallback((offerId: string, qty: number) => dispatch({ type: "SET_QTY", offerId, qty }), []);
   const clear = useCallback(() => dispatch({ type: "CLEAR" }), []);
@@ -79,7 +85,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
   const totalItems = state.items.reduce((s, i) => s + i.quantity, 0);
   const totalRub = state.items.reduce((s, i) => s + i.product.priceRub * i.quantity, 0);
 
-  return <CartContext.Provider value={{ items: state.items, totalItems, totalRub, add, remove, setQty, clear }}>{children}</CartContext.Provider>;
+  return <CartContext.Provider value={{ items: state.items, hydrated, totalItems, totalRub, add, remove, setQty, clear }}>{children}</CartContext.Provider>;
 }
 
 export function useCart(): CartCtx {

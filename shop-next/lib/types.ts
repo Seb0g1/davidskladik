@@ -51,6 +51,8 @@ export interface ShopSettings {
   deliveryDaysMin?: number;
   deliveryPriceRub?: number;
   freeDeliveryFrom?: number;
+  features?: { giftBuilder?: boolean; vipClub?: boolean };
+  deliveryMode?: "fixed" | "ozon";
 }
 
 export interface CartItem {
@@ -63,7 +65,7 @@ export type PaymentMethod = "ozon_pay" | "sbp" | "cash";
 export interface ShopOrderPayload {
   items: { offerId: string; quantity: number; priceRub: number }[];
   delivery: {
-    type?: "courier" | "pickup";
+    type?: "courier" | "pickup" | "ozon_pay";
     firstName: string;
     lastName?: string;
     phone: string;
@@ -72,11 +74,14 @@ export interface ShopOrderPayload {
     city?: string;
     postalCode?: string;
     pvzId?: string;
+    pvzName?: string;
   };
   comment?: string;
   paymentMethod?: PaymentMethod;
   refCode?: string;
   promoCode?: string;
+  /** 152-ФЗ consent (required) and 38-ФЗ ads opt-in, with the document version */
+  consents?: { pd: boolean; ads: boolean; version: string };
 }
 
 export interface ShopOrder {
@@ -85,8 +90,12 @@ export interface ShopOrder {
   paymentUrl?: string;
   totalRub: number;
   createdAt: string;
-  items?: { offerId: string; quantity: number; priceRub: number; name?: string }[];
-  delivery?: { firstName?: string; lastName?: string; city?: string; address?: string; phone?: string; email?: string };
+  items?: { offerId: string; quantity: number; priceRub: number; name?: string; brand?: string; image?: string | null; volume?: string | null; slug?: string | null }[];
+  delivery?: { type?: string; firstName?: string; lastName?: string; city?: string; address?: string; phone?: string; email?: string; pvzId?: string; pvzName?: string; priceRub?: number;
+    carrier?: string; carrierTitle?: string; daysMin?: number | null; daysMax?: number | null;
+    shipment?: { carrier: string; id: string; status?: string; statusLabel?: string; number?: string | null; trackingUrl?: string | null } };
+  /** /track/<id>?k=… — страница отслеживания на сайте (есть, когда заказ передан в службу) */
+  trackUrl?: string;
   comment?: string;
 }
 
@@ -138,12 +147,19 @@ export interface FragranceNotes {
   seasons?: string[];
 }
 
+export interface CatalogFacets {
+  brands: { name: string; count: number }[];
+  volumes: { ml: number; count: number }[];
+  price: { min: number; max: number };
+}
+
 export interface CatalogResponse {
   products: ShopProduct[];
   total: number;
   page: number;
   pageSize: number;
   brands: string[];
+  facets?: CatalogFacets;
 }
 
 export interface BlogPost {
@@ -179,4 +195,19 @@ export interface AutoCategory {
   slug: string;
   label: string;
   count: number;
+}
+
+export interface ShopContest {
+  id: string;
+  title: string;
+  badge?: string;
+  description?: string;
+  prize?: string;
+  imageUrl?: string;
+  linkUrl?: string;
+  linkText?: string;
+  rulesUrl?: string;
+  startDate?: string;
+  endDate?: string;
+  steps: { title: string; desc: string }[];
 }

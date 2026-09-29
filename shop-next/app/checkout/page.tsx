@@ -3,67 +3,49 @@ import { useState, useEffect, useRef } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Check, AlertCircle, MapPin, ChevronLeft, Loader2, Shield, Lock, Tag, X, ChevronRight } from "lucide-react";
+import { Check, AlertCircle, MapPin, ChevronLeft, Loader2, Lock, Tag, X, ChevronRight, Truck } from "lucide-react";
 import { useCart } from "@/components/CartContext";
 import { useAuth } from "@/components/AuthContext";
 import type { ShopOrderPayload } from "@/lib/types";
-import type { PvzPoint } from "@/components/OzonPickupMap";
+import type { DeliverySelection, PickOption } from "@/components/DeliveryPicker";
+import { CARRIER_LOGO, daysText, slotText } from "@/lib/delivery";
+import { OzonPayLogo } from "@/components/OzonPay";
+import { productImg } from "@/lib/img";
+import ConsentCheck from "@/components/ConsentCheck";
+import { CONSENT_VERSION } from "@/lib/legal";
+import { ymGoal } from "@/lib/metrika";
+import { loadAddresses, rememberAddress, rememberContact, forgetAddress, prettyAddress, type SavedAddress } from "@/lib/addresses";
 
-const OzonPickupMap = dynamic(() => import("@/components/OzonPickupMap"), { ssr: false });
-
-const S = {
-  bg:      "#0E0D0B",
-  surface: "#161512",
-  surface2:"#1D1C18",
-  border:  "rgba(255,252,245,0.07)",
-  borderMd:"rgba(255,252,245,0.13)",
-  text:    "#F4EFE6",
-  muted:   "rgba(244,239,230,0.48)",
-  subtle:  "rgba(244,239,230,0.22)",
-  accent:  "#C9A96E",
-  accent3: "#EDD9B0",
-};
+const DeliveryPicker = dynamic(() => import("@/components/DeliveryPicker"), { ssr: false });
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE ?? "https://davidsklad.ru";
 
-function DarkField({
+const CARRIER_MARK: Record<string, string> = { cdek: "СДЭК", yandex: "Яндекс Доставка", dostavista: "Достависта", ozon: "Ozon" };
+
+function Field({
   label, required, textarea, ...props
 }: { label: string; required?: boolean; textarea?: boolean } & React.InputHTMLAttributes<HTMLInputElement | HTMLTextAreaElement>) {
-  const inputStyle: React.CSSProperties = {
-    width: "100%", paddingLeft: 16, paddingRight: 16, paddingTop: 12, paddingBottom: 12,
-    fontSize: 13, fontWeight: 500, fontFamily: "inherit",
-    background: "rgba(255,255,255,0.05)", border: `1.5px solid ${S.border}`,
-    borderRadius: 12, color: S.text, outline: "none", transition: "all 0.15s ease",
-    resize: textarea ? "none" as const : undefined, boxSizing: "border-box" as const,
-  };
   return (
-    <div>
-      <label style={{ display: "block", fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: S.subtle, marginBottom: 6 }}>
-        {label}{required && " *"}
-      </label>
+    <label className="mv-co-field">
+      <span className="mv-co-label">{label}{required && <i> *</i>}</span>
       {textarea
-        ? <textarea {...(props as React.TextareaHTMLAttributes<HTMLTextAreaElement>)} rows={3} style={inputStyle}
-            onFocus={e => { e.target.style.borderColor = "rgba(201,169,110,0.4)"; e.target.style.background = "rgba(255,255,255,0.08)"; }}
-            onBlur={e => { e.target.style.borderColor = S.border; e.target.style.background = "rgba(255,255,255,0.05)"; }} />
-        : <input {...(props as React.InputHTMLAttributes<HTMLInputElement>)} required={required} style={inputStyle}
-            onFocus={e => { e.target.style.borderColor = "rgba(201,169,110,0.4)"; e.target.style.background = "rgba(255,255,255,0.08)"; }}
-            onBlur={e => { e.target.style.borderColor = S.border; e.target.style.background = "rgba(255,255,255,0.05)"; }} />
-      }
-    </div>
+        ? <textarea {...(props as React.TextareaHTMLAttributes<HTMLTextAreaElement>)} rows={3} className="mv-co-input" />
+        : <input {...(props as React.InputHTMLAttributes<HTMLInputElement>)} required={required} className="mv-co-input" />}
+    </label>
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ n, title, children }: { n: string; title: string; children: React.ReactNode }) {
   return (
-    <div style={{ background: S.surface, borderRadius: 20, padding: "22px 24px", border: `1px solid ${S.border}` }}>
-      <h3 style={{ fontSize: 14, fontWeight: 700, color: S.text, marginBottom: 18 }}>{title}</h3>
+    <section className="mv-co-card">
+      <h2 className="mv-co-h"><span className="mv-co-n">{n}</span>{title}</h2>
       {children}
-    </div>
+    </section>
   );
 }
 
 export default function CheckoutPage() {
-  const { items, totalRub, clear } = useCart();
+  const { items, totalRub, clear, hydrated } = useCart();
   const { customer, token } = useAuth();
   const router = useRouter();
 
@@ -71,21 +53,85 @@ export default function CheckoutPage() {
   const [lastName, setLastName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
-  const [city, setCity] = useState("");
-  const [address, setAddress] = useState("");
-  const [postalCode, setPostalCode] = useState("");
+  const [city, setCity] = useState(""); // только для доставки Ozon (цена по городу)
   const [comment, setComment] = useState("");
-  const [deliveryType, setDeliveryType] = useState<"courier" | "pickup">("pickup");
+  const [pdConsent, setPdConsent] = useState(false);
+  const [adsConsent, setAdsConsent] = useState(false);
   const paymentMethod = "ozon_pay" as const;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pvzMapOpen, setPvzMapOpen] = useState(false);
-  const [selectedPvz, setSelectedPvz] = useState<PvzPoint | null>(null);
+  const [repriced, setRepriced] = useState<{ url: string; totalRub: number; was: number } | null>(null);
+  // выбранная доставка: пункт или дом на карте (СДЭК / Яндекс / Достависта) либо Ozon (адрес — на странице оплаты)
+  const [sel, setSel] = useState<DeliverySelection | null>(null);
+  const [ozonChosen, setOzonChosen] = useState(false);
+  const [picker, setPicker] = useState<null | "point" | "address">(null);
+  // the map bundle (~1 MB) is fetched in the background after the page settles and mounted on first use
+  const [pickerMounted, setPickerMounted] = useState(false);
+  useEffect(() => { if (picker) setPickerMounted(true); }, [picker]);
+  useEffect(() => { const t = setTimeout(() => { void import("@/components/DeliveryPicker"); }, 3000); return () => clearTimeout(t); }, []);
+  const [savedBusy, setSavedBusy] = useState<string | null>(null);
 
   const [promoInput, setPromoInput] = useState("");
   const [promoValidating, setPromoValidating] = useState(false);
   const [promoResult, setPromoResult] = useState<{ valid: boolean; discountPct?: number; code?: string } | null>(null);
   const promoRef = useRef<HTMLInputElement>(null);
+
+  // Saved addresses & contact (orders history + this browser), like Ozon / WB / Market
+  const [saved, setSaved] = useState<SavedAddress[]>([]);
+  const [showAllSaved, setShowAllSaved] = useState(false);
+
+  // Delivery mode + tariff (davidsklad → Магазин → Настройки). With Ozon Delivery the buyer picks
+  // the pickup point / courier address once, on the Ozon Pay form — the site doesn't ask for it.
+  // Price comes from the server (davidsklad → Магазин → Настройки → «Доставка: правила»): flat, or by
+  // the Ozon tariffs for the buyer's city — so with Ozon Delivery the site asks for the city only.
+  const [dm, setDm] = useState<{ ozonDelivery: boolean; deliveryRub: number; needCity: boolean; cluster: string | null; freeDeliveryFrom: number } | null>(null);
+  const [quoting, setQuoting] = useState(false);
+  const ozonDelivery = dm?.ozonDelivery === true;
+  useEffect(() => {
+    let alive = true;
+    loadAddresses(token).then(({ addresses, contact }) => {
+      if (!alive) return;
+      setSaved(addresses);
+      if (contact) {
+        setFirstName((v) => v || contact.firstName || "");
+        setLastName((v) => v || contact.lastName || "");
+        setPhone((v) => v || contact.phone || "");
+        setEmail((v) => v || contact.email || "");
+      }
+      // последний адрес со службой доставки — сразу выбран (цена пересчитается)
+      const last = addresses.find((a) => a.carrier && a.method);
+      if (last) void applySaved(last);
+    });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, hydrated]);
+
+  // сохранённый пункт / адрес: пересчитываем цену заново (тарифы меняются), выбираем тот же способ
+  async function applySaved(a: SavedAddress) {
+    if (!a.carrier || !items.length) return;
+    setSavedBusy(a.id);
+    try {
+      const body = a.type === "pickup" && a.pvzId
+        ? { type: "point", carrier: a.carrier, id: a.pvzId }
+        : { type: "address", city: a.city || a.region || "", region: a.region || "", full: [a.city, a.address].filter(Boolean).join(", "), lat: a.lat, lng: a.lng };
+      const d = await (await fetch(`${BASE}/api/shop/checkout/quote`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: items.map((i) => ({ offerId: i.product.offerId, quantity: i.quantity })), goodsRub: goods, target: body }),
+      })).json();
+      const list: PickOption[] = d.options || [];
+      const o = list.find((x) => x.id === a.method) || list.find((x) => x.speed !== "slot") || null;
+      if (!o) return;
+      setOzonChosen(false);
+      if (body.type === "point" && d.point) setSel({ mode: "point", option: o, point: d.point });
+      else if (body.type === "address") setSel({
+        mode: "address", option: o,
+        place: { kind: "house", lat: a.lat || 0, lng: a.lng || 0, city: a.city || "", region: a.region || "", street: "", house: "", postcode: a.postalCode || "", title: a.address, subtitle: a.city || "", full: [a.city, a.address].filter(Boolean).join(", ") },
+        details: { flat: a.flat || "", entrance: a.entrance || "", floor: a.floor || "", intercom: a.intercom || "", comment: a.addrComment || "" },
+      });
+    } catch { /* выберет на карте */ }
+    finally { setSavedBusy(null); }
+  }
+  const activeSavedId = sel?.mode === "point" ? `pvz:${sel.point.id}` : sel?.mode === "address" ? `courier:${sel.place.title.trim().toLowerCase()}` : "";
 
   // Pre-fill from auth
   useEffect(() => {
@@ -97,14 +143,87 @@ export default function CheckoutPage() {
     }
   }, [customer]);
 
+  // wait for the saved cart, and don't bounce to /cart after a successful order clears it
+  const submittedRef = useRef(false);
   useEffect(() => {
-    if (items.length === 0) router.replace("/cart");
-  }, [items, router]);
+    if (hydrated && items.length === 0 && !submittedRef.current) router.replace("/cart");
+  }, [hydrated, items, router]);
 
-  const refCode = typeof window !== "undefined" ? (localStorage.getItem("shopRefCode") || undefined) : undefined;
-  const refDiscount = refCode ? Math.round(totalRub * 0.07) : 0;
-  const promoDiscount = (promoResult?.valid && !refCode) ? Math.round(totalRub * (promoResult.discountPct ?? 0) / 100) : 0;
-  const total = totalRub - refDiscount - promoDiscount;
+  // referral code from a ?ref= link: the discount is shown only once the server confirmed the code
+  // (a stale or mistyped code would otherwise promise 7% the order won't get and hide the promo field)
+  const [refCode, setRefCode] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    let stored = "";
+    try { stored = localStorage.getItem("shopRefCode") || ""; } catch { /* private mode */ }
+    if (!stored) return;
+    let alive = true;
+    fetch(`${BASE}/api/shop/referral/validate`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: stored }) })
+      .then((r) => r.json())
+      .then((d) => {
+        if (!alive) return;
+        if (d?.valid) setRefCode(stored.toUpperCase());
+        else if (d?.ok) { try { localStorage.removeItem("shopRefCode"); } catch { /* ignore */ } }
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  // same rounding as the server: goods = round(sum × (1 − discount))
+  const discountPct = refCode ? 7 : promoResult?.valid ? promoResult.discountPct ?? 0 : 0;
+  const goods = Math.round(totalRub * (1 - discountPct / 100));
+  const refDiscount = refCode ? totalRub - goods : 0;
+  const promoDiscount = !refCode && promoResult?.valid ? totalRub - goods : 0;
+  // same rule as the server (shopDeliveryRub): free from the threshold, counted on goods after discounts
+  const quoteCity = sel?.mode === "point" ? sel.point.city : sel?.mode === "address" ? sel.place.city : city;
+  const quoteKey = `${items.map((i) => `${i.product.offerId}:${i.quantity}`).join(",")}|${quoteCity.trim().toLowerCase()}|${goods}`;
+  useEffect(() => {
+    if (!items.length) return;
+    let alive = true;
+    setQuoting(true);
+    const t = setTimeout(() => {
+      fetch(`${BASE}/api/shop/checkout/delivery-mode`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: items.map((i) => ({ offerId: i.product.offerId, quantity: i.quantity })), city: quoteCity, goodsRub: goods }),
+      }).then((r) => r.json()).then((d) => { if (alive) setDm(d); })
+        .catch(() => { if (alive) setDm((v) => v || { ozonDelivery: false, deliveryRub: 0, needCity: false, cluster: null, freeDeliveryFrom: 0 }); })
+        .finally(() => { if (alive) setQuoting(false); });
+    }, 350); // typing the city → one request
+    return () => { alive = false; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quoteKey]);
+  // the chosen point / address was priced for the cart at that moment: after a quantity change or a
+  // promo code (free delivery threshold, insurance, weight) ask the server again, so the total shown
+  // here is the one the order and the Ozon Pay form will have
+  const [requoting, setRequoting] = useState(false);
+  const cartKey = `${items.map((i) => `${i.product.offerId}:${i.quantity}`).join(",")}|${goods}`;
+  const pricedKey = useRef("");
+  const pricedSel = useRef("");
+  const selKey = sel ? `${sel.option.id}|${sel.mode === "point" ? sel.point.id : sel.place.full}` : "";
+  useEffect(() => {
+    if (!sel) { pricedKey.current = ""; pricedSel.current = ""; return; }
+    // a newly picked point / address was just priced for this very cart
+    if (pricedSel.current !== selKey) { pricedSel.current = selKey; pricedKey.current = cartKey; return; }
+    if (pricedKey.current === cartKey || !items.length) return;
+    pricedKey.current = cartKey;
+    let alive = true;
+    setRequoting(true);
+    const target = sel.mode === "point"
+      ? { type: "point", carrier: sel.point.carrier, id: sel.point.id }
+      : { type: "address", city: sel.place.city || sel.place.region, region: sel.place.region, full: sel.place.full, lat: sel.place.lat, lng: sel.place.lng };
+    fetch(`${BASE}/api/shop/checkout/quote`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: items.map((i) => ({ offerId: i.product.offerId, quantity: i.quantity })), goodsRub: goods, target }),
+    }).then((r) => r.json()).then((d) => {
+      if (!alive) return;
+      const o: PickOption | undefined = (d.options || []).find((x: PickOption) => x.id === sel.option.id);
+      if (o) setSel((s) => (s ? { ...s, option: o } as DeliverySelection : s));
+      else { setSel(null); setError("Выбранная доставка для этой корзины недоступна — выберите способ ещё раз"); }
+    }).catch(() => {}).finally(() => { if (alive) setRequoting(false); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cartKey, selKey]);
+  const deliveryRub = sel ? sel.option.priceRub : ozonChosen ? dm?.deliveryRub ?? 0 : 0;
+  const toFree = dm && deliveryRub > 0 && dm.freeDeliveryFrom > 0 ? dm.freeDeliveryFrom - goods : 0;
+  const total = goods + deliveryRub;
 
   async function applyPromo() {
     const code = promoInput.trim().toUpperCase();
@@ -127,19 +246,32 @@ export default function CheckoutPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!firstName || !phone || !email) return;
+    // Enter in a field submits the form even while the button is disabled
+    if (loading || !valid) return;
     setLoading(true);
     setError(null);
     try {
-      const resolvedAddress = deliveryType === "pickup" && selectedPvz ? selectedPvz.address : address;
-      const resolvedCity = deliveryType === "pickup" && selectedPvz ? (selectedPvz.city ?? city) : city;
+      const useOzon = !sel && ozonChosen;
+      const pt = sel?.mode === "point" ? sel.point : null;
+      const pl = sel?.mode === "address" ? sel : null;
       const payload: ShopOrderPayload = {
         items: items.map(i => ({ offerId: i.product.offerId, quantity: i.quantity, priceRub: i.product.priceRub })),
-        delivery: { type: deliveryType, firstName, lastName, phone, email, city: resolvedCity, address: resolvedAddress, postalCode, pvzId: deliveryType === "pickup" ? (selectedPvz?.id ?? undefined) : undefined },
+        delivery: {
+          type: useOzon ? "ozon_pay" : pt ? "pickup" : "courier", firstName, lastName, phone, email,
+          city: pt ? pt.city : pl ? (pl.place.city || pl.place.region) : city,
+          ...(pt ? { region: pt.region, address: pt.address, pvzId: pt.id, pvzName: pt.kind === "postamat" ? "Постамат" : "Пункт выдачи" } : {}),
+          ...(pl ? {
+            region: pl.place.region, address: pl.place.title, postalCode: pl.place.postcode, lat: pl.place.lat, lng: pl.place.lng,
+            flat: pl.details.flat, entrance: pl.details.entrance, floor: pl.details.floor, intercom: pl.details.intercom, addrComment: pl.details.comment,
+            ...(pl.slot ? { dvFrom: pl.slot.from, dvTo: pl.slot.to } : {}),
+          } : {}),
+          ...(sel ? { carrier: sel.option.carrier, method: sel.option.id } : {}),
+        },
         comment: comment || undefined,
         paymentMethod,
         promoCode: promoResult?.valid ? promoResult.code : undefined,
         refCode,
+        consents: { pd: pdConsent, ads: adsConsent, version: CONSENT_VERSION },
       };
       const res = await fetch(`${BASE}/api/shop/orders`, {
         method: "POST",
@@ -151,7 +283,18 @@ export default function CheckoutPage() {
         throw new Error(json.error ?? `Ошибка ${res.status}`);
       }
       const data = await res.json();
+      if (pt && sel) rememberAddress({ type: "pickup", pvzId: pt.id, name: `${CARRIER_MARK[pt.carrier]} · ${pt.kind === "postamat" ? "постамат" : "пункт выдачи"}`, address: pt.address, city: pt.city, region: pt.region, carrier: pt.carrier, method: sel.option.id, lat: pt.lat, lng: pt.lng });
+      if (pl && sel) rememberAddress({ type: "courier", address: pl.place.title, city: pl.place.city, region: pl.place.region, postalCode: pl.place.postcode, lat: pl.place.lat, lng: pl.place.lng, carrier: sel.option.carrier, method: sel.option.id, ...pl.details, addrComment: pl.details.comment });
+      rememberContact({ firstName, lastName, phone, email });
+      submittedRef.current = true;
+      ymGoal("order", { order_price: data.totalRub ?? total, currency: "RUB" });
       clear();
+      // prices are always recounted on the server: if the sum differs from the one on the button
+      // (a price changed while the page was open), show it instead of silently charging another amount
+      if (data.paymentUrl && typeof data.totalRub === "number" && Math.abs(data.totalRub - total) >= 1) {
+        setRepriced({ url: data.paymentUrl, totalRub: data.totalRub, was: total });
+        return;
+      }
       if (data.paymentUrl) {
         window.location.href = data.paymentUrl;
       } else {
@@ -164,222 +307,236 @@ export default function CheckoutPage() {
     }
   }
 
-  if (items.length === 0) return null;
+  if (repriced) {
+    const fmt = (n: number) => `${n.toLocaleString("ru-RU")} ₽`;
+    return (
+      <div className="mv-co">
+        <div className="mv-co-wrap" style={{ maxWidth: 560 }}>
+          <h1 className="mv-co-title">Сумма изменилась</h1>
+          <section className="mv-co-card" style={{ marginTop: 24 }}>
+            <p style={{ margin: 0, lineHeight: 1.6 }}>
+              Пока вы оформляли заказ, изменилась цена товара или доставки. Заказ создан, к оплате — <b>{fmt(repriced.totalRub)}</b> вместо {fmt(repriced.was)}.
+            </p>
+            <a href={repriced.url} className="mv-co-paybtn" style={{ marginTop: 20, textDecoration: "none" }}>Оплатить {fmt(repriced.totalRub)}</a>
+            <p style={{ margin: "14px 0 0", fontSize: 13, opacity: 0.6 }}>Если сумма не подходит, просто не оплачивайте: деньги не спишутся.</p>
+          </section>
+        </div>
+      </div>
+    );
+  }
 
-  const valid = !!firstName && !!phone && !!email && (deliveryType === "courier" ? !!address : !!selectedPvz);
+  if (!hydrated || items.length === 0) return <div className="mv-co" />;
+
+  // tell the buyer why "Оплатить" is disabled instead of just fading it
+  const missing = [
+    !firstName.trim() && "имя",
+    phone.replace(/\D/g, "").length < 10 && (phone ? "телефон полностью" : "телефон"),
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) && (email ? "email без ошибок" : "email"),
+    !pdConsent && "согласие на обработку данных",
+    !sel && !ozonChosen ? "способ доставки" : ozonChosen && !sel && dm?.needCity && !city.trim() ? "город" : false,
+    (requoting || (ozonChosen && !sel && quoting)) && "расчёт доставки",
+  ].filter(Boolean) as string[];
+  const valid = missing.length === 0;
+  const rub = (n: number) => `${n.toLocaleString("ru-RU")} ₽`;
 
   return (
-    <div style={{ background: S.bg, minHeight: "100vh" }}>
-      <OzonPickupMap
-        open={pvzMapOpen}
-        onClose={() => setPvzMapOpen(false)}
-        defaultCity={city}
-        onSelect={(pvz: PvzPoint) => {
-          setSelectedPvz(pvz);
-          if (pvz.city) setCity(pvz.city);
-          setPvzMapOpen(false);
-        }}
-      />
-      <div style={{ maxWidth: 1000, margin: "0 auto", padding: "clamp(20px,3vw,48px) clamp(16px,4vw,32px)" }}>
-        <Link href="/cart" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, color: S.muted, textDecoration: "none", marginBottom: 24 }}
-          onMouseEnter={e => (e.currentTarget.style.color = S.text)}
-          onMouseLeave={e => (e.currentTarget.style.color = S.muted)}
-        >
-          <ChevronLeft size={15} /> Назад в корзину
-        </Link>
+    <div className="mv-co">
+      {pickerMounted && <DeliveryPicker
+        open={!!picker}
+        initialMode={picker || "point"}
+        onClose={() => setPicker(null)}
+        items={items.map((i) => ({ offerId: i.product.offerId, quantity: i.quantity }))}
+        goodsRub={goods}
+        start={sel?.mode === "address" && sel.place.lat ? { lat: sel.place.lat, lng: sel.place.lng } : sel?.mode === "point" ? { lat: sel.point.lat, lng: sel.point.lng } : null}
+        onSelect={(s) => { setSel(s); setOzonChosen(false); setPicker(null); }}
+      />}
+      <div className="mv-co-wrap">
+        <Link href="/cart" className="mv-co-back"><ChevronLeft size={16} /> Назад в корзину</Link>
+        <h1 className="mv-co-title">Оформление</h1>
+        <div className="mv-co-script">ещё пара шагов — и аромат ваш</div>
 
-        <h1 style={{ fontSize: "clamp(22px,3vw,30px)", fontWeight: 700, color: S.text, letterSpacing: "-0.04em", marginBottom: 32 }}>
-          Оформление заказа
-        </h1>
+        <form onSubmit={handleSubmit} className="mv-co-grid">
+          <div className="mv-co-main">
+            <Section n="01" title="Контакты">
+              <div className="mv-co-2col">
+                <Field label="Имя" required value={firstName} onChange={e => setFirstName((e.target as HTMLInputElement).value)} placeholder="Иван" autoComplete="given-name" />
+                <Field label="Фамилия" value={lastName} onChange={e => setLastName((e.target as HTMLInputElement).value)} placeholder="Иванов" autoComplete="family-name" />
+                <Field label="Телефон" required type="tel" inputMode="tel" value={phone} onChange={e => setPhone((e.target as HTMLInputElement).value)} placeholder="+7 900 000-00-00" autoComplete="tel" />
+                <Field label="Email" required type="email" inputMode="email" value={email} onChange={e => setEmail((e.target as HTMLInputElement).value)} placeholder="ivan@mail.ru" autoComplete="email" />
+              </div>
+            </Section>
 
-        <form onSubmit={handleSubmit}>
-          <style>{`@media(min-width:1024px){.checkout-grid{grid-template-columns:1fr 340px!important;}}`}</style>
-          <div className="checkout-grid" style={{ display: "grid", gridTemplateColumns: "1fr", gap: 16, alignItems: "start" }}>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-
-              {/* Contact */}
-              <Section title="Контактные данные">
-                <style>{`@media(min-width:560px){.contact-grid{grid-template-columns:1fr 1fr!important;}}`}</style>
-                <div className="contact-grid" style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
-                  <DarkField label="Имя" required value={firstName} onChange={e => setFirstName((e.target as HTMLInputElement).value)} placeholder="Иван" />
-                  <DarkField label="Фамилия" value={lastName} onChange={e => setLastName((e.target as HTMLInputElement).value)} placeholder="Иванов" />
-                  <DarkField label="Телефон" required type="tel" value={phone} onChange={e => setPhone((e.target as HTMLInputElement).value)} placeholder="+7 900 000-00-00" />
-                  <DarkField label="Email" required type="email" value={email} onChange={e => setEmail((e.target as HTMLInputElement).value)} placeholder="ivan@mail.ru" />
+            <Section n="02" title="Доставка">
+              {sel ? (
+                <div className="mv-dl-sel">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img className="mv-dl-logo" src={CARRIER_LOGO[sel.option.carrier]} alt={CARRIER_MARK[sel.option.carrier]} />
+                  <div className="mv-dl-sel-t">
+                    <b>{sel.mode === "point" ? `${sel.point.kind === "postamat" ? "Постамат" : "Пункт выдачи"} · ${sel.point.address}` : `${sel.place.title}${sel.details.flat ? `, кв. ${sel.details.flat}` : ""}`}</b>
+                    <span>
+                      {sel.mode === "point" ? [sel.point.city, sel.point.schedule].filter(Boolean).join(" · ")
+                        : [sel.place.city, sel.details.entrance && `подъезд ${sel.details.entrance}`, sel.details.floor && `этаж ${sel.details.floor}`, sel.details.intercom && `домофон ${sel.details.intercom}`].filter(Boolean).join(", ")}
+                    </span>
+                    <span className="mv-dl-when">{sel.mode === "address" && sel.slot ? slotText(sel.slot) : daysText(sel.option)}</span>
+                  </div>
+                  <div className="mv-dl-sel-p">{sel.option.priceRub > 0 ? rub(sel.option.priceRub) : "Бесплатно"}</div>
+                  <button type="button" className="mv-co-link mv-dl-change" onClick={() => setPicker(sel.mode === "point" ? "point" : "address")}>Изменить</button>
                 </div>
-              </Section>
-
-              {/* Delivery */}
-              <Section title="Доставка">
-                <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
-                  {([["pickup", "ПВЗ Ozon"], ["courier", "Курьер"]] as const).map(([val, label]) => (
-                    <button key={val} type="button" onClick={() => setDeliveryType(val)} style={{
-                      flex: 1, padding: "12px", border: `1px solid ${deliveryType === val ? "rgba(201,169,110,0.5)" : S.border}`,
-                      borderRadius: 12, background: deliveryType === val ? "rgba(201,169,110,0.08)" : "transparent",
-                      color: deliveryType === val ? S.accent : S.muted, cursor: "pointer", fontSize: 13,
-                      display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
-                    }}>
-                      <MapPin size={14} />{label}
+              ) : ozonChosen ? (
+                <div className="mv-dl-sel">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img className="mv-dl-logo" src={CARRIER_LOGO.ozon} alt="Ozon" />
+                  <div className="mv-dl-sel-t">
+                    <b>Ozon — пункт выдачи или курьер</b>
+                    <span>Адрес выберете на странице оплаты Ozon Pay · 1–5 дн.</span>
+                    {dm?.needCity && <input className="mv-co-input" style={{ marginTop: 8 }} value={city} onChange={(e) => setCity(e.target.value)} placeholder="Ваш город — для расчёта цены" aria-label="Город" />}
+                  </div>
+                  <div className="mv-dl-sel-p">{quoting ? "…" : dm && dm.deliveryRub > 0 ? rub(dm.deliveryRub) : "Бесплатно"}</div>
+                  <button type="button" className="mv-co-link mv-dl-change" onClick={() => setOzonChosen(false)}>Изменить</button>
+                </div>
+              ) : (
+                <div className="mv-dl-choose">
+                  <button type="button" className="mv-dl-big" onClick={() => setPicker("point")}>
+                    <span className="mv-dl-big-ic"><MapPin size={22} /></span>
+                    <span className="mv-dl-big-t"><b>Пункт выдачи или постамат</b><span>Выберите на карте рядом с домом</span></span>
+                    <span className="mv-dl-big-logos">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={CARRIER_LOGO.cdek} alt="СДЭК" />{/* eslint-disable-next-line @next/next/no-img-element */}<img src={CARRIER_LOGO.yandex} alt="Яндекс Доставка" />
+                    </span>
+                    <ChevronRight size={20} className="mv-dl-big-go" />
+                  </button>
+                  <button type="button" className="mv-dl-big" onClick={() => setPicker("address")}>
+                    <span className="mv-dl-big-ic"><Truck size={22} /></span>
+                    <span className="mv-dl-big-t"><b>Курьером до двери</b><span>Отметьте дом на карте, по Москве — сегодня</span></span>
+                    <span className="mv-dl-big-logos">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={CARRIER_LOGO.dostavista} alt="Достависта" />{/* eslint-disable-next-line @next/next/no-img-element */}<img src={CARRIER_LOGO.cdek} alt="СДЭК" />{/* eslint-disable-next-line @next/next/no-img-element */}<img src={CARRIER_LOGO.yandex} alt="Яндекс Доставка" />
+                    </span>
+                    <ChevronRight size={20} className="mv-dl-big-go" />
+                  </button>
+                  {dm?.ozonDelivery && (
+                    <button type="button" className="mv-dl-big" onClick={() => { setOzonChosen(true); setSel(null); }}>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <span className="mv-dl-big-ic"><img src={CARRIER_LOGO.ozon} alt="" style={{ width: 30 }} /></span>
+                      <span className="mv-dl-big-t"><b>Доставка Ozon</b><span>Пункт выдачи или курьер — выберете на странице оплаты</span></span>
+                      <ChevronRight size={20} className="mv-dl-big-go" />
                     </button>
-                  ))}
-                </div>
-                <div style={{ display: "grid", gap: 12 }}>
-                  <DarkField label="Город" required value={city} onChange={e => setCity((e.target as HTMLInputElement).value)} placeholder="Москва" />
-                  {deliveryType === "pickup" ? (
-                    <div>
-                      <label style={{ display: "block", fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: S.subtle, marginBottom: 6 }}>
-                        Пункт выдачи
-                      </label>
-                      {selectedPvz ? (
-                        <div style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "12px 16px", background: "rgba(201,169,110,0.06)", border: "1.5px solid rgba(201,169,110,0.3)", borderRadius: 12 }}>
-                          <MapPin size={15} style={{ color: S.accent, flexShrink: 0, marginTop: 2 }} />
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: 13, fontWeight: 600, color: S.text }}>{selectedPvz.name}</div>
-                            <div style={{ fontSize: 12, color: S.muted, marginTop: 2 }}>{selectedPvz.address}</div>
-                          </div>
-                          <button type="button" onClick={() => setPvzMapOpen(true)} style={{ fontSize: 11, color: S.accent, background: "none", border: "none", cursor: "pointer", flexShrink: 0, fontWeight: 600 }}>
-                            Изменить
-                          </button>
-                        </div>
-                      ) : (
-                        <button type="button" onClick={() => setPvzMapOpen(true)} style={{
-                          width: "100%", padding: "12px 16px", display: "flex", alignItems: "center", gap: 10,
-                          background: "rgba(255,255,255,0.04)", border: `1.5px dashed ${S.border}`,
-                          borderRadius: 12, cursor: "pointer", color: S.muted, fontSize: 13, fontFamily: "inherit",
-                          transition: "border-color 0.15s, color 0.15s",
-                        }}
-                          onMouseEnter={e => { const el = e.currentTarget; el.style.borderColor = "rgba(201,169,110,0.4)"; el.style.color = S.accent; }}
-                          onMouseLeave={e => { const el = e.currentTarget; el.style.borderColor = S.border; el.style.color = S.muted; }}
-                        >
-                          <MapPin size={15} style={{ flexShrink: 0 }} />
-                          Выбрать пункт выдачи на карте
-                          <ChevronRight size={14} style={{ marginLeft: "auto" }} />
-                        </button>
-                      )}
-                    </div>
-                  ) : (
-                    <DarkField label="Улица, дом, квартира" required value={address} onChange={e => setAddress((e.target as HTMLInputElement).value)} placeholder="ул. Ленина, д. 1, кв. 5" />
                   )}
-                  {deliveryType === "courier" && <DarkField label="Индекс" value={postalCode} onChange={e => setPostalCode((e.target as HTMLInputElement).value)} placeholder="123456" />}
                 </div>
-              </Section>
+              )}
 
-              {/* Payment */}
-              <Section title="Способ оплаты">
-                <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", background: "rgba(0,91,255,0.06)", border: "1px solid rgba(0,91,255,0.2)", borderRadius: 12 }}>
-                  <svg width="32" height="32" viewBox="0 0 32 32" fill="none"><rect width="32" height="32" rx="8" fill="#005BFF"/><text x="16" y="21" textAnchor="middle" fontFamily="Arial,sans-serif" fontWeight="900" fontSize="13" fill="#fff">Ozon</text></svg>
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: S.text }}>Ozon Pay</div>
-                    <div style={{ fontSize: 11, color: S.muted, marginTop: 2 }}>Оплата картой или балансом Ozon</div>
-                  </div>
-                </div>
-              </Section>
-
-              {/* Comment */}
-              <Section title="Комментарий">
-                <DarkField label="Пожелания к заказу" textarea value={comment} onChange={e => setComment((e.target as HTMLTextAreaElement).value)} placeholder="Необязательно..." />
-              </Section>
-            </div>
-
-            {/* Order summary */}
-            <div style={{ background: S.surface, borderRadius: 20, padding: 22, border: `1px solid ${S.border}`, position: "sticky", top: 80 }}>
-              <h3 style={{ fontSize: 14, fontWeight: 700, color: S.text, marginBottom: 18 }}>Ваш заказ</h3>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16, maxHeight: 200, overflowY: "auto" }}>
-                {items.map(({ product, quantity }) => (
-                  <div key={product.offerId} style={{ display: "flex", gap: 8, fontSize: 12 }}>
-                    <span style={{ flex: 1, color: S.muted, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden", lineHeight: 1.4 }}>{product.name}</span>
-                    <span style={{ color: S.subtle, flexShrink: 0 }}>×{quantity}</span>
-                    <span style={{ fontWeight: 600, color: S.text, flexShrink: 0 }}>{(product.priceRub * quantity).toLocaleString("ru-RU")} ₽</span>
-                  </div>
-                ))}
-              </div>
-
-              {/* Promo code */}
-              {!refCode && (
-                <div style={{ marginBottom: 16 }}>
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <div style={{ position: "relative", flex: 1 }}>
-                      <Tag size={13} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: S.subtle, pointerEvents: "none" }} />
-                      <input
-                        ref={promoRef}
-                        type="text"
-                        value={promoInput}
-                        onChange={e => { setPromoInput(e.target.value.toUpperCase()); setPromoResult(null); }}
-                        onKeyDown={e => e.key === "Enter" && (e.preventDefault(), applyPromo())}
-                        placeholder="Промокод"
-                        maxLength={32}
-                        disabled={promoResult?.valid}
-                        style={{
-                          width: "100%", paddingLeft: 34, paddingRight: 12, paddingTop: 10, paddingBottom: 10,
-                          fontSize: 12, fontFamily: "monospace", letterSpacing: "0.08em", boxSizing: "border-box",
-                          background: promoResult?.valid ? "rgba(74,222,128,0.06)" : "rgba(255,255,255,0.04)",
-                          border: `1.5px solid ${promoResult === null ? S.border : promoResult.valid ? "rgba(74,222,128,0.4)" : "rgba(239,68,68,0.4)"}`,
-                          borderRadius: 10, color: S.text, outline: "none",
-                        }}
-                      />
-                    </div>
-                    {promoResult?.valid
-                      ? <button type="button" onClick={() => { setPromoResult(null); setPromoInput(""); }} style={{ background: "rgba(255,255,255,0.06)", border: `1px solid ${S.border}`, borderRadius: 8, padding: "9px 12px", color: S.muted, cursor: "pointer" }}><X size={13} /></button>
-                      : <button type="button" onClick={applyPromo} disabled={!promoInput.trim() || promoValidating} style={{ background: S.accent, color: "#0E0D0B", border: "none", borderRadius: 8, padding: "9px 14px", fontSize: 12, fontWeight: 600, cursor: "pointer", opacity: (!promoInput.trim() || promoValidating) ? 0.5 : 1, flexShrink: 0 }}>
-                          {promoValidating ? <Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> : "Применить"}
+              {saved.filter((a) => a.carrier).length > 0 && (
+                <div className="mv-co-saved" style={{ marginTop: 14 }}>
+                  <div className="mv-co-label">Недавние адреса</div>
+                  <div className="mv-co-saved-list">
+                    {(showAllSaved ? saved : saved.slice(0, 3)).filter((a) => a.carrier).map((a) => (
+                      <div key={a.id} className={`mv-co-saved-item${a.id === activeSavedId ? " on" : ""}`}>
+                        <button type="button" onClick={() => applySaved(a)} disabled={savedBusy === a.id}>
+                          <span className="mv-co-saved-ic">{savedBusy === a.id ? <Loader2 size={15} className="mv-spin" /> : a.type === "pickup" ? <MapPin size={15} /> : <Truck size={15} />}</span>
+                          <span className="mv-co-saved-txt">
+                            <b>{a.type === "pickup" ? (a.name || "Пункт выдачи") : `${CARRIER_MARK[a.carrier || ""] || ""} · курьер`}</b>
+                            <span>{prettyAddress(a)}{a.flat ? `, кв. ${a.flat}` : ""}</span>
+                          </span>
+                          {a.id === activeSavedId && <Check size={16} className="mv-co-saved-check" />}
                         </button>
-                    }
+                        <button type="button" className="mv-co-saved-x" aria-label="Удалить адрес" onClick={() => { forgetAddress(a); setSaved((l) => l.filter((x) => x.id !== a.id)); }}><X size={14} /></button>
+                      </div>
+                    ))}
                   </div>
-                  {promoResult?.valid && <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 6, fontSize: 12, color: "#4ade80" }}><Check size={12} /> {promoResult.code} — скидка {promoResult.discountPct}%</div>}
-                  {promoResult !== null && !promoResult.valid && <div style={{ marginTop: 6, fontSize: 12, color: "#f87171" }}>Промокод не найден</div>}
+                  {saved.filter((a) => a.carrier).length > 3 && (
+                    <button type="button" className="mv-co-link" onClick={() => setShowAllSaved((v) => !v)}>
+                      {showAllSaved ? "Свернуть" : `Все адреса (${saved.filter((a) => a.carrier).length})`}
+                    </button>
+                  )}
                 </div>
               )}
+            </Section>
 
-              <div style={{ borderTop: `1px solid ${S.border}`, paddingTop: 14, display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: S.muted }}>
-                  <span>Товары</span>
-                  <span style={{ color: S.text, fontWeight: 500 }}>{totalRub.toLocaleString("ru-RU")} ₽</span>
+            <Section n="03" title="Оплата">
+              <div className="mv-co-pay">
+                <OzonPayLogo height={28} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="mv-co-pvz-t">Ozon Pay</div>
+                  <div className="mv-co-pvz-s">Карта любого банка, СБП, Ozon Карта или Рассрочка</div>
                 </div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: S.muted }}>
-                  <span>Доставка</span>
-                  <span style={{ color: "#4ade80", fontWeight: 600 }}>Бесплатно</span>
-                </div>
-                {refDiscount > 0 && (
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-                    <span style={{ color: S.accent }}>Реферальная скидка −7%</span>
-                    <span style={{ color: "#4ade80", fontWeight: 600 }}>−{refDiscount.toLocaleString("ru-RU")} ₽</span>
-                  </div>
-                )}
-                {promoDiscount > 0 && (
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-                    <span style={{ color: S.accent }}>Промокод −{promoResult?.discountPct}%</span>
-                    <span style={{ color: "#4ade80", fontWeight: 600 }}>−{promoDiscount.toLocaleString("ru-RU")} ₽</span>
-                  </div>
-                )}
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 18, fontWeight: 700, color: S.text, paddingTop: 8, borderTop: `1px solid ${S.border}`, marginTop: 4 }}>
-                  <span>К оплате</span>
-                  <span>{total.toLocaleString("ru-RU")} ₽</span>
-                </div>
+                <span className="mv-co-radio" aria-hidden><Check size={13} /></span>
               </div>
+            </Section>
 
-              {error && (
-                <div style={{ background: "rgba(239,68,68,0.1)", color: "#f87171", fontSize: 12, padding: "10px 14px", borderRadius: 12, marginBottom: 14, border: "1px solid rgba(239,68,68,0.2)", display: "flex", gap: 8, alignItems: "flex-start" }}>
-                  <AlertCircle size={14} style={{ flexShrink: 0, marginTop: 1 }} />{error}
-                </div>
-              )}
-
-              <button type="submit" disabled={!valid || loading} style={{
-                width: "100%", fontSize: 15, padding: "14px 0", display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
-                background: valid && !loading ? "#f2efe6" : "rgba(242,239,230,0.25)",
-                color: "#14120f", border: "none", borderRadius: 12, fontWeight: 600, letterSpacing: "0.06em",
-                cursor: valid && !loading ? "pointer" : "not-allowed", fontFamily: "inherit",
-              }}>
-                {loading
-                  ? <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Оформляем...</>
-                  : <><Lock size={14} /> Оплатить · {total.toLocaleString("ru-RU")} ₽</>
-                }
-              </button>
-              <div style={{ marginTop: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 11, color: S.subtle }}>
-                <Shield size={11} />
-                <span>Безопасное оформление заказа</span>
-              </div>
-            </div>
+            <Section n="04" title="Комментарий">
+              <Field label="Пожелания к заказу" textarea value={comment} onChange={e => setComment((e.target as HTMLTextAreaElement).value)} placeholder="Необязательно" />
+            </Section>
           </div>
+
+          <aside className="mv-co-card mv-co-sum">
+            <h2 className="mv-co-h">Ваш заказ <span className="mv-co-count">{items.reduce((n, i) => n + i.quantity, 0)}</span></h2>
+            <ul className="mv-co-items">
+              {items.map(({ product, quantity }) => (
+                <li key={product.offerId}>
+                  <span className="mv-co-thumb">
+                    {product.images?.[0]
+                      // eslint-disable-next-line @next/next/no-img-element
+                      ? <img src={productImg(product.images[0], 160)} alt="" loading="lazy" />
+                      : <b>{(product.brand || product.name || "?")[0]}</b>}
+                    {quantity > 1 && <em>{quantity}</em>}
+                  </span>
+                  <span className="mv-co-iname">{product.name}</span>
+                  <span className="mv-co-iprice">{rub(product.priceRub * quantity)}</span>
+                </li>
+              ))}
+            </ul>
+
+            {!refCode && (
+              <div className="mv-co-promo">
+                <div className={`mv-co-promo-row${promoResult === null ? "" : promoResult.valid ? " ok" : " bad"}`}>
+                  <Tag size={15} />
+                  <input
+                    ref={promoRef}
+                    type="text"
+                    value={promoInput}
+                    onChange={e => { setPromoInput(e.target.value.toUpperCase()); setPromoResult(null); }}
+                    onKeyDown={e => e.key === "Enter" && (e.preventDefault(), applyPromo())}
+                    placeholder="Промокод"
+                    maxLength={32}
+                    disabled={promoResult?.valid}
+                    aria-label="Промокод"
+                  />
+                  {promoResult?.valid
+                    ? <button type="button" className="mv-co-promo-x" aria-label="Убрать промокод" onClick={() => { setPromoResult(null); setPromoInput(""); }}><X size={14} /></button>
+                    : <button type="button" className="mv-co-promo-btn" onClick={applyPromo} disabled={!promoInput.trim() || promoValidating}>
+                        {promoValidating ? <Loader2 size={14} className="mv-spin" /> : "Применить"}
+                      </button>}
+                </div>
+                {promoResult?.valid && <div className="mv-co-msg ok"><Check size={13} /> {promoResult.code} — скидка {promoResult.discountPct}%</div>}
+                {promoResult !== null && !promoResult.valid && <div className="mv-co-msg bad">Промокод не найден</div>}
+              </div>
+            )}
+
+            <div className="mv-co-rows">
+              <div><span>Товары</span><span>{rub(totalRub)}</span></div>
+              <div><span>Доставка{sel ? ` ${CARRIER_MARK[sel.option.carrier]}` : ozonChosen ? " Ozon" : ""}</span>{!sel && !ozonChosen ? <span>выберите способ</span> : ozonChosen && (!dm || quoting) ? <span>…</span> : deliveryRub > 0 ? <span>{rub(deliveryRub)}</span> : <span className="mv-co-free">Бесплатно</span>}</div>
+              {refDiscount > 0 && <div><span>Реферальная скидка −7%</span><span className="mv-co-free">−{rub(refDiscount)}</span></div>}
+              {promoDiscount > 0 && <div><span>Промокод −{promoResult?.discountPct}%</span><span className="mv-co-free">−{rub(promoDiscount)}</span></div>}
+            </div>
+            <div className="mv-co-total"><span>К оплате</span><strong>{rub(total)}</strong></div>
+            {toFree > 0 && <div className="mv-co-msg ok"><Truck size={13} /> Добавьте товаров ещё на {rub(toFree)} — доставка станет бесплатной</div>}
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 10, margin: "14px 0 4px" }}>
+              <ConsentCheck kind="pd" checked={pdConsent} onChange={setPdConsent} />
+              <ConsentCheck kind="ads" checked={adsConsent} onChange={setAdsConsent} />
+            </div>
+
+            {error && <div className="mv-co-error" role="alert"><AlertCircle size={15} />{error}</div>}
+            {!valid && <div className="mv-co-need">Осталось указать: {missing.join(", ")}</div>}
+
+            <button type="submit" disabled={!valid || loading} className="mv-co-paybtn">
+              {loading
+                ? <><Loader2 size={18} className="mv-spin" /> Оформляем…</>
+                : <>Оплатить {rub(total)}<span className="mv-co-paylogo"><OzonPayLogo height={16} variant="white" /></span></>}
+            </button>
+            <div className="mv-co-secure"><Lock size={12} /> Оплата на защищённой странице Ozon Pay — данные карты не передаются магазину</div>
+            <div className="mv-co-secure"><span>Нажимая «Оплатить», вы принимаете <Link href="/terms" style={{ color: "var(--accent)" }}>условия покупки (оферту)</Link></span></div>
+          </aside>
         </form>
       </div>
     </div>

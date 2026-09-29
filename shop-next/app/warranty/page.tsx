@@ -4,23 +4,23 @@ import { ShieldCheck, Award, FileText, Phone } from "lucide-react";
 import { SITE_NAME, SITE_URL, breadcrumbJsonLd } from "@/lib/seo";
 
 export const metadata: Metadata = {
-  title: `Гарантия оригинала и права потребителей | ${SITE_NAME}`,
-  description: "Magic Vibes гарантирует подлинность каждого товара. Возврат 14 дней, права потребителей по ЗоЗПП, реквизиты продавца.",
+  title: `Гарантия оригинала и права потребителей`,
+  description: "Magic Vibes гарантирует подлинность каждого товара. Возврат 7 дней, права потребителей по ЗоЗПП, реквизиты продавца.",
   alternates: { canonical: "/warranty" },
   openGraph: { title: "Гарантия и возврат — Magic Vibes", url: `${SITE_URL}/warranty` },
 };
 
 const S = {
-  bg:      "#0E0D0B",
-  surface: "#161512",
-  surface2:"#1D1C18",
-  border:  "rgba(255,252,245,0.07)",
-  borderMd:"rgba(255,252,245,0.13)",
-  text:    "#F4EFE6",
-  muted:   "rgba(244,239,230,0.48)",
-  subtle:  "rgba(244,239,230,0.22)",
-  accent:  "#C9A96E",
-  accent2: "#D9BF8F",
+  bg:      "var(--surface)",
+  surface: "var(--surface)",
+  surface2:"var(--surface)",
+  border:  "rgba(var(--ink-rgb),0.056)",
+  borderMd:"rgba(var(--ink-rgb),0.104)",
+  text:    "var(--ink)",
+  muted:   "rgba(var(--ink-rgb),0.55)",
+  subtle:  "rgba(var(--ink-rgb),0.45)",
+  accent:  "var(--accent)",
+  accent2: "var(--accent2)",
 };
 
 const guarantees = [
@@ -38,7 +38,7 @@ const rights = [
 ];
 
 const steps = [
-  { step: "1", text: "Напишите на info@magicvibes.ru с темой «Претензия» и укажите номер заказа" },
+  { step: "1", text: "Напишите на noreply@magicvibes.ru с темой «Претензия» и укажите номер заказа" },
   { step: "2", text: "Приложите фотографии товара и упаковки (при необходимости)" },
   { step: "3", text: "Мы рассмотрим обращение в течение 1 рабочего дня и предложим решение" },
   { step: "4", text: "Возврат средств производится в течение 10 рабочих дней после подтверждения" },
@@ -48,7 +48,7 @@ function Section({ icon, title, children }: { icon: React.ReactNode; title: stri
   return (
     <div style={{ background: S.surface, borderRadius: 20, padding: "28px 28px 24px", border: `1px solid ${S.border}`, marginBottom: 16 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
-        <div style={{ width: 40, height: 40, borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(201,169,110,0.1)", border: "1px solid rgba(201,169,110,0.2)", flexShrink: 0 }}>
+        <div style={{ width: 40, height: 40, borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(var(--accent-rgb),0.1)", border: "1px solid rgba(var(--accent-rgb),0.2)", flexShrink: 0 }}>
           {icon}
         </div>
         <h2 style={{ fontSize: 17, fontWeight: 600, color: S.text, margin: 0 }}>{title}</h2>
@@ -74,11 +74,11 @@ export default function WarrantyPage() {
 
           {/* Header */}
           <div style={{ textAlign: "center", marginBottom: 56 }}>
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 10, marginBottom: 20, padding: "6px 16px", borderRadius: 999, border: `1px solid ${S.borderMd}`, background: "rgba(201,169,110,0.06)" }}>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 10, marginBottom: 20, padding: "6px 16px", borderRadius: 999, border: `1px solid ${S.borderMd}`, background: "rgba(var(--accent-rgb),0.06)" }}>
               <ShieldCheck size={13} style={{ color: S.accent }} />
               <span style={{ fontSize: 12, letterSpacing: "0.12em", textTransform: "uppercase", color: S.accent }}>Гарантии</span>
             </div>
-            <h1 style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", fontWeight: 600, fontSize: "clamp(26px,5vw,40px)", color: S.text, margin: "0 0 16px" }}>
+            <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 600, fontSize: "clamp(26px,5vw,40px)", color: S.text, margin: "0 0 16px" }}>
               Гарантия оригинала
             </h1>
             <div style={{ width: 48, height: 1, background: S.accent, margin: "0 auto 16px" }} />
@@ -132,17 +132,17 @@ export default function WarrantyPage() {
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {steps.map(s => (
                 <div key={s.step} style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
-                  <div style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(201,169,110,0.12)", border: "1px solid rgba(201,169,110,0.25)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 12, fontWeight: 700, color: S.accent }}>
+                  <div style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(var(--accent-rgb),0.12)", border: "1px solid rgba(var(--accent-rgb),0.25)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: 12, fontWeight: 700, color: S.accent }}>
                     {s.step}
                   </div>
                   <div style={{ fontSize: 14, paddingTop: 5 }}>{s.text}</div>
                 </div>
               ))}
             </div>
-            <div style={{ marginTop: 20, padding: "14px 16px", borderRadius: 12, background: "rgba(201,169,110,0.06)", border: "1px solid rgba(201,169,110,0.15)" }}>
+            <div style={{ marginTop: 20, padding: "14px 16px", borderRadius: 12, background: "rgba(var(--accent-rgb),0.06)", border: "1px solid rgba(var(--accent-rgb),0.15)" }}>
               <span style={{ fontSize: 13 }}>
                 Email:{" "}
-                <a href="mailto:info@magicvibes.ru" style={{ color: S.accent, textDecoration: "none", fontWeight: 500 }}>info@magicvibes.ru</a>
+                <a href="mailto:noreply@magicvibes.ru" style={{ color: S.accent, textDecoration: "none", fontWeight: 500 }}>noreply@magicvibes.ru</a>
                 {" "}· Telegram:{" "}
                 <a href="https://t.me/magicvibes_ru" target="_blank" rel="noopener noreferrer" style={{ color: S.accent, textDecoration: "none", fontWeight: 500 }}>@magicvibes_ru</a>
               </span>
@@ -156,7 +156,7 @@ export default function WarrantyPage() {
               <div><span style={{ color: S.subtle }}>Продавец: </span><span style={{ color: S.text }}>ИП Шальнев Давид Алиевич</span></div>
               <div><span style={{ color: S.subtle }}>ОГРНИП: </span><span style={{ color: S.text, fontFamily: "monospace" }}>323861700065205</span></div>
               <div><span style={{ color: S.subtle }}>ИНН: </span><span style={{ color: S.text, fontFamily: "monospace" }}>860203590860</span></div>
-              <div><span style={{ color: S.subtle }}>Email: </span><a href="mailto:info@magicvibes.ru" style={{ color: S.accent, textDecoration: "none" }}>info@magicvibes.ru</a></div>
+              <div><span style={{ color: S.subtle }}>Email: </span><a href="mailto:noreply@magicvibes.ru" style={{ color: S.accent, textDecoration: "none" }}>noreply@magicvibes.ru</a></div>
             </div>
             <div style={{ marginTop: 16, fontSize: 12, color: S.subtle, lineHeight: 1.7, borderTop: `1px solid ${S.border}`, paddingTop: 14 }}>
               Информация актуальна в соответствии с Законом РФ «О защите прав потребителей» № 2300-1

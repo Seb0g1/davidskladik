@@ -6,13 +6,13 @@ import { useQuery } from "@tanstack/react-query";
 import type { BlogPost } from "@/lib/types";
 
 const S = {
-  bg:      "#09090b",
-  surface: "#111113",
-  border:  "rgba(255,255,255,0.07)",
-  gold:    "#c9a25e",
-  goldDim: "rgba(201,162,94,0.18)",
-  text:    "#f2ede6",
-  muted:   "#7d7a73",
+  bg:      "var(--paper)",
+  surface: "var(--surface)",
+  border:  "rgba(var(--ink-rgb),0.056)",
+  gold:    "var(--accent)",
+  goldDim: "rgba(var(--accent-rgb),0.18)",
+  text:    "var(--ink)",
+  muted:   "rgba(var(--ink-rgb),0.6)",
 };
 
 const BASE = process.env.NEXT_PUBLIC_API_BASE ?? "https://davidsklad.ru";
@@ -32,8 +32,8 @@ function PostCard({ post }: { post: BlogPost }) {
     : "";
   return (
     <Link href={`/blog/${post.slug}`} style={{ textDecoration: "none", display: "block" }}>
-      <article style={{ border: `1px solid ${S.border}`, borderRadius: 4, overflow: "hidden", background: S.surface, transition: "border-color 0.3s, transform 0.4s cubic-bezier(.16,1,.3,1)", cursor: "pointer" }}
-        onMouseEnter={e => { const el = e.currentTarget as HTMLElement; el.style.borderColor = "rgba(201,162,94,0.35)"; el.style.transform = "translateY(-3px)"; }}
+      <article style={{ border: `1px solid ${S.border}`, borderRadius: 14, overflow: "hidden", background: S.surface, transition: "border-color 0.3s, transform 0.4s cubic-bezier(.16,1,.3,1)", cursor: "pointer" }}
+        onMouseEnter={e => { const el = e.currentTarget as HTMLElement; el.style.borderColor = "rgba(var(--accent-rgb),0.35)"; el.style.transform = "translateY(-3px)"; }}
         onMouseLeave={e => { const el = e.currentTarget as HTMLElement; el.style.borderColor = S.border; el.style.transform = "none"; }}
       >
         {post.coverUrl && (
@@ -49,17 +49,17 @@ function PostCard({ post }: { post: BlogPost }) {
           {post.tags?.length > 0 && (
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
               {post.tags.slice(0, 3).map(tag => (
-                <span key={tag} style={{ fontSize: 9, letterSpacing: "0.16em", textTransform: "uppercase", padding: "3px 8px", borderRadius: 2, border: `1px solid ${S.goldDim}`, color: S.gold, background: "rgba(201,162,94,0.06)" }}>{tag}</span>
+                <span key={tag} style={{ fontSize: 9, letterSpacing: "0.16em", textTransform: "uppercase", padding: "3px 8px", borderRadius: 10, border: `1px solid ${S.goldDim}`, color: S.gold, background: "rgba(var(--accent-rgb),0.06)" }}>{tag}</span>
               ))}
             </div>
           )}
-          <h2 style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", fontWeight: 400, fontSize: 20, color: S.text, lineHeight: 1.3, marginBottom: 10 }}>{post.title}</h2>
+          <h2 style={{ fontFamily: "var(--font-display)", fontWeight: 400, fontSize: 20, color: S.text, lineHeight: 1.3, marginBottom: 10 }}>{post.title}</h2>
           {post.excerpt && (
             <p style={{ fontSize: 13, color: S.muted, lineHeight: 1.7, marginBottom: 14, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{post.excerpt}</p>
           )}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             {date && <span style={{ fontSize: 11, color: S.muted }}>{date}</span>}
-            <span style={{ fontSize: 12, color: S.gold, fontStyle: "italic" }}>Читать →</span>
+            <span style={{ fontSize: 12, color: S.gold }}>Читать →</span>
           </div>
         </div>
       </article>
@@ -69,7 +69,7 @@ function PostCard({ post }: { post: BlogPost }) {
 
 function SkeletonCard() {
   return (
-    <div style={{ height: 360, background: S.surface, borderRadius: 4, border: `1px solid ${S.border}`, animation: "pulse 1.5s ease-in-out infinite" }} />
+    <div style={{ height: 360, background: S.surface, borderRadius: 14, border: `1px solid ${S.border}`, animation: "pulse 1.5s ease-in-out infinite" }} />
   );
 }
 
@@ -104,9 +104,9 @@ export default function BlogClient({ initialPosts, initialTotal, initialTags }: 
           {["", ...allTags].map(t => (
             <button key={t || "__all"} onClick={() => { setTag(t); setPage(1); }} style={{
               fontSize: 10, letterSpacing: "0.16em", textTransform: "uppercase",
-              padding: "5px 14px", borderRadius: 2, cursor: "pointer",
+              padding: "5px 14px", borderRadius: 10, cursor: "pointer",
               border: `1px solid ${tag === t ? S.gold : S.border}`,
-              background: tag === t ? "rgba(201,162,94,0.1)" : "transparent",
+              background: tag === t ? "rgba(var(--accent-rgb),0.1)" : "transparent",
               color: tag === t ? S.gold : S.muted, fontFamily: "inherit",
             }}>
               {t || "Все"}
@@ -122,7 +122,7 @@ export default function BlogClient({ initialPosts, initialTotal, initialTags }: 
         </div>
       ) : posts.length === 0 ? (
         <div style={{ textAlign: "center", padding: "80px 0" }}>
-          <p style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", fontSize: 22, color: S.muted }}>
+          <p style={{ fontFamily: "var(--font-display)", fontSize: 22, color: S.muted }}>
             {tag ? `Нет статей с тегом «${tag}»` : "Статьи скоро появятся"}
           </p>
         </div>
@@ -137,11 +137,11 @@ export default function BlogClient({ initialPosts, initialTotal, initialTags }: 
         <div style={{ display: "flex", justifyContent: "center", gap: 8, marginTop: 48 }}>
           {Array.from({ length: totalPages }, (_, i) => i + 1).map(p => (
             <button key={p} onClick={() => setPage(p)} style={{
-              width: 36, height: 36, borderRadius: 2, cursor: "pointer",
+              width: 36, height: 36, borderRadius: 10, cursor: "pointer",
               border: `1px solid ${p === page ? S.gold : S.border}`,
-              background: p === page ? "rgba(201,162,94,0.12)" : "transparent",
+              background: p === page ? "rgba(var(--accent-rgb),0.12)" : "transparent",
               color: p === page ? S.gold : S.muted,
-              fontSize: 13, fontFamily: "'Cormorant Garamond',Georgia,serif",
+              fontSize: 13, fontFamily: "var(--font-display)",
             }}>{p}</button>
           ))}
         </div>

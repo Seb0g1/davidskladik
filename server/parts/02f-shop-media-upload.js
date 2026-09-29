@@ -30,6 +30,17 @@ function _shopUploadRateLimit(request) {
   _shopUploadRateMap.set(ip, entry);
 }
 
+// file type by magic bytes → safe extension, or null
+function _shopUploadSniffExt(buf) {
+  if (!buf || buf.length < 12) return null;
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "jpg";
+  if (buf.slice(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "png";
+  if (buf.toString("latin1", 0, 4) === "RIFF" && buf.toString("latin1", 8, 12) === "WEBP") return "webp";
+  if (buf.toString("latin1", 4, 8) === "ftyp") return buf.toString("latin1", 8, 10) === "qt" ? "mov" : "mp4";
+  if (buf[0] === 0x1a && buf[1] === 0x45 && buf[2] === 0xdf && buf[3] === 0xa3) return "webm";
+  return null;
+}
+
 const _shopUploadDir = path.join(__dirname, "../../public/uploads/shop");
 const _shopFsPromises = require("fs").promises;
 
@@ -45,8 +56,14 @@ app.post("/api/shop/upload-media", shopCors, _shopUploadMulier.single("file"), a
       return response.status(413).json({ error: "Изображение не должно превышать 8 МБ." });
     }
 
-    const ext = originalname.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase() || (isVideo ? "mp4" : "jpg");
-    const safeName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+    // The extension comes from the real file bytes, never from the client's name or mimetype:
+    // "x.html" sent as image/png would otherwise be served as a page from davidsklad.ru (stored XSS
+    // on the admin panel's origin).
+    const ext = _shopUploadSniffExt(buffer);
+    if (!ext || isVideo !== ["mp4", "mov", "webm"].includes(ext)) {
+      return response.status(400).json({ error: "Разрешены форматы: JPG, PNG, WEBP, MP4, WEBM" });
+    }
+    const safeName = `${Date.now()}-${require("crypto").randomBytes(8).toString("hex")}.${ext}`;
 
     await _shopFsPromises.mkdir(_shopUploadDir, { recursive: true });
     await _shopFsPromises.writeFile(path.join(_shopUploadDir, safeName), buffer);

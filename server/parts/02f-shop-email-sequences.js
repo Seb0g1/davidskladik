@@ -9,265 +9,112 @@
 // Globals available: getPrisma, logger, readAppSettings, cleanText
 
 // ─── SMTP (self-contained, mirrors shopSendEmail in 02d-shop-api-routes.js) ──
-function seqSendMail({ to, subject, html }) {
-  return new Promise((resolve, reject) => {
-    const tls = require("tls");
-    const host = process.env.SHOP_SMTP_HOST;
-    const port = Number(process.env.SHOP_SMTP_PORT || 465);
-    const user = process.env.SHOP_SMTP_USER;
-    const pass = process.env.SHOP_SMTP_PASS;
-    if (!host || !user || !pass) return reject(new Error("SMTP not configured"));
-
-    const b64 = (s) => Buffer.from(s).toString("base64");
-    const lines = [];
-    let buf = "";
-    let done = false;
-
-    const sock = tls.connect({ host, port, rejectUnauthorized: true }, () => {});
-    sock.setTimeout(20000);
-    sock.on("timeout", () => sock.destroy(new Error("SMTP timeout")));
-
-    function send(line) { sock.write(line + "\r\n"); }
-
-    function onLine(line) {
-      const code = parseInt(line.slice(0, 3), 10);
-      if (line[3] === "-") return; // multi-line, wait for last
-      if (code === 220) { send("EHLO magicvibes.ru"); return; }
-      if (code === 250) {
-        if (!lines.includes("auth")) { lines.push("auth"); send("AUTH LOGIN"); return; }
-        if (!lines.includes("user")) { lines.push("user"); send(b64(user)); return; }
-        if (!lines.includes("rcpt")) { lines.push("rcpt"); send(`RCPT TO:<${to}>`); return; }
-        if (!lines.includes("data")) { lines.push("data"); send("DATA"); return; }
-        if (!lines.includes("quit")) { lines.push("quit"); send("QUIT"); return; }
-        return;
-      }
-      if (code === 334) {
-        if (!lines.includes("user")) { lines.push("user"); send(b64(user)); return; }
-        send(b64(pass)); return;
-      }
-      if (code === 235) { send(`MAIL FROM:<${user}>`); return; }
-      if (code === 354) {
-        const msg = [
-          `From: "Magic Vibes" <${user}>`,
-          `To: ${to}`,
-          `Subject: =?utf-8?B?${Buffer.from(subject).toString("base64")}?=`,
-          `MIME-Version: 1.0`,
-          `Content-Type: text/html; charset=utf-8`,
-          `X-Mailer: Magic Vibes Shop`,
-          `List-Unsubscribe: <mailto:${user}?subject=unsubscribe>`,
-          `List-Unsubscribe-Post: List-Unsubscribe=One-Click`,
-          ``,
-          html,
-          `.`,
-        ].join("\r\n");
-        sock.write(msg + "\r\n"); return;
-      }
-      if (code === 221) { sock.destroy(); if (!done) { done = true; resolve(); } return; }
-      if (code >= 400) { sock.destroy(new Error(`SMTP ${code}: ${line.slice(4)}`)); return; }
-    }
-
-    sock.on("data", (chunk) => {
-      buf += chunk.toString();
-      let idx;
-      while ((idx = buf.indexOf("\r\n")) !== -1) {
-        onLine(buf.slice(0, idx));
-        buf = buf.slice(idx + 2);
-      }
-    });
-    sock.on("error", (err) => { if (!done) { done = true; reject(err); } });
-    sock.on("close", () => { if (!done) { done = true; reject(new Error("SMTP: connection closed before send completed")); } });
-  });
+// Delegates to shopSendEmail (02d) — one SMTP client, base64 body, proper headers.
+// Order mails are transactional; review / newsletter mails are marketing (List-Unsubscribe)
+// and go only to orders with delivery.consents.ads = true.
+function seqSendMail({ to, subject, html, marketing = false }) {
+  return shopSendEmail({ to, subject, html, marketing });
 }
 
-// ─── Email base layout ────────────────────────────────────────────────────────
-function seqLayout(bodyContent) {
-  return `<!DOCTYPE html>
-<html lang="ru">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Magic Vibes</title>
-</head>
-<body style="margin:0;padding:0;background:#f0ede8;font-family:Georgia,'Times New Roman',serif;">
-<table width="100%" cellpadding="0" cellspacing="0" style="background:#f0ede8;padding:32px 16px;">
-<tr><td align="center">
-<table width="540" cellpadding="0" cellspacing="0" style="background:#0b0b0b;border-radius:4px;overflow:hidden;max-width:100%;">
-
-  <!-- Header -->
-  <tr><td style="padding:32px 40px 24px;border-bottom:1px solid rgba(201,162,94,0.25);text-align:center;">
-    <div style="font-family:Georgia,serif;font-style:italic;font-size:28px;color:#f5f4f0;letter-spacing:-0.5px;">Magic Vibes</div>
-    <div style="font-size:10px;letter-spacing:0.28em;text-transform:uppercase;color:#5d5a54;margin-top:4px;">Оригинальная парфюмерия</div>
-  </td></tr>
-
-  <!-- Body -->
-  ${bodyContent}
-
-  <!-- Footer -->
-  <tr><td style="padding:24px 40px 32px;border-top:1px solid rgba(255,255,255,0.06);text-align:center;">
-    <div style="font-size:11px;color:#3d3a34;line-height:1.7;">
-      Magic Vibes · magicvibes.ru<br>
-      <a href="mailto:noreply@magicvibes.ru?subject=unsubscribe" style="color:#4a473f;text-decoration:underline;">Отписаться от писем</a>
-    </div>
-  </td></tr>
-
-</table>
-</td></tr>
-</table>
-</body>
-</html>`;
+function seqRub(n) {
+  return `${Math.round(Number(n) || 0).toLocaleString("ru-RU").replace(/ /g, "&nbsp;")}&nbsp;&#8381;`;
 }
 
 // ─── Template: Day 1 — order confirmation ────────────────────────────────────
 function emailDay1Html({ firstName, items, orderId, totalRub }) {
-  const itemRows = (items || []).slice(0, 5).map((it) =>
-    `<tr>
-      <td style="padding:8px 0;font-size:13px;color:#c9c5bc;border-bottom:1px solid rgba(255,255,255,0.05);">${it.name || it.offerId}</td>
-      <td style="padding:8px 0;font-size:13px;color:#c9c5bc;border-bottom:1px solid rgba(255,255,255,0.05);text-align:right;">×${it.quantity}</td>
-      <td style="padding:8px 0;font-size:13px;color:#e8d5a3;border-bottom:1px solid rgba(255,255,255,0.05);text-align:right;">${(it.priceRub * it.quantity).toLocaleString("ru-RU")} ₽</td>
-    </tr>`
-  ).join("");
+  const rows = (items || []).slice(0, 6).map((it) => `<tr>
+<td style="padding:12px 0;border-bottom:1px solid #ece8e0;font-family:${MV_MAIL.body};font-size:14px;line-height:1.45;color:${MV_MAIL.ink};">${mvEsc(it.name || it.offerId)}</td>
+<td style="padding:12px 0 12px 12px;border-bottom:1px solid #ece8e0;font-family:${MV_MAIL.body};font-size:13px;color:${MV_MAIL.muted};white-space:nowrap;" align="right">&times;${mvEsc(it.quantity)}</td>
+<td style="padding:12px 0 12px 14px;border-bottom:1px solid #ece8e0;font-family:${MV_MAIL.body};font-size:14px;font-weight:700;color:${MV_MAIL.ink};white-space:nowrap;" align="right">${seqRub(Number(it.priceRub) * Number(it.quantity || 1))}</td>
+</tr>`).join("");
 
-  const body = `
-  <tr><td style="padding:40px 40px 28px;">
-    <div style="font-family:Georgia,serif;font-style:italic;font-size:32px;color:#f5f4f0;line-height:1.1;margin-bottom:12px;">
-      ${firstName ? `${firstName}, с` : "С"}пасибо за заказ
-    </div>
-    <div style="font-size:13px;color:#7d7a73;line-height:1.7;margin-bottom:28px;">
-      Мы уже готовим вашу посылку. Каждый флакон проходит проверку перед отправкой — это занимает 1–2 дня.
-    </div>
+  const content = `
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:26px 0 0;"><tr>
+<td bgcolor="${MV_MAIL.paper}" style="background:${MV_MAIL.paper};border-radius:22px;padding:20px 22px 16px;">
+<div style="font-family:${MV_MAIL.body};font-size:11px;font-weight:700;letter-spacing:1.4px;text-transform:uppercase;color:${MV_MAIL.muted};">Заказ №${mvEsc(orderId)}</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:6px;">${rows}</table>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;"><tr>
+<td style="font-family:${MV_MAIL.body};font-size:14px;color:${MV_MAIL.muted};">Итого</td>
+<td align="right" style="font-family:${MV_MAIL.display};font-size:22px;font-weight:800;color:${MV_MAIL.ink};">${seqRub(totalRub)}</td>
+</tr></table>
+</td></tr></table>
 
-    <!-- Order summary -->
-    <div style="background:#111113;border-radius:3px;border:1px solid rgba(201,162,94,0.2);padding:20px 24px;margin-bottom:28px;">
-      <div style="font-size:10px;letter-spacing:0.22em;text-transform:uppercase;color:#c9a25e;margin-bottom:14px;">Ваш заказ #${orderId}</div>
-      <table width="100%" cellpadding="0" cellspacing="0">${itemRows}</table>
-      <div style="display:flex;justify-content:space-between;padding-top:12px;margin-top:4px;border-top:1px solid rgba(201,162,94,0.2);">
-        <div style="font-size:12px;color:#5d5a54;">Итого</div>
-        <div style="font-size:16px;font-family:Georgia,serif;font-style:italic;color:#e8d5a3;">${(totalRub || 0).toLocaleString("ru-RU")} ₽</div>
-      </div>
-    </div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:18px 0 22px;"><tr>
+<td width="33%" valign="top" style="padding-right:8px;font-family:${MV_MAIL.body};font-size:13px;line-height:1.45;color:#2b2a27;"><div style="font-family:${MV_MAIL.display};font-size:18px;font-weight:800;color:${MV_MAIL.pink};">01</div>Проверяем оригинальность каждого флакона</td>
+<td width="33%" valign="top" style="padding:0 4px;font-family:${MV_MAIL.body};font-size:13px;line-height:1.45;color:#2b2a27;"><div style="font-family:${MV_MAIL.display};font-size:18px;font-weight:800;color:${MV_MAIL.pink};">02</div>Бережно упаковываем за 1–2 дня</td>
+<td width="33%" valign="top" style="padding-left:8px;font-family:${MV_MAIL.body};font-size:13px;line-height:1.45;color:#2b2a27;"><div style="font-family:${MV_MAIL.display};font-size:18px;font-weight:800;color:${MV_MAIL.pink};">03</div>Доставляем через Ozon за 1–5 дней</td>
+</tr></table>`;
 
-    <!-- Fragrance story -->
-    <div style="border-left:2px solid rgba(201,162,94,0.4);padding-left:20px;margin-bottom:32px;">
-      <div style="font-size:10px;letter-spacing:0.22em;text-transform:uppercase;color:#5d5a54;margin-bottom:10px;">История аромата</div>
-      <div style="font-family:Georgia,serif;font-style:italic;font-size:17px;color:#c9a25e;line-height:1.5;margin-bottom:8px;">«Аромат — это невидимый аксессуар, который оставляет самое сильное воспоминание»</div>
-      <div style="font-size:12px;color:#5d5a54;text-align:right;">— Коко Шанель</div>
-    </div>
-    <div style="font-size:13px;color:#7d7a73;line-height:1.8;margin-bottom:32px;">
-      Парфюмерия — это искусство, которое существует вне времени. Каждый флакон хранит работу парфюмера: сотни проб, тысячи ингредиентов и годы поиска идеального баланса. Ваш выбор — это не просто аромат, это история, которую вы расскажете без слов.
-    </div>
-
-    <div style="text-align:center;">
-      <a href="https://magicvibes.ru/orders" style="display:inline-block;padding:14px 32px;background:rgba(201,162,94,0.12);border:1px solid rgba(201,162,94,0.4);border-radius:2px;font-size:12px;letter-spacing:0.14em;text-transform:uppercase;color:#e8d5a3;text-decoration:none;">
-        Мои заказы
-      </a>
-    </div>
-  </td></tr>`;
-
-  return seqLayout(body);
+  return mvEmailLayout({
+    preheader: `Заказ №${orderId} принят — ${Math.round(Number(totalRub) || 0).toLocaleString("ru-RU")} ₽`,
+    kicker: "Заказ принят",
+    title: `${firstName ? mvEsc(firstName) + ", с" : "С"}пасибо за заказ`,
+    script: "ваш аромат уже в пути к вам",
+    intro: "Мы получили заказ и уже готовим посылку. Как только передадим её в доставку — пришлём трек-номер.",
+    content,
+    cta: { label: "Мои заказы", href: `${MV_MAIL.site}/orders` },
+    note: "«Аромат — невидимый аксессуар, который оставляет самое сильное воспоминание». — Коко Шанель",
+  });
 }
 
 // ─── Template: Day 7 — review request ────────────────────────────────────────
 function emailDay7Html({ firstName, items, orderId }) {
-  const productName = items?.[0]?.name || "ваш аромат";
-  const reviewUrl = `https://magicvibes.ru/account`;
-
-  const body = `
-  <tr><td style="padding:40px 40px 28px;">
-    <div style="font-family:Georgia,serif;font-style:italic;font-size:32px;color:#f5f4f0;line-height:1.1;margin-bottom:12px;">
-      Как вам аромат?
-    </div>
-    <div style="font-size:13px;color:#7d7a73;line-height:1.7;margin-bottom:28px;">
-      ${firstName ? `${firstName}, п` : "П"}рошла неделя с вашего заказа #${orderId}. Надеемся, что <em>${productName}</em> вам понравился и уже стал частью вашего образа.
-    </div>
-
-    <!-- Review invitation -->
-    <div style="background:#111113;border-radius:3px;border:1px solid rgba(201,162,94,0.2);padding:24px;margin-bottom:28px;text-align:center;">
-      <div style="font-size:36px;margin-bottom:12px;">⭐⭐⭐⭐⭐</div>
-      <div style="font-family:Georgia,serif;font-style:italic;font-size:18px;color:#f5f4f0;margin-bottom:8px;">Оставьте отзыв</div>
-      <div style="font-size:13px;color:#7d7a73;line-height:1.6;margin-bottom:20px;">
-        Ваше мнение помогает другим покупателям выбрать идеальный аромат.<br>
-        За отзыв с фото — <strong style="color:#c9a25e;">+50 баллов</strong> «Золото Magic Vibes».
-      </div>
-      <a href="${reviewUrl}" style="display:inline-block;padding:12px 28px;background:rgba(201,162,94,0.12);border:1px solid rgba(201,162,94,0.4);border-radius:2px;font-size:12px;letter-spacing:0.14em;text-transform:uppercase;color:#e8d5a3;text-decoration:none;">
-        Написать отзыв
-      </a>
-    </div>
-
-    <!-- Promo code -->
-    <div style="background:linear-gradient(135deg,#1a1408 0%,#111113 70%);border-radius:3px;border:1px solid rgba(201,162,94,0.35);padding:20px 24px;margin-bottom:28px;text-align:center;">
-      <div style="font-size:10px;letter-spacing:0.22em;text-transform:uppercase;color:#5d5a54;margin-bottom:10px;">Подарок за отзыв</div>
-      <div style="font-family:Georgia,serif;font-size:28px;font-style:italic;color:#c9a25e;letter-spacing:0.1em;margin-bottom:6px;">REVIEW5</div>
-      <div style="font-size:12px;color:#7d7a73;">−5% на следующий заказ · действует 30 дней</div>
-    </div>
-
-    <div style="font-size:12px;color:#3d3a34;line-height:1.7;text-align:center;">
-      Промокод действителен при следующем оформлении заказа на magicvibes.ru
-    </div>
-  </td></tr>`;
-
-  return seqLayout(body);
+  const productName = mvEsc(items?.[0]?.name || "ваш аромат");
+  const content = `
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:24px 0 8px;"><tr>
+<td align="center" bgcolor="${MV_MAIL.paper}" style="background:${MV_MAIL.paper};border-radius:22px;padding:22px 18px;">
+<div style="font-size:30px;letter-spacing:6px;color:${MV_MAIL.pink};line-height:1;">&#9733;&#9733;&#9733;&#9733;&#9733;</div>
+<div style="font-family:${MV_MAIL.body};font-size:14px;line-height:1.55;color:#2b2a27;margin-top:12px;">Отзыв помогает другим выбрать свой аромат.<br>За отзыв с фото — <b>+50 баллов</b> «Золото Magic Vibes».</div>
+</td></tr></table>`
+    + mvEmailCodeTile("REVIEW5", "−5% на следующий заказ · действует 30 дней");
+  return mvEmailLayout({
+    preheader: "Расскажите, как вам аромат — и получите −5% на следующий заказ",
+    kicker: "Неделя с ароматом",
+    title: "Как вам аромат?",
+    script: "нам правда важно",
+    intro: `${firstName ? mvEsc(firstName) + ", п" : "П"}рошла неделя с заказа №${mvEsc(orderId)}. Надеемся, <b>${productName}</b> уже стал частью вашего образа.`,
+    content,
+    cta: { label: "Написать отзыв", href: `${MV_MAIL.site}/orders` },
+    marketing: true,
+  });
 }
 
 // ─── Template: Day 30 — fragrance of the month ───────────────────────────────
 async function emailDay30Html({ firstName }) {
-  // Try to get the latest Telegram news post as "fragrance of month" content
+  // latest Telegram news post as "fragrance of the month" content (local photos only)
   let newsText = null;
   let newsPhotoUrl = null;
   try {
     const prisma = getPrisma();
     if (prisma) {
-      const post = await prisma.telegramNewsPost.findFirst({
-        where: { active: true },
-        orderBy: { publishedAt: "desc" },
-      });
+      const post = await prisma.telegramNewsPost.findFirst({ where: { active: true }, orderBy: { publishedAt: "desc" } });
       if (post) {
-        newsText = (post.text || "").slice(0, 300);
-        newsPhotoUrl = post.photoUrl || null;
+        newsText = (post.text || "").slice(0, 320);
+        const photo = post.photoUrl || "";
+        newsPhotoUrl = photo.startsWith("/uploads/") ? `https://davidsklad.ru${photo}` : null;
       }
     }
   } catch { /* ignore */ }
 
   const months = ["января","февраля","марта","апреля","мая","июня","июля","августа","сентября","октября","ноября","декабря"];
   const month = months[new Date().getMonth()];
-
-  const photoBlock = newsPhotoUrl
-    ? `<tr><td style="padding:0 40px 24px;"><img src="${newsPhotoUrl}" alt="" width="460" style="display:block;max-width:100%;border-radius:2px;opacity:0.85;"></td></tr>`
+  const photo = newsPhotoUrl
+    ? `<img src="${mvEsc(newsPhotoUrl)}" alt="" width="496" style="display:block;width:100%;max-width:496px;height:auto;border:0;border-radius:20px;margin:24px 0 4px;">`
     : "";
+  const text = newsText
+    ? `<p style="margin:18px 0 22px;font-family:${MV_MAIL.body};font-size:15px;line-height:1.65;color:#2b2a27;border-left:3px solid ${MV_MAIL.lime};padding-left:16px;">${mvEsc(newsText)}${newsText.length >= 320 ? "…" : ""}</p>`
+    : `<p style="margin:18px 0 22px;font-family:${MV_MAIL.body};font-size:15px;line-height:1.65;color:#2b2a27;">Каталог пополнился: от классических европейских домов до редких арабских ароматов. Найдите свою следующую историю.</p>`;
 
-  const body = `
-  ${photoBlock}
-  <tr><td style="padding:${newsPhotoUrl ? "0" : "40px"} 40px 28px;">
-    <div style="font-size:10px;letter-spacing:0.28em;text-transform:uppercase;color:#c9a25e;margin-bottom:14px;">Аромат ${month}</div>
-    <div style="font-family:Georgia,serif;font-style:italic;font-size:32px;color:#f5f4f0;line-height:1.1;margin-bottom:16px;">
-      ${firstName ? `${firstName}, н` : "Н"}овая история
-    </div>
-
-    ${newsText
-      ? `<div style="font-size:14px;color:#9d9a94;line-height:1.85;margin-bottom:28px;border-left:2px solid rgba(201,162,94,0.3);padding-left:18px;">${newsText}</div>`
-      : `<div style="font-size:14px;color:#7d7a73;line-height:1.85;margin-bottom:28px;">
-          Месяц прошёл — и пришло время открыть что-то новое. Наш каталог пополнился свежими поступлениями: от классических европейских домов до редких ближневосточных ароматов. Найдите свою следующую историю.
-        </div>`
-    }
-
-    <!-- CTA -->
-    <div style="background:#111113;border-radius:3px;border:1px solid rgba(255,255,255,0.07);padding:24px;margin-bottom:28px;text-align:center;">
-      <div style="font-family:Georgia,serif;font-style:italic;font-size:18px;color:#f5f4f0;margin-bottom:8px;">22 000+ ароматов</div>
-      <div style="font-size:12px;color:#5d5a54;margin-bottom:20px;">Chanel · Dior · Tom Ford · Creed · Hermès · Byredo и другие</div>
-      <a href="https://magicvibes.ru/catalog" style="display:inline-block;padding:14px 32px;background:rgba(201,162,94,0.12);border:1px solid rgba(201,162,94,0.4);border-radius:2px;font-size:12px;letter-spacing:0.14em;text-transform:uppercase;color:#e8d5a3;text-decoration:none;">
-        Открыть каталог
-      </a>
-    </div>
-
-    <!-- Loyalty reminder -->
-    <div style="text-align:center;padding:12px 0;">
-      <div style="font-size:11px;color:#3d3a34;line-height:1.7;">
-        ✦ Программа «Золото Magic Vibes» — баллы за каждый отзыв и покупку<br>
-        <a href="https://magicvibes.ru/account" style="color:#c9a25e;text-decoration:none;">Проверить баланс баллов →</a>
-      </div>
-    </div>
-  </td></tr>`;
-
-  return seqLayout(body);
+  return mvEmailLayout({
+    preheader: `Аромат ${month}: новинки и подборки Magic Vibes`,
+    kicker: `Аромат ${month}`,
+    title: `${firstName ? mvEsc(firstName) + ", н" : "Н"}овая история`,
+    script: "22 000 ароматов ждут",
+    content: photo + text + `<p style="margin:0 0 18px;font-family:${MV_MAIL.body};font-size:13px;color:${MV_MAIL.muted};">Chanel · Dior · Tom Ford · Creed · Byredo · Montale и ещё 200+ брендов</p>`,
+    cta: { label: "Открыть каталог", href: `${MV_MAIL.site}/catalog` },
+    note: `&#10022; «Золото Magic Vibes» — баллы за покупки и отзывы. <a href="${MV_MAIL.site}/account" style="color:${MV_MAIL.violet};text-decoration:none;font-weight:600;">Проверить баланс &rarr;</a>`,
+    marketing: true,
+  });
 }
 
 // ─── Core: log sent + guard against duplicates ───────────────────────────────
@@ -320,6 +167,8 @@ async function runEmailSequenceScanner() {
       SELECT o.id, o.delivery, o.items, o.total_rub, o.created_at
       FROM shop_orders o
       WHERE o.created_at <= $1
+        -- review / newsletter mails are advertising (38-ФЗ ст. 18): only with the opt-in ticked at checkout
+        AND (o.delivery::jsonb #>> '{consents,ads}') = 'true'
         AND NOT EXISTS (
           SELECT 1 FROM shop_email_sequence_logs l
           WHERE l.order_id = o.id AND l.step = 7
@@ -336,7 +185,7 @@ async function runEmailSequenceScanner() {
         const ok = await seqMarkSent(prisma, order.id, email, 7);
         if (!ok) continue;
         const html = emailDay7Html({ firstName: delivery.firstName, items, orderId: order.id });
-        await seqSendMail({ to: email, subject: "Как вам аромат? Оставьте отзыв — −5% на следующий заказ", html });
+        await seqSendMail({ to: email, subject: "Как вам аромат? Оставьте отзыв — −5% на следующий заказ", html, marketing: true });
         sent7++;
         logger.info("email_seq_sent", { step: 7, orderId: order.id, to: email });
         await new Promise((r) => setTimeout(r, 1200)); // rate-limit: 1 email/1.2s
@@ -351,6 +200,8 @@ async function runEmailSequenceScanner() {
       SELECT o.id, o.delivery, o.items, o.created_at
       FROM shop_orders o
       WHERE o.created_at <= $1
+        -- review / newsletter mails are advertising (38-ФЗ ст. 18): only with the opt-in ticked at checkout
+        AND (o.delivery::jsonb #>> '{consents,ads}') = 'true'
         AND NOT EXISTS (
           SELECT 1 FROM shop_email_sequence_logs l
           WHERE l.order_id = o.id AND l.step = 30
@@ -366,7 +217,7 @@ async function runEmailSequenceScanner() {
         const ok = await seqMarkSent(prisma, order.id, email, 30);
         if (!ok) continue;
         const html = await emailDay30Html({ firstName: delivery.firstName });
-        await seqSendMail({ to: email, subject: `Аромат ${["января","февраля","марта","апреля","мая","июня","июля","августа","сентября","октября","ноября","декабря"][new Date().getMonth()]} от Magic Vibes`, html });
+        await seqSendMail({ to: email, subject: `Аромат ${["января","февраля","марта","апреля","мая","июня","июля","августа","сентября","октября","ноября","декабря"][new Date().getMonth()]} от Magic Vibes`, html, marketing: true });
         sent30++;
         logger.info("email_seq_sent", { step: 30, orderId: order.id, to: email });
         await new Promise((r) => setTimeout(r, 1200));

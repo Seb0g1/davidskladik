@@ -1,5 +1,7 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
+import ConsentCheck from "@/components/ConsentCheck";
+import { productImg, productImgSet } from "@/lib/img";
 import Link from "next/link";
 import { useMutation } from "@tanstack/react-query";
 import { toProductSlug } from "@/lib/slug";
@@ -8,29 +10,32 @@ import {
   Minus, Plus, Share2, Link2, Users, X, Bell, MessageSquare, ThumbsUp, Send,
 } from "lucide-react";
 import { useCart } from "@/components/CartContext";
+import PhotoLightbox from "@/components/PhotoLightbox";
 import { useAuth } from "@/components/AuthContext";
 import { stockAlert, postReview, uploadMedia } from "@/lib/client";
 import type { ShopProduct, ShopSettings, MarketplaceReview, FragranceNotes, ProductQAItem } from "@/lib/types";
+import type { ProductVariant } from "@/lib/api";
 import type { ShopReview } from "@/lib/client";
+import { brandHref } from "@/lib/landings";
 
 const S = {
-  bg:      "#0E0D0B",
-  surface: "#161512",
-  surface2:"#1D1C18",
-  border:  "rgba(255,252,245,0.07)",
-  borderMd:"rgba(255,252,245,0.13)",
-  text:    "#F4EFE6",
-  muted:   "rgba(244,239,230,0.48)",
-  subtle:  "rgba(244,239,230,0.22)",
-  accent:  "#C9A96E",
-  accent2: "#D9BF8F",
-  accent3: "#EDD9B0",
+  bg:      "var(--surface)",
+  surface: "var(--surface)",
+  surface2:"var(--surface)",
+  border:  "rgba(var(--ink-rgb),0.056)",
+  borderMd:"rgba(var(--ink-rgb),0.104)",
+  text:    "var(--ink)",
+  muted:   "rgba(var(--ink-rgb),0.55)",
+  subtle:  "rgba(var(--ink-rgb),0.45)",
+  accent:  "var(--accent)",
+  accent2: "var(--accent2)",
+  accent3: "var(--accent2)",
 };
 
 const PYRAMID_LAYERS = [
-  { key: "top",   label: "Верхние",  field: "topNotes"    as const, color: "#f0dfa0", rgb: "240,223,160", widthPct: 38 },
-  { key: "heart", label: "Сердце",   field: "middleNotes" as const, color: "#c9a25e", rgb: "201,162,94",  widthPct: 62 },
-  { key: "base",  label: "База",     field: "baseNotes"   as const, color: "#8c7251", rgb: "140,114,81",  widthPct: 88 },
+  { key: "top",   label: "Верхние",  field: "topNotes"    as const, color: "var(--accent2)", rgb: "240,223,160", widthPct: 38 },
+  { key: "heart", label: "Сердце",   field: "middleNotes" as const, color: "var(--accent)", rgb: "201,162,94",  widthPct: 62 },
+  { key: "base",  label: "База",     field: "baseNotes"   as const, color: "var(--accent)", rgb: "140,114,81",  widthPct: 88 },
 ];
 
 function FragrancePyramid({ notes }: { notes: FragranceNotes }) {
@@ -75,10 +80,10 @@ function FragrancePyramid({ notes }: { notes: FragranceNotes }) {
                   {items.map(note => (
                     <span key={note} style={{
                       fontSize: 11,
-                      color: isHov ? `rgba(${layer.rgb},0.95)` : "rgba(242,237,230,0.65)",
+                      color: isHov ? `rgba(${layer.rgb},0.95)` : "rgba(var(--ink-rgb),0.75)",
                       background: `rgba(${layer.rgb},0.06)`,
                       border: `1px solid rgba(${layer.rgb},${isHov ? "0.35" : "0.18"})`,
-                      borderRadius: 3, padding: "2px 8px", whiteSpace: "nowrap",
+                      borderRadius: 14, padding: "2px 8px", whiteSpace: "nowrap",
                       transition: "color 0.15s, border-color 0.15s",
                     }}>{note}</span>
                   ))}
@@ -90,10 +95,10 @@ function FragrancePyramid({ notes }: { notes: FragranceNotes }) {
       </div>
       {notes.accords && notes.accords.length > 0 && (
         <div style={{ marginTop: 14 }}>
-          <div style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(242,237,230,0.3)", fontWeight: 600, marginBottom: 8, textAlign: "center" }}>Аккорды</div>
+          <div style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(var(--ink-rgb),0.45)", fontWeight: 600, marginBottom: 8, textAlign: "center" }}>Аккорды</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center" }}>
             {notes.accords.slice(0, 6).map(accord => (
-              <span key={accord} style={{ fontSize: 11, color: "#c9a25e", background: "rgba(201,162,94,0.07)", border: "1px solid rgba(201,162,94,0.2)", borderRadius: 12, padding: "4px 12px" }}>{accord}</span>
+              <span key={accord} style={{ fontSize: 11, color: "var(--accent)", background: "rgba(var(--accent-rgb),0.07)", border: "1px solid rgba(var(--accent-rgb),0.2)", borderRadius: 12, padding: "4px 12px" }}>{accord}</span>
             ))}
           </div>
         </div>
@@ -101,13 +106,13 @@ function FragrancePyramid({ notes }: { notes: FragranceNotes }) {
       {(notes.gender || (notes.seasons && notes.seasons.length > 0)) && (
         <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center" }}>
           {notes.gender && notes.gender !== "unisex" && (
-            <span style={{ fontSize: 10, color: "rgba(242,237,230,0.35)", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+            <span style={{ fontSize: 10, color: "rgba(var(--ink-rgb),0.45)", letterSpacing: "0.1em", textTransform: "uppercase" }}>
               {notes.gender === "male" ? "♂ Мужской" : "♀ Женский"}
             </span>
           )}
           {notes.seasons?.map(s => {
             const M: Record<string, string> = { spring: "Весна 🌸", summer: "Лето ☀️", fall: "Осень 🍂", winter: "Зима ❄️" };
-            return M[s] ? <span key={s} style={{ fontSize: 10, color: "rgba(242,237,230,0.35)" }}>{M[s]}</span> : null;
+            return M[s] ? <span key={s} style={{ fontSize: 10, color: "rgba(var(--ink-rgb),0.45)" }}>{M[s]}</span> : null;
           })}
         </div>
       )}
@@ -133,21 +138,24 @@ interface Props {
   fragranceNotes: FragranceNotes | null;
   relatedProducts: ShopProduct[];
   qaItems: ProductQAItem[];
+  variants?: ProductVariant[];
 }
 
 export default function ProductClient({
   product, settings, initialMpReviews, initialAvgRating, initialReviewCount,
-  initialSiteReviews, fragranceNotes, relatedProducts, qaItems,
+  initialSiteReviews, fragranceNotes, relatedProducts, qaItems, variants = [],
 }: Props) {
   const { add } = useCart();
   const { customer, token, updateProfile } = useAuth();
   const [qty, setQty] = useState(1);
   const [activeImg, setActiveImg] = useState(0);
+  const [lightbox, setLightbox] = useState(false);
   const [added, setAdded] = useState(false);
   const [cartPopup, setCartPopup] = useState(false);
   const [imgErrors, setImgErrors] = useState<Set<number>>(new Set());
   const [viewers, setViewers] = useState(0);
   const [alertEmail, setAlertEmail] = useState("");
+  const [alertConsent, setAlertConsent] = useState(false);
   const [alertSent, setAlertSent] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
@@ -251,11 +259,11 @@ export default function ProductClient({
   }
 
   const pageUrl = typeof window !== "undefined" ? window.location.href : "";
-  const shareText = `${product.name} — ${product.priceRub.toLocaleString("ru-RU")} ₽`;
+  const shareText = `${product.name} — ${product.priceRub.toLocaleString("ru-RU")} ₽`;
 
   return (
     <div style={{ background: S.bg, minHeight: "100vh" }}>
-      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "clamp(20px,3vw,48px) clamp(16px,4vw,32px)" }}>
+      <div style={{ maxWidth: 1280, margin: "0 auto", padding: "clamp(20px,3vw,48px) clamp(16px,4vw,32px)" }}>
 
         {/* Breadcrumb */}
         <nav style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: S.muted, marginBottom: 24, flexWrap: "wrap" }}>
@@ -269,7 +277,7 @@ export default function ProductClient({
           {product.brand && (
             <>
               <ChevronRight size={11} style={{ color: S.subtle }} />
-              <Link href={`/catalog?brand=${encodeURIComponent(product.brand)}`} style={{ color: S.muted, textDecoration: "none", transition: "color 0.15s" }}
+              <Link href={brandHref(product.brand)} style={{ color: S.muted, textDecoration: "none", transition: "color 0.15s" }}
                 onMouseEnter={e => (e.currentTarget.style.color = S.text)}
                 onMouseLeave={e => (e.currentTarget.style.color = S.muted)}>{product.brand}</Link>
             </>
@@ -285,44 +293,60 @@ export default function ProductClient({
           <div className="product-layout" style={{ display: "grid", gridTemplateColumns: "1fr" }}>
 
             {/* Images column */}
-            <div style={{ background: S.surface2, padding: "clamp(24px,4vw,48px)", display: "flex", flexDirection: "column", gap: 16, borderRight: `1px solid ${S.border}` }}>
-              <div style={{
+            <div style={{ background: "#fff", padding: "clamp(12px,4vw,48px)", display: "flex", flexDirection: "column", gap: 16, borderRight: `1px solid ${S.border}` }}>
+              <div className="mv-photo-tilt"
+                onPointerMove={(e) => {
+                  if (e.pointerType !== "mouse") return;
+                  const r = e.currentTarget.getBoundingClientRect();
+                  const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+                  e.currentTarget.style.setProperty("--rx", `${(0.5 - y) * 7}deg`);
+                  e.currentTarget.style.setProperty("--ry", `${(x - 0.5) * 9}deg`);
+                  e.currentTarget.style.setProperty("--gx", `${x * 100}%`);
+                  e.currentTarget.style.setProperty("--gy", `${y * 100}%`);
+                }}
+                onPointerLeave={(e) => { e.currentTarget.style.setProperty("--rx", "0deg"); e.currentTarget.style.setProperty("--ry", "0deg"); }}
+                onClick={() => activeValidImg && setLightbox(true)}
+                style={{
                 aspectRatio: "1", borderRadius: 18, overflow: "hidden",
-                background: `radial-gradient(ellipse 82% 82% at 50% 46%, #ffffff 0%, #d8cfc4 52%, ${S.bg} 84%)`,
+                background: "#fff",
                 display: "flex", alignItems: "center", justifyContent: "center",
-                border: `1px solid ${S.border}`, position: "relative",
+                position: "relative",
               }}>
+                {activeValidImg && (
+                  <span className="mv-photo-zoom" aria-hidden>⤢ Увеличить</span>
+                )}
                 {activeValidImg
                   ? <>
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={activeValidImg} alt={product.brand ? `${product.name} ${product.brand} купить` : `${product.name} купить`}
-                        itemProp="image"
-                        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", padding: 8, mixBlendMode: "multiply" }}
+                      <img src={productImg(activeValidImg, 640)} srcSet={productImgSet(activeValidImg, 640)}
+                        alt={product.brand ? `${product.name} ${product.brand} купить` : `${product.name} купить`}
+                        itemProp="image" fetchPriority="high" className="mv-photo-img"
+                        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }}
                         onError={() => setImgErrors(s => new Set(s).add(activeImg))} />
-                      <div style={{ position: "absolute", bottom: 16, right: 18, zIndex: 3, display: "flex", alignItems: "center", gap: 5, pointerEvents: "none", userSelect: "none", opacity: 0.28, mixBlendMode: "multiply" }}>
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src="/favicon.svg" alt="" width={16} height={16} style={{ display: "block" }} />
-                        <span style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontStyle: "italic", fontWeight: 600, fontSize: 14, letterSpacing: "0.05em", color: "#6b5a3e", lineHeight: 1 }}>Magic Vibes</span>
-                      </div>
+                      <span className="mv-photo-glare" aria-hidden />
                     </>
                   : <span style={{ fontSize: 80, fontWeight: 800, color: S.subtle, opacity: 0.2 }}>{product.brand?.[0] ?? "?"}</span>
                 }
               </div>
+
+              {lightbox && validImages.length > 0 && (
+                <PhotoLightbox images={validImages} start={Math.min(activeImg, validImages.length - 1)} alt={product.name} onClose={() => setLightbox(false)} />
+              )}
 
               {validImages.length > 1 && (
                 <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 4 }}>
                   {product.images.map((img, i) => !imgErrors.has(i) && (
                     <button key={i} onClick={() => setActiveImg(i)} style={{
                       flexShrink: 0, width: 56, height: 56, borderRadius: 12, overflow: "hidden",
-                      background: `radial-gradient(ellipse 85% 85% at center, #ffffff 0%, #ccc4b8 55%, ${S.bg} 88%)`,
+                      background: "#fff",
                       border: `2px solid ${i === activeImg ? S.accent : S.border}`,
                       cursor: "pointer", transition: "border-color 0.15s ease",
-                      boxShadow: i === activeImg ? "0 0 16px rgba(201,169,110,0.25)" : "none",
+                      boxShadow: i === activeImg ? "0 0 16px rgba(var(--accent-rgb),0.25)" : "none",
                       position: "relative",
                     }}>
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={img} alt={`${product.name} фото ${i + 1}`}
-                        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", padding: 4, mixBlendMode: "multiply" }}
+                      <img src={productImg(img, 160)} alt={`${product.name} фото ${i + 1}`} loading="lazy"
+                        style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain" }}
                         onError={() => setImgErrors(s => new Set(s).add(i))} />
                     </button>
                   ))}
@@ -347,18 +371,25 @@ export default function ProductClient({
                 {product.name}
               </h1>
 
-              {product.volume && (
-                <span style={{ display: "inline-block", fontSize: 12, color: S.muted, background: "rgba(255,255,255,0.06)", border: `1px solid ${S.border}`, borderRadius: 8, padding: "4px 12px", marginBottom: 16, alignSelf: "flex-start" }}>
+              {variants.length > 1 ? (
+                <nav aria-label="Другие объёмы" className="mv-variants">
+                  <span className="mv-variants-l">Объём</span>
+                  {variants.map((v) => v.current
+                    ? <span key={v.offerId} className="mv-variant on" aria-current="true"><b>{v.volume}</b><em>{v.priceRub.toLocaleString("ru-RU")}&nbsp;₽</em></span>
+                    : <Link key={v.offerId} href={`/product/${v.slug}`} className={`mv-variant${v.inStock ? "" : " out"}`}><b>{v.volume}</b><em>{v.priceRub.toLocaleString("ru-RU")}&nbsp;₽</em></Link>)}
+                </nav>
+              ) : product.volume && (
+                <span style={{ display: "inline-block", fontSize: 12, color: S.muted, background: "rgba(var(--ink-rgb),0.048)", border: `1px solid ${S.border}`, borderRadius: 8, padding: "4px 12px", marginBottom: 16, alignSelf: "flex-start" }}>
                   {product.volume}
                 </span>
               )}
 
-              {(mpAvgRating > 0 || (product.rating && product.rating > 0)) && (
+              {(mpAvgRating > 0 || (product.rating ?? 0) > 0) && (
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
                   <div style={{ display: "flex" }}>
                     {[1,2,3,4,5].map(s => {
                       const r = mpAvgRating || product.rating!;
-                      return <Star key={s} size={14} style={{ color: s <= Math.round(r) ? "#C9A96E" : S.subtle, fill: s <= Math.round(r) ? "#C9A96E" : S.subtle }} />;
+                      return <Star key={s} size={14} style={{ color: s <= Math.round(r) ? "var(--accent)" : S.subtle, fill: s <= Math.round(r) ? "var(--accent)" : S.subtle }} />;
                     })}
                   </div>
                   <span style={{ fontSize: 13, fontWeight: 600, color: S.accent3 }}>{(mpAvgRating || product.rating!).toFixed(1)}</span>
@@ -377,20 +408,25 @@ export default function ProductClient({
               </div>
               <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 8 }}>
                 <span style={{ fontSize: "clamp(28px,3vw,40px)", fontWeight: 700, color: S.text, letterSpacing: "-0.04em" }}>
-                  {product.priceRub.toLocaleString("ru-RU")} ₽
+                  {product.priceRub.toLocaleString("ru-RU")} ₽
                 </span>
-                {product.oldPriceRub && (
+                {(product.oldPriceRub ?? 0) > 0 && (
                   <>
-                    <span style={{ fontSize: 16, color: S.subtle, textDecoration: "line-through" }}>{product.oldPriceRub.toLocaleString("ru-RU")} ₽</span>
-                    <span style={{ fontSize: 12, background: "rgba(239,68,68,0.12)", color: "#f87171", fontWeight: 700, padding: "3px 8px", borderRadius: 8 }}>−{discount}%</span>
+                    <span style={{ fontSize: 16, color: S.subtle, textDecoration: "line-through" }}>{(product.oldPriceRub ?? 0).toLocaleString("ru-RU")} ₽</span>
+                    <span style={{ fontSize: 12, background: "rgba(var(--danger-rgb),0.12)", color: "var(--danger)", fontWeight: 700, padding: "3px 8px", borderRadius: 8 }}>−{discount}%</span>
                   </>
                 )}
               </div>
+              {(product.oldPriceRub ?? 0) > 0 && (
+                <div style={{ fontSize: 12.5, color: S.muted, marginTop: -4, marginBottom: 10 }}>
+                  Зачёркнута цена этого товара на маркетплейсах — у нас дешевле на {((product.oldPriceRub ?? 0) - product.priceRub).toLocaleString("ru-RU")} ₽
+                </div>
+              )}
 
               {/* Stock + viewers */}
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 24 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 500, color: product.inStock ? "#4ade80" : S.muted }}>
-                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: product.inStock ? "#4ade80" : S.subtle, boxShadow: product.inStock ? "0 0 8px #4ade80" : "none" }} />
+                <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 500, color: product.inStock ? "var(--success)" : S.muted }}>
+                  <div style={{ width: 8, height: 8, borderRadius: "50%", background: product.inStock ? "var(--success)" : S.subtle, boxShadow: product.inStock ? "0 0 8px var(--success)" : "none" }} />
                   {product.inStock ? `В наличии${product.stockQty > 0 ? ` · ${product.stockQty} шт.` : ""}` : "Нет в наличии"}
                 </div>
                 {product.inStock && viewers > 1 && (
@@ -405,7 +441,7 @@ export default function ProductClient({
               {!product.inStock && (
                 <div style={{ marginBottom: 24 }}>
                   {alertSent ? (
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", background: "rgba(74,222,128,0.08)", border: "1px solid rgba(74,222,128,0.2)", borderRadius: 14, fontSize: 13, color: "#4ade80" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", background: "rgba(var(--success-rgb),0.08)", border: "1px solid rgba(var(--success-rgb),0.2)", borderRadius: 14, fontSize: 13, color: "var(--success)" }}>
                       <Check size={15} /> Вы в списке ожидания! Уведомим на {alertEmail}
                     </div>
                   ) : (
@@ -414,20 +450,21 @@ export default function ProductClient({
                         type="email" value={alertEmail} onChange={e => setAlertEmail(e.target.value)}
                         placeholder="Ваш email для уведомления"
                         style={{ flex: 1, padding: "12px 14px", background: S.surface2, border: `1.5px solid ${S.border}`, borderRadius: 12, fontSize: 13, color: S.text, fontFamily: "inherit", outline: "none" }}
-                        onFocus={e => (e.target.style.borderColor = "rgba(201,169,110,0.4)")}
+                        onFocus={e => (e.target.style.borderColor = "rgba(var(--accent-rgb),0.4)")}
                         onBlur={e => (e.target.style.borderColor = S.border)}
-                        onKeyDown={e => { if (e.key === "Enter" && alertEmail) alertMutation.mutate(); }}
+                        onKeyDown={e => { if (e.key === "Enter" && alertEmail && alertConsent) alertMutation.mutate(); }}
                       />
                       <button
                         onClick={() => alertMutation.mutate()}
-                        disabled={!alertEmail || alertMutation.isPending}
-                        style={{ display: "flex", alignItems: "center", gap: 6, padding: "12px 18px", background: "rgba(201,169,110,0.1)", border: "1px solid rgba(201,169,110,0.25)", borderRadius: 12, fontSize: 13, fontWeight: 600, color: S.accent3, cursor: "pointer", flexShrink: 0, fontFamily: "inherit", opacity: (!alertEmail || alertMutation.isPending) ? 0.5 : 1 }}
+                        disabled={!alertEmail || !alertConsent || alertMutation.isPending}
+                        style={{ display: "flex", alignItems: "center", gap: 6, padding: "12px 18px", background: "rgba(var(--accent-rgb),0.1)", border: "1px solid rgba(var(--accent-rgb),0.25)", borderRadius: 12, fontSize: 13, fontWeight: 600, color: S.accent3, cursor: "pointer", flexShrink: 0, fontFamily: "inherit", opacity: (!alertEmail || !alertConsent || alertMutation.isPending) ? 0.5 : 1 }}
                       >
                         <Bell size={14} /> Уведомить
                       </button>
                     </div>
                   )}
-                  {alertMutation.error && <div style={{ fontSize: 12, color: "#f87171", marginTop: 6 }}>{(alertMutation.error as Error).message}</div>}
+                  {!alertSent && <div style={{ marginTop: 10 }}><ConsentCheck kind="pd" compact checked={alertConsent} onChange={setAlertConsent} /></div>}
+                  {alertMutation.error && <div style={{ fontSize: 12, color: "var(--danger)", marginTop: 6 }}>{(alertMutation.error as Error).message}</div>}
                 </div>
               )}
 
@@ -446,7 +483,7 @@ export default function ProductClient({
                   <button onClick={handleAdd} className={added ? "" : "btn-primary"} style={{
                     flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
                     padding: "14px 20px", borderRadius: 16, fontSize: 14, fontWeight: 700, border: "none", cursor: "pointer",
-                    ...(added ? { background: "rgba(74,222,128,0.15)", color: "#4ade80", border: "1px solid rgba(74,222,128,0.25)", boxShadow: "none" } : {}),
+                    ...(added ? { background: "rgba(var(--success-rgb),0.15)", color: "var(--success)", border: "1px solid rgba(var(--success-rgb),0.25)", boxShadow: "none" } : {}),
                     transition: "all 0.2s ease",
                   }}>
                     {added ? <><Check size={18} /> Добавлено!</> : <><ShoppingBag size={18} /> В корзину</>}
@@ -460,20 +497,20 @@ export default function ProductClient({
                   onClick={() => setShareOpen(o => !o)}
                   style={{
                     display: "inline-flex", alignItems: "center", gap: 8,
-                    padding: "9px 18px", borderRadius: 2, cursor: "pointer",
-                    background: shareOpen ? "rgba(201,162,94,0.07)" : "transparent",
-                    border: `1px solid ${shareOpen ? "rgba(201,162,94,0.5)" : S.border}`,
+                    padding: "9px 18px", borderRadius: 10, cursor: "pointer",
+                    background: shareOpen ? "rgba(var(--accent-rgb),0.07)" : "transparent",
+                    border: `1px solid ${shareOpen ? "rgba(var(--accent-rgb),0.5)" : S.border}`,
                     color: shareOpen ? S.accent3 : S.muted, fontSize: 12, fontFamily: "inherit",
                     letterSpacing: "0.12em", textTransform: "uppercase",
                     transition: "border-color 0.25s, color 0.25s, background 0.25s",
                   }}
-                  onMouseEnter={e => { if (!shareOpen) { e.currentTarget.style.borderColor = "rgba(201,162,94,0.45)"; e.currentTarget.style.color = S.text; } }}
+                  onMouseEnter={e => { if (!shareOpen) { e.currentTarget.style.borderColor = "rgba(var(--accent-rgb),0.45)"; e.currentTarget.style.color = S.text; } }}
                   onMouseLeave={e => { if (!shareOpen) { e.currentTarget.style.borderColor = S.border; e.currentTarget.style.color = S.muted; } }}
                 >
                   <Share2 size={13} strokeWidth={1.6} /> Поделиться
                 </button>
                 {shareOpen && (
-                  <div style={{ position: "absolute", bottom: "calc(100% + 10px)", left: 0, zIndex: 60, background: "#1a1815", borderRadius: 3, border: `1px solid ${S.borderMd}`, boxShadow: "0 20px 60px rgba(0,0,0,0.8)", padding: "6px", minWidth: 220 }}>
+                  <div style={{ position: "absolute", bottom: "calc(100% + 10px)", left: 0, zIndex: 60, background: "var(--surface)", borderRadius: 14, border: `1px solid ${S.borderMd}`, boxShadow: "0 20px 60px rgba(var(--ink-rgb),0.28)", padding: "6px", minWidth: 220 }}>
                     {[
                       { label: "Telegram",       href: `https://t.me/share/url?url=${encodeURIComponent(pageUrl)}&text=${encodeURIComponent(shareText)}`, icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="12" fill="#26A5E4"/><path d="M5.5 11.8l11-4.3c.5-.2.9.1.8.6l-1.9 8.8c-.1.6-.5.7-1 .5l-2.8-2-1.3 1.3c-.1.1-.3.2-.5.2l.2-2.8 5.1-4.6c.2-.2 0-.3-.3-.1l-6.4 4-2.7-.9c-.6-.2-.6-.6.1-.9z" fill="white"/></svg> },
                       { label: "ВКонтакте",      href: `https://vk.com/share.php?url=${encodeURIComponent(pageUrl)}&title=${encodeURIComponent(shareText)}`, icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" rx="4" fill="#4C75A3"/><path d="M12.7 16.5h1.2s.3 0 .5-.3l.2-.5s.2-1.5.9-1.7c.6-.2 1.4 1.4 2.2 2 .6.4 1.1.3 1.1.3l2.2-.1s1.2-.1.6-1c0 0-.4-.8-2.1-2.3-1.7-1.5-1.5-1.3.6-4 1.3-1.8 1.8-2.9 1.7-3.3-.1-.4-1.1-.3-1.1-.3h-2.5s-.2 0-.3.1l-.2.3s-.5 1.4-1.2 2.6c-1.4 2.4-2 2.5-2.2 2.4-.5-.4-.4-1.4-.4-2.2 0-2.4.4-3.4-.7-3.6-.4-.1-.6-.1-1.6-.1-1.3 0-2.3.1-2.9.4-.4.2-.7.6-.5.6.2 0 .8.1 1 .5.3.5.3 1.7.3 1.7s.2 2.8-.4 3.2c-.4.3-1-.4-2.2-2.5-.7-1.2-1.2-2.5-1.2-2.5l-.2-.3s-.1-.1-.3-.2H4.6s-.3 0-.4.1c-.1.2 0 .5 0 .5s2 4.7 4.2 7.1c2 2.2 4.3 2 4.3 2z" fill="white"/></svg> },
@@ -481,18 +518,18 @@ export default function ProductClient({
                       { label: "Одноклассники", href: `https://connect.ok.ru/offer?url=${encodeURIComponent(pageUrl)}&title=${encodeURIComponent(shareText)}`, icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="12" fill="#ED812B"/><path d="M12 6.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5zm0 3.5a1 1 0 110-2 1 1 0 010 2zm4 3.2c-.7.5-1.5.8-2.4.9l2.1 2.1c.3.3.3.8 0 1.1-.3.3-.8.3-1.1 0L12 14.8l-2.6 2.5c-.3.3-.8.3-1.1 0-.3-.3-.3-.8 0-1.1l2.1-2.1c-.9-.1-1.7-.4-2.4-.9-.4-.3-.5-.8-.2-1.2.3-.4.8-.5 1.2-.2.9.6 2 1 3.1 1s2.1-.3 3.1-1c.4-.3.9-.2 1.2.2.2.4.1.9-.3 1.2z" fill="white"/></svg> },
                     ].map(({ label, href, icon }) => (
                       <a key={label} href={href} target="_blank" rel="noopener noreferrer" onClick={() => setShareOpen(false)}
-                        style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", borderRadius: 2, textDecoration: "none", color: S.text, fontSize: 13, transition: "background 0.15s" }}
-                        onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.05)")}
+                        style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", borderRadius: 10, textDecoration: "none", color: S.text, fontSize: 13, transition: "background 0.15s" }}
+                        onMouseEnter={e => (e.currentTarget.style.background = "rgba(var(--ink-rgb),0.04)")}
                         onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
                       >{icon}{label}</a>
                     ))}
                     <div style={{ height: 1, background: S.border, margin: "4px 0" }} />
                     <button onClick={() => { copyShareLink(); setShareOpen(false); }}
-                      style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", borderRadius: 2, background: "transparent", border: "none", cursor: "pointer", color: shareCopied ? "#4ade80" : S.text, fontSize: 13, width: "100%", textAlign: "left", transition: "background 0.15s, color 0.2s", fontFamily: "inherit" }}
-                      onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.05)")}
+                      style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", borderRadius: 10, background: "transparent", border: "none", cursor: "pointer", color: shareCopied ? "var(--success)" : S.text, fontSize: 13, width: "100%", textAlign: "left", transition: "background 0.15s, color 0.2s", fontFamily: "inherit" }}
+                      onMouseEnter={e => (e.currentTarget.style.background = "rgba(var(--ink-rgb),0.04)")}
                       onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
                     >
-                      <Link2 size={18} style={{ color: shareCopied ? "#4ade80" : S.muted, flexShrink: 0, transition: "color 0.2s" }} />
+                      <Link2 size={18} style={{ color: shareCopied ? "var(--success)" : S.muted, flexShrink: 0, transition: "color 0.2s" }} />
                       {shareCopied ? "Ссылка скопирована!" : "Копировать ссылку"}
                     </button>
                   </div>
@@ -502,7 +539,7 @@ export default function ProductClient({
               {/* Perks */}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 24 }}>
                 {[
-                  { icon: Truck,     label: freeDelivery ? "Бесплатная доставка" : `Доставка ${(settings?.deliveryPriceRub ?? 350).toLocaleString("ru-RU")} ₽` },
+                  { icon: Truck,     label: freeDelivery ? "Бесплатная доставка" : `Доставка ${(settings?.deliveryPriceRub ?? 350).toLocaleString("ru-RU")} ₽` },
                   { icon: Shield,    label: "100% оригинал" },
                   { icon: RefreshCw, label: "Возврат 14 дней" },
                 ].map(({ icon: Icon, label }) => (
@@ -517,7 +554,7 @@ export default function ProductClient({
               {product.description && (
                 <div style={{ borderTop: `1px solid ${S.border}`, paddingTop: 20 }}>
                   <h3 style={{ fontSize: 13, fontWeight: 600, color: S.text, marginBottom: 10 }}>Описание</h3>
-                  <p itemProp="description" style={{ fontSize: 13, color: S.muted, lineHeight: 1.7 }}>{product.description}</p>
+                  <p itemProp="description" style={{ fontSize: 14, color: S.muted, lineHeight: 1.7, whiteSpace: "pre-line", overflowWrap: "anywhere" }}>{product.description}</p>
                 </div>
               )}
 
@@ -544,7 +581,7 @@ export default function ProductClient({
               {mpAvgRating > 0 && (
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
                   <div style={{ display: "flex", gap: 2 }}>
-                    {[1,2,3,4,5].map(s => <Star key={s} size={14} style={{ color: s <= Math.round(mpAvgRating) ? "#C9A96E" : S.subtle, fill: s <= Math.round(mpAvgRating) ? "#C9A96E" : S.subtle }} />)}
+                    {[1,2,3,4,5].map(s => <Star key={s} size={14} style={{ color: s <= Math.round(mpAvgRating) ? "var(--accent)" : S.subtle, fill: s <= Math.round(mpAvgRating) ? "var(--accent)" : S.subtle }} />)}
                   </div>
                   <span style={{ fontSize: 13, fontWeight: 600, color: S.accent3 }}>{mpAvgRating.toFixed(1)}</span>
                   <span style={{ fontSize: 12, color: S.muted }}>{mpReviewCount} {mpReviewCount === 1 ? "отзыв" : mpReviewCount >= 2 && mpReviewCount <= 4 ? "отзыва" : "отзывов"} на Ozon</span>
@@ -554,7 +591,7 @@ export default function ProductClient({
                 const avg = productReviews.reduce((s, r) => s + r.rating, 0) / productReviews.length;
                 return (
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    {[1,2,3,4,5].map(s => <Star key={s} size={13} style={{ color: s <= Math.round(avg) ? "#fbbf24" : S.subtle, fill: s <= Math.round(avg) ? "#fbbf24" : S.subtle }} />)}
+                    {[1,2,3,4,5].map(s => <Star key={s} size={13} style={{ color: s <= Math.round(avg) ? "var(--warning)" : S.subtle, fill: s <= Math.round(avg) ? "var(--warning)" : S.subtle }} />)}
                     <span style={{ fontSize: 12, color: S.muted }}>{avg.toFixed(1)} средняя оценка</span>
                   </div>
                 );
@@ -566,8 +603,8 @@ export default function ProductClient({
                 else { setReviewOpen(false); setNamePromptOpen(o => !o); }
               }} style={{
                 display: "flex", alignItems: "center", gap: 6, padding: "9px 16px",
-                background: (reviewOpen || namePromptOpen) ? "rgba(201,169,110,0.12)" : "rgba(255,255,255,0.06)",
-                border: `1px solid ${(reviewOpen || namePromptOpen) ? "rgba(201,169,110,0.3)" : S.border}`,
+                background: (reviewOpen || namePromptOpen) ? "rgba(var(--accent-rgb),0.12)" : "rgba(var(--ink-rgb),0.048)",
+                border: `1px solid ${(reviewOpen || namePromptOpen) ? "rgba(var(--accent-rgb),0.3)" : S.border}`,
                 borderRadius: 12, fontSize: 13, fontWeight: 500, color: (reviewOpen || namePromptOpen) ? S.accent3 : S.muted,
                 cursor: "pointer", transition: "all 0.15s", fontFamily: "inherit",
               }}>
@@ -578,15 +615,15 @@ export default function ProductClient({
 
           {/* Name prompt */}
           {namePromptOpen && customer && !reviewSent && (
-            <div style={{ background: S.surface, borderRadius: 18, padding: 24, border: `1px solid rgba(201,169,110,0.2)`, marginBottom: 20 }}>
+            <div style={{ background: S.surface, borderRadius: 18, padding: 24, border: `1px solid rgba(var(--accent-rgb),0.2)`, marginBottom: 20 }}>
               <div style={{ fontSize: 13, color: S.accent3, fontWeight: 600, marginBottom: 6 }}>Укажите ваше имя</div>
               <div style={{ fontSize: 12, color: S.muted, marginBottom: 16, lineHeight: 1.6 }}>
                 Для публикации отзыва нужно имя — оно будет показано вместо email.
               </div>
               <input type="text" value={nameInput} onChange={e => { setNameInput(e.target.value); setNameError(""); }} placeholder="Ваше имя (например: Анна)" autoFocus maxLength={50}
-                style={{ width: "100%", padding: "12px 14px", background: S.surface2, border: `1.5px solid ${nameError ? "#f87171" : S.border}`, borderRadius: 12, fontSize: 13, color: S.text, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }}
-                onFocus={e => (e.target.style.borderColor = "rgba(201,169,110,0.4)")}
-                onBlur={e => (e.target.style.borderColor = nameError ? "#f87171" : S.border)}
+                style={{ width: "100%", padding: "12px 14px", background: S.surface2, border: `1.5px solid ${nameError ? "var(--danger)" : S.border}`, borderRadius: 12, fontSize: 13, color: S.text, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }}
+                onFocus={e => (e.target.style.borderColor = "rgba(var(--accent-rgb),0.4)")}
+                onBlur={e => (e.target.style.borderColor = nameError ? "var(--danger)" : S.border)}
                 onKeyDown={async e => {
                   if (e.key === "Enter") {
                     const n = nameInput.trim();
@@ -598,7 +635,7 @@ export default function ProductClient({
                   }
                 }}
               />
-              {nameError && <div style={{ fontSize: 12, color: "#f87171", marginTop: 6 }}>{nameError}</div>}
+              {nameError && <div style={{ fontSize: 12, color: "var(--danger)", marginTop: 6 }}>{nameError}</div>}
               <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
                 <button disabled={!nameInput.trim() || nameSaving}
                   onClick={async () => {
@@ -609,7 +646,7 @@ export default function ProductClient({
                     catch { setNameError("Не удалось сохранить имя"); }
                     finally { setNameSaving(false); }
                   }}
-                  style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "11px 20px", background: S.accent, color: "#0E0D0B", border: "none", borderRadius: 12, fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: (!nameInput.trim() || nameSaving) ? 0.5 : 1, fontFamily: "inherit" }}>
+                  style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "11px 20px", background: S.accent, color: "var(--surface)", border: "none", borderRadius: 12, fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: (!nameInput.trim() || nameSaving) ? 0.5 : 1, fontFamily: "inherit" }}>
                   {nameSaving ? "Сохранение…" : "Сохранить и продолжить"}
                 </button>
                 <button onClick={() => { setNamePromptOpen(false); setNameError(""); }} style={{ padding: "11px 14px", background: "none", border: `1px solid ${S.border}`, borderRadius: 12, color: S.muted, cursor: "pointer" }}>
@@ -623,7 +660,7 @@ export default function ProductClient({
           {reviewOpen && customer && !reviewSent && (
             <div style={{ background: S.surface, borderRadius: 18, padding: 24, border: `1px solid ${S.border}`, marginBottom: 20 }}>
               {customer.firstName && (
-                <div style={{ fontSize: 12, color: S.muted, marginBottom: 16, padding: "8px 12px", background: "rgba(201,169,110,0.06)", borderRadius: 8, border: "1px solid rgba(201,169,110,0.1)" }}>
+                <div style={{ fontSize: 12, color: S.muted, marginBottom: 16, padding: "8px 12px", background: "rgba(var(--accent-rgb),0.06)", borderRadius: 8, border: "1px solid rgba(var(--accent-rgb),0.1)" }}>
                   Отзыв от имени <span style={{ color: S.accent3, fontWeight: 600 }}>{customer.firstName}{customer.lastName ? ` ${customer.lastName}` : ""}</span>
                 </div>
               )}
@@ -633,14 +670,14 @@ export default function ProductClient({
                   {[1,2,3,4,5].map(s => (
                     <button key={s} type="button" onClick={() => setReviewRating(s)} onMouseEnter={() => setReviewHover(s)} onMouseLeave={() => setReviewHover(0)}
                       style={{ background: "none", border: "none", cursor: "pointer", padding: 2 }}>
-                      <Star size={24} style={{ color: s <= (reviewHover || reviewRating) ? "#fbbf24" : S.subtle, fill: s <= (reviewHover || reviewRating) ? "#fbbf24" : S.subtle, transition: "color 0.1s" }} />
+                      <Star size={24} style={{ color: s <= (reviewHover || reviewRating) ? "var(--warning)" : S.subtle, fill: s <= (reviewHover || reviewRating) ? "var(--warning)" : S.subtle, transition: "color 0.1s" }} />
                     </button>
                   ))}
                 </div>
               </div>
               <textarea value={reviewText} onChange={e => setReviewText(e.target.value)} placeholder="Расскажите о товаре — запах, стойкость, упаковка..." rows={4}
                 style={{ width: "100%", padding: "12px 14px", background: S.surface2, border: `1.5px solid ${S.border}`, borderRadius: 12, fontSize: 13, color: S.text, fontFamily: "inherit", outline: "none", resize: "vertical", lineHeight: 1.6, boxSizing: "border-box" }}
-                onFocus={e => (e.target.style.borderColor = "rgba(201,169,110,0.4)")}
+                onFocus={e => (e.target.style.borderColor = "rgba(var(--accent-rgb),0.4)")}
                 onBlur={e => (e.target.style.borderColor = S.border)}
               />
               <input ref={reviewPhotoInputRef} type="file" accept="image/jpeg,image/png,image/webp" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; if (f) handleReviewPhotoFile(f); }} />
@@ -649,7 +686,7 @@ export default function ProductClient({
                   <div style={{ position: "relative", display: "inline-block" }}>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img src={reviewPhotoUrl} alt="" style={{ width: 72, height: 72, objectFit: "cover", borderRadius: 10, border: `1px solid ${S.border}`, display: "block" }} />
-                    <button onClick={() => setReviewPhotoUrl("")} style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, background: "#2a2a2a", border: "none", borderRadius: "50%", color: S.muted, fontSize: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
+                    <button onClick={() => setReviewPhotoUrl("")} style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, background: "var(--surface)", border: "none", borderRadius: "50%", color: S.muted, fontSize: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
                   </div>
                 ) : (
                   <div
@@ -657,16 +694,16 @@ export default function ProductClient({
                     onDragOver={e => { e.preventDefault(); setReviewPhotoDragOver(true); }}
                     onDragLeave={() => setReviewPhotoDragOver(false)}
                     onDrop={e => { e.preventDefault(); setReviewPhotoDragOver(false); const f = e.dataTransfer.files[0]; if (f) handleReviewPhotoFile(f); }}
-                    style={{ padding: "10px 14px", borderRadius: 10, cursor: "pointer", display: "flex", alignItems: "center", gap: 8, border: `1px dashed ${reviewPhotoDragOver ? "rgba(201,169,110,0.6)" : S.border}`, background: reviewPhotoDragOver ? "rgba(201,169,110,0.04)" : "transparent", transition: "border-color 0.2s", color: S.muted, fontSize: 12 }}
+                    style={{ padding: "10px 14px", borderRadius: 10, cursor: "pointer", display: "flex", alignItems: "center", gap: 8, border: `1px dashed ${reviewPhotoDragOver ? "rgba(var(--accent-rgb),0.6)" : S.border}`, background: reviewPhotoDragOver ? "rgba(var(--accent-rgb),0.04)" : "transparent", transition: "border-color 0.2s", color: S.muted, fontSize: 12 }}
                   >
                     {reviewPhotoUploading ? <span>Загрузка…</span> : <><span>📷</span><span>Добавить фото</span></>}
                   </div>
                 )}
               </div>
-              {reviewMutation.error && <div style={{ fontSize: 12, color: "#f87171", marginTop: 6 }}>{(reviewMutation.error as Error).message}</div>}
+              {reviewMutation.error && <div style={{ fontSize: 12, color: "var(--danger)", marginTop: 6 }}>{(reviewMutation.error as Error).message}</div>}
               <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
                 <button onClick={() => reviewMutation.mutate()} disabled={reviewText.trim().length < 10 || reviewMutation.isPending}
-                  style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "11px 20px", background: S.accent, color: "#0E0D0B", border: "none", borderRadius: 12, fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: (reviewText.trim().length < 10 || reviewMutation.isPending) ? 0.5 : 1, fontFamily: "inherit" }}>
+                  style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, padding: "11px 20px", background: S.accent, color: "var(--surface)", border: "none", borderRadius: 12, fontSize: 13, fontWeight: 700, cursor: "pointer", opacity: (reviewText.trim().length < 10 || reviewMutation.isPending) ? 0.5 : 1, fontFamily: "inherit" }}>
                   <Send size={14} /> {reviewMutation.isPending ? "Отправка…" : "Опубликовать отзыв"}
                 </button>
                 <button onClick={() => setReviewOpen(false)} style={{ padding: "11px 14px", background: "none", border: `1px solid ${S.border}`, borderRadius: 12, color: S.muted, cursor: "pointer" }}>
@@ -677,7 +714,7 @@ export default function ProductClient({
           )}
 
           {reviewSent && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", background: "rgba(74,222,128,0.08)", border: "1px solid rgba(74,222,128,0.2)", borderRadius: 14, fontSize: 13, color: "#4ade80", marginBottom: 20 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 16px", background: "rgba(var(--success-rgb),0.08)", border: "1px solid rgba(var(--success-rgb),0.2)", borderRadius: 14, fontSize: 13, color: "var(--success)", marginBottom: 20 }}>
               <Check size={15} /> Спасибо! Ваш отзыв отправлен на проверку.
             </div>
           )}
@@ -705,31 +742,31 @@ export default function ProductClient({
                   <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       <div style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(0,143,255,0.1)", border: "1px solid rgba(0,143,255,0.2)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                        <span style={{ fontSize: 13, fontWeight: 700, color: "#60b3ff" }}>{(r.author || "П")[0].toUpperCase()}</span>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: "#1d4ed8" }}>{(r.author || "П")[0].toUpperCase()}</span>
                       </div>
                       <div>
                         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                           <span style={{ fontSize: 13, fontWeight: 600, color: S.text }}>{r.author}</span>
-                          <span style={{ fontSize: 9, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "#60b3ff", background: "rgba(0,143,255,0.1)", borderRadius: 4, padding: "1px 5px" }}>Ozon</span>
+                          <span style={{ fontSize: 9, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "#1d4ed8", background: "rgba(0,143,255,0.1)", borderRadius: 14, padding: "1px 5px" }}>Ozon</span>
                         </div>
                         <div style={{ fontSize: 11, color: S.muted }}>{new Date(r.createdAt).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })}</div>
                       </div>
                     </div>
                     <div style={{ display: "flex", gap: 2, flexShrink: 0 }}>
-                      {[1,2,3,4,5].map(s => <Star key={s} size={12} style={{ color: s <= r.rating ? "#C9A96E" : S.subtle, fill: s <= r.rating ? "#C9A96E" : S.subtle }} />)}
+                      {[1,2,3,4,5].map(s => <Star key={s} size={12} style={{ color: s <= r.rating ? "var(--accent)" : S.subtle, fill: s <= r.rating ? "var(--accent)" : S.subtle }} />)}
                     </div>
                   </div>
                   <p style={{ fontSize: 13, color: S.muted, lineHeight: 1.65, margin: 0 }}>{r.text}</p>
                   {r.advantages && (
                     <div style={{ marginTop: 8, display: "flex", gap: 6, alignItems: "flex-start" }}>
-                      <span style={{ fontSize: 10, color: "#4ade80", fontWeight: 600, flexShrink: 0, marginTop: 1 }}>+</span>
-                      <span style={{ fontSize: 12, color: "rgba(74,222,128,0.8)", lineHeight: 1.5 }}>{r.advantages}</span>
+                      <span style={{ fontSize: 10, color: "var(--success)", fontWeight: 600, flexShrink: 0, marginTop: 1 }}>+</span>
+                      <span style={{ fontSize: 12, color: "rgba(var(--success-rgb),0.8)", lineHeight: 1.5 }}>{r.advantages}</span>
                     </div>
                   )}
                   {r.disadvantages && (
                     <div style={{ marginTop: 4, display: "flex", gap: 6, alignItems: "flex-start" }}>
-                      <span style={{ fontSize: 10, color: "#f87171", fontWeight: 600, flexShrink: 0, marginTop: 1 }}>−</span>
-                      <span style={{ fontSize: 12, color: "rgba(248,113,113,0.8)", lineHeight: 1.5 }}>{r.disadvantages}</span>
+                      <span style={{ fontSize: 10, color: "var(--danger)", fontWeight: 600, flexShrink: 0, marginTop: 1 }}>−</span>
+                      <span style={{ fontSize: 12, color: "rgba(var(--danger-rgb),0.8)", lineHeight: 1.5 }}>{r.disadvantages}</span>
                     </div>
                   )}
                   {r.photos && r.photos.length > 0 && (
@@ -761,7 +798,7 @@ export default function ProductClient({
                 <div key={r.id} style={{ background: S.surface, borderRadius: 16, padding: "16px 20px", border: `1px solid ${S.border}` }}>
                   <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <div style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(201,169,110,0.12)", border: `1px solid rgba(201,169,110,0.2)`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      <div style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(var(--accent-rgb),0.12)", border: `1px solid rgba(var(--accent-rgb),0.2)`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                         <span style={{ fontSize: 13, fontWeight: 700, color: S.accent3 }}>{(r.author || "П")[0].toUpperCase()}</span>
                       </div>
                       <div>
@@ -770,7 +807,7 @@ export default function ProductClient({
                       </div>
                     </div>
                     <div style={{ display: "flex", gap: 2, flexShrink: 0 }}>
-                      {[1,2,3,4,5].map(s => <Star key={s} size={12} style={{ color: s <= r.rating ? "#fbbf24" : S.subtle, fill: s <= r.rating ? "#fbbf24" : S.subtle }} />)}
+                      {[1,2,3,4,5].map(s => <Star key={s} size={12} style={{ color: s <= r.rating ? "var(--warning)" : S.subtle, fill: s <= r.rating ? "var(--warning)" : S.subtle }} />)}
                     </div>
                   </div>
                   <p style={{ fontSize: 13, color: S.muted, lineHeight: 1.65, margin: 0 }}>{r.text}</p>
@@ -790,7 +827,7 @@ export default function ProductClient({
               {qaItems.map(item => {
                 const isOpen = qaOpen.has(item.id);
                 return (
-                  <div key={item.id} style={{ background: S.surface, borderRadius: 14, border: `1px solid ${isOpen ? "rgba(201,169,110,0.2)" : S.border}`, overflow: "hidden", transition: "border-color 0.2s" }}>
+                  <div key={item.id} style={{ background: S.surface, borderRadius: 14, border: `1px solid ${isOpen ? "rgba(var(--accent-rgb),0.2)" : S.border}`, overflow: "hidden", transition: "border-color 0.2s" }}>
                     <button
                       onClick={() => setQaOpen(prev => { const next = new Set(prev); if (isOpen) next.delete(item.id); else next.add(item.id); return next; })}
                       style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 18px", background: "none", border: "none", cursor: "pointer", textAlign: "left", fontFamily: "inherit" }}
@@ -801,7 +838,7 @@ export default function ProductClient({
                     {isOpen && (
                       <div style={{ padding: "0 18px 16px", borderTop: `1px solid ${S.border}` }}>
                         <div style={{ display: "flex", gap: 8, paddingTop: 12, alignItems: "flex-start" }}>
-                          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", color: "#60b3ff", background: "rgba(0,143,255,0.1)", borderRadius: 4, padding: "3px 7px", flexShrink: 0, marginTop: 1 }}>Ozon</span>
+                          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", color: "#1d4ed8", background: "rgba(0,143,255,0.1)", borderRadius: 14, padding: "3px 7px", flexShrink: 0, marginTop: 1 }}>Ozon</span>
                           <p style={{ fontSize: 13, color: S.muted, lineHeight: 1.65, margin: 0 }}>{item.answer}</p>
                         </div>
                       </div>
@@ -821,18 +858,18 @@ export default function ProductClient({
               {relatedItems.map(p => (
                 <Link key={p.offerId} href={`/product/${toProductSlug(p.name, p.offerId)}`}
                   style={{ display: "flex", gap: 12, padding: 14, textDecoration: "none", background: S.surface, borderRadius: 16, border: `1px solid ${S.border}`, transition: "border-color 0.15s" }}
-                  onMouseEnter={e => (e.currentTarget.style.borderColor = "rgba(201,169,110,0.25)")}
+                  onMouseEnter={e => (e.currentTarget.style.borderColor = "rgba(var(--accent-rgb),0.25)")}
                   onMouseLeave={e => (e.currentTarget.style.borderColor = S.border)}>
                   <div style={{ width: 52, height: 52, borderRadius: 10, overflow: "hidden", flexShrink: 0, background: S.surface2, display: "flex", alignItems: "center", justifyContent: "center" }}>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     {p.images[0]
-                      ? <img src={p.images[0]} alt={p.name} style={{ width: 52, height: 52, objectFit: "contain", padding: 4 }} />
+                      ? <img src={productImg(p.images[0], 160)} alt={p.name} loading="lazy" style={{ width: 52, height: 52, objectFit: "contain" }} />
                       : <span style={{ fontSize: 18, fontWeight: 700, color: S.subtle }}>{p.brand?.[0] ?? "?"}</span>}
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 11, color: S.accent3, fontWeight: 600, marginBottom: 2 }}>{p.brand}</div>
                     <div style={{ fontSize: 12, color: S.text, lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{p.name}</div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: S.text, marginTop: 4 }}>{p.priceRub.toLocaleString("ru-RU")} ₽</div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: S.text, marginTop: 4 }}>{p.priceRub.toLocaleString("ru-RU")} ₽</div>
                   </div>
                 </Link>
               ))}
@@ -843,15 +880,15 @@ export default function ProductClient({
 
       {/* Add-to-cart popup */}
       {cartPopup && (
-        <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 100, padding: `16px clamp(16px,4vw,32px) calc(16px + env(safe-area-inset-bottom, 0px))`, background: S.surface, borderTop: `1px solid ${S.border}`, boxShadow: "0 -8px 32px rgba(0,0,0,0.4)", animation: "slideUp 0.25s ease" }}>
+        <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, zIndex: 100, padding: `16px clamp(16px,4vw,32px) calc(16px + env(safe-area-inset-bottom, 0px))`, background: S.surface, borderTop: `1px solid ${S.border}`, boxShadow: "0 -8px 32px rgba(var(--ink-rgb),0.14)", animation: "slideUp 0.25s ease" }}>
           <div style={{ maxWidth: 680, margin: "0 auto", display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
               <div style={{ width: 40, height: 40, borderRadius: 10, overflow: "hidden", flexShrink: 0, background: S.surface2 }}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-              {product.images[0] && <img src={product.images[0]} alt="" style={{ width: 40, height: 40, objectFit: "contain", padding: 3 }} />}
+              {product.images[0] && <img src={productImg(product.images[0], 160)} alt="" style={{ width: 40, height: 40, objectFit: "contain" }} />}
               </div>
               <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 12, color: "#4ade80", fontWeight: 600 }}>Добавлено в корзину</div>
+                <div style={{ fontSize: 12, color: "var(--success)", fontWeight: 600 }}>Добавлено в корзину</div>
                 <div style={{ fontSize: 12, color: S.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{product.name}</div>
               </div>
             </div>
@@ -871,8 +908,8 @@ export default function ProductClient({
                 <Link key={p.offerId} href={`/product/${toProductSlug(p.name, p.offerId)}`} onClick={() => setCartPopup(false)}
                   style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: S.surface2, borderRadius: 10, border: `1px solid ${S.border}`, textDecoration: "none", fontSize: 12, color: S.text, whiteSpace: "nowrap" }}>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  {p.images[0] && <img src={p.images[0]} alt="" style={{ width: 24, height: 24, objectFit: "contain", borderRadius: 4 }} />}
-                  {p.priceRub.toLocaleString("ru-RU")} ₽
+                  {p.images[0] && <img src={productImg(p.images[0], 160)} alt="" style={{ width: 24, height: 24, objectFit: "contain", borderRadius: 14 }} />}
+                  {p.priceRub.toLocaleString("ru-RU")} ₽
                 </Link>
               ))}
             </div>

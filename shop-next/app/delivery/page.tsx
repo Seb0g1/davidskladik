@@ -1,37 +1,40 @@
+/* eslint-disable @next/next/no-img-element */
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Truck, CreditCard, RotateCcw, Clock, Shield, MapPin } from "lucide-react";
 import { fetchSettings } from "@/lib/api";
 import { breadcrumbJsonLd, SITE_URL, SITE_NAME } from "@/lib/seo";
+import DeliveryMapButton from "@/components/DeliveryMapButton";
+import { OzonPayLogo, OZON_PAY_METHODS, OZON_PAY_FAQ } from "@/components/OzonPay";
 
 export const revalidate = 3600;
 
 export const metadata: Metadata = {
-  title: `Доставка и оплата | ${SITE_NAME}`,
-  description: "Доставка парфюмерии Magic Vibes по всей России через Ozon FBS. Оплата картой, СБП. Возврат 14 дней. Реквизиты ИП Шальнев Давид Алиевич.",
+  title: `Доставка и оплата`,
+  description: "Доставка парфюмерии Magic Vibes по всей России: СДЭК, Яндекс Доставка, Ozon — в пункт выдачи, постамат или курьером; по Москве курьер Достависты день в день. Оплата через Ozon Pay: карты российских банков, СБП, Ozon Карта, рассрочка. Возврат 7 дней. Реквизиты ИП Шальнев Давид Алиевич.",
   alternates: { canonical: "/delivery" },
   openGraph: { title: "Доставка и оплата — Magic Vibes", url: `${SITE_URL}/delivery` },
-  keywords: "доставка парфюмерии, доставка духов по России, Ozon ПВЗ парфюм, оплата картой парфюм, возврат духов",
+  keywords: "доставка парфюмерии, доставка духов по России, СДЭК парфюм, Яндекс Доставка духи, курьер Москва духи, Ozon ПВЗ парфюм, оплата картой парфюм, возврат духов",
 };
 
 const S = {
-  bg:      "#0E0D0B",
-  surface: "#161512",
-  surface2:"#1D1C18",
-  border:  "rgba(255,252,245,0.07)",
-  borderMd:"rgba(255,252,245,0.13)",
-  text:    "#F4EFE6",
-  muted:   "rgba(244,239,230,0.48)",
-  subtle:  "rgba(244,239,230,0.22)",
-  accent:  "#C9A96E",
-  accent2: "#D9BF8F",
+  bg:      "var(--surface)",
+  surface: "var(--surface)",
+  surface2:"var(--surface)",
+  border:  "rgba(var(--ink-rgb),0.056)",
+  borderMd:"rgba(var(--ink-rgb),0.104)",
+  text:    "var(--ink)",
+  muted:   "rgba(var(--ink-rgb),0.55)",
+  subtle:  "rgba(var(--ink-rgb),0.45)",
+  accent:  "var(--accent)",
+  accent2: "var(--accent2)",
 };
 
-function Section({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
+function Section({ id, icon, title, children }: { id?: string; icon: React.ReactNode; title: string; children: React.ReactNode }) {
   return (
-    <div style={{ background: S.surface, borderRadius: 20, padding: "28px 28px 24px", border: `1px solid ${S.border}`, marginBottom: 16 }}>
+    <div id={id} style={{ scrollMarginTop: 90, background: S.surface, borderRadius: 20, padding: "28px 28px 24px", border: `1px solid ${S.border}`, marginBottom: 16 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
-        <div style={{ width: 40, height: 40, borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(201,169,110,0.1)", border: "1px solid rgba(201,169,110,0.2)", flexShrink: 0 }}>
+        <div style={{ width: 40, height: 40, borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(var(--accent-rgb),0.1)", border: "1px solid rgba(var(--accent-rgb),0.2)", flexShrink: 0 }}>
           {icon}
         </div>
         <h2 style={{ fontSize: 17, fontWeight: 600, color: S.text, margin: 0 }}>{title}</h2>
@@ -58,7 +61,7 @@ export default async function DeliveryPage() {
   const daysMax = settings?.deliveryDays ?? 5;
   const price = settings?.deliveryPriceRub ?? 0;
   const freeFrom = settings?.freeDeliveryFrom;
-  const priceStr = price === 0 ? "Бесплатно" : `${price.toLocaleString("ru-RU")} ₽${freeFrom ? ` (от ${freeFrom.toLocaleString("ru-RU")} ₽ — бесплатно)` : ""}`;
+  const priceStr = price === 0 ? "Бесплатно" : `${price.toLocaleString("ru-RU")} ₽${freeFrom ? ` (от ${freeFrom.toLocaleString("ru-RU")} ₽ — бесплатно)` : ""}`;
 
   const breadcrumb = breadcrumbJsonLd([
     { name: "Главная", url: "/" },
@@ -78,53 +81,64 @@ export default async function DeliveryPage() {
 
           {/* Header */}
           <div style={{ textAlign: "center", marginBottom: 56 }}>
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 10, marginBottom: 20, padding: "6px 16px", borderRadius: 999, border: `1px solid ${S.borderMd}`, background: "rgba(201,169,110,0.06)" }}>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 10, marginBottom: 20, padding: "6px 16px", borderRadius: 999, border: `1px solid ${S.borderMd}`, background: "rgba(var(--accent-rgb),0.06)" }}>
               <Truck size={13} style={{ color: S.accent }} />
               <span style={{ fontSize: 12, letterSpacing: "0.12em", textTransform: "uppercase", color: S.accent }}>Условия</span>
             </div>
-            <h1 style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", fontWeight: 600, fontSize: "clamp(26px,5vw,40px)", color: S.text, margin: "0 0 16px" }}>
+            <h1 style={{ fontFamily: "var(--font-display)", fontWeight: 600, fontSize: "clamp(26px,5vw,40px)", color: S.text, margin: "0 0 16px" }}>
               Доставка и оплата
             </h1>
             <div style={{ width: 48, height: 1, background: S.accent, margin: "0 auto 16px" }} />
             <p style={{ fontSize: 15, color: S.muted, lineHeight: 1.7, maxWidth: 520, margin: "0 auto" }}>
-              Мы доставляем оригинальную парфюмерию по всей России через инфраструктуру Ozon
+              Доставляем оригинальную парфюмерию по всей России — вы сами выбираете службу, срок и цену
             </p>
           </div>
 
           {/* Delivery */}
           <Section icon={<Truck size={18} style={{ color: S.accent }} />} title="Доставка">
             <div style={{ marginBottom: 20 }}>
-              Все заказы отправляются через логистику <strong style={{ color: S.text }}>Ozon FBS</strong> (Fulfillment by Seller).
-              Вы выбираете удобный пункт выдачи Ozon на карте при оформлении заказа.
+              При оформлении заказа укажите город — мы покажем все доступные способы с точной ценой и сроком. Стоимость доставки
+              оплачивает покупатель по тарифу выбранной службы; она видна до оплаты и отдельной строкой в чеке.
             </div>
-            <Row label="Способ доставки" value="Пункт выдачи Ozon (ПВЗ)" />
-            <Row label="Стоимость" value={priceStr} />
-            <Row label="Срок доставки" value={`${daysMin}–${daysMax} рабочих дней`} />
+            <Row label="СДЭК" value="Пункт выдачи, постамат или курьер до двери" />
+            <Row label="Яндекс Доставка" value="Пункт выдачи, постамат или курьер до двери" />
+            <Row label="Ozon" value="Пункт выдачи или курьер — выбор на странице Ozon Pay" />
+            <Row label="Достависта" value="Курьер в день заказа — Москва и область" />
+            <Row label="Стоимость" value="По тарифу службы — рассчитывается при оформлении" />
+            <Row label="Срок доставки" value="Показывается для каждого способа, обычно 1–7 дней" />
             <Row label="По всей" value="России" />
-            <div style={{ marginTop: 16, padding: "14px 16px", borderRadius: 12, background: "rgba(201,169,110,0.06)", border: "1px solid rgba(201,169,110,0.15)" }}>
+            <DeliveryMapButton />
+            <div style={{ marginTop: 16, padding: "14px 16px", borderRadius: 12, background: "rgba(var(--accent-rgb),0.06)", border: "1px solid rgba(var(--accent-rgb),0.15)" }}>
               <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
                 <Clock size={14} style={{ color: S.accent, flexShrink: 0, marginTop: 2 }} />
                 <span style={{ fontSize: 13 }}>
-                  После оформления заказа мы обрабатываем его в течение <strong style={{ color: S.accent2 }}>1 рабочего дня</strong> и передаём в службу доставки Ozon.
+                  После оплаты мы собираем заказ в течение <strong style={{ color: S.accent2 }}>1 рабочего дня</strong> и передаём в выбранную службу доставки. Номер для отслеживания появится в личном кабинете.
                 </span>
               </div>
             </div>
           </Section>
 
           {/* Payment */}
-          <Section icon={<CreditCard size={18} style={{ color: S.accent }} />} title="Оплата">
-            <div style={{ marginBottom: 20 }}>
-              Оплата производится онлайн через защищённую платёжную систему. Ваши платёжные данные не хранятся на наших серверах.
+          <Section id="payment" icon={<CreditCard size={18} style={{ color: S.accent }} />} title="Оплата через Ozon Pay">
+            <img src="/ozon-pay-banner.jpg" alt="Ozon Pay — оплата картами с Ozon и через СБП" width={1600} height={339}
+              style={{ width: "100%", height: "auto", borderRadius: 14, display: "block", marginBottom: 20 }} />
+            <div style={{ display: "flex", gap: 14, alignItems: "flex-start", marginBottom: 20 }}>
+              <OzonPayLogo height={34} />
+              <div>{OZON_PAY_FAQ}</div>
             </div>
-            <Row label="Банковские карты" value="Visa, Mastercard, Мир" />
-            <Row label="Онлайн-банкинг" value="СБП (Система быстрых платежей)" />
-            <Row label="Наличные" value="При получении в ПВЗ" />
+            <div style={{ fontSize: 13, color: S.text, fontWeight: 600, marginBottom: 4 }}>Способы оплаты</div>
+            {OZON_PAY_METHODS.map((m) => (
+              <div key={m} style={{ display: "flex", gap: 10, padding: "8px 0", borderBottom: `1px solid ${S.border}`, color: S.text, fontSize: 14 }}>
+                <span style={{ color: "#4d8dff" }}>●</span>{m}
+              </div>
+            ))}
+            <Row label="Когда оплачивать" value="Онлайн при оформлении заказа" />
             <Row label="Валюта" value="Российский рубль (₽)" />
-            <div style={{ marginTop: 16, padding: "14px 16px", borderRadius: 12, background: "rgba(74,222,128,0.05)", border: "1px solid rgba(74,222,128,0.15)" }}>
+            <div style={{ marginTop: 16, padding: "14px 16px", borderRadius: 12, background: "rgba(var(--success-rgb),0.05)", border: "1px solid rgba(var(--success-rgb),0.15)" }}>
               <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-                <Shield size={14} style={{ color: "#4ade80", flexShrink: 0, marginTop: 2 }} />
+                <Shield size={14} style={{ color: "var(--success)", flexShrink: 0, marginTop: 2 }} />
                 <span style={{ fontSize: 13 }}>
-                  Платёж защищён по протоколу <strong style={{ color: "#4ade80" }}>TLS/SSL</strong>. Данные карты не передаются магазину.
+                  Оплата проходит на защищённой странице <strong style={{ color: "var(--success)" }}>Ozon Pay</strong> (Ozon Банк). Данные карты не передаются магазину.
                 </span>
               </div>
             </div>
@@ -137,7 +151,7 @@ export default async function DeliveryPage() {
             </div>
             <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 20 }}>
               {[
-                { title: "14 дней — возврат товара надлежащего качества", desc: "Товар можно вернуть в течение 14 дней с момента получения, если он не был в употреблении, сохранены оригинальная упаковка, товарный вид и потребительские свойства." },
+                { title: "7 дней — возврат товара надлежащего качества", desc: "Товар, купленный дистанционно, можно вернуть в течение 7 дней с момента получения (ст. 26.1 Закона «О защите прав потребителей»), если он не был в употреблении, сохранены оригинальная упаковка, товарный вид и потребительские свойства." },
                 { title: "Возврат некачественного товара", desc: "Если товар имеет дефекты, вы вправе потребовать замены, ремонта, соразмерного снижения цены или полного возврата средств." },
                 { title: "Возврат средств", desc: "Деньги возвращаются на исходный способ оплаты в течение 10 рабочих дней после получения и проверки товара." },
               ].map(item => (
@@ -147,12 +161,12 @@ export default async function DeliveryPage() {
                 </div>
               ))}
             </div>
-            <div style={{ padding: "14px 16px", borderRadius: 12, background: "rgba(201,169,110,0.06)", border: "1px solid rgba(201,169,110,0.15)" }}>
+            <div style={{ padding: "14px 16px", borderRadius: 12, background: "rgba(var(--accent-rgb),0.06)", border: "1px solid rgba(var(--accent-rgb),0.15)" }}>
               <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
                 <MapPin size={14} style={{ color: S.accent, flexShrink: 0, marginTop: 2 }} />
                 <span style={{ fontSize: 13 }}>
                   Для оформления возврата напишите на{" "}
-                  <a href="mailto:info@magicvibes.ru" style={{ color: S.accent, textDecoration: "none" }}>info@magicvibes.ru</a>{" "}
+                  <a href="mailto:noreply@magicvibes.ru" style={{ color: S.accent, textDecoration: "none" }}>noreply@magicvibes.ru</a>{" "}
                   с темой «Возврат» и номером заказа. Ответим в течение 1 рабочего дня.
                 </span>
               </div>
@@ -166,7 +180,7 @@ export default async function DeliveryPage() {
               <div><span style={{ color: S.subtle }}>Продавец: </span><span style={{ color: S.text }}>ИП Шальнев Давид Алиевич</span></div>
               <div><span style={{ color: S.subtle }}>ОГРНИП: </span><span style={{ color: S.text, fontFamily: "monospace" }}>323861700065205</span></div>
               <div><span style={{ color: S.subtle }}>ИНН: </span><span style={{ color: S.text, fontFamily: "monospace" }}>860203590860</span></div>
-              <div><span style={{ color: S.subtle }}>Email: </span><a href="mailto:info@magicvibes.ru" style={{ color: S.accent, textDecoration: "none" }}>info@magicvibes.ru</a></div>
+              <div><span style={{ color: S.subtle }}>Email: </span><a href="mailto:noreply@magicvibes.ru" style={{ color: S.accent, textDecoration: "none" }}>noreply@magicvibes.ru</a></div>
             </div>
             <div style={{ marginTop: 16, fontSize: 12, color: S.subtle, lineHeight: 1.7, borderTop: `1px solid ${S.border}`, paddingTop: 14 }}>
               Настоящая страница является публичной офертой в части условий доставки и возврата товаров,

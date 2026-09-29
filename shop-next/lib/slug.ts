@@ -17,11 +17,13 @@ export function toProductSlug(name: string, offerId: string): string {
     .substring(0, 80)
     .replace(/-+$/, '');
 
-  return `${nameSlug}--${offerId}`;
+  // offerIds may contain URL-reserved chars (e.g. "#YV000011#") — encode, or the # turns into a fragment → 404
+  return `${nameSlug}--${encodeURIComponent(offerId)}`;
 }
 
 export function parseSlugForOfferId(slug: string): string {
   const idx = slug.lastIndexOf('--');
   if (idx === -1) return decodeURIComponent(slug); // backward compat with old plain-offerId URLs
-  return slug.slice(idx + 2);
+  const raw = slug.slice(idx + 2);
+  try { return decodeURIComponent(raw); } catch { return raw; }
 }

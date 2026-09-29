@@ -21,15 +21,15 @@ const STEPS = ["Аромат", "Упаковка", "Открытка", "Итог
 const PAGE_STYLE = `
   .gift-product-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
   @media (min-width: 640px) { .gift-product-grid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); } }
-  .gift-product-card { background: #111; border: 1px solid rgba(255,255,255,0.07); border-radius: 2px; cursor: pointer; transition: border-color 0.25s ease, transform 0.25s ease; overflow: hidden; }
-  .gift-product-card:hover { border-color: rgba(201,162,94,0.4); transform: translateY(-2px); }
-  .gift-product-card.selected { border-color: #c9a25e; background: rgba(201,162,94,0.06); }
-  .gift-pack-card { background: #111; border: 1px solid rgba(255,255,255,0.07); border-radius: 2px; padding: 20px 24px; min-height: 120px; cursor: pointer; transition: border-color 0.25s ease, background 0.25s ease; display: flex; flex-direction: column; gap: 8px; }
-  .gift-pack-card:hover { border-color: rgba(201,162,94,0.4); }
-  .gift-pack-card.selected { border-color: #c9a25e; background: rgba(201,162,94,0.07); }
-  .gift-skip-link { font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: rgba(245,244,240,0.28); background: none; border: none; cursor: pointer; padding: 4px 0; font-family: inherit; transition: color 0.2s; }
-  .gift-skip-link:hover { color: rgba(245,244,240,0.6); }
-  .skeleton { background: linear-gradient(90deg, #1a1a1a 25%, #222 50%, #1a1a1a 75%); background-size: 200% 100%; animation: shimmer 1.4s infinite; border-radius: 2px; }
+  .gift-product-card { background: var(--surface); border: 1px solid rgba(var(--ink-rgb),0.056); border-radius: 12px; cursor: pointer; transition: border-color 0.25s ease, transform 0.25s ease; overflow: hidden; }
+  .gift-product-card:hover { border-color: rgba(var(--accent-rgb),0.4); transform: translateY(-2px); }
+  .gift-product-card.selected { border-color: var(--accent); background: rgba(var(--accent-rgb),0.06); }
+  .gift-pack-card { background: var(--surface); border: 1px solid rgba(var(--ink-rgb),0.056); border-radius: 12px; padding: 20px 24px; min-height: 120px; cursor: pointer; transition: border-color 0.25s ease, background 0.25s ease; display: flex; flex-direction: column; gap: 8px; }
+  .gift-pack-card:hover { border-color: rgba(var(--accent-rgb),0.4); }
+  .gift-pack-card.selected { border-color: var(--accent); background: rgba(var(--accent-rgb),0.07); }
+  .gift-skip-link { font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: rgba(var(--ink-rgb),0.45); background: none; border: none; cursor: pointer; padding: 4px 0; font-family: inherit; transition: color 0.2s; }
+  .gift-skip-link:hover { color: rgba(var(--ink-rgb),0.69); }
+  .skeleton { background: linear-gradient(90deg, var(--surface) 25%, var(--surface) 50%, var(--surface) 75%); background-size: 200% 100%; animation: shimmer 1.4s infinite; border-radius: 12px; }
   @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
 `;
 
@@ -41,21 +41,21 @@ function StepIndicator({ step }: { step: number }) {
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
             <div style={{
               width: 28, height: 28, borderRadius: "50%",
-              border: `1px solid ${i === step ? "#c9a25e" : i < step ? "rgba(201,162,94,0.4)" : "rgba(255,255,255,0.12)"}`,
-              background: i === step ? "rgba(201,162,94,0.15)" : i < step ? "rgba(201,162,94,0.08)" : "transparent",
+              border: `1px solid ${i === step ? "var(--accent)" : i < step ? "rgba(var(--accent-rgb),0.4)" : "rgba(var(--ink-rgb),0.096)"}`,
+              background: i === step ? "rgba(var(--accent-rgb),0.15)" : i < step ? "rgba(var(--accent-rgb),0.08)" : "transparent",
               display: "flex", alignItems: "center", justifyContent: "center",
               fontSize: 11, fontWeight: 500,
-              color: i === step ? "#c9a25e" : i < step ? "rgba(201,162,94,0.6)" : "rgba(245,244,240,0.2)",
+              color: i === step ? "var(--accent)" : i < step ? "rgba(var(--accent-rgb),0.6)" : "rgba(var(--ink-rgb),0.45)",
               transition: "all 0.3s ease",
             }}>
               {i < step ? "✓" : i + 1}
             </div>
-            <span style={{ fontSize: 9, letterSpacing: "0.12em", textTransform: "uppercase", color: i === step ? "#c9a25e" : i < step ? "rgba(201,162,94,0.5)" : "rgba(245,244,240,0.2)", whiteSpace: "nowrap" }}>
+            <span style={{ fontSize: 11, letterSpacing: "0.12em", textTransform: "uppercase", color: i === step ? "var(--accent)" : i < step ? "rgba(var(--accent-rgb),0.5)" : "rgba(var(--ink-rgb),0.45)", whiteSpace: "nowrap" }}>
               {label}
             </span>
           </div>
           {i < STEPS.length - 1 && (
-            <div style={{ width: "clamp(20px,5vw,60px)", height: 1, background: i < step ? "rgba(201,162,94,0.35)" : "rgba(255,255,255,0.08)", margin: "0 8px", marginBottom: 22, transition: "background 0.3s" }} />
+            <div style={{ width: "clamp(20px,5vw,60px)", height: 1, background: i < step ? "rgba(var(--accent-rgb),0.35)" : "rgba(var(--ink-rgb),0.064)", margin: "0 8px", marginBottom: 22, transition: "background 0.3s" }} />
           )}
         </div>
       ))}
@@ -67,23 +67,23 @@ function ProductCardMini({ product, selected, onClick }: { product: ShopProduct;
   const img = product.images?.[0];
   return (
     <div className={`gift-product-card${selected ? " selected" : ""}`} onClick={onClick}>
-      <div style={{ aspectRatio: "4/5", overflow: "hidden", background: "#0d0d0d", position: "relative" }}>
+      <div style={{ aspectRatio: "4/5", overflow: "hidden", background: "var(--surface)", position: "relative" }}>
         {img
           ? <Image src={img} alt={product.name} fill style={{ objectFit: "cover" }} />
-          : <div style={{ width: "100%", height: "100%", background: "#181818" }} />
+          : <div style={{ width: "100%", height: "100%", background: "var(--surface)" }} />
         }
         {selected && (
-          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(201,162,94,0.15)" }}>
-            <div style={{ width: 28, height: 28, borderRadius: "50%", background: "#c9a25e", display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <span style={{ fontSize: 14, color: "#0b0b0b", fontWeight: 700 }}>✓</span>
+          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(var(--accent-rgb),0.15)" }}>
+            <div style={{ width: 28, height: 28, borderRadius: "50%", background: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <span style={{ fontSize: 14, color: "var(--paper)", fontWeight: 700 }}>✓</span>
             </div>
           </div>
         )}
       </div>
       <div style={{ padding: "10px 12px 12px" }}>
-        <p style={{ margin: "0 0 3px", fontSize: 9, letterSpacing: "0.14em", textTransform: "uppercase", color: "#6f6c66" }}>{product.brand}</p>
-        <p style={{ margin: "0 0 5px", fontSize: 12.5, color: "#d8d5cc", lineHeight: 1.35, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as const, overflow: "hidden" }}>{product.name}</p>
-        <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: "#c9a25e" }}>{product.priceRub.toLocaleString("ru-RU")} ₽</p>
+        <p style={{ margin: "0 0 3px", fontSize: 11, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(var(--ink-rgb),0.55)" }}>{product.brand}</p>
+        <p style={{ margin: "0 0 5px", fontSize: 12.5, color: "var(--ink)", lineHeight: 1.35, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" as const, overflow: "hidden" }}>{product.name}</p>
+        <p style={{ margin: 0, fontSize: 13, fontWeight: 500, color: "var(--accent)" }}>{product.priceRub.toLocaleString("ru-RU")} ₽</p>
       </div>
     </div>
   );
@@ -91,7 +91,7 @@ function ProductCardMini({ product, selected, onClick }: { product: ShopProduct;
 
 function MiniSkeleton() {
   return (
-    <div style={{ background: "#111", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 2, overflow: "hidden" }}>
+    <div style={{ background: "var(--surface)", border: "1px solid rgba(var(--ink-rgb),0.056)", borderRadius: 10, overflow: "hidden" }}>
       <div className="skeleton" style={{ aspectRatio: "4/5" } as React.CSSProperties} />
       <div style={{ padding: "10px 12px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
         <div className="skeleton" style={{ height: 7, width: "40%" }} />
@@ -124,7 +124,7 @@ export default function GiftClient() {
   const { data, isLoading } = useQuery({
     queryKey: ["gift-catalog", debouncedQ],
     queryFn: async () => {
-      const qs = new URLSearchParams({ pageSize: "9", inStock: "true" });
+      const qs = new URLSearchParams({ pageSize: "9", inStock: "true", perfumeOnly: "true" });
       if (debouncedQ) qs.set("q", debouncedQ);
       const r = await fetch(`${BASE}/catalog?${qs}`);
       return r.json();
@@ -142,14 +142,14 @@ export default function GiftClient() {
   }
 
   return (
-    <div style={{ background: "#0b0b0b", minHeight: "100vh", color: "#f5f4f0" }}>
+    <div style={{ background: "var(--paper)", minHeight: "100vh", color: "var(--ink)" }}>
       <style>{PAGE_STYLE}</style>
       <div style={{ maxWidth: 900, margin: "0 auto", padding: "clamp(32px,5vw,64px) clamp(18px,4vw,56px)" }}>
 
-        <p style={{ fontSize: 10, letterSpacing: "0.26em", textTransform: "uppercase", color: "#c9a25e", margin: "0 0 12px", textAlign: "center" }}>
+        <p style={{ fontSize: 11, letterSpacing: "0.2em", textTransform: "uppercase", color: "var(--accent)", margin: "0 0 12px", textAlign: "center" }}>
           Собери подарок
         </p>
-        <h1 style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontSize: "clamp(32px,5vw,54px)", fontStyle: "italic", fontWeight: 300, color: "#f5f4f0", margin: "0 0 clamp(28px,4vw,48px)", lineHeight: 1.1, textAlign: "center" }}>
+        <h1 style={{ fontFamily: "var(--font-display)", fontSize: "clamp(32px,5vw,54px)", fontWeight: 300, color: "var(--ink)", margin: "0 0 clamp(28px,4vw,48px)", lineHeight: 1.1, textAlign: "center" }}>
           Подарочный конфигуратор
         </h1>
 
@@ -158,15 +158,15 @@ export default function GiftClient() {
         {/* STEP 0: Choose fragrance */}
         {step === 0 && (
           <div>
-            <h2 style={{ fontSize: "clamp(18px,2.4vw,26px)", fontWeight: 400, color: "#d8d5cc", margin: "0 0 20px", letterSpacing: "0.02em" }}>
+            <h2 style={{ fontSize: "clamp(18px,2.4vw,26px)", fontWeight: 400, color: "var(--ink)", margin: "0 0 20px", letterSpacing: "0.02em" }}>
               Выберите аромат
             </h2>
             <div style={{ position: "relative", marginBottom: 24 }}>
-              <Search size={15} style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "rgba(245,244,240,0.28)", pointerEvents: "none" }} />
+              <Search size={15} style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "rgba(var(--ink-rgb),0.45)", pointerEvents: "none" }} />
               <input
                 type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Поиск по названию, бренду..."
-                style={{ width: "100%", boxSizing: "border-box", paddingLeft: 42, paddingRight: 16, paddingTop: 12, paddingBottom: 12, background: "#0e0e0e", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 2, color: "#f5f4f0", fontSize: 14, outline: "none", fontFamily: "inherit" }}
+                style={{ width: "100%", boxSizing: "border-box", paddingLeft: 42, paddingRight: 16, paddingTop: 12, paddingBottom: 12, background: "var(--surface)", border: "1px solid rgba(var(--ink-rgb),0.072)", borderRadius: 10, color: "var(--ink)", fontSize: 14, outline: "none", fontFamily: "inherit" }}
               />
             </div>
             {isLoading ? (
@@ -178,16 +178,16 @@ export default function GiftClient() {
                 ))}
               </div>
             ) : (
-              <div style={{ padding: "40px 0", textAlign: "center", color: "#7d7a73", fontSize: 14 }}>
+              <div style={{ padding: "40px 0", textAlign: "center", color: "rgba(var(--ink-rgb),0.6)", fontSize: 14 }}>
                 Ничего не найдено — попробуйте другой запрос
               </div>
             )}
             <div style={{ marginTop: 28, display: "flex", justifyContent: "flex-end" }}>
               <button disabled={!selectedProduct} onClick={() => setStep(1)} style={{
-                display: "flex", alignItems: "center", gap: 8, padding: "12px 28px", borderRadius: 2,
-                background: selectedProduct ? "#c9a25e" : "rgba(255,255,255,0.05)",
-                border: `1px solid ${selectedProduct ? "#c9a25e" : "rgba(255,255,255,0.08)"}`,
-                color: selectedProduct ? "#0b0b0b" : "rgba(245,244,240,0.28)",
+                display: "flex", alignItems: "center", gap: 8, padding: "12px 28px", borderRadius: 10,
+                background: selectedProduct ? "var(--accent)" : "rgba(var(--ink-rgb),0.04)",
+                border: `1px solid ${selectedProduct ? "var(--accent)" : "rgba(var(--ink-rgb),0.064)"}`,
+                color: selectedProduct ? "var(--paper)" : "rgba(var(--ink-rgb),0.45)",
                 fontSize: 13, fontWeight: 500, letterSpacing: "0.08em",
                 cursor: selectedProduct ? "pointer" : "not-allowed", fontFamily: "inherit",
               }}>
@@ -200,7 +200,7 @@ export default function GiftClient() {
         {/* STEP 1: Choose packaging */}
         {step === 1 && (
           <div>
-            <h2 style={{ fontSize: "clamp(18px,2.4vw,26px)", fontWeight: 400, color: "#d8d5cc", margin: "0 0 20px", letterSpacing: "0.02em" }}>
+            <h2 style={{ fontSize: "clamp(18px,2.4vw,26px)", fontWeight: 400, color: "var(--ink)", margin: "0 0 20px", letterSpacing: "0.02em" }}>
               Стиль упаковки
             </h2>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14, marginBottom: 28 }}>
@@ -209,17 +209,17 @@ export default function GiftClient() {
                   <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
                     <span style={{ fontSize: 32, lineHeight: 1 }}>{pkg.emoji}</span>
                     <span style={{
-                      fontSize: 11, letterSpacing: "0.08em", padding: "3px 10px", borderRadius: 2, flexShrink: 0, marginTop: 4,
-                      border: `1px solid ${pkg.price === 0 ? "rgba(93,216,118,0.3)" : "rgba(201,162,94,0.3)"}`,
-                      background: pkg.price === 0 ? "rgba(93,216,118,0.06)" : "rgba(201,162,94,0.07)",
-                      color: pkg.price === 0 ? "#5dd876" : "#c9a25e",
+                      fontSize: 11, letterSpacing: "0.08em", padding: "3px 10px", borderRadius: 10, flexShrink: 0, marginTop: 4,
+                      border: `1px solid ${pkg.price === 0 ? "rgba(var(--success-rgb),0.3)" : "rgba(var(--accent-rgb),0.3)"}`,
+                      background: pkg.price === 0 ? "rgba(var(--success-rgb),0.06)" : "rgba(var(--accent-rgb),0.07)",
+                      color: pkg.price === 0 ? "var(--success)" : "var(--accent)",
                     }}>
-                      {pkg.price === 0 ? "Бесплатно" : `+${pkg.price.toLocaleString("ru-RU")} ₽`}
+                      {pkg.price === 0 ? "Бесплатно" : `+${pkg.price.toLocaleString("ru-RU")} ₽`}
                     </span>
                   </div>
                   <div>
-                    <p style={{ margin: "0 0 4px", fontSize: 15, color: selectedPackaging === pkg.id ? "#f5f4f0" : "#d8d5cc", fontWeight: 400 }}>{pkg.label}</p>
-                    <p style={{ margin: 0, fontSize: 12.5, color: "#7d7a73", lineHeight: 1.55 }}>{pkg.desc}</p>
+                    <p style={{ margin: "0 0 4px", fontSize: 15, color: selectedPackaging === pkg.id ? "var(--ink)" : "var(--ink)", fontWeight: 400 }}>{pkg.label}</p>
+                    <p style={{ margin: 0, fontSize: 12.5, color: "rgba(var(--ink-rgb),0.6)", lineHeight: 1.55 }}>{pkg.desc}</p>
                   </div>
                 </div>
               ))}
@@ -230,8 +230,8 @@ export default function GiftClient() {
                 <button onClick={() => { setSelectedPackaging(null); setStep(2); }} className="gift-skip-link">Пропустить</button>
               </div>
               <button onClick={() => setStep(2)} style={{
-                display: "flex", alignItems: "center", gap: 8, padding: "12px 28px", borderRadius: 2,
-                background: "#c9a25e", border: "1px solid #c9a25e", color: "#0b0b0b",
+                display: "flex", alignItems: "center", gap: 8, padding: "12px 28px", borderRadius: 10,
+                background: "var(--accent)", border: "1px solid var(--accent)", color: "var(--paper)",
                 fontSize: 13, fontWeight: 500, letterSpacing: "0.08em", cursor: "pointer", fontFamily: "inherit",
               }}>
                 Далее <ChevronRight size={16} />
@@ -243,21 +243,21 @@ export default function GiftClient() {
         {/* STEP 2: Message */}
         {step === 2 && (
           <div>
-            <h2 style={{ fontSize: "clamp(18px,2.4vw,26px)", fontWeight: 400, color: "#d8d5cc", margin: "0 0 8px", letterSpacing: "0.02em" }}>
+            <h2 style={{ fontSize: "clamp(18px,2.4vw,26px)", fontWeight: 400, color: "var(--ink)", margin: "0 0 8px", letterSpacing: "0.02em" }}>
               Личное послание
             </h2>
-            <p style={{ margin: "0 0 24px", fontSize: 13.5, color: "#7d7a73", lineHeight: 1.6 }}>
+            <p style={{ margin: "0 0 24px", fontSize: 13.5, color: "rgba(var(--ink-rgb),0.6)", lineHeight: 1.6 }}>
               Напишите тёплые слова — они будут напечатаны на вложенной открытке.
             </p>
             <div style={{ position: "relative" }}>
               <textarea
                 value={message} onChange={(e) => setMessage(e.target.value.slice(0, 200))}
                 placeholder="Напишите тёплые слова..." rows={5}
-                style={{ width: "100%", boxSizing: "border-box", padding: "16px 18px", background: "#0e0e0e", border: "1px solid rgba(255,255,255,0.09)", borderRadius: 2, color: "#f5f4f0", fontSize: 14, lineHeight: 1.7, outline: "none", resize: "vertical", fontFamily: "inherit" }}
-                onFocus={e => (e.target.style.borderColor = "rgba(201,162,94,0.5)")}
-                onBlur={e => (e.target.style.borderColor = "rgba(255,255,255,0.09)")}
+                style={{ width: "100%", boxSizing: "border-box", padding: "16px 18px", background: "var(--surface)", border: "1px solid rgba(var(--ink-rgb),0.072)", borderRadius: 10, color: "var(--ink)", fontSize: 14, lineHeight: 1.7, outline: "none", resize: "vertical", fontFamily: "inherit" }}
+                onFocus={e => (e.target.style.borderColor = "rgba(var(--accent-rgb),0.5)")}
+                onBlur={e => (e.target.style.borderColor = "rgba(var(--ink-rgb),0.072)")}
               />
-              <span style={{ position: "absolute", bottom: 12, right: 14, fontSize: 11, color: message.length >= 180 ? "#f87171" : "#6f6c66" }}>
+              <span style={{ position: "absolute", bottom: 12, right: 14, fontSize: 11, color: message.length >= 180 ? "var(--danger)" : "rgba(var(--ink-rgb),0.55)" }}>
                 {message.length}/200
               </span>
             </div>
@@ -267,8 +267,8 @@ export default function GiftClient() {
                 <button onClick={() => setStep(3)} className="gift-skip-link">Пропустить</button>
               </div>
               <button onClick={() => setStep(3)} style={{
-                display: "flex", alignItems: "center", gap: 8, padding: "12px 28px", borderRadius: 2,
-                background: "#c9a25e", border: "1px solid #c9a25e", color: "#0b0b0b",
+                display: "flex", alignItems: "center", gap: 8, padding: "12px 28px", borderRadius: 10,
+                background: "var(--accent)", border: "1px solid var(--accent)", color: "var(--paper)",
                 fontSize: 13, fontWeight: 500, letterSpacing: "0.08em", cursor: "pointer", fontFamily: "inherit",
               }}>
                 Далее <ChevronRight size={16} />
@@ -280,59 +280,59 @@ export default function GiftClient() {
         {/* STEP 3: Summary */}
         {step === 3 && selectedProduct && (
           <div>
-            <h2 style={{ fontSize: "clamp(18px,2.4vw,26px)", fontWeight: 400, color: "#d8d5cc", margin: "0 0 24px", letterSpacing: "0.02em" }}>
+            <h2 style={{ fontSize: "clamp(18px,2.4vw,26px)", fontWeight: 400, color: "var(--ink)", margin: "0 0 24px", letterSpacing: "0.02em" }}>
               Ваш подарочный набор
             </h2>
-            <div style={{ border: "1px solid rgba(255,255,255,0.08)", borderRadius: 2, background: "#0e0e0e", overflow: "hidden", marginBottom: 20 }}>
-              <div style={{ display: "flex", gap: 18, padding: "20px 22px", borderBottom: "1px solid rgba(255,255,255,0.06)", alignItems: "center" }}>
-                <div style={{ width: 72, height: 90, flexShrink: 0, background: "#141414", borderRadius: 2, overflow: "hidden" }}>
+            <div style={{ border: "1px solid rgba(var(--ink-rgb),0.064)", borderRadius: 10, background: "var(--surface)", overflow: "hidden", marginBottom: 20 }}>
+              <div style={{ display: "flex", gap: 18, padding: "20px 22px", borderBottom: "1px solid rgba(var(--ink-rgb),0.048)", alignItems: "center" }}>
+                <div style={{ width: 72, height: 90, flexShrink: 0, background: "var(--surface)", borderRadius: 10, overflow: "hidden" }}>
                   {selectedProduct.images?.[0]
                     ? <Image src={selectedProduct.images[0]} alt={selectedProduct.name} width={72} height={90} style={{ objectFit: "cover", width: "100%", height: "100%" }} />
-                    : <div style={{ width: "100%", height: "100%", background: "#181818" }} />
+                    : <div style={{ width: "100%", height: "100%", background: "var(--surface)" }} />
                   }
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <p style={{ margin: "0 0 3px", fontSize: 9.5, letterSpacing: "0.14em", textTransform: "uppercase", color: "#6f6c66" }}>{selectedProduct.brand}</p>
-                  <p style={{ margin: "0 0 6px", fontSize: 15, color: "#f5f4f0", lineHeight: 1.35 }}>{selectedProduct.name}</p>
-                  {selectedProduct.volume && <p style={{ margin: 0, fontSize: 12, color: "#7d7a73" }}>{selectedProduct.volume}</p>}
+                  <p style={{ margin: "0 0 3px", fontSize: 11, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(var(--ink-rgb),0.55)" }}>{selectedProduct.brand}</p>
+                  <p style={{ margin: "0 0 6px", fontSize: 15, color: "var(--ink)", lineHeight: 1.35 }}>{selectedProduct.name}</p>
+                  {selectedProduct.volume && <p style={{ margin: 0, fontSize: 12, color: "rgba(var(--ink-rgb),0.6)" }}>{selectedProduct.volume}</p>}
                 </div>
-                <p style={{ margin: 0, fontSize: 16, fontWeight: 500, color: "#f5f4f0", flexShrink: 0 }}>
-                  {selectedProduct.priceRub.toLocaleString("ru-RU")} ₽
+                <p style={{ margin: 0, fontSize: 16, fontWeight: 500, color: "var(--ink)", flexShrink: 0 }}>
+                  {selectedProduct.priceRub.toLocaleString("ru-RU")} ₽
                 </p>
               </div>
               {selectedPackaging && (
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 22px", borderBottom: "1px solid rgba(255,255,255,0.06)", gap: 12 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 22px", borderBottom: "1px solid rgba(var(--ink-rgb),0.048)", gap: 12 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                     <span style={{ fontSize: 20 }}>{packaging.emoji}</span>
                     <div>
-                      <p style={{ margin: 0, fontSize: 13.5, color: "#d8d5cc" }}>{packaging.label}</p>
-                      <p style={{ margin: "2px 0 0", fontSize: 12, color: "#7d7a73" }}>{packaging.desc}</p>
+                      <p style={{ margin: 0, fontSize: 13.5, color: "var(--ink)" }}>{packaging.label}</p>
+                      <p style={{ margin: "2px 0 0", fontSize: 12, color: "rgba(var(--ink-rgb),0.6)" }}>{packaging.desc}</p>
                     </div>
                   </div>
-                  <p style={{ margin: 0, fontSize: 14, color: packaging.price === 0 ? "#5dd876" : "#c9a25e", flexShrink: 0 }}>
-                    {packaging.price === 0 ? "Бесплатно" : `+${packaging.price.toLocaleString("ru-RU")} ₽`}
+                  <p style={{ margin: 0, fontSize: 14, color: packaging.price === 0 ? "var(--success)" : "var(--accent)", flexShrink: 0 }}>
+                    {packaging.price === 0 ? "Бесплатно" : `+${packaging.price.toLocaleString("ru-RU")} ₽`}
                   </p>
                 </div>
               )}
               {message.trim() && (
-                <div style={{ padding: "14px 22px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                  <p style={{ margin: "0 0 6px", fontSize: 9.5, letterSpacing: "0.14em", textTransform: "uppercase", color: "#6f6c66" }}>Личное послание</p>
-                  <p style={{ margin: 0, fontSize: 13.5, color: "#8b8880", lineHeight: 1.65, fontStyle: "italic" }}>«{message}»</p>
+                <div style={{ padding: "14px 22px", borderBottom: "1px solid rgba(var(--ink-rgb),0.048)" }}>
+                  <p style={{ margin: "0 0 6px", fontSize: 11, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(var(--ink-rgb),0.55)" }}>Личное послание</p>
+                  <p style={{ margin: 0, fontSize: 13.5, color: "rgba(var(--ink-rgb),0.66)", lineHeight: 1.65 }}>«{message}»</p>
                 </div>
               )}
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 22px" }}>
-                <p style={{ margin: 0, fontSize: 12, letterSpacing: "0.1em", textTransform: "uppercase", color: "#6f6c66" }}>Итого</p>
-                <p style={{ margin: 0, fontSize: 20, fontWeight: 500, color: "#f5f4f0" }}>{totalPrice.toLocaleString("ru-RU")} ₽</p>
+                <p style={{ margin: 0, fontSize: 12, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(var(--ink-rgb),0.55)" }}>Итого</p>
+                <p style={{ margin: 0, fontSize: 20, fontWeight: 500, color: "var(--ink)" }}>{totalPrice.toLocaleString("ru-RU")} ₽</p>
               </div>
             </div>
             <button onClick={handleAddToCart} style={{
               width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
-              padding: "16px 28px", borderRadius: 2, background: "#c9a25e", border: "1px solid #c9a25e",
-              color: "#0b0b0b", fontSize: 14, fontWeight: 600, letterSpacing: "0.08em", cursor: "pointer", fontFamily: "inherit",
+              padding: "16px 28px", borderRadius: 10, background: "var(--accent)", border: "1px solid var(--accent)",
+              color: "var(--paper)", fontSize: 14, fontWeight: 600, letterSpacing: "0.08em", cursor: "pointer", fontFamily: "inherit",
             }}>
               <ShoppingBag size={18} /> Добавить в корзину как подарок
             </button>
-            <p style={{ margin: "14px 0 20px", fontSize: 12, color: "#6f6c66", lineHeight: 1.65, textAlign: "center" }}>
+            <p style={{ margin: "14px 0 20px", fontSize: 12, color: "rgba(var(--ink-rgb),0.55)", lineHeight: 1.65, textAlign: "center" }}>
               Специальная упаковка и открытка будут вложены в заказ. Укажите пожелания в комментарии к заказу.
             </p>
             <div style={{ display: "flex", justifyContent: "center" }}>
@@ -343,17 +343,17 @@ export default function GiftClient() {
 
         {step === 3 && !selectedProduct && (
           <div style={{ textAlign: "center", padding: "40px 0" }}>
-            <p style={{ color: "#7d7a73", marginBottom: 16 }}>Аромат не выбран</p>
+            <p style={{ color: "rgba(var(--ink-rgb),0.6)", marginBottom: 16 }}>Аромат не выбран</p>
             <button onClick={() => setStep(0)} className="gift-skip-link">← Выбрать аромат</button>
           </div>
         )}
 
         {step < 3 && (
-          <div style={{ marginTop: 40, paddingTop: 20, borderTop: "1px solid rgba(255,255,255,0.06)", display: "flex", justifyContent: "center", gap: 24 }}>
-            <Link href="/catalog" style={{ fontSize: 12, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(245,244,240,0.3)", textDecoration: "none" }}>
+          <div style={{ marginTop: 40, paddingTop: 20, borderTop: "1px solid rgba(var(--ink-rgb),0.048)", display: "flex", justifyContent: "center", gap: 24 }}>
+            <Link href="/catalog" style={{ fontSize: 12, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(var(--ink-rgb),0.45)", textDecoration: "none" }}>
               Весь каталог
             </Link>
-            <Link href="/catalog?category=sets" style={{ fontSize: 12, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(245,244,240,0.3)", textDecoration: "none" }}>
+            <Link href="/collections/nabory" style={{ fontSize: 12, letterSpacing: "0.1em", textTransform: "uppercase", color: "rgba(var(--ink-rgb),0.45)", textDecoration: "none" }}>
               Готовые наборы
             </Link>
           </div>

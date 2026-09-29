@@ -1,348 +1,367 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Package, User, Loader2, CheckCircle, Clock, Truck, LogOut, Save, ChevronRight, Star } from "lucide-react";
+import { Package, User, Loader2, CheckCircle, Clock, Truck, LogOut, Save, MapPin, Gift, RotateCcw, X, ChevronDown, Copy, CreditCard } from "lucide-react";
 import { useAuth } from "@/components/AuthContext";
-import type { ShopOrder } from "@/lib/types";
+import { useCart } from "@/components/CartContext";
+import type { ShopOrder, ShopProduct } from "@/lib/types";
+import { productImg } from "@/lib/img";
+import { loadAddresses, forgetAddress, prettyAddress, type SavedAddress } from "@/lib/addresses";
 
-const AUTH_API = (process.env.NEXT_PUBLIC_API_BASE ?? "https://davidsklad.ru") + "/api/shop/auth";
+const API = (process.env.NEXT_PUBLIC_API_BASE ?? "https://davidsklad.ru") + "/api/shop";
+const AUTH_API = API + "/auth";
 
-const S = {
-  bg: "#0E0D0B", surface: "#161512", surface2: "#1D1C18",
-  border: "rgba(255,252,245,0.07)", borderMd: "rgba(255,252,245,0.13)",
-  text: "#F4EFE6", muted: "rgba(244,239,230,0.48)", subtle: "rgba(244,239,230,0.22)",
-  accent: "#C9A96E", accent3: "#EDD9B0",
+type Tab = "orders" | "addresses" | "profile" | "bonus";
+
+const STATUS: Record<string, { label: string; tone: string; icon: typeof Package }> = {
+  pending:         { label: "Принят",         tone: "wait", icon: Clock },
+  payment_pending: { label: "Ожидает оплаты", tone: "wait", icon: Clock },
+  payment_failed:  { label: "Оплата не прошла", tone: "bad", icon: X },
+  paid:            { label: "Оплачен",        tone: "ok",   icon: CheckCircle },
+  confirmed:       { label: "Подтверждён",    tone: "ok",   icon: CheckCircle },
+  picking:         { label: "Собирается",     tone: "info", icon: Package },
+  shipped:         { label: "В пути",         tone: "info", icon: Truck },
+  delivered:       { label: "Доставлен",      tone: "ok",   icon: CheckCircle },
+  cancelled:       { label: "Отменён",        tone: "bad",  icon: X },
 };
+// progress steps shown on each order
+const STEPS = ["paid", "picking", "shipped", "delivered"];
+const STEP_LABEL = ["Оплачен", "Собираем", "В пути", "Получен"];
 
-const STATUS_MAP: Record<string, { label: string; color: string; icon: typeof Package }> = {
-  pending:         { label: "Принят",         color: "#f59e0b", icon: Clock },
-  payment_pending: { label: "Ожидает оплаты", color: "#f59e0b", icon: Clock },
-  paid:            { label: "Оплачен",         color: "#10b981", icon: CheckCircle },
-  confirmed:       { label: "Подтверждён",     color: "#3b82f6", icon: Clock },
-  picking:         { label: "Собирается",      color: "#8b5cf6", icon: Package },
-  shipped:         { label: "Отправлен",       color: "#0ea5e9", icon: Truck },
-  delivered:       { label: "Доставлен",       color: "#10b981", icon: CheckCircle },
-  cancelled:       { label: "Отменён",         color: "#ef4444", icon: Package },
-};
-
-function ruPlural(n: number, one: string, few: string, many: string) {
-  const mod10 = n % 10, mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return one;
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return few;
+const rub = (n: number) => `${Math.round(n).toLocaleString("ru-RU")} ₽`;
+function plural(n: number, one: string, few: string, many: string) {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return few;
   return many;
 }
 
-function StatusBadge({ status }: { status: string }) {
-  const s = STATUS_MAP[status] || { label: status, color: "#6e6e73", icon: Package };
-  const Icon = s.icon;
-  return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 100, background: s.color + "1a", color: s.color }}>
-      <Icon size={11} strokeWidth={2.5} /> {s.label}
-    </span>
-  );
-}
-
+/* ─────────────── orders ─────────────── */
 function OrderCard({ order }: { order: ShopOrder }) {
-  const date = new Date(order.createdAt).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+  const { add } = useCart();
+  const { token } = useAuth();
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [paying, setPaying] = useState(false);
+  const [payErr, setPayErr] = useState<string | null>(null);
+  const unpaid = ["pending", "payment_pending", "payment_failed"].includes(order.status);
+
+  // back to the Ozon Pay page: pay, pick the pickup point / courier address there
+  async function pay() {
+    setPaying(true);
+    setPayErr(null);
+    try {
+      const r = await fetch(`${API}/auth/orders/${encodeURIComponent(order.id)}/pay`, {
+        method: "POST", headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      });
+      const d = await r.json().catch(() => ({}));
+      if (d.paymentUrl) { window.location.href = d.paymentUrl; return; }
+      if (d.paid) { window.location.reload(); return; }
+      setPayErr(d.error || "Не удалось открыть оплату");
+    } catch {
+      setPayErr("Нет связи — попробуйте ещё раз");
+    }
+    setPaying(false);
+  }
+  const st = STATUS[order.status] || { label: order.status, tone: "info", icon: Package };
+  const Icon = st.icon;
   const items = order.items || [];
+  const date = new Date(order.createdAt).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+  const stepIdx = order.status === "confirmed" ? 0 : STEPS.indexOf(order.status);
+  const d = order.delivery || {};
+
+  async function repeat() {
+    setBusy(true);
+    try {
+      for (const it of items) {
+        const r = await fetch(`${API}/product/${encodeURIComponent(it.offerId)}`);
+        if (!r.ok) continue;
+        const p = (await r.json()) as ShopProduct;
+        if (p?.offerId && p.inStock) add(p, it.quantity || 1);
+      }
+      router.push("/cart");
+    } finally { setBusy(false); }
+  }
+
   return (
-    <div style={{ background: S.surface, borderRadius: 18, border: `1px solid ${S.border}`, overflow: "hidden" }}>
-      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, padding: "16px 20px", borderBottom: `1px solid ${S.border}` }}>
+    <article className="mv-acc-order">
+      <header className="mv-acc-order-h">
         <div>
-          <div style={{ fontSize: 11, color: S.muted, marginBottom: 4 }}>{date}</div>
-          <div style={{ fontSize: 12, fontFamily: "monospace", color: S.subtle }}>#{order.id.slice(-8).toUpperCase()}</div>
+          <div className="mv-acc-order-date">{date}</div>
+          <div className="mv-acc-order-id">№ {order.id.replace(/^MV-/, "")}</div>
         </div>
-        <div style={{ textAlign: "right", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
-          <StatusBadge status={order.status} />
-          <div style={{ fontSize: 16, fontWeight: 700, color: S.text }}>{order.totalRub.toLocaleString("ru-RU")} ₽</div>
-        </div>
+        <span className={`mv-acc-status ${st.tone}`}><Icon size={13} /> {st.label}</span>
+      </header>
+
+      <div className="mv-acc-thumbs">
+        {items.slice(0, 5).map((it, i) => (
+          <Link key={i} href={it.slug ? `/product/${it.slug}` : "#"} className="mv-acc-thumb" title={it.name || it.offerId}>
+            {it.image
+              // eslint-disable-next-line @next/next/no-img-element
+              ? <img src={productImg(it.image, 160)} alt={it.name || ""} loading="lazy" />
+              : <b>{(it.brand || it.name || "?")[0]}</b>}
+            {it.quantity > 1 && <em>{it.quantity}</em>}
+          </Link>
+        ))}
+        {items.length > 5 && <span className="mv-acc-more">+{items.length - 5}</span>}
+        <div className="mv-acc-order-sum">{rub(order.totalRub)}</div>
       </div>
-      {items.length > 0 && (
-        <div style={{ padding: "12px 20px", display: "flex", flexDirection: "column", gap: 6 }}>
-          {items.slice(0, 3).map((item, i) => (
-            <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-              <span style={{ color: S.muted, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.name || item.offerId}</span>
-              <span style={{ color: S.subtle, marginLeft: 12, flexShrink: 0 }}>×{item.quantity}</span>
-              <span style={{ fontWeight: 600, color: S.text, marginLeft: 12, flexShrink: 0 }}>{(item.priceRub * item.quantity).toLocaleString("ru-RU")} ₽</span>
+
+      {stepIdx >= 0 && (
+        <ol className="mv-acc-steps">
+          {STEP_LABEL.map((l, i) => <li key={l} className={i <= stepIdx ? "done" : ""}><span />{l}</li>)}
+        </ol>
+      )}
+
+      <button type="button" className="mv-acc-toggle" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        {items.length} {plural(items.length, "товар", "товара", "товаров")} · подробнее <ChevronDown size={15} style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .2s" }} />
+      </button>
+      {open && (
+        <div className="mv-acc-details">
+          {items.map((it, i) => (
+            <div key={i} className="mv-acc-line">
+              <span className="mv-acc-line-name">{it.name || it.offerId}{it.volume ? `, ${it.volume}` : ""}</span>
+              <span className="mv-acc-line-q">×{it.quantity}</span>
+              <span className="mv-acc-line-p">{rub(it.priceRub * it.quantity)}</span>
             </div>
           ))}
-          {items.length > 3 && <div style={{ fontSize: 11, color: S.subtle }}>+ещё {items.length - 3} {ruPlural(items.length - 3, "товар", "товара", "товаров")}</div>}
+          {typeof d.priceRub === "number" && (
+            <div className="mv-acc-line">
+              <span className="mv-acc-line-name">{d.carrierTitle || `Доставка${d.type === "ozon_pay" ? " Ozon" : ""}`}</span>
+              <span className="mv-acc-line-q" />
+              <span className="mv-acc-line-p">{d.priceRub > 0 ? rub(d.priceRub) : "бесплатно"}</span>
+            </div>
+          )}
+          {d.type === "ozon_pay" && !d.address && (
+            <div className="mv-acc-addr"><MapPin size={14} /> {unpaid ? "Пункт выдачи или адрес курьера выберете на странице оплаты Ozon" : "Адрес доставки выбран в Ozon Pay"}</div>
+          )}
+          {(d.address || d.city) && (
+            <div className="mv-acc-addr"><MapPin size={14} /> {d.pvzName ? `${d.pvzName}, ` : ""}{[d.city, d.address].filter(Boolean).join(", ")}</div>
+          )}
+          {d.shipment && (
+            <div className="mv-acc-addr">
+              <Truck size={14} /> {d.shipment.statusLabel || "Отправка создана"}{d.shipment.number ? ` · трек ${d.shipment.number}` : ""}
+              {order.trackUrl ? <> · <Link href={order.trackUrl} style={{ color: "var(--accent)", fontWeight: 700 }}>{d.carrier === "dostavista" ? "где курьер на карте" : "отследить"}</Link></>
+                : d.shipment.trackingUrl && <> · <a href={d.shipment.trackingUrl} target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)" }}>отследить</a></>}
+            </div>
+          )}
         </div>
       )}
-      {order.delivery?.city && (
-        <div style={{ padding: "0 20px 14px", fontSize: 11, color: S.subtle, display: "flex", alignItems: "center", gap: 6 }}>
-          <Truck size={11} /> {[order.delivery.city, order.delivery.address].filter(Boolean).join(", ")}
-        </div>
-      )}
-    </div>
-  );
-}
 
-function OrdersTab({ token }: { token: string }) {
-  const [orders, setOrders] = useState<ShopOrder[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    fetch(AUTH_API + "/orders", { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json())
-      .then(d => { if (d.orders) setOrders(d.orders); else throw new Error(d.error || "Ошибка"); })
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setLoading(false));
-  }, [token]);
-
-  if (loading) return (
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, padding: "80px 20px", fontSize: 13, color: S.muted }}>
-      <Loader2 size={18} style={{ animation: "spin 1s linear infinite" }} /> Загружаем заказы...
-    </div>
-  );
-  if (error) return <div style={{ background: "rgba(239,68,68,0.08)", color: "#f87171", borderRadius: 16, padding: "14px 18px", fontSize: 13, border: "1px solid rgba(239,68,68,0.15)" }}>{error}</div>;
-  if (!orders.length) return (
-    <div style={{ textAlign: "center", padding: "80px 20px" }}>
-      <div style={{ width: 56, height: 56, borderRadius: 18, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px", background: "rgba(201,169,110,0.1)", border: "1px solid rgba(201,169,110,0.15)" }}>
-        <Package size={24} style={{ color: S.accent3 }} strokeWidth={1.5} />
-      </div>
-      <div style={{ fontSize: 15, fontWeight: 600, color: S.text, marginBottom: 6 }}>Заказов пока нет</div>
-      <div style={{ fontSize: 13, color: S.muted, marginBottom: 24 }}>Ваши заказы появятся здесь</div>
-      <Link href="/catalog" style={{ fontSize: 13, fontWeight: 600, color: S.accent3, textDecoration: "none" }}>Перейти в каталог</Link>
-    </div>
-  );
-  return <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{orders.map(o => <OrderCard key={o.id} order={o} />)}</div>;
-}
-
-function DarkInput({ label, ...props }: { label: string } & React.InputHTMLAttributes<HTMLInputElement>) {
-  return (
-    <div>
-      <label style={{ display: "block", fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: S.subtle, marginBottom: 6 }}>{label}</label>
-      <input {...props} style={{ width: "100%", padding: "11px 14px", background: "rgba(255,255,255,0.05)", border: `1.5px solid ${S.border}`, borderRadius: 12, fontSize: 13, fontFamily: "inherit", color: S.text, outline: "none", transition: "all 0.15s ease" }}
-        onFocus={e => { e.target.style.borderColor = "rgba(201,169,110,0.4)"; e.target.style.background = "rgba(255,255,255,0.08)"; }}
-        onBlur={e => { e.target.style.borderColor = S.border; e.target.style.background = "rgba(255,255,255,0.05)"; }} />
-    </div>
-  );
-}
-
-const TIER_META = {
-  silver:   { label: "Серебро", color: "#9ca3af", bg: "rgba(156,163,175,0.1)", next: 100 },
-  gold:     { label: "Золото",  color: "#c9a25e", bg: "rgba(201,162,94,0.1)",  next: 300 },
-  platinum: { label: "Платина", color: "#a78bfa", bg: "rgba(167,139,250,0.1)", next: null },
-} as const;
-
-function LoyaltyPanel({ token }: { token: string }) {
-  const [data, setData] = useState<{ points: number; tier: keyof typeof TIER_META; nextTier: number | null; transactions: { id: string; reason: string; points: number }[] } | null>(null);
-  useEffect(() => {
-    fetch(AUTH_API + "/loyalty", { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()).then(d => { if (d.ok !== false) setData(d); }).catch(() => {});
-  }, [token]);
-  if (!data) return null;
-  const { points, tier, nextTier, transactions } = data;
-  const meta = TIER_META[tier] || TIER_META.silver;
-  const progress = nextTier ? Math.min(100, Math.round((points / nextTier) * 100)) : 100;
-  return (
-    <div style={{ background: `linear-gradient(135deg, #1a1408 0%, ${S.surface} 70%)`, borderRadius: 18, padding: "20px", border: "1px solid rgba(201,162,94,0.25)" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
-        <Star size={14} style={{ color: meta.color }} />
-        <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.18em", color: S.subtle }}>Золото Magic Vibes</span>
-      </div>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
-        <span style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", fontSize: 42, color: meta.color, lineHeight: 1 }}>{points}</span>
-        <span style={{ fontSize: 12, color: S.muted }}>баллов</span>
-        <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 100, background: meta.bg, color: meta.color, border: `1px solid ${meta.color}40` }}>{meta.label}</span>
-      </div>
-      {nextTier && (
-        <div style={{ marginBottom: 14 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: S.subtle, marginBottom: 5 }}>
-            <span>{points} / {nextTier} до следующего уровня</span><span>{progress}%</span>
+      {unpaid && (
+        <div className="mv-acc-pay">
+          <div>
+            <b>Заказ ждёт оплаты</b>
+            <span>{d.type === "ozon_pay" ? "Оплатите и выберите пункт выдачи или курьера на странице Ozon Pay" : "Оплатите заказ на странице Ozon Pay — товары зарезервированы"}</span>
           </div>
-          <div style={{ height: 4, background: "rgba(255,255,255,0.07)", borderRadius: 2, overflow: "hidden" }}>
-            <div style={{ height: "100%", width: `${progress}%`, background: `linear-gradient(90deg, ${meta.color}88, ${meta.color})`, borderRadius: 2, transition: "width 0.8s ease" }} />
-          </div>
+          <button type="button" className="mv-acc-btn pay" onClick={pay} disabled={paying}>
+            {paying ? <Loader2 size={15} className="mv-spin" /> : <CreditCard size={15} />} Оплатить {rub(order.totalRub)}
+          </button>
+          {payErr && <span className="mv-acc-pay-err">{payErr}</span>}
         </div>
       )}
-      {transactions.length > 0 && (
-        <div style={{ borderTop: `1px solid ${S.border}`, paddingTop: 12 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: S.subtle, marginBottom: 8 }}>Последние начисления</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            {transactions.slice(0, 5).map(t => (
-              <div key={t.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
-                <span style={{ color: S.muted }}>{t.reason}</span>
-                <span style={{ color: "#4ade80", fontWeight: 600 }}>+{t.points}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-      <p style={{ fontSize: 11, color: S.subtle, marginTop: 12, lineHeight: 1.6 }}>Баллы начисляются за отзывы (+20), отзывы с фото (+50) и одобренные анбоксинги.</p>
-    </div>
-  );
-}
 
-function ReferralPanel({ token }: { token: string }) {
-  const [data, setData] = useState<{ ok: boolean; link: string; code: string; ordersFromRef: number } | null>(null);
-  const [copied, setCopied] = useState(false);
-  useEffect(() => {
-    fetch(AUTH_API + "/referral", { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()).then(d => { if (d.ok) setData(d); }).catch(() => {});
-  }, [token]);
-  if (!data) return null;
-  const { link, ordersFromRef } = data;
-  function copyLink() { navigator.clipboard.writeText(link).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); }
-  return (
-    <div style={{ background: S.surface, borderRadius: 18, padding: "20px", border: "1px solid rgba(201,162,94,0.18)", marginTop: 16 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-        <span style={{ fontSize: 14 }}>🔗</span>
-        <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.18em", color: S.subtle }}>Реферальная программа</span>
-      </div>
-      <p style={{ fontSize: 12, color: S.muted, lineHeight: 1.6, marginBottom: 14 }}>Поделитесь своей ссылкой — друг получит скидку <span style={{ color: S.accent }}>−7%</span> на первый заказ, а вы получите <span style={{ color: "#4ade80" }}>+100 баллов</span> на счёт.</p>
-      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-        <div style={{ flex: 1, background: "rgba(255,255,255,0.04)", border: `1px solid ${S.border}`, borderRadius: 10, padding: "10px 14px", fontSize: 12, color: S.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{link}</div>
-        <button onClick={copyLink} style={{ padding: "10px 18px", borderRadius: 10, background: copied ? "rgba(74,222,128,0.12)" : "rgba(201,162,94,0.1)", border: `1px solid ${copied ? "rgba(74,222,128,0.3)" : "rgba(201,162,94,0.25)"}`, color: copied ? "#4ade80" : S.accent, fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", transition: "all 0.2s" }}>
-          {copied ? "Скопировано!" : "Скопировать"}
+      <footer className="mv-acc-order-f">
+        <button type="button" className={`mv-acc-btn${unpaid ? " ghost" : ""}`} onClick={repeat} disabled={busy || !items.length}>
+          {busy ? <Loader2 size={15} className="mv-spin" /> : <RotateCcw size={15} />} Повторить заказ
         </button>
-      </div>
-      <div style={{ display: "flex", gap: 14 }}>
-        {[{ val: ordersFromRef, label: "заказов по вашей ссылке", color: S.accent }, { val: ordersFromRef * 100, label: "баллов заработано", color: "#4ade80" }].map(({ val, label, color }) => (
-          <div key={label} style={{ flex: 1, background: "rgba(255,255,255,0.03)", borderRadius: 10, padding: "12px", textAlign: "center" }}>
-            <div style={{ fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", fontSize: 28, color, lineHeight: 1 }}>{val}</div>
-            <div style={{ fontSize: 10, color: S.subtle, marginTop: 4 }}>{label}</div>
-          </div>
-        ))}
-      </div>
-    </div>
+        <Link href="/delivery" className="mv-acc-btn ghost">Доставка и возврат</Link>
+      </footer>
+    </article>
   );
 }
 
-function VipPanel({ token }: { token: string }) {
-  const [data, setData] = useState<{ ok: boolean; eligible: boolean; ordersCount: number; vipLink?: string } | null>(null);
-  useEffect(() => {
-    fetch(AUTH_API + "/vip", { headers: { Authorization: `Bearer ${token}` } }).then(r => r.json()).then(d => { if (d.ok) setData(d); }).catch(() => {});
-  }, [token]);
-  if (!data) return null;
-  const { eligible, ordersCount, vipLink } = data;
-  const needed = Math.max(0, 3 - ordersCount);
+function OrdersTab({ orders, loading, error }: { orders: ShopOrder[]; loading: boolean; error: string }) {
+  if (loading) return <div className="mv-acc-empty"><Loader2 size={20} className="mv-spin" /> Загружаем заказы…</div>;
+  if (error) return <div className="mv-acc-error">{error}</div>;
+  if (!orders.length) return (
+    <div className="mv-acc-empty">
+      <Package size={28} />
+      <b>Заказов пока нет</b>
+      <span>Здесь появятся ваши заказы, статусы доставки и быстрый повтор покупки.</span>
+      <Link href="/catalog" className="btn-primary">Перейти в каталог</Link>
+    </div>
+  );
+  return <div className="mv-acc-list">{orders.map((o) => <OrderCard key={o.id} order={o} />)}</div>;
+}
+
+/* ─────────────── addresses ─────────────── */
+function AddressesTab({ token }: { token: string }) {
+  const [list, setList] = useState<SavedAddress[] | null>(null);
+  useEffect(() => { loadAddresses(token).then(({ addresses }) => setList(addresses)); }, [token]);
+  if (!list) return <div className="mv-acc-empty"><Loader2 size={20} className="mv-spin" /> Загружаем адреса…</div>;
+  if (!list.length) return (
+    <div className="mv-acc-empty">
+      <MapPin size={28} />
+      <b>Адресов пока нет</b>
+      <span>Пункт выдачи или адрес курьера сохранится после первого заказа — в следующий раз выберете его одним нажатием.</span>
+    </div>
+  );
   return (
-    <div style={{ background: eligible ? "linear-gradient(135deg, rgba(201,162,94,0.06) 0%, rgba(22,20,14,0.9) 100%)" : S.surface, borderRadius: 18, padding: "20px", border: `1px solid ${eligible ? "rgba(201,162,94,0.3)" : S.border}`, marginTop: 16 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
-        <span style={{ fontSize: 18 }}>👑</span>
-        <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.18em", color: eligible ? S.accent : S.subtle }}>VIP-клуб Magic Vibes</span>
-      </div>
-      {eligible && vipLink ? (
-        <>
-          <p style={{ fontSize: 13, color: S.muted, lineHeight: 1.65, marginBottom: 14 }}>Вы — наш постоянный покупатель. Вступайте в закрытый Telegram-клуб: ранний доступ к новинкам, эксклюзивные промокоды, голосование за «аромат месяца».</p>
-          <a href={vipLink} target="_blank" rel="noopener noreferrer" style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "11px 22px", borderRadius: 12, fontSize: 13, fontWeight: 700, textDecoration: "none", background: "linear-gradient(135deg, rgba(201,162,94,0.2), rgba(201,162,94,0.1))", border: "1px solid rgba(201,162,94,0.35)", color: S.accent }}>
-            <span>✈</span> Вступить в VIP-клуб
-          </a>
-        </>
-      ) : eligible ? (
-        <p style={{ fontSize: 12, color: S.muted, lineHeight: 1.6 }}>Вы получили VIP-статус! Ссылка на клуб скоро будет добавлена.</p>
-      ) : (
-        <>
-          <p style={{ fontSize: 12, color: S.muted, lineHeight: 1.6, marginBottom: 14 }}>После <span style={{ color: S.text }}>3 завершённых заказов</span> откроется закрытый VIP-клуб с ранним доступом, эксклюзивными промокодами и подарками.</p>
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            {[0, 1, 2].map(i => (
-              <div key={i} style={{ width: 10, height: 10, borderRadius: "50%", background: i < ordersCount ? S.accent : "rgba(255,255,255,0.08)", border: `1px solid ${i < ordersCount ? S.accent : "rgba(255,255,255,0.12)"}`, transition: "all 0.3s" }} />
-            ))}
-            <span style={{ fontSize: 11, color: S.subtle, marginLeft: 6 }}>{ordersCount}/3 заказов{needed > 0 && ` — ещё ${needed}`}</span>
+    <div className="mv-acc-list">
+      {list.map((a) => (
+        <div key={a.id} className="mv-acc-addr-card">
+          <span className="mv-co-saved-ic">{a.type === "pickup" ? <MapPin size={16} /> : <Truck size={16} />}</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <b>{a.type === "pickup" ? (a.name || "Пункт выдачи Ozon") : "Доставка курьером"}</b>
+            <span>{prettyAddress(a)}</span>
+            {a.lastUsed && <em>последний заказ {new Date(a.lastUsed).toLocaleDateString("ru-RU", { day: "numeric", month: "long" })}</em>}
           </div>
-        </>
-      )}
+          <button type="button" className="mv-co-saved-x" style={{ position: "static" }} aria-label="Удалить адрес"
+            onClick={() => { forgetAddress(a); setList((l) => (l || []).filter((x) => x.id !== a.id)); }}><X size={15} /></button>
+        </div>
+      ))}
+      <p className="mv-acc-hint">Адреса запоминаются автоматически при оформлении заказа.</p>
     </div>
   );
 }
 
-function ProfileTab({ token }: { token: string }) {
+/* ─────────────── profile ─────────────── */
+function ProfileTab() {
   const { customer, updateProfile } = useAuth();
   const [form, setForm] = useState({ firstName: customer?.firstName || "", lastName: customer?.lastName || "", phone: customer?.phone || "" });
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [state, setState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [error, setError] = useState("");
-
-  function setF(k: keyof typeof form) {
-    return (e: React.ChangeEvent<HTMLInputElement>) => { setForm(f => ({ ...f, [k]: e.target.value })); setSaved(false); };
+  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) => { setForm((f) => ({ ...f, [k]: e.target.value })); setState("idle"); };
+  async function save(e: React.FormEvent) {
+    e.preventDefault(); setState("saving");
+    try { await updateProfile(form); setState("saved"); } catch (err) { setError((err as Error).message); setState("error"); }
   }
-
-  async function handleSave(e: React.FormEvent) {
-    e.preventDefault(); setError(""); setSaving(true);
-    try { await updateProfile(form); setSaved(true); }
-    catch (err) { setError((err as Error).message); }
-    finally { setSaving(false); }
-  }
-
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <div style={{ background: S.surface, borderRadius: 18, padding: "18px 20px", border: `1px solid ${S.border}` }}>
-        <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: S.subtle, marginBottom: 12 }}>Email</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: S.surface2, borderRadius: 12, border: `1px solid ${S.border}` }}>
-          <span style={{ fontSize: 13, color: S.text }}>{customer?.email}</span>
-          <span style={{ marginLeft: "auto", fontSize: 10, color: "#4ade80", background: "rgba(74,222,128,0.1)", border: "1px solid rgba(74,222,128,0.2)", padding: "2px 8px", borderRadius: 100 }}>подтверждён</span>
-        </div>
+    <form onSubmit={save} className="mv-acc-card">
+      <div className="mv-acc-card-h">Личные данные</div>
+      <label className="mv-co-field"><span className="mv-co-label">Email</span>
+        <div className="mv-acc-email">{customer?.email}<span>подтверждён</span></div>
+      </label>
+      <div className="mv-co-2col">
+        <label className="mv-co-field"><span className="mv-co-label">Имя</span><input className="mv-co-input" value={form.firstName} onChange={set("firstName")} placeholder="Иван" autoComplete="given-name" /></label>
+        <label className="mv-co-field"><span className="mv-co-label">Фамилия</span><input className="mv-co-input" value={form.lastName} onChange={set("lastName")} placeholder="Иванов" autoComplete="family-name" /></label>
       </div>
-      <form onSubmit={handleSave} style={{ background: S.surface, borderRadius: 18, padding: "18px 20px", border: `1px solid ${S.border}`, display: "flex", flexDirection: "column", gap: 14 }}>
-        <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: S.subtle }}>Личные данные</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <DarkInput label="Имя" type="text" value={form.firstName} onChange={setF("firstName")} placeholder="Иван" />
-          <DarkInput label="Фамилия" type="text" value={form.lastName} onChange={setF("lastName")} placeholder="Иванов" />
+      <label className="mv-co-field"><span className="mv-co-label">Телефон</span><input className="mv-co-input" type="tel" inputMode="tel" value={form.phone} onChange={set("phone")} placeholder="+7 900 000-00-00" autoComplete="tel" /></label>
+      {state === "error" && <div className="mv-acc-error">{error}</div>}
+      <button type="submit" className="btn-primary" disabled={state === "saving"} style={{ alignSelf: "flex-start" }}>
+        {state === "saving" ? <Loader2 size={16} className="mv-spin" /> : state === "saved" ? <CheckCircle size={16} /> : <Save size={16} />}
+        {state === "saved" ? "Сохранено" : "Сохранить"}
+      </button>
+    </form>
+  );
+}
+
+/* ─────────────── bonuses ─────────────── */
+const TIER = { silver: "Серебро", gold: "Золото", platinum: "Платина" } as const;
+function BonusTab({ token }: { token: string }) {
+  const [loyalty, setLoyalty] = useState<{ points: number; tier: keyof typeof TIER; nextTier: number | null; transactions: { id: string; reason: string; points: number }[] } | null>(null);
+  const [ref, setRef] = useState<{ link: string; ordersFromRef: number } | null>(null);
+  const [vip, setVip] = useState<{ eligible: boolean; ordersCount: number; vipLink?: string } | null>(null);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    const h = { headers: { Authorization: `Bearer ${token}` } };
+    fetch(AUTH_API + "/loyalty", h).then((r) => r.json()).then((d) => { if (d.ok !== false) setLoyalty(d); }).catch(() => {});
+    fetch(AUTH_API + "/referral", h).then((r) => r.json()).then((d) => { if (d.ok) setRef(d); }).catch(() => {});
+    // the API answers { disabled: true } while the VIP club is switched off in the admin
+    fetch(AUTH_API + "/vip", h).then((r) => r.json()).then((d) => { if (d.ok && !d.disabled) setVip(d); }).catch(() => {});
+  }, [token]);
+  const progress = loyalty?.nextTier ? Math.min(100, Math.round((loyalty.points / loyalty.nextTier) * 100)) : 100;
+  return (
+    <div className="mv-acc-list">
+      {loyalty && (
+        <div className="mv-acc-card lime">
+          <div className="mv-acc-card-h">Золото Magic Vibes <span className="mv-acc-tier">{TIER[loyalty.tier] || "Серебро"}</span></div>
+          <div className="mv-acc-points">{loyalty.points}<small> {plural(loyalty.points, "балл", "балла", "баллов")}</small></div>
+          {loyalty.nextTier && <div className="mv-acc-bar"><span style={{ width: `${progress}%` }} /></div>}
+          {loyalty.nextTier && <div className="mv-acc-hint">{loyalty.points} из {loyalty.nextTier} до следующего уровня</div>}
+          {loyalty.transactions.slice(0, 5).map((t) => <div key={t.id} className="mv-acc-line"><span className="mv-acc-line-name">{t.reason}</span><span className="mv-acc-line-p">+{t.points}</span></div>)}
+          <p className="mv-acc-hint">Баллы за отзывы (+20), отзывы с фото (+50) и анбоксинги.</p>
         </div>
-        <DarkInput label="Телефон" type="tel" value={form.phone} onChange={setF("phone")} placeholder="+7 900 000-00-00" />
-        {error && <div style={{ fontSize: 12, color: "#f87171", background: "rgba(239,68,68,0.08)", borderRadius: 10, padding: "10px 14px", border: "1px solid rgba(239,68,68,0.15)" }}>{error}</div>}
-        <button type="submit" disabled={saving} style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 20px", borderRadius: 12, fontSize: 13, fontWeight: 700, cursor: saving ? "not-allowed" : "pointer", background: saved ? "rgba(74,222,128,0.15)" : "linear-gradient(135deg, #7c3aed, #9333ea)", color: saved ? "#4ade80" : "#fff", border: saved ? "1px solid rgba(74,222,128,0.25)" : "none", opacity: saving ? 0.7 : 1, alignSelf: "flex-start", transition: "all 0.2s" } as React.CSSProperties}>
-          {saving ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : saved ? <CheckCircle size={15} /> : <Save size={15} />}
-          {saving ? "Сохраняем..." : saved ? "Сохранено" : "Сохранить"}
-        </button>
-      </form>
-      <LoyaltyPanel token={token} />
-      <ReferralPanel token={token} />
-      <VipPanel token={token} />
+      )}
+      {ref && (
+        <div className="mv-acc-card">
+          <div className="mv-acc-card-h">Пригласите друга</div>
+          <p className="mv-acc-hint" style={{ marginTop: 0 }}>Друг получит −7% на первый заказ, вы — +100 баллов.</p>
+          <div className="mv-acc-ref">
+            <span>{ref.link}</span>
+            <button type="button" onClick={() => navigator.clipboard.writeText(ref.link).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1800); })}>
+              {copied ? <CheckCircle size={15} /> : <Copy size={15} />} {copied ? "Скопировано" : "Копировать"}
+            </button>
+          </div>
+          <div className="mv-acc-hint">Заказов по вашей ссылке: <b>{ref.ordersFromRef}</b></div>
+        </div>
+      )}
+      {vip && (
+        <div className="mv-acc-card ink">
+          <div className="mv-acc-card-h">VIP-клуб</div>
+          {vip.eligible && vip.vipLink
+            ? <><p className="mv-acc-hint" style={{ color: "rgba(245,242,236,.75)" }}>Ранний доступ к новинкам, закрытые промокоды и голосование за «аромат месяца».</p><a className="btn-primary on-dark" href={vip.vipLink} target="_blank" rel="noopener noreferrer">Вступить в клуб</a></>
+            : <><p className="mv-acc-hint" style={{ color: "rgba(245,242,236,.75)" }}>Откроется после 3 оплаченных заказов.</p>
+                <div className="mv-acc-dots">{[0, 1, 2].map((i) => <span key={i} className={i < vip.ordersCount ? "on" : ""} />)}<em>{vip.ordersCount}/3</em></div></>}
+        </div>
+      )}
     </div>
   );
 }
 
+/* ─────────────── page ─────────────── */
 export default function AccountPage() {
   const { customer, token, loading, logout } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
-  const activeTab = pathname === "/orders" ? "orders" : "profile";
+  const [tab, setTab] = useState<Tab>(pathname === "/orders" ? "orders" : "orders");
+  const [orders, setOrders] = useState<ShopOrder[]>([]);
+  const [stats, setStats] = useState<{ orders: number; paidOrders: number; spentRub: number } | null>(null);
+  const [ordersLoading, setOrdersLoading] = useState(true);
+  const [ordersError, setOrdersError] = useState("");
 
-  useEffect(() => { if (!loading && !customer) router.push("/"); }, [loading, customer, router]);
+  useEffect(() => { if (!loading && !customer) router.replace(`/login?next=${encodeURIComponent(pathname || "/account")}`); }, [loading, customer, router, pathname]);
+  useEffect(() => {
+    if (!token) return;
+    fetch(AUTH_API + "/orders", { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => r.json())
+      .then((d) => { if (d.orders) { setOrders(d.orders); setStats(d.stats || null); } else throw new Error(d.error || "Не удалось загрузить заказы"); })
+      .catch((e: Error) => setOrdersError(e.message))
+      .finally(() => setOrdersLoading(false));
+  }, [token]);
 
-  if (loading) return (
-    <div style={{ minHeight: "100vh", background: S.bg, display: "flex", alignItems: "center", justifyContent: "center" }}>
-      <Loader2 size={24} style={{ animation: "spin 1s linear infinite", color: S.muted }} />
-    </div>
-  );
+  if (loading) return <div className="mv-acc"><div className="mv-acc-empty"><Loader2 size={22} className="mv-spin" /></div></div>;
   if (!customer || !token) return null;
 
-  const displayName = [customer.firstName, customer.lastName].filter(Boolean).join(" ") || customer.email;
+  const name = [customer.firstName, customer.lastName].filter(Boolean).join(" ") || customer.email.split("@")[0];
+  const TABS: { id: Tab; label: string; icon: typeof Package }[] = [
+    { id: "orders", label: "Заказы", icon: Package },
+    { id: "addresses", label: "Адреса", icon: MapPin },
+    { id: "profile", label: "Профиль", icon: User },
+    { id: "bonus", label: "Бонусы", icon: Gift },
+  ];
 
   return (
-    <div style={{ minHeight: "100vh", background: S.bg }}>
-      <div style={{ maxWidth: 640, margin: "0 auto", padding: "clamp(24px,4vw,48px) clamp(16px,4vw,32px)" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 28 }}>
-          <div style={{ width: 48, height: 48, borderRadius: 16, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 18, color: "#fff", flexShrink: 0, background: "linear-gradient(135deg, #7c3aed, #9333ea)", boxShadow: "0 0 24px rgba(201,169,110,0.3)" }}>
-            {(customer.firstName || customer.email)[0].toUpperCase()}
-          </div>
+    <div className="mv-acc">
+      <div className="mv-acc-wrap">
+        <section className="mv-acc-hero">
+          <div className="mv-acc-avatar">{name[0]?.toUpperCase()}</div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: 15, color: S.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{displayName}</div>
-            <div style={{ fontSize: 12, color: S.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{customer.email}</div>
+            <div className="mv-acc-kicker">Личный кабинет</div>
+            <h1 className="mv-acc-name">{name}</h1>
+            <div className="mv-acc-mail">{customer.email}</div>
           </div>
-          <button onClick={() => { logout(); router.push("/"); }} style={{ display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 12, fontSize: 12, fontWeight: 600, background: "rgba(239,68,68,0.08)", color: "#f87171", border: "1px solid rgba(239,68,68,0.15)", cursor: "pointer", transition: "all 0.15s" }}
-            onMouseEnter={e => (e.currentTarget.style.background = "rgba(239,68,68,0.15)")}
-            onMouseLeave={e => (e.currentTarget.style.background = "rgba(239,68,68,0.08)")}>
-            <LogOut size={13} /> Выйти
-          </button>
-        </div>
+          <button type="button" className="mv-acc-logout" onClick={() => { logout(); router.push("/"); }}><LogOut size={15} /> <span>Выйти</span></button>
+          <div className="mv-acc-stats">
+            <div><b>{stats?.orders ?? "—"}</b><span>{plural(stats?.orders ?? 0, "заказ", "заказа", "заказов")}</span></div>
+            <div><b>{stats ? rub(stats.spentRub) : "—"}</b><span>оплачено</span></div>
+            <div><b>{stats?.paidOrders ?? "—"}</b><span>оплаченных</span></div>
+          </div>
+        </section>
 
-        <div style={{ display: "flex", gap: 4, marginBottom: 20, padding: 4, background: S.surface, borderRadius: 16, border: `1px solid ${S.border}` }}>
-          {([
-            { href: "/account", key: "profile", icon: User,    label: "Профиль" },
-            { href: "/orders",  key: "orders",  icon: Package, label: "Заказы" },
-          ] as const).map(({ href, key, icon: Icon, label }) => (
-            <Link key={href} href={href} style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "10px", borderRadius: 12, fontSize: 13, fontWeight: 600, textDecoration: "none", background: activeTab === key ? S.surface2 : "transparent", color: activeTab === key ? S.text : S.muted, border: activeTab === key ? `1px solid ${S.border}` : "1px solid transparent", transition: "all 0.15s" }}>
-              <Icon size={15} /> {label}
-              {activeTab === key && <ChevronRight size={12} />}
-            </Link>
+        <nav className="mv-acc-tabs" aria-label="Разделы кабинета">
+          {TABS.map(({ id, label, icon: I }) => (
+            <button key={id} type="button" className={tab === id ? "on" : ""} onClick={() => setTab(id)}><I size={16} /> {label}</button>
           ))}
-        </div>
+        </nav>
 
-        {activeTab === "orders" ? <OrdersTab token={token} /> : <ProfileTab token={token} />}
+        {tab === "orders" && <OrdersTab orders={orders} loading={ordersLoading} error={ordersError} />}
+        {tab === "addresses" && <AddressesTab token={token} />}
+        {tab === "profile" && <ProfileTab />}
+        {tab === "bonus" && <BonusTab token={token} />}
       </div>
     </div>
   );
