@@ -526,7 +526,7 @@ export function SupplierCartPanel() {
                   ) : null}
                   {row.stockOnlyFallback ? <small>Заказ уйдёт через «Наш склад» — цена в PriceMaster будет 0, остаток со склада.</small> : null}
                   {row.skipReason === "supplier_cutoff_passed_no_alternative" ? <small className="danger-text">Все подходящие поставщики уже закрыли прием заказов на сегодня.</small> : null}
-                  {!row.ready && !row.alreadyCommitted ? <small className="danger-text">Причина: {row.skipReason || "не готово"}</small> : null}
+                  {!row.ready && !row.alreadyCommitted ? <small className="danger-text">Причина: {row.skipReason === "supplier_volume_mismatch" ? "у поставщиков только другой объём — проверьте привязку" : (row.skipReason || "не готово")}</small> : null}
                   {!row.alreadyCommitted ? (
                     <div className="supplier-cart-actions">
                       <button className="secondary-action" type="button" disabled={overrideMutation.isPending} onClick={() => setAltKey(altKey === row.key ? null : row.key)}>

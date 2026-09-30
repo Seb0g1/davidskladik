@@ -1748,8 +1748,9 @@ function DiagnosticsPanel({ data, error, loading }: { data?: Record<string, unkn
               <div className="diagnostic-pm-links">
                 <b>PriceMaster:</b>
                 {itemLinks.length ? itemLinks.map((link, index) => (
-                  <span className="diagnostic-pm-chip" key={`${link.id || link.article}-${index}`}>
+                  <span className={`diagnostic-pm-chip${link.volumeMismatch ? " danger-text" : ""}`} key={`${link.id || link.article}-${index}`}>
                     {String(link.article || link.supplierArticle || "без артикула")} · {String(link.supplierName || "поставщик не указан")} · row {String(link.sourceRowId || link.rowId || link.id || "-")} · partner {String(link.partnerId || "-")}
+                    {link.volumeMismatch ? ` · другой объём ${String(link.volumeMismatch).replace("->", " → ")} мл, не используется` : ""}
                   </span>
                 )) : <span className="diagnostic-pm-chip muted">нет привязки</span>}
               </div>

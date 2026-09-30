@@ -73,6 +73,10 @@ function warehouseProductDiagnosticSaleState(product = {}, contextProducts = [])
   if (archived) return { code: "archived", label: "Архив", reason: "marketplace_card_archived" };
   if (!hasLinks) return { code: "no_links", label: "Нет привязки", reason: "no_pricemaster_links" };
   if (!selectedSupplier) {
+    const otherBottle = (Array.isArray(product.links) ? product.links : []).find((link) => link.volumeMismatch);
+    if (otherBottle) {
+      return { code: "no_supplier", label: "Нет поставщика: другой объём", reason: `linked_supplier_other_volume:${otherBottle.volumeMismatch}` };
+    }
     if (marketplaceHasPositiveStock(product)) {
       return { code: "no_supplier", label: "Нет поставщика", reason: "linked_without_supplier_marketplace_stock_positive" };
     }
@@ -180,6 +184,7 @@ function publicWarehouseDiagnosticProduct(product = {}, contextProducts = []) {
       available: link.availableCount > 0,
       missingInPriceMaster: Boolean(link.missingInPriceMaster),
       unavailableInPriceMaster: Boolean(link.unavailableInPriceMaster),
+      volumeMismatch: link.volumeMismatch || null,
     })),
   };
 }
