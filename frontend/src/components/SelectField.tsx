@@ -50,7 +50,7 @@ export function SelectField({
   };
 
   return (
-    <div className={`select-field${open ? " is-open" : ""}${disabled ? " is-disabled" : ""} ${className}`.trim()} ref={wrapRef}>
+    <div className={`select-field${open ? " is-open" : ""}${disabled ? " is-disabled" : ""}${options.length && value !== options[0].value ? " is-filtered" : ""} ${className}`.trim()} ref={wrapRef}>
       <button
         type="button"
         className="select-field-trigger"

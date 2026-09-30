@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CalendarDays, Check, CheckCircle2, ChevronDown, ClipboardList, Clock, Copy, Database, Download, Info, Loader2, MoreHorizontal, PackageX, Pencil, RefreshCw, Repeat2, RotateCcw, ShoppingBag, Trash2, Users, Wallet, X, Zap } from "lucide-react";
+import { AlertTriangle, CalendarDays, Check, CheckCircle2, ChevronDown, ClipboardList, Clock, Copy, Database, Download, Info, Loader2, MoreHorizontal, PackageX, Pencil, RefreshCw, Repeat2, RotateCcw, Search, ShoppingBag, Trash2, Users, Wallet, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
@@ -13,6 +13,7 @@ import { SupplierAltPicker } from "../components/SupplierAltPicker";
 import { DailyCartTotalSchema, PickerBalanceSchema, PickerBalancesSchema, PickerMyDaySchema, PickerReportSchema, PickerSpendingSchema, SupplierCartCancelSchema, SupplierLedgerPaymentSchema, SupplierPickingInvoiceSchema, SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema, SupplierReplaceResponseSchema } from "../types";
 import { PmSearchPanel } from "./SupplierCartPage";
 import { compactDate, copyPlainText, errorMessage, money, numberValue } from "../lib/common";
+import { FlashToast } from "../lib/toast";
 
 type PickingRow = z.infer<typeof SupplierPickingRowSchema>;
 
@@ -235,6 +236,8 @@ export function PickingListPage() {
   });
 
   const [helpOpen, setHelpOpen] = useState(false);
+  // Строка «Заплатил» нужна только при оплате наличными на месте — прячем её за кнопкой.
+  const [paymentOpen, setPaymentOpen] = useState<Set<string>>(new Set());
   const [resetConfirm, setResetConfirm] = useState(false);
   const [openActionMenu, setOpenActionMenu] = useState<string | null>(null);
   const [hintFocusedSupplier, setHintFocusedSupplier] = useState<string | null>(null);
@@ -992,18 +995,10 @@ export function PickingListPage() {
       </div>
 
       <section className="dashboard-metrics">
-        <div role="button" tabIndex={0} className="stat-filter-btn" onClick={() => { setStatus("open"); setDeferredDateFilter(null); }} onKeyDown={(e) => e.key === "Enter" && (setStatus("open"), setDeferredDateFilter(null))}>
-          <Stat label="К сборке" value={numberValue(summary.open)} tone={numberValue(summary.open) ? "warn" : "success"} icon={<ClipboardList size={18} />} />
-        </div>
-        <div role="button" tabIndex={0} className="stat-filter-btn" onClick={() => { setStatus("picked"); setDeferredDateFilter(null); }} onKeyDown={(e) => e.key === "Enter" && (setStatus("picked"), setDeferredDateFilter(null))}>
-          <Stat label="Собрано" value={numberValue(summary.picked)} tone="success" icon={<CheckCircle2 size={18} />} />
-        </div>
-        <div role="button" tabIndex={0} className="stat-filter-btn" onClick={() => { setStatus("missing"); setDeferredDateFilter(null); }} onKeyDown={(e) => e.key === "Enter" && (setStatus("missing"), setDeferredDateFilter(null))}>
-          <Stat label="Не было" value={numberValue(summary.missing)} tone={numberValue(summary.missing) ? "warn" : "success"} icon={<AlertTriangle size={18} />} />
-        </div>
-        <div role="button" tabIndex={0} className="stat-filter-btn" onClick={() => { setStatus("open"); setDeferredDateFilter(null); }} onKeyDown={(e) => e.key === "Enter" && (setStatus("open"), setDeferredDateFilter(null))}>
-          <Stat label="На завтра" value={numberValue((summary as Record<string, number>).deferred ?? 0)} tone={(summary as Record<string, number>).deferred ? "accent" : ""} icon={<CalendarDays size={18} />} />
-        </div>
+        <Stat label="К сборке" value={numberValue(summary.open)} tone={numberValue(summary.open) ? "warn" : "success"} icon={<ClipboardList size={18} />} selected={status === "open"} onClick={() => { setStatus("open"); setDeferredDateFilter(null); }} />
+        <Stat label="Собрано" value={numberValue(summary.picked)} tone="success" icon={<CheckCircle2 size={18} />} selected={status === "picked"} onClick={() => { setStatus("picked"); setDeferredDateFilter(null); }} />
+        <Stat label="Не было" value={numberValue(summary.missing)} tone={numberValue(summary.missing) ? "warn" : "success"} icon={<AlertTriangle size={18} />} selected={status === "missing"} onClick={() => { setStatus("missing"); setDeferredDateFilter(null); }} />
+        <Stat label="На завтра" value={numberValue((summary as Record<string, number>).deferred ?? 0)} tone={(summary as Record<string, number>).deferred ? "accent" : ""} icon={<CalendarDays size={18} />} onClick={() => { setStatus("open"); setDeferredDateFilter(null); }} />
       </section>
 
       {/* Mobile: status chips row */}
@@ -1055,8 +1050,12 @@ export function PickingListPage() {
       </div>
 
       {/* Desktop: full filter row */}
-      <div className="control-grid compact-controls picking-filters">
-        <label>Статус
+      <div className="toolbar picking-toolbar">
+        <label className="search-box picking-search-box">
+          <Search size={16} />
+          <input ref={searchRef} value={q} onChange={(event) => setQ(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") { if (q) setQ(""); else event.currentTarget.blur(); } }} placeholder="Поиск: SKU, товар, заказ" />
+          {q ? <button type="button" className="search-clear" title="Очистить (Esc)" onClick={() => setQ("")}><X size={14} /></button> : <kbd className="search-kbd">/</kbd>}
+        </label>
           <SelectField
             ariaLabel="Статус сборки"
             value={status}
@@ -1070,8 +1069,6 @@ export function PickingListPage() {
               { value: "all", label: "Все" },
             ]}
           />
-        </label>
-        <label>Поставщик
           <SelectField
             ariaLabel="Поставщик"
             value={supplier}
@@ -1081,23 +1078,18 @@ export function PickingListPage() {
               ...displaySuppliers.map((item) => ({ value: String(item), label: String(item) })),
             ]}
           />
-        </label>
-        <label>Поиск
-          <input ref={searchRef} value={q} onChange={(event) => setQ(event.target.value)} placeholder="SKU, товар, заказ" />
-        </label>
+          <button
+            type="button"
+            className={`stats-toggle-btn picking-help-btn${helpOpen ? " is-on" : ""}`}
+            onClick={() => setHelpOpen(v => !v)}
+            aria-expanded={helpOpen}
+            title="Как работает сборка"
+          >
+            <Info size={15} />
+          </button>
       </div>
 
       <div className="picking-help-collapsible">
-        <button
-          type="button"
-          className="picking-help-toggle"
-          onClick={() => setHelpOpen(v => !v)}
-          aria-expanded={helpOpen}
-        >
-          <Info size={13} />
-          <span>Как работает сборка</span>
-          <ChevronDown size={13} style={{ marginLeft: "auto", transform: helpOpen ? "rotate(180deg)" : "none", transition: "transform .2s", opacity: 0.5 }} />
-        </button>
         {helpOpen ? (
           <div className="picking-help-body">
             <div><strong>Собрал</strong> — взял товар у поставщика. Долг фиксируется автоматически по цене из PM.</div>
@@ -1116,7 +1108,7 @@ export function PickingListPage() {
       {cancelCartMutation.error ? <div className="inline-error">{errorMessage(cancelCartMutation.error)}</div> : null}
       {replaceMutation.error ? <div className="inline-error">Замена поставщика: {errorMessage(replaceMutation.error)}</div> : null}
       {replaceMutation.data && replaceMutation.data.inserted > 0 ? (
-        <div className="success-strip">Перезаказано у «{replaceMutation.data.supplierName || "нового поставщика"}»: заявка в PriceMaster создана (doc {replaceMutation.data.docIds?.join(", ") || "-"}).</div>
+        <FlashToast>Перезаказано у «{replaceMutation.data.supplierName || "нового поставщика"}»: заявка в PriceMaster создана (doc {replaceMutation.data.docIds?.join(", ") || "-"}).</FlashToast>
       ) : replaceMutation.data && replaceMutation.data.inserted === 0 ? (
         <div className="inline-error"><AlertTriangle size={14} /> Поставщик заменён в списке сборки, но заявка в PriceMaster не создана{replaceMutation.data.skippedDetails?.[0]?.skipReason ? ` (${replaceMutation.data.skippedDetails[0].skipReason})` : ""}. Создайте вручную через PM.</div>
       ) : null}
@@ -1807,6 +1799,14 @@ export function PickingListPage() {
                           ? <span className={`picking-supplier-total-price${total > 0 ? " tone-warn" : ""}`}>{moneyAmount(total, "RUB")}</span>
                           : <span className={`picking-supplier-total-price${total > 0 ? " tone-warn" : ""}`}>{moneyAmount(total, "USD")} <span style={{ fontSize: "0.8em", opacity: 0.7 }}>≈{moneyAmount(totalRub, "RUB")}</span></span>
                         }
+                        <button
+                          type="button"
+                          className={`secondary-action picking-pay-toggle${paymentOpen.has(supplierName) ? " is-on" : ""}`}
+                          onClick={() => setPaymentOpen((prev) => { const next = new Set(prev); if (next.has(supplierName)) next.delete(supplierName); else next.add(supplierName); return next; })}
+                          title="Записать оплату поставщику наличными"
+                        >
+                          <Wallet size={14} /> Оплата
+                        </button>
                       </div>
                     </div>
                     <div className="supplier-ledger-row">
@@ -1815,7 +1815,7 @@ export function PickingListPage() {
                       <DiagnosticValue label="Сборка" value={supplierCurrency === "RUB" ? moneyAmount(total, "RUB") : `${moneyAmount(total, "USD")} / ≈${moneyAmount(totalRub, "RUB")}`} />
                     </div>
                   </div>
-                  <div className="supplier-payment-row">
+                  {paymentOpen.has(supplierName) || draftAmount ? <div className="supplier-payment-row">
                     <div className="payment-amount-field">
                       <span className="payment-currency-prefix">{supplierCurrency === "USD" ? "$" : "₽"}</span>
                       <input
@@ -1824,6 +1824,7 @@ export function PickingListPage() {
                         pattern="[0-9]*[.,]?[0-9]*"
                         placeholder="0"
                         autoComplete="off"
+                        autoFocus={paymentOpen.has(supplierName)}
                         value={draftAmount}
                         onChange={(event) => setPaymentDrafts((current) => ({ ...current, [supplierName]: event.target.value }))}
                         onFocus={() => { setHintFocusedSupplier(supplierName); currentSupplierRef.current = supplierName; }}
@@ -1849,7 +1850,7 @@ export function PickingListPage() {
                     >
                       {paymentMutation.isPending ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Заплатил
                     </button>
-                  </div>
+                  </div> : null}
                   {hintFocusedSupplier === supplierName ? (
                     <p style={{ fontSize: 11, color: "var(--muted)", margin: "2px 0 4px", padding: "0 4px" }}>
                       Долг фиксируется автоматически при нажатии «Собрал». Поле выше — только если платите наличными прямо сейчас.

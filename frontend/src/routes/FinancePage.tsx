@@ -8,6 +8,7 @@ import { SelectField } from "../components/SelectField";
 import { ListSkeleton } from "../components/Skeleton";
 import { Stat } from "../components/Stat";
 import { errorMessage } from "../lib/common";
+import { FlashToast } from "../lib/toast";
 
 const money = (value: unknown) => {
   const n = Number(value || 0);
@@ -164,7 +165,7 @@ export function FinancePage() {
         {expenseError ? <div className="inline-error">{expenseError}</div> : null}
         {createExpense.error ? <div className="inline-error">{errorMessage(createExpense.error)}</div> : null}
         {updateOrder.error ? <div className="inline-error">{errorMessage(updateOrder.error)}</div> : null}
-        {expenseSuccess ? <div className="success-strip">Закупка добавлена в финансы и историю поставщика.</div> : null}
+        {expenseSuccess ? <FlashToast>Закупка добавлена в финансы и историю поставщика.</FlashToast> : null}
       </section>
 
       <div className="table-panel price-table finance-orders-table">

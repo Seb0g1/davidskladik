@@ -11,6 +11,7 @@ import { getPmSearchStore } from "../lib/pmSearchStore";
 import { SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema, SupplierReplaceResponseSchema } from "../types";
 import { SupplierCartPanel } from "./OperationsPage";
 import { compactDate, errorMessage } from "../lib/common";
+import { FlashToast } from "../lib/toast";
 
 type PickingRow = z.infer<typeof SupplierPickingRowSchema>;
 
@@ -362,7 +363,7 @@ function ReadyToShipPanel() {
         ) : null}
       </div>
       {batchOrderMutation.isSuccess ? (
-        <div className="success-strip">Добавлено в PM: {batchOrderMutation.data?.inserted} · Не удалось: {batchOrderMutation.data?.failed} · Документы: {(batchOrderMutation.data?.docIds || []).join(", ") || "-"}</div>
+        <FlashToast>Добавлено в PM: {batchOrderMutation.data?.inserted} · Не удалось: {batchOrderMutation.data?.failed} · Документы: {(batchOrderMutation.data?.docIds || []).join(", ") || "-"}</FlashToast>
       ) : null}
       {(batchOrderMutation.data?.failedDetails || []).filter((item) => item.reason === "pm_name_mismatch").map((item) => (
         <div key={String(item.key)} className="inline-error">
@@ -474,7 +475,7 @@ function ReadyToShipPanel() {
           {listQuery.error ? <div className="inline-error">{errorMessage(listQuery.error)}</div> : null}
           {revertMutation.error ? <div className="inline-error">{errorMessage(revertMutation.error)}</div> : null}
           {returnMutation.error ? <div className="inline-error">{errorMessage(returnMutation.error)}</div> : null}
-          {returnMutation.data ? <div className="success-strip">Товар отмечен как «вернули из ПВЗ». При следующем заказе этого SKU PM-заявка не создаётся — берётся из пула возвратов.</div> : null}
+          {returnMutation.data ? <FlashToast>Товар отмечен как «вернули из ПВЗ». При следующем заказе этого SKU PM-заявка не создаётся — берётся из пула возвратов.</FlashToast> : null}
           {revertAndReplaceMutation.error ? <div className="inline-error">Замена поставщика: {errorMessage(revertAndReplaceMutation.error)}</div> : null}
           {revertAndReplaceMutation.data ? (
             (revertAndReplaceMutation.data.inserted ?? 0) > 0 ? (
@@ -1109,7 +1110,7 @@ export function SupplierCartPage() {
                 Будет очищено: в обработке {dryRun.cartProcessed}, черновик {dryRun.draftRows}, сборка {dryRun.pickingRows}, блокировки {dryRun.supplierBlocks}, строк PM {countArray(pm.rowIds)}, документов PM {countArray(pm.docIds)}.
               </div>
             ) : null}
-            {rollbackApply.data ? <div className="success-strip">Откат выполнен. Осталось строк сборки: {rollbackApply.data.after?.pickingRows || 0}, строк PM: {countArray(rollbackApply.data.after?.pm?.rowIds)}.</div> : null}
+            {rollbackApply.data ? <FlashToast>Откат выполнен. Осталось строк сборки: {rollbackApply.data.after?.pickingRows || 0}, строк PM: {countArray(rollbackApply.data.after?.pm?.rowIds)}.</FlashToast> : null}
             {rollbackDryRun.error ? <div className="inline-error">{errorMessage(rollbackDryRun.error)}</div> : null}
             {rollbackApply.error ? <div className="inline-error">{errorMessage(rollbackApply.error)}</div> : null}
           </section>

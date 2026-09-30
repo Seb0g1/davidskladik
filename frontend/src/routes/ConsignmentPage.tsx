@@ -27,6 +27,7 @@ import { SelectField } from "../components/SelectField";
 import { ListSkeleton } from "../components/Skeleton";
 import { Stat } from "../components/Stat";
 import { errorMessage } from "../lib/common";
+import { FlashToast } from "../lib/toast";
 
 // Все цены на странице реализации ведутся в долларах.
 const money = (value: unknown) => {
@@ -830,7 +831,7 @@ export function ConsignmentPage() {
           </button>
         </div>
         {createItem.error ? <div className="inline-error">{errorMessage(createItem.error)}</div> : null}
-        {createItem.isSuccess ? <div className="success-strip">Товар добавлен на склад реализации.</div> : null}
+        {createItem.isSuccess ? <FlashToast>Товар добавлен на склад реализации.</FlashToast> : null}
 
         {draftItems.length ? (
           <div className="consignment-draft-panel">
@@ -888,7 +889,7 @@ export function ConsignmentPage() {
             {bulkCreate.error ? <div className="inline-error">{errorMessage(bulkCreate.error)}</div> : null}
           </div>
         ) : null}
-        {bulkCreate.isSuccess && !draftItems.length ? <div className="success-strip">Список загружен: товары добавлены на склад реализации.</div> : null}
+        {bulkCreate.isSuccess && !draftItems.length ? <FlashToast>Список загружен: товары добавлены на склад реализации.</FlashToast> : null}
       </section>
 
       {action ? (
@@ -1081,7 +1082,7 @@ export function ConsignmentPage() {
           </button>
         </div>
         {payout.error ? <div className="inline-error">{errorMessage(payout.error)}</div> : null}
-        {payout.isSuccess ? <div className="success-strip">Выплата записана.</div> : null}
+        {payout.isSuccess ? <FlashToast>Выплата записана.</FlashToast> : null}
         </div>
         <div className="cn-money-block">
         <h4><HandCoins size={15} /> Пополнить баланс спонсора</h4>
@@ -1101,7 +1102,7 @@ export function ConsignmentPage() {
           </button>
         </div>
         {topup.error ? <div className="inline-error">{errorMessage(topup.error)}</div> : null}
-        {topup.isSuccess ? <div className="success-strip">Пополнение записано — баланс обновлён.</div> : null}
+        {topup.isSuccess ? <FlashToast>Пополнение записано — баланс обновлён.</FlashToast> : null}
         </div>
         </div>
       </section>

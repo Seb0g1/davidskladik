@@ -7,6 +7,7 @@ import { fetchJson, mutationBody, patchBody } from "../api";
 import { AiAssistantResponseSchema, AiImageJobResponseSchema, BrandIndexStatusSchema, DiagnosticsSchema, Filters, GroupDetailSchema, isProductGroupPageItem, isProductPageItem, LiveRefreshSchema, MutationProductResponseSchema, OperationCreateSchema, PriceHistorySchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductGroupPageItem, ProductLink, ProductRepairSchema, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
 import { MarketplaceBadge } from "../components/MarketplaceBadge";
 import { PageHeader } from "../components/PageHeader";
+import { toast } from "../lib/toast";
 import { PmChipInput } from "../components/PmChipInput";
 import { getPmSearchStore } from "../lib/pmSearchStore";
 import { BrandPicker } from "../components/BrandPicker";
@@ -232,11 +233,14 @@ function ProductGroupRow({ group, selected, onSelect, bulkChecked, onBulkToggle 
   const pmRowName = pmMismatch ? supplierPmRowName(primary) : "";
   return (
     <button className={`product-row group-row ${selected ? "is-selected" : ""}${bulkChecked ? " bulk-selected" : ""}`} type="button" onClick={onSelect}>
-      <span className="row-check" aria-hidden="true" onClick={onBulkToggle}>
+      {/* Клик ловит только обёртка: раньше срабатывали и она, и onChange чекбокса — выделение
+          переключалось дважды и не ставилось. Клик не открывает карточку товара. */}
+      <span className="row-check" aria-hidden="true" onClick={(e) => { e.stopPropagation(); onBulkToggle?.(e); }}>
         <input
           type="checkbox"
           checked={bulkChecked ?? false}
-          onChange={(e) => { e.stopPropagation(); onBulkToggle?.(e as unknown as React.MouseEvent); }}
+          onChange={() => { /* переключает обёртка */ }}
+          tabIndex={-1}
           className="wh-bulk-check"
         />
       </span>
@@ -2742,7 +2746,6 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
   const [selectedGroup, setSelectedGroup] = useState(() => selectedGroupFromPath());
   const [isMobileList, setIsMobileList] = useState(() => typeof window !== "undefined" && window.matchMedia(mobileListMedia).matches);
   const [selectedGroupKeys, setSelectedGroupKeys] = useState<Set<string>>(new Set());
-  const [bulkResult, setBulkResult] = useState<string | null>(null);
   const [pageSize, setPageSize] = useState<number>(() => {
     try { return Number(window.localStorage.getItem("warehouse-page-size") || DEFAULT_PAGE_SIZE) || DEFAULT_PAGE_SIZE; } catch { return DEFAULT_PAGE_SIZE; }
   });
@@ -2893,22 +2896,22 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
       fetchJson("/api/warehouse/prices/send", z.object({ ok: z.boolean(), sent: z.number().optional(), errors: z.number().optional() }).passthrough(), mutationBody({ confirmed: true, productIds, force: true, dryRun: false })),
     onSuccess: (data) => {
       const sent = (data as Record<string, unknown>).sent ?? 0;
-      setBulkResult(`Цены отправлены: ${sent} товаров`);
+      toast.success(`Цены отправлены: ${sent} товаров`);
       setSelectedGroupKeys(new Set());
-      setTimeout(() => setBulkResult(null), 4000);
     },
-    onError: (e) => { setBulkResult(`Ошибка: ${errorMessage(e)}`); setTimeout(() => setBulkResult(null), 5000); },
+    meta: { silent: true },
+    onError: (e) => { toast.error(`Цены не отправлены: ${errorMessage(e)}`); },
   });
 
   const bulkStockMutation = useMutation({
     mutationFn: (productIds: string[]) =>
       fetchJson("/api/warehouse/links/recover-stale-stocks", z.object({ ok: z.boolean() }).passthrough(), mutationBody({ productIds })),
     onSuccess: () => {
-      setBulkResult(`Остатки переотправлены для ${selectedProductIds.length} товаров`);
+      toast.success(`Остатки переотправлены для ${selectedProductIds.length} товаров`);
       setSelectedGroupKeys(new Set());
-      setTimeout(() => setBulkResult(null), 4000);
     },
-    onError: (e) => { setBulkResult(`Ошибка: ${errorMessage(e)}`); setTimeout(() => setBulkResult(null), 5000); },
+    meta: { silent: true },
+    onError: (e) => { toast.error(`Остатки не переотправлены: ${errorMessage(e)}`); },
   });
 
   const selectedRowsOnPage = useMemo(() => groups.find((group) => group.groupKey === selectedGroup)?.products || [], [groups, selectedGroup]);
@@ -2969,6 +2972,41 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
     estimateSize: () => (isMobileList ? 160 : 72),
     overscan: 8,
   });
+  // Клавиатура: ↑/↓ — по товарам списка, Enter — открыть, Esc — закрыть карточку.
+  const moveSelection = (delta: number) => {
+    if (!groups.length) return;
+    const current = groups.findIndex((group) => group.groupKey === selectedGroup);
+    const nextIndex = current < 0 ? (delta > 0 ? 0 : groups.length - 1) : Math.max(0, Math.min(groups.length - 1, current + delta));
+    setSelectedGroup(groups[nextIndex].groupKey);
+    virtualizer.scrollToIndex(nextIndex, { align: "auto" });
+  };
+  const onSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      moveSelection(1);
+      searchInputRef.current?.blur();
+    } else if (event.key === "Escape") {
+      if (filters.q) setFilter("q", "");
+      else searchInputRef.current?.blur();
+    } else if (event.key === "Enter" && groups.length && !selectedGroup) {
+      setSelectedGroup(groups[0].groupKey);
+    }
+  };
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable) return;
+      if (document.querySelector(".cmdk-overlay, .supplier-modal-backdrop, .link-edit-backdrop")) return;
+      if (event.key === "ArrowDown" || event.key === "j") { event.preventDefault(); moveSelection(1); }
+      else if (event.key === "ArrowUp" || event.key === "k") { event.preventDefault(); moveSelection(-1); }
+      else if (event.key === "Escape" && selectedGroup) { setSelectedGroup(""); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
   const setFilter = (key: keyof Filters, value: string | boolean | number) => {
     setFilters((current) => ({ ...current, [key]: value, page: key === "page" ? Number(value) : 1 }));
     if (key === "linked") setSelectedGroup("");
@@ -3055,23 +3093,20 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
             refreshing={refreshBrands.isPending}
             canRefresh={isAdmin}
           />
-          <label className="toggle-filter">
+          <label className={`toggle-filter chip-toggle${filters.autoOnly ? " is-on" : ""}`}>
             <input type="checkbox" checked={filters.autoOnly} onChange={(event) => setFilter("autoOnly", event.target.checked)} />
-            Только автопрайс
+            Автопрайс
           </label>
-          <select
-            className="page-size-select"
-            value={pageSize}
-            aria-label="Товаров на странице"
-            onChange={(e) => {
-              const v = Number(e.target.value) || DEFAULT_PAGE_SIZE;
-              setPageSize(v);
-              try { window.localStorage.setItem("warehouse-page-size", String(v)); } catch { /* ignore */ }
-              setFilters((f) => ({ ...f, page: 1 }));
-            }}
-          >
-            {PAGE_SIZE_OPTIONS.map((n) => <option key={n} value={n}>{n} / стр.</option>)}
-          </select>
+          {activeFilterCount ? (
+            <button
+              className="reset-filters-btn"
+              type="button"
+              title="Сбросить все фильтры"
+              onClick={() => { setFilters((current) => ({ q: current.q, marketplace: "all", linked: "all", state: "all", brand: "", sort: "", autoOnly: false, page: 1 })); setSelectedGroupKeys(new Set()); }}
+            >
+              <X size={14} /> Сбросить · {activeFilterCount}
+            </button>
+          ) : null}
           <button
             className="stats-toggle-btn"
             type="button"
@@ -3084,14 +3119,15 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
             }}
           >
             {statsVisible ? <EyeOff size={15} /> : <BarChart2 size={15} />}
-            <span>{statsVisible ? "Скрыть стат." : "Статистика"}</span>
+            {isMobileList ? <span>{statsVisible ? "Скрыть статистику" : "Статистика"}</span> : null}
           </button>
         </>;
         return <>
           <section className="toolbar">
             <label className="search-box">
               <Search size={18} />
-              <input ref={searchInputRef} value={filters.q} onChange={(event) => setFilter("q", event.target.value)} placeholder="Поиск: 41059, CC-AASH5001, НФ-00004538" />
+              <input ref={searchInputRef} value={filters.q} onChange={(event) => setFilter("q", event.target.value)} onKeyDown={onSearchKeyDown} placeholder="Поиск: 41059, CC-AASH5001, НФ-00004538" />
+              {filters.q ? <button type="button" className="search-clear" title="Очистить (Esc)" onClick={() => { setFilter("q", ""); searchInputRef.current?.focus(); }}><X size={14} /></button> : <kbd className="search-kbd">/</kbd>}
             </label>
             {isMobileList ? (
               <button className={`filters-drawer-btn${activeFilterCount ? " has-active" : ""}`} type="button" onClick={() => setFiltersDrawerOpen(true)}>
@@ -3118,7 +3154,6 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
       {pageQuery.isFetching ? (
         <div className="catalog-loading-bar" role="status" aria-label="Каталог обновляется">
           <div className="catalog-loading-bar-fill" />
-          <span>Обновляю каталог…</span>
         </div>
       ) : null}
       {statsVisible && (
@@ -3127,7 +3162,7 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
           {(catalogStats || (pageQuery.data?.grouped && pageQuery.data?.rowTotal)) ? <Stat label="SKU" value={catalogStats?.rowTotal ?? pageQuery.data?.rowTotal ?? 0} icon={<Copy size={18} />} /> : null}
           <Stat label="Всего" value={catalogStats?.totalAll ?? (pageQuery.data?.totalAll || 0)} icon={<Search size={18} />} />
           <Stat label="Готовы" value={catalogStats?.ready ?? (pageQuery.data != null ? (pageQuery.data?.ready ?? 0) : undefined)} tone="success" icon={<Check size={18} />} />
-          <Stat label="Изменения" value={catalogStats?.changed ?? (pageQuery.data != null ? (pageQuery.data?.changed ?? 0) : undefined)} tone="warn" icon={<RefreshCw size={18} />} />
+          <Stat label="Изменения" value={catalogStats?.changed ?? (pageQuery.data != null ? (pageQuery.data?.changed ?? 0) : undefined)} tone="warn" icon={<RefreshCw size={18} />} selected={filters.linked === "changed"} onClick={() => setFilter("linked", filters.linked === "changed" ? "all" : "changed")} />
           <Stat label="Без поставщика" value={catalogStats?.withoutSupplier ?? (pageQuery.data != null ? (pageQuery.data?.withoutSupplier ?? 0) : undefined)} icon={<Link2 size={18} />} />
           <Stat label="С поставщиком" value={pageQuery.data != null ? (pageQuery.data?.linkedProducts ?? 0) : undefined} tone="success" icon={<Users size={18} />} />
         </section>
@@ -3155,19 +3190,19 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
               />
             </span>
             <span>Товар</span>
-            <span>Артикул / SKU</span>
-            <span>Маркетплейсы</span>
-            <span>Остаток</span>
-            <span>Поставщик</span>
-            <span>Цена</span>
-            <span>Статус</span>
+            <span className="col-sku">Артикул / SKU</span>
+            <span className="col-mp">Маркетплейсы</span>
+            <span className="col-stock">Остаток</span>
+            <span className="col-supplier">Поставщик</span>
+            <span className="col-price">Цена</span>
+            <span className="col-status">Статус</span>
           </div>
           <div ref={parentRef} className="virtual-list">
             <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative" }}>
               {virtualizer.getVirtualItems().map((virtualRow) => {
                 const group = groups[virtualRow.index];
                 return (
-                  <div key={group.groupKey} style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualRow.start}px)` }}>
+                  <div key={group.groupKey} data-index={virtualRow.index} ref={virtualizer.measureElement} style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualRow.start}px)` }}>
                     <ProductGroupRow group={group} selected={group.groupKey === selectedGroup} onSelect={() => setSelectedGroup(group.groupKey)} bulkChecked={selectedGroupKeys.has(group.groupKey)} onBulkToggle={() => toggleBulkGroup(group.groupKey)} />
                   </div>
                 );
@@ -3197,9 +3232,22 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
             )}
           </div>
           <div className="pager">
-            <button disabled={filters.page <= 1} onClick={() => setFilter("page", Math.max(1, filters.page - 1))}>Назад</button>
+            <button disabled={filters.page <= 1} onClick={() => setFilter("page", Math.max(1, filters.page - 1))} title="Предыдущая страница">Назад</button>
             <span>Страница {filters.page}</span>
-            <button disabled={!pageQuery.data?.hasMore} onClick={() => setFilter("page", filters.page + 1)}>Дальше</button>
+            <button disabled={!pageQuery.data?.hasMore} onClick={() => setFilter("page", filters.page + 1)} title="Следующая страница">Дальше</button>
+            <select
+              className="page-size-select"
+              value={pageSize}
+              aria-label="Товаров на странице"
+              onChange={(e) => {
+                const v = Number(e.target.value) || DEFAULT_PAGE_SIZE;
+                setPageSize(v);
+                try { window.localStorage.setItem("warehouse-page-size", String(v)); } catch { /* ignore */ }
+                setFilters((f) => ({ ...f, page: 1 }));
+              }}
+            >
+              {PAGE_SIZE_OPTIONS.map((n) => <option key={n} value={n}>{n} / стр.</option>)}
+            </select>
           </div>
         </div>
         <DetailPanel
@@ -3232,11 +3280,6 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
           <button className="icon-action" type="button" onClick={() => setSelectedGroupKeys(new Set())} title="Снять выделение">
             <X size={15} />
           </button>
-        </div>
-      )}
-      {bulkResult && (
-        <div className={`bulk-result-toast${selectedGroupKeys.size > 0 ? " bulk-result-toast--offset" : ""}`}>
-          {bulkResult}
         </div>
       )}
     </>

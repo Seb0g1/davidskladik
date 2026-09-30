@@ -1,122 +1,108 @@
-import { Activity, AlertCircle, AlertTriangle, BadgeDollarSign, Ban, BarChart3, BookOpen, ChevronDown, CirclePlay, ClipboardList, DollarSign, Download, HandCoins, Home, Loader2, LogOut, Menu, PackageCheck, PackagePlus, RefreshCcw, Settings, ShoppingCart, Sparkles, Store, Truck, Star, HelpCircle, MessageCircle, MessageCircleHeart, Tag, UserCircle, Upload, Wrench } from "lucide-react";
-import { lazy, ReactNode, Suspense, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { AlertCircle, ChevronDown, Keyboard, LogOut, Menu, PanelLeft, RefreshCw, Search, Star, X } from "lucide-react";
+import { Activity, Suspense, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { CommandPalette, PaletteAction } from "./components/CommandPalette";
 import { NotificationsBell } from "./components/NotificationsBell";
 import { SystemHealthIndicator } from "./components/SystemHealthIndicator";
 import { ThemeSwitcher } from "./components/ThemeSwitcher";
+import { AppRoute, NAV_SECTIONS, navItems, NavItem, pageComponent, prefetchRoute, prefetchRoutesWhenIdle, routeFromPath } from "./lib/nav";
+import { Toaster } from "./lib/toast";
 
-// Страницы грузятся лениво: один бандл на всё приложение весил 780 КБ и
-// тормозил первый вход — теперь каждый раздел приезжает своим чанком.
-const WarehousePage = lazy(() => import("./routes/WarehousePage").then((m) => ({ default: m.WarehousePage })));
-const DashboardPage = lazy(() => import("./routes/DashboardPage").then((m) => ({ default: m.DashboardPage })));
-const FeedbackPage = lazy(() => import("./routes/FeedbackPage").then((m) => ({ default: m.FeedbackPage })));
-const ChatsPage = lazy(() => import("./routes/ChatsPage").then((m) => ({ default: m.ChatsPage })));
-const ImportPage = lazy(() => import("./routes/ImportPage").then((m) => ({ default: m.ImportPage })));
-const AvitoPage = lazy(() => import("./routes/AvitoPage").then((m) => ({ default: m.AvitoPage })));
-const OperationsPage = lazy(() => import("./routes/OperationsPage").then((m) => ({ default: m.OperationsPage })));
-const SettingsPage = lazy(() => import("./routes/SettingsPage").then((m) => ({ default: m.SettingsPage })));
-const AiDraftsPage = lazy(() => import("./routes/AiDraftsPage").then((m) => ({ default: m.AiDraftsPage })));
-const NoSupplierPage = lazy(() => import("./routes/NoSupplierPage").then((m) => ({ default: m.NoSupplierPage })));
-const SupplierCartPage = lazy(() => import("./routes/SupplierCartPage").then((m) => ({ default: m.SupplierCartPage })));
-const RecoveryQueuePage = lazy(() => import("./routes/RecoveryQueuePage").then((m) => ({ default: m.RecoveryQueuePage })));
-const PricesPage = lazy(() => import("./routes/PricesPage").then((m) => ({ default: m.PricesPage })));
-const SystemPage = lazy(() => import("./routes/SystemPage").then((m) => ({ default: m.SystemPage })));
-const PickingListPage = lazy(() => import("./routes/PickingListPage").then((m) => ({ default: m.PickingListPage })));
-const ProblemProductsPage = lazy(() => import("./routes/ProblemProductsPage").then((m) => ({ default: m.ProblemProductsPage })));
-const FinancePage = lazy(() => import("./routes/FinancePage").then((m) => ({ default: m.FinancePage })));
-const SuppliersPage = lazy(() => import("./routes/SuppliersPage").then((m) => ({ default: m.SuppliersPage })));
-const StatisticsPage = lazy(() => import("./routes/StatisticsPage").then((m) => ({ default: m.StatisticsPage })));
-const ConsignmentPage = lazy(() => import("./routes/ConsignmentPage").then((m) => ({ default: m.ConsignmentPage })));
-const NewProductsPage = lazy(() => import("./routes/NewProductsPage").then((m) => ({ default: m.NewProductsPage })));
-const ShopAdminPage = lazy(() => import("./routes/ShopAdminPage").then((m) => ({ default: m.default })));
-const TnvedPage = lazy(() => import("./routes/TnvedPage").then((m) => ({ default: m.TnvedPage })));
-const SupportChatsPage = lazy(() => import("./routes/SupportChatsPage").then((m) => ({ default: m.SupportChatsPage })));
-const BrandBansPage = lazy(() => import("./routes/BrandBansPage").then((m) => ({ default: m.BrandBansPage })));
-const BrandsTnvedPage = lazy(() => import("./routes/BrandsTnvedPage").then((m) => ({ default: m.BrandsTnvedPage })));
-const OzonCardFixPage = lazy(() => import("./routes/OzonCardFixPage").then((m) => ({ default: m.OzonCardFixPage })));
-
-type AppRoute = "dashboard" | "import" | "avito" | "shop" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "consignment" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier" | "new-products" | "tnved" | "support" | "brand-bans" | "brands-tnved" | "ozon-card-fix";
 type SessionState = { authenticated?: boolean; role?: string | null; username?: string | null; allowedPages?: string[] | null; displayName?: string | null; avatarUrl?: string | null };
 
-const navItems: Array<{ route: AppRoute; href: string; label: string; icon: ReactNode }> = [
-  { route: "dashboard", href: "/app/dashboard", label: "Дашборд", icon: <Home size={16} /> },
-  { route: "warehouse", href: "/app/warehouse", label: "Склад", icon: <PackageCheck size={16} /> },
-  { route: "picking-list", href: "/app/picking-list", label: "Сборка", icon: <ClipboardList size={16} /> },
-  { route: "avito", href: "/app/avito", label: "Автозагрузка Avito", icon: <Upload size={16} /> },
-  { route: "consignment", href: "/app/consignment", label: "Реализация", icon: <HandCoins size={16} /> },
-  { route: "reviews", href: "/app/reviews", label: "Отзывы", icon: <Star size={16} /> },
-  { route: "chats", href: "/app/chats", label: "Чаты", icon: <MessageCircle size={16} /> },
-  { route: "questions", href: "/app/questions", label: "Вопросы", icon: <HelpCircle size={16} /> },
-  { route: "support", href: "/app/support", label: "Поддержка сайта", icon: <MessageCircleHeart size={16} /> },
-  { route: "settings", href: "/app/settings", label: "Настройки", icon: <Settings size={16} /> },
-  { route: "system", href: "/app/system", label: "Система", icon: <Activity size={16} /> },
-  { route: "ai-drafts", href: "/app/ai-drafts", label: "AI drafts", icon: <Sparkles size={16} /> },
-  { route: "no-supplier", href: "/app/no-supplier", label: "Ошибки наличия", icon: <AlertCircle size={16} /> },
-  { route: "operations", href: "/app/operations", label: "Операции", icon: <CirclePlay size={16} /> },
-  { route: "recovery-queue", href: "/app/recovery-queue", label: "Восстановление", icon: <RefreshCcw size={16} /> },
-  { route: "suppliers", href: "/app/suppliers", label: "Поставщики", icon: <Truck size={16} /> },
-  { route: "shop", href: "/app/shop", label: "Магазин MV", icon: <Store size={16} /> },
-  { route: "import", href: "/app/import", label: "Импорт на Яндекс", icon: <Download size={16} /> },
-  { route: "supplier-cart", href: "/app/supplier-cart", label: "Автокорзина", icon: <ShoppingCart size={16} /> },
-  { route: "prices", href: "/app/prices", label: "Цены", icon: <DollarSign size={16} /> },
-  { route: "statistics", href: "/app/statistics", label: "Статистика", icon: <BarChart3 size={16} /> },
-  { route: "problem-products", href: "/app/problem-products", label: "Проблемные товары", icon: <AlertTriangle size={16} /> },
-  { route: "finance", href: "/app/finance", label: "Финансы", icon: <BadgeDollarSign size={16} /> },
-  { route: "new-products", href: "/app/new-products", label: "Новые товары", icon: <PackagePlus size={16} /> },
-  { route: "tnved", href: "/app/tnved", label: "Коды ТН ВЭД", icon: <Tag size={16} /> },
-  { route: "brand-bans", href: "/app/brand-bans", label: "Запрет брендов", icon: <Ban size={16} /> },
-  { route: "brands-tnved", href: "/app/brands-tnved", label: "Бренды / ТН ВЭД", icon: <BookOpen size={16} /> },
-  { route: "ozon-card-fix", href: "/app/ozon-card-fix", label: "Карточки Ozon", icon: <Wrench size={16} /> },
-];
-
-// Сайдбар: первые пять пунктов — без заголовка, дальше сворачиваемые группы.
-const NAV_SECTIONS: Array<{ id: string; title?: string; routes: AppRoute[] }> = [
-  { id: "main", routes: ["dashboard", "warehouse", "picking-list", "supplier-cart", "consignment"] },
-  { id: "clients", title: "Работа с клиентами", routes: ["reviews", "chats", "questions", "support"] },
-  { id: "marketplace", title: "Маркетплейсы", routes: ["suppliers", "avito", "import", "prices", "finance", "statistics"] },
-  { id: "admin", title: "Настройки", routes: ["settings", "system", "ai-drafts", "operations"] },
-  { id: "tools", title: "Инструменты", routes: ["tnved", "brand-bans", "brands-tnved", "ozon-card-fix", "no-supplier", "recovery-queue", "new-products", "problem-products", "shop"] },
-];
-
-function currentRoute(): AppRoute {
-  const path = window.location.pathname;
-  if (path.startsWith("/app/dashboard")) return "dashboard";
-  if (path.startsWith("/app/picking-list")) return "picking-list";
-  if (path.startsWith("/app/suppliers")) return "suppliers";
-  if (path.startsWith("/app/operations")) return "operations";
-  if (path.startsWith("/app/supplier-cart")) return "supplier-cart";
-  if (path.startsWith("/app/recovery-queue")) return "recovery-queue";
-  if (path.startsWith("/app/reviews")) return "reviews";
-  if (path.startsWith("/app/questions")) return "questions";
-  if (path.startsWith("/app/chats")) return "chats";
-  if (path.startsWith("/app/support")) return "support";
-  if (path.startsWith("/app/import")) return "import";
-  if (path.startsWith("/app/avito")) return "avito";
-  if (path.startsWith("/app/shop")) return "shop";
-  if (path.startsWith("/app/prices")) return "prices";
-  if (path.startsWith("/app/problem-products")) return "problem-products";
-  if (path.startsWith("/app/finance")) return "finance";
-  if (path.startsWith("/app/consignment")) return "consignment";
-  if (path.startsWith("/app/statistics")) return "statistics";
-  if (path.startsWith("/app/settings")) return "settings";
-  if (path.startsWith("/app/system")) return "system";
-  if (path.startsWith("/app/ai-drafts")) return "ai-drafts";
-  if (path.startsWith("/app/no-supplier")) return "no-supplier";
-  if (path.startsWith("/app/new-products")) return "new-products";
-  if (path.startsWith("/app/tnved")) return "tnved";
-  if (path.startsWith("/app/brand-bans")) return "brand-bans";
-  if (path.startsWith("/app/brands-tnved")) return "brands-tnved";
-  if (path.startsWith("/app/ozon-card-fix")) return "ozon-card-fix";
-  return "warehouse";
-}
+// Сколько разделов держать «живыми» в фоне: возврат на них мгновенный, с сохранёнными
+// фильтрами, выделением и прокруткой. Скрытые разделы не опрашивают сервер (эффекты
+// в <Activity mode="hidden"> остановлены), свежие данные подтягиваются при возврате.
+const KEEP_ALIVE_LIMIT = 6;
+const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 
 // Embedded page preview (iframe inside the page-access modal): hide the app chrome.
 const isPreviewEmbed = new URLSearchParams(window.location.search).get("embed") === "preview";
 
+function readStoredList(key: string): AppRoute[] {
+  try {
+    const value = JSON.parse(window.localStorage.getItem(key) || "[]");
+    return Array.isArray(value) ? value.filter((item) => navItems.some((nav) => nav.route === item)) : [];
+  } catch {
+    return [];
+  }
+}
+function writeStoredList(key: string, value: AppRoute[]) {
+  try { window.localStorage.setItem(key, JSON.stringify(value)); } catch { /* приватный режим */ }
+}
+
+function isTypingTarget(target: EventTarget | null) {
+  const element = target as HTMLElement | null;
+  if (!element) return false;
+  const tag = element.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || element.isContentEditable;
+}
+
+/** Первое видимое поле поиска на текущей странице (для горячей клавиши «/»). */
+function findPageSearchInput(): HTMLInputElement | null {
+  const content = document.querySelector(".app-content");
+  if (!content) return null;
+  const candidates = Array.from(content.querySelectorAll<HTMLInputElement>(
+    '.search-box input, input[type="search"], input[placeholder*="Поиск"], input[placeholder*="поиск"], input[placeholder*="SKU"]',
+  ));
+  return candidates.find((input) => input.offsetParent !== null && !input.disabled) || null;
+}
+
+function RoutePage({ route, isAdmin }: { route: AppRoute; isAdmin: boolean }) {
+  const Page = pageComponent(route);
+  if (route === "reviews") return <Page defaultTab="reviews" />;
+  if (route === "questions") return <Page defaultTab="questions" />;
+  if (route === "warehouse") return <Page isAdmin={isAdmin} />;
+  return <Page />;
+}
+
+function ShortcutsHelp({ onClose }: { onClose: () => void }) {
+  const mod = isMac ? "⌘" : "Ctrl";
+  const rows: Array<[string[], string]> = [
+    [[mod, "K"], "Быстрый переход: разделы, действия, поиск товара"],
+    [["/"], "Фокус на поиск текущей страницы"],
+    [["Alt", "1…9"], "Открыть раздел из избранного (или меню по порядку)"],
+    [["Alt", "←"], "Назад к предыдущему разделу"],
+    [["↑", "↓"], "Склад: переход по товарам, Enter — открыть карточку"],
+    [["Esc"], "Закрыть окно, карточку или меню"],
+    [["?"], "Эта подсказка"],
+  ];
+  return (
+    <div className="cmdk-overlay" onMouseDown={onClose}>
+      <div className="shortcuts-help" role="dialog" aria-modal="true" aria-label="Горячие клавиши" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="shortcuts-help-head">
+          <Keyboard size={18} />
+          <strong>Горячие клавиши</strong>
+          <button type="button" className="icon-action" onClick={onClose} aria-label="Закрыть"><X size={15} /></button>
+        </div>
+        {rows.map(([keys, text]) => (
+          <div className="shortcuts-help-row" key={text}>
+            <span className="shortcuts-help-keys">{keys.map((key) => <kbd key={key}>{key}</kbd>)}</span>
+            <span>{text}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function AppShell() {
-  const [route, setRoute] = useState<AppRoute>(() => currentRoute());
+  const queryClient = useQueryClient();
+  const [route, setRoute] = useState<AppRoute>(() => routeFromPath());
+  // Разделы, которые уже открывались (последний — самый свежий) + «версия» для перемонтирования.
+  const [alive, setAlive] = useState<AppRoute[]>(() => [routeFromPath()]);
+  const [remountKeys, setRemountKeys] = useState<Partial<Record<AppRoute, number>>>({});
+  const [isPending, startTransition] = useTransition();
   const [session, setSession] = useState<SessionState | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [sidebarCompact, setSidebarCompact] = useState(false);
+  const [sidebarCompact, setSidebarCompact] = useState(() => {
+    try { return window.localStorage.getItem("nav-compact") === "1"; } catch { return false; }
+  });
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [favorites, setFavorites] = useState<AppRoute[]>(() => readStoredList("nav-favorites"));
+  const [recent, setRecent] = useState<AppRoute[]>(() => readStoredList("nav-recent"));
+  const [openPicking, setOpenPicking] = useState(0);
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>(() => {
     try {
       const stored = JSON.parse(window.localStorage.getItem("nav-collapsed-sections") || "");
@@ -124,6 +110,8 @@ function AppShell() {
     } catch { /* дефолт ниже */ }
     return { tools: true, admin: true };
   });
+  const scrollPositions = useRef<Partial<Record<AppRoute, number>>>({});
+  const previousRoute = useRef<AppRoute | null>(null);
   const toggleNavSection = (id: string) => {
     setCollapsedSections((current) => {
       const next = { ...current, [id]: !current[id] };
@@ -133,21 +121,55 @@ function AppShell() {
   };
   const [isMobileNav, setIsMobileNav] = useState(() => window.matchMedia("(max-width: 980px)").matches);
   const activeNavRef = useRef<HTMLAnchorElement | null>(null);
+
+  const showRoute = useCallback((next: AppRoute, forceRemount = false) => {
+    setRoute((current) => {
+      if (current !== next) {
+        scrollPositions.current[current] = window.scrollY;
+        previousRoute.current = current;
+      }
+      return next;
+    });
+    setAlive((current) => [...current.filter((item) => item !== next), next].slice(-KEEP_ALIVE_LIMIT));
+    if (forceRemount) setRemountKeys((current) => ({ ...current, [next]: (current[next] || 0) + 1 }));
+    setRecent((current) => {
+      const updated = [next, ...current.filter((item) => item !== next)].slice(0, 6);
+      writeStoredList("nav-recent", updated);
+      return updated;
+    });
+  }, []);
+
+  const navigateTo = useCallback((href: string) => {
+    const url = new URL(href, window.location.origin);
+    const next = routeFromPath(url.pathname);
+    // Переход с параметрами (например, поиск товара из палитры) открывает раздел заново,
+    // чтобы он прочитал параметры из адреса, а не показал старое состояние.
+    const forceRemount = Boolean(url.search);
+    window.history.pushState(null, "", href);
+    setSidebarOpen(false);
+    startTransition(() => showRoute(next, forceRemount));
+  }, [showRoute]);
+
+  const navigate = (event: React.MouseEvent<HTMLAnchorElement>, href: string) => {
+    if (event.ctrlKey || event.metaKey || event.shiftKey || event.button === 1) return; // новая вкладка
+    event.preventDefault();
+    navigateTo(href);
+  };
+
+  // Восстанавливаем прокрутку раздела после его показа.
+  useEffect(() => {
+    const top = scrollPositions.current[route] ?? 0;
+    window.requestAnimationFrame(() => window.scrollTo({ top, behavior: "instant" as ScrollBehavior }));
+  }, [route]);
+
   useEffect(() => {
     const onPop = () => {
-      setRoute(currentRoute());
+      startTransition(() => showRoute(routeFromPath()));
       setSidebarOpen(false);
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, []);
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setSidebarOpen(false);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [showRoute]);
   useEffect(() => {
     const media = window.matchMedia("(max-width: 980px)");
     const sync = () => {
@@ -177,57 +199,192 @@ function AppShell() {
     let cancelled = false;
     const BASE_TITLE = "DavidSklad";
     async function poll() {
+      if (document.hidden) return;
       try {
         const res = await fetch("/api/supplier-picking-list?status=open&limit=1", { credentials: "include" });
         if (!res.ok || cancelled) return;
         const data = await res.json().catch(() => null);
-        const open = Number((data?.summary as Record<string,number> | undefined)?.open ?? 0);
-        if (!cancelled) document.title = open > 0 ? `(${open}) ${BASE_TITLE}` : BASE_TITLE;
+        const open = Number((data?.summary as Record<string, number> | undefined)?.open ?? 0);
+        if (!cancelled) {
+          setOpenPicking(Number.isFinite(open) ? open : 0);
+          document.title = open > 0 ? `(${open}) ${BASE_TITLE}` : BASE_TITLE;
+        }
       } catch { /* ignore */ }
     }
     void poll();
     const id = window.setInterval(poll, 60_000);
-    return () => { cancelled = true; clearInterval(id); document.title = BASE_TITLE; };
+    const onVisible = () => { if (!document.hidden) void poll(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { cancelled = true; clearInterval(id); document.removeEventListener("visibilitychange", onVisible); document.title = BASE_TITLE; };
   }, []);
-  const navigate = (event: React.MouseEvent<HTMLAnchorElement>, href: string) => {
-    event.preventDefault();
-    window.history.pushState(null, "", href);
-    setRoute(currentRoute());
-    setSidebarOpen(false);
-  };
-  const toggleNavigation = () => {
+
+  const toggleNavigation = useCallback(() => {
     if (isMobileNav) {
       setSidebarOpen((value) => !value);
       return;
     }
-    setSidebarCompact((value) => !value);
+    setSidebarCompact((value) => {
+      try { window.localStorage.setItem("nav-compact", value ? "0" : "1"); } catch { /* ignore */ }
+      return !value;
+    });
+  }, [isMobileNav]);
+
+  const toggleFavorite = (target: AppRoute) => {
+    setFavorites((current) => {
+      const next = current.includes(target) ? current.filter((item) => item !== target) : [...current, target];
+      writeStoredList("nav-favorites", next);
+      return next;
+    });
   };
+
   const sessionReady = session !== null;
   const isAdmin = session?.role === "admin";
   // Per-user page visibility: admins see everything, others see the pages granted
   // in Настройки -> Сотрудники (empty grant falls back to the old manager defaults).
-  const defaultEmployeeRoutes: AppRoute[] = ["warehouse", "picking-list"];
-  const allRouteKeys = navItems.map((item) => item.route);
-  const grantedPages = (session?.allowedPages || []).filter((page): page is AppRoute => (allRouteKeys as string[]).includes(page));
-  const headerRoutes = new Set<AppRoute>(isAdmin ? allRouteKeys : (grantedPages.length ? grantedPages : defaultEmployeeRoutes));
-  const visibleNavItems = navItems.filter((item) => headerRoutes.has(item.route));
+  const visibleNavItems = useMemo(() => {
+    const defaultEmployeeRoutes: AppRoute[] = ["warehouse", "picking-list"];
+    const allRouteKeys = navItems.map((item) => item.route);
+    const grantedPages = (session?.allowedPages || []).filter((page): page is AppRoute => (allRouteKeys as string[]).includes(page));
+    const allowed = new Set<AppRoute>(isAdmin ? allRouteKeys : (grantedPages.length ? grantedPages : defaultEmployeeRoutes));
+    return navItems.filter((item) => allowed.has(item.route));
+  }, [isAdmin, session?.allowedPages]);
+  const allowedRoutes = useMemo(() => new Set(visibleNavItems.map((item) => item.route)), [visibleNavItems]);
+  const visibleFavorites = favorites.filter((item) => allowedRoutes.has(item));
+  const quickRoutes = (visibleFavorites.length ? visibleFavorites : visibleNavItems.map((item) => item.route)).slice(0, 9);
+
   useEffect(() => {
     activeNavRef.current?.scrollIntoView({ block: "nearest" });
   }, [route, visibleNavItems.length]);
-  const accessDenied = sessionReady && !headerRoutes.has(route);
+
+  // Чанки разрешённых разделов подтягиваются в простое — переходы без ожидания загрузки.
+  useEffect(() => {
+    if (!sessionReady || isPreviewEmbed) return;
+    const ordered = [...visibleFavorites, ...recent, ...visibleNavItems.map((item) => item.route)].filter((item) => allowedRoutes.has(item));
+    prefetchRoutesWhenIdle(Array.from(new Set(ordered)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionReady]);
+
+  const accessDenied = sessionReady && !allowedRoutes.has(route);
   useEffect(() => {
     // Users without access to the current page land on their first granted page
     // (the sponsor logs in and goes straight to Реализация).
     if (!sessionReady || !accessDenied) return;
-    const fallback = navItems.find((item) => headerRoutes.has(item.route));
+    const fallback = visibleNavItems[0];
     if (fallback && fallback.route !== route) {
       window.history.replaceState(null, "", fallback.href);
-      setRoute(currentRoute());
+      showRoute(fallback.route);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionReady, accessDenied]);
+
+  // Глобальные горячие клавиши.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const mod = event.ctrlKey || event.metaKey;
+      if (mod && !event.altKey && (event.key.toLowerCase() === "k" || event.key.toLowerCase() === "л" || event.code === "KeyK")) {
+        event.preventDefault();
+        setHelpOpen(false);
+        setPaletteOpen((value) => !value);
+        return;
+      }
+      if (event.key === "Escape") {
+        setSidebarOpen(false);
+        return;
+      }
+      if (paletteOpen || helpOpen) return;
+      if (event.altKey && !mod && /^Digit[1-9]$/.test(event.code)) {
+        const target = quickRoutes[Number(event.code.slice(5)) - 1];
+        const item = visibleNavItems.find((nav) => nav.route === target);
+        if (item) {
+          event.preventDefault();
+          navigateTo(item.href);
+        }
+        return;
+      }
+      if (event.altKey && event.key === "ArrowLeft" && previousRoute.current) {
+        const item = visibleNavItems.find((nav) => nav.route === previousRoute.current);
+        if (item) {
+          event.preventDefault();
+          navigateTo(item.href);
+        }
+        return;
+      }
+      if (event.defaultPrevented || isTypingTarget(event.target) || mod || event.altKey) return;
+      if (event.key === "/") {
+        const input = findPageSearchInput();
+        if (input) {
+          event.preventDefault();
+          input.focus();
+          input.select();
+        }
+      } else if (event.key === "?") {
+        event.preventDefault();
+        setHelpOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [paletteOpen, helpOpen, quickRoutes, visibleNavItems, navigateTo]);
+
+  const logout = () => {
+    fetch("/api/logout", { method: "POST" }).finally(() => {
+      window.location.href = "/login.html";
+    });
+  };
+
+  const paletteActions = useMemo<PaletteAction[]>(() => [
+    { id: "refresh", label: "Обновить данные", hint: "перезапросить всё с сервера", icon: <RefreshCw size={15} />, keywords: "обновить refresh перезагрузить", run: () => { void queryClient.invalidateQueries(); } },
+    { id: "sidebar", label: sidebarCompact ? "Развернуть меню" : "Свернуть меню", icon: <PanelLeft size={15} />, keywords: "меню сайдбар sidebar", run: toggleNavigation },
+    ...(visibleNavItems.some((item) => item.route === route) ? [{
+      id: "favorite",
+      label: favorites.includes(route) ? "Убрать раздел из избранного" : "Добавить раздел в избранное",
+      icon: <Star size={15} />,
+      keywords: "избранное закрепить pin",
+      run: () => toggleFavorite(route),
+    }] : []),
+    { id: "shortcuts", label: "Горячие клавиши", hint: "?", icon: <Keyboard size={15} />, keywords: "клавиши hotkeys подсказка", run: () => setHelpOpen(true) },
+    { id: "logout", label: "Выйти", icon: <LogOut size={15} />, keywords: "выход logout", run: logout },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [queryClient, sidebarCompact, toggleNavigation, favorites, route, visibleNavItems]);
+
   const roleLabel = !sessionReady ? "Загрузка" : (isAdmin ? "Администратор" : (session?.role === "manager" ? "Менеджер" : "Сотрудник"));
   const navExpanded = isMobileNav ? sidebarOpen : !sidebarCompact;
+  const currentItem = navItems.find((item) => item.route === route);
+  const currentSection = NAV_SECTIONS.find((section) => section.routes.includes(route));
+
+  const renderNavLink = (item: NavItem, keyPrefix = "") => {
+    const isFavorite = favorites.includes(item.route);
+    const quickIndex = quickRoutes.indexOf(item.route);
+    const badge = item.route === "picking-list" && openPicking > 0 ? openPicking : 0;
+    return (
+      <a
+        key={`${keyPrefix}${item.route}`}
+        ref={route === item.route && !keyPrefix ? activeNavRef : undefined}
+        title={quickIndex >= 0 ? `${item.label} · Alt+${quickIndex + 1}` : item.label}
+        className={route === item.route ? "is-active" : ""}
+        href={item.href}
+        onClick={(event) => navigate(event, item.href)}
+        onMouseEnter={() => prefetchRoute(item.route)}
+        onFocus={() => prefetchRoute(item.route)}
+      >
+        {item.icon}
+        <span className="nav-label">{item.label}</span>
+        {badge ? <span className="nav-badge">{badge > 99 ? "99+" : badge}</span> : null}
+        <span
+          role="button"
+          tabIndex={-1}
+          className={`nav-fav${isFavorite ? " is-on" : ""}`}
+          title={isFavorite ? "Убрать из избранного" : "В избранное"}
+          onClick={(event) => { event.preventDefault(); event.stopPropagation(); toggleFavorite(item.route); }}
+        >
+          <Star size={12} />
+        </span>
+      </a>
+    );
+  };
+
+  const favoriteItems = visibleFavorites.map((favorite) => visibleNavItems.find((item) => item.route === favorite)).filter((item): item is NavItem => Boolean(item));
+
   return (
     <main className={`app-shell with-sidebar${sidebarOpen ? " sidebar-open" : ""}${sidebarCompact ? " sidebar-compact" : ""}${isPreviewEmbed ? " preview-embed" : ""}`}>
       <aside className="side-nav" aria-label="Основная навигация">
@@ -237,15 +394,17 @@ function AppShell() {
             <h1>David<span>Sklad</span></h1>
           </div>
         </div>
-        <div className="side-role-chip">
-          <span className="role-dot" />
-          {roleLabel}
-        </div>
         <nav className="side-nav-links">
+          {favoriteItems.length ? (
+            <div className="nav-section nav-favorites">
+              <div className="nav-section-title nav-section-static"><span>Избранное</span></div>
+              {favoriteItems.map((item) => renderNavLink(item, "fav-"))}
+            </div>
+          ) : null}
           {NAV_SECTIONS.map((section) => {
             const items = section.routes
               .map((sectionRoute) => visibleNavItems.find((item) => item.route === sectionRoute))
-              .filter((item): item is typeof navItems[number] => Boolean(item));
+              .filter((item): item is NavItem => Boolean(item));
             if (!items.length) return null;
             const containsActive = items.some((item) => item.route === route);
             // Свёрнутая группа с активной страницей раскрывается, чтобы подсветка не
@@ -259,11 +418,9 @@ function AppShell() {
                     <ChevronDown size={13} className="nav-section-chevron" />
                   </button>
                 ) : null}
-                {!collapsed ? items.map((item) => (
-                  <a key={item.route} ref={route === item.route ? activeNavRef : undefined} title={item.label} className={route === item.route ? "is-active" : ""} href={item.href} onClick={(event) => navigate(event, item.href)}>
-                    {item.icon}{item.label}
-                  </a>
-                )) : null}
+                <div className="nav-section-items">
+                  {!collapsed ? items.map((item) => renderNavLink(item)) : null}
+                </div>
               </div>
             );
           })}
@@ -280,89 +437,72 @@ function AppShell() {
             <span>{roleLabel}</span>
             <strong>{session?.displayName || session?.username || "—"}</strong>
           </div>
+          <button className="side-logout-icon" type="button" onClick={logout} title="Выйти" aria-label="Выйти"><LogOut size={16} /></button>
         </div>
-        <button
-          className="side-logout"
-          type="button"
-          onClick={() => {
-            fetch("/api/logout", { method: "POST" }).finally(() => {
-              window.location.href = "/login.html";
-            });
-          }}
-        ><LogOut size={16} /> Выйти</button>
       </aside>
       <button className="sidebar-backdrop" type="button" aria-label="Закрыть меню" onClick={() => setSidebarOpen(false)} />
       <div className="app-content">
-      <header className="topbar content-topbar">
-        <button className="topbar-menu" type="button" aria-label={navExpanded ? "Свернуть меню" : "Открыть меню"} aria-expanded={navExpanded} onClick={toggleNavigation}><Menu size={22} /></button>
-        <div className="topbar-spacer" />
-        <div className="topbar-actions">
-          <ThemeSwitcher />
-          {isAdmin ? <SystemHealthIndicator /> : null}
-          <NotificationsBell />
-          <div className="topbar-user" title={roleLabel}>
-            <UserCircle size={30} />
+        <header className="topbar content-topbar">
+          <button className="topbar-menu" type="button" aria-label={navExpanded ? "Свернуть меню" : "Открыть меню"} aria-expanded={navExpanded} onClick={toggleNavigation}><Menu size={20} /></button>
+          <div className="topbar-crumbs" aria-hidden={!currentItem}>
+            {currentSection?.title ? <span className="topbar-crumb-section">{currentSection.title}</span> : null}
+            {currentItem ? <strong>{currentItem.label}</strong> : null}
           </div>
-        </div>
-      </header>
-      {!sessionReady ? (
-        <section className="app-loading-screen" aria-live="polite" aria-label="ДавидСклад загружается">
-          <div className="premium-loader" aria-hidden="true">
-            <span />
-            <span />
-            <span />
+          <button className="topbar-search" type="button" onClick={() => setPaletteOpen(true)} title="Быстрый переход">
+            <Search size={16} />
+            <span>Найти раздел, товар или действие…</span>
+            <kbd>{isMac ? "⌘" : "Ctrl"} K</kbd>
+          </button>
+          <div className="topbar-spacer" />
+          <div className="topbar-actions">
+            <ThemeSwitcher />
+            {isAdmin ? <SystemHealthIndicator /> : null}
+            <NotificationsBell />
           </div>
-          <div>
-            <span className="eyebrow">DavidSklad</span>
-            <h2>Подготавливаю рабочее пространство</h2>
-            <p>Проверяю сессию, собираю навигацию и поднимаю свежие данные склада.</p>
-          </div>
-          <div className="premium-skeleton-grid" aria-hidden="true">
-            <span />
-            <span />
-            <span />
-          </div>
-        </section>
-      ) : null}
-      {sessionReady && accessDenied ? (
-        <section className="access-denied-panel">
-          <AlertCircle size={24} />
-          <strong>Нет доступа</strong>
-          <span>Эта страница не входит в ваш доступ. Обратитесь к администратору.</span>
-          {visibleNavItems[0] ? <a href={visibleNavItems[0].href} onClick={(event) => navigate(event, visibleNavItems[0].href)}>Перейти: {visibleNavItems[0].label}</a> : null}
-        </section>
-      ) : null}
-      <Suspense fallback={<div className="page-lazy-loading"><Loader2 className="spin" size={22} /> Загружаю раздел…</div>}>
-      {sessionReady && !accessDenied && route === "dashboard" ? <DashboardPage /> : null}
-      {sessionReady && !accessDenied && route === "operations" ? <OperationsPage /> : null}
-      {sessionReady && !accessDenied && route === "picking-list" ? <PickingListPage /> : null}
-      {sessionReady && !accessDenied && route === "suppliers" ? <SuppliersPage /> : null}
-      {sessionReady && !accessDenied && route === "supplier-cart" ? <SupplierCartPage /> : null}
-      {sessionReady && !accessDenied && route === "recovery-queue" ? <RecoveryQueuePage /> : null}
-      {sessionReady && !accessDenied && route === "reviews" ? <FeedbackPage defaultTab="reviews" /> : null}
-      {sessionReady && !accessDenied && route === "questions" ? <FeedbackPage defaultTab="questions" /> : null}
-      {sessionReady && !accessDenied && route === "chats" ? <ChatsPage /> : null}
-      {sessionReady && !accessDenied && route === "support" ? <SupportChatsPage /> : null}
-      {sessionReady && !accessDenied && route === "import" ? <ImportPage /> : null}
-      {sessionReady && !accessDenied && route === "avito" ? <AvitoPage /> : null}
-      {sessionReady && !accessDenied && route === "shop" ? <ShopAdminPage /> : null}
-      {sessionReady && !accessDenied && route === "prices" ? <PricesPage /> : null}
-      {sessionReady && !accessDenied && route === "problem-products" ? <ProblemProductsPage /> : null}
-      {sessionReady && !accessDenied && route === "finance" ? <FinancePage /> : null}
-      {sessionReady && !accessDenied && route === "consignment" ? <ConsignmentPage /> : null}
-      {sessionReady && !accessDenied && route === "statistics" ? <StatisticsPage /> : null}
-      {sessionReady && !accessDenied && route === "settings" ? <SettingsPage /> : null}
-      {sessionReady && !accessDenied && route === "system" ? <SystemPage /> : null}
-      {sessionReady && !accessDenied && route === "ai-drafts" ? <AiDraftsPage /> : null}
-      {sessionReady && !accessDenied && route === "no-supplier" ? <NoSupplierPage /> : null}
-      {sessionReady && !accessDenied && route === "new-products" ? <NewProductsPage /> : null}
-      {sessionReady && !accessDenied && route === "tnved" ? <TnvedPage /> : null}
-      {sessionReady && !accessDenied && route === "brand-bans" ? <BrandBansPage /> : null}
-      {sessionReady && !accessDenied && route === "brands-tnved" ? <BrandsTnvedPage /> : null}
-      {sessionReady && !accessDenied && route === "ozon-card-fix" ? <OzonCardFixPage /> : null}
-      {sessionReady && !accessDenied && route === "warehouse" ? <WarehousePage isAdmin={isAdmin} /> : null}
-      </Suspense>
+          <div className={`route-progress${isPending ? " is-active" : ""}`} aria-hidden="true" />
+        </header>
+        {!sessionReady ? (
+          <section className="app-loading-screen" aria-live="polite" aria-label="ДавидСклад загружается">
+            <div className="premium-loader" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </div>
+            <div>
+              <span className="eyebrow">DavidSklad</span>
+              <h2>Подготавливаю рабочее пространство</h2>
+            </div>
+          </section>
+        ) : null}
+        {sessionReady && accessDenied ? (
+          <section className="access-denied-panel">
+            <AlertCircle size={24} />
+            <strong>Нет доступа</strong>
+            <span>Эта страница не входит в ваш доступ. Обратитесь к администратору.</span>
+            {visibleNavItems[0] ? <a href={visibleNavItems[0].href} onClick={(event) => navigate(event, visibleNavItems[0].href)}>Перейти: {visibleNavItems[0].label}</a> : null}
+          </section>
+        ) : null}
+        <Suspense fallback={<div className="page-lazy-loading"><span className="page-lazy-bar" /></div>}>
+          {sessionReady ? alive.filter((item) => allowedRoutes.has(item)).map((item) => (
+            <Activity key={`${item}-${remountKeys[item] || 0}`} mode={item === route && !accessDenied ? "visible" : "hidden"}>
+              <div className="route-view" data-route={item}>
+                <RoutePage route={item} isAdmin={isAdmin} />
+              </div>
+            </Activity>
+          )) : null}
+        </Suspense>
       </div>
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        items={visibleNavItems}
+        recent={recent.filter((item) => allowedRoutes.has(item) && item !== route)}
+        favorites={visibleFavorites}
+        actions={paletteActions}
+        onNavigate={navigateTo}
+      />
+      {helpOpen ? <ShortcutsHelp onClose={() => setHelpOpen(false)} /> : null}
+      <Toaster />
     </main>
   );
 }

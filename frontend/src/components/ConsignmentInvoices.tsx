@@ -6,6 +6,7 @@ import { ConsignmentInvoice, ConsignmentInvoicesSchema, ConsignmentPmNomenclatur
 import { PageHeader } from "./PageHeader";
 import { ListSkeleton } from "./Skeleton";
 import { errorMessage } from "../lib/common";
+import { FlashToast } from "../lib/toast";
 
 // Приходные накладные реализации. Проведённая накладная создаёт операции прихода от спонсора
 // или закупки с баланса; её можно снять с проводки (операции удаляются, остатки и баланс
@@ -308,7 +309,7 @@ export function ConsignmentInvoices({ onBack }: { onBack: () => void }) {
             <strong>Итого {money(totals.amount)}</strong>
           </div>
 
-          {notice ? <div className="success-strip">{notice}</div> : null}
+          {notice ? <FlashToast key={notice}>{notice}</FlashToast> : null}
           {error ? <div className="inline-error">{errorMessage(error)}</div> : null}
 
           <div className="cn-inv-actions">

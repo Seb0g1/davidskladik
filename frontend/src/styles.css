@@ -6231,7 +6231,7 @@ textarea {
   flex: none;
 }
 
-.app-content > .page-heading {
+.route-view > .page-heading {
   margin: 10px 0 14px;
 }
 
@@ -6638,7 +6638,7 @@ label.settings-toggle {
     white-space: normal;
   }
 
-  .app-content > .page-heading {
+  .route-view > .page-heading {
     margin-top: 0;
   }
 

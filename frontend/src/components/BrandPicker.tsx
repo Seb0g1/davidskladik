@@ -49,7 +49,7 @@ export function BrandPicker({
       <input
         className="brand-combo-input"
         value={query}
-        placeholder="Бренд"
+        placeholder={loading ? "Бренд…" : `Бренд${options.length ? ` · ${options.length}` : ""}`}
         onFocus={() => setOpen(true)}
         onChange={(event) => { setQuery(event.target.value); setOpen(true); setActive(0); }}
         onKeyDown={(event) => {
@@ -60,7 +60,7 @@ export function BrandPicker({
         }}
       />
       <div className="brand-combo-meta">
-        {loading ? <><Loader2 className="spin" size={11} /> загружаю бренды</> : <span>{options.length} брендов</span>}
+        {loading ? <Loader2 className="spin" size={12} /> : null}
         {value ? (
           <button type="button" className="icon-action" title="Сбросить бренд" onClick={() => choose("")}><X size={12} /></button>
         ) : null}
