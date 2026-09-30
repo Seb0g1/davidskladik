@@ -730,6 +730,32 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { p
       });
     }
   }
+  // Never buy another bottle for this card (a 120 ml row for a 60 ml product).
+  const cartProductName = cleanText(normalizeWarehouseProduct(product).name || "");
+  if (cartProductName) {
+    const beforeVolumeCheck = matches;
+    matches = new Map([...matches].map(([linkId, rows]) => [
+      linkId,
+      Array.isArray(rows) ? rows.filter((row) => !supplierRowVolumeMismatch(cartProductName, row.name || row.nativeName || "")) : rows,
+    ]));
+    const hadRows = [...beforeVolumeCheck.values()].some((rows) => Array.isArray(rows) && rows.length > 0);
+    const hasRows = [...matches.values()].some((rows) => Array.isArray(rows) && rows.length > 0);
+    if (hadRows && !hasRows) {
+      return normalizeSupplierCartPreviewRow({
+        ...normalizedLine,
+        warehouseProductId: product.id,
+        groupKey: warehouseProductPageGroupKey(product),
+        groupOfferId: product.offerId,
+        ready: false,
+        skipReason: "supplier_volume_mismatch",
+        saleAmount: computeMarketplaceSaleAmountRub(normalizedLine),
+        soldAt: normalizedLine.orderedAt,
+        alreadyCommitted: Boolean(processed) || alreadyPicked || coveredByManual,
+        requestDocId: processed?.requestDocId,
+        requestRowId: processed?.requestRowId,
+      });
+    }
+  }
   const blockedPartnerIds = activeSupplierBlocksForOffer(state, normalizedLine.offerId);
   const {
     selected,

@@ -89,7 +89,8 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
     // Disambiguate PM rows per product: when a Dalik-style supplier stores multiple products
     // under the same article code, use the warehouse product name to pick the correct row.
     const productName = cleanText(product.name || product.offerId || product.offer_id || "");
-    const productSubMap = new Map(normalizedLinks.map((link) => [link.id, matchMap.get(link.id) || []]));
+    // A row for another bottle (60 ml card, 120 ml row) never supplies this card.
+    const productSubMap = new Map(normalizedLinks.map((link) => [link.id, markVolumeMismatchedMatches(matchMap.get(link.id) || [], product.name)]));
     const disambiguatedMap = productName
       ? disambiguateSupplierCartMatchesByOrderName(productSubMap, productName)
       : productSubMap;
@@ -146,6 +147,7 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
         priceEligible: availableMatches.some((item) => item.priceEligible !== false && item.stockOnly !== true),
         missingInPriceMaster: availableMatches.length === 0,
         unavailableInPriceMaster: matched.length > 0 && availableMatches.length === 0,
+        volumeMismatch: matched.find((item) => item.volumeMismatch)?.volumeMismatch || null,
       };
     });
     const availableSupplierCount = rawSuppliers.filter((supplier) => supplier.available && supplier.priceEligible !== false && supplier.stockOnly !== true).length;

@@ -28,6 +28,8 @@ async function listSupplierCartSupplierOptions(offerIdInput = "", { now = new Da
   for (const rows of matches.values()) {
     for (const row of rows || []) {
       if (!row) continue;
+      // Another bottle (a 120 ml row for a 60 ml card) is never offered as a replacement.
+      if (supplierRowVolumeMismatch(product.name, row.name || row.nativeName || "")) continue;
       const partnerId = cleanText(row.partnerId);
       const rowId = cleanText(row.rowId);
       if (!partnerId && !rowId) continue;

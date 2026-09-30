@@ -71,6 +71,47 @@ function extractPriceMasterVolumes(value) {
   return Array.from(volumes);
 }
 
+// Bottle volumes stated explicitly: "60 мл", "60ml", "100.0ml", or a bare number right before the
+// concentration ("40 EDP"). Unlike extractPriceMasterVolumes it ignores shade codes ("5/6 LC").
+function priceMasterBottleVolumes(value) {
+  const text = String(value || "").toLowerCase();
+  const volumes = new Set();
+  const add = (raw) => {
+    const number = Number(String(raw).replace(",", "."));
+    if (Number.isFinite(number) && number > 0) volumes.add(number);
+  };
+  for (const match of text.matchAll(/(\d+(?:[.,]\d+)?)\s*(?:ml|мл)(?![a-zа-я])/g)) add(match[1]);
+  for (const match of text.matchAll(/(?:^|[^\d.,/])(\d+(?:[.,]\d+)?)\s+(?:edp|edt|edc|parfum|extrait)(?![a-z])/g)) add(match[1]);
+  return Array.from(volumes);
+}
+
+// A supplier row for a clearly different bottle (60 ml card, 120 ml row) must never supply the card:
+// the price would come from another bottle and the picker would buy the wrong one. Sets and gift
+// boxes list several volumes, and samples differ by fractions of a millilitre, so both pass.
+function supplierRowVolumeMismatch(productName, rowName) {
+  const isSet = (text) => /\+|набор|(^|[^a-z])(set|kit|coffret)(?![a-z])|\*|×|\d\s*[xх]\s*\d|подар/i.test(String(text || ""));
+  if (isSet(productName) || isSet(rowName)) return null;
+  const productVolumes = priceMasterBottleVolumes(productName);
+  const rowVolumes = priceMasterBottleVolumes(rowName);
+  if (!productVolumes.length || !rowVolumes.length) return null;
+  if (rowVolumes.some((volume) => productVolumes.some((own) => Math.abs(own - volume) < 0.01))) return null;
+  const productVolume = Math.max(...productVolumes);
+  const rowVolume = Math.max(...rowVolumes);
+  const high = Math.max(productVolume, rowVolume);
+  const low = Math.min(productVolume, rowVolume);
+  if (high < 10 || high / low <= 1.3) return null;
+  return `${productVolume}->${rowVolume}`;
+}
+
+// Marks supplier matches for another bottle as unavailable, so neither price nor stock comes from them.
+function markVolumeMismatchedMatches(matches, productName) {
+  if (!Array.isArray(matches) || !matches.length || !cleanText(productName)) return matches;
+  return matches.map((match) => {
+    const mismatch = supplierRowVolumeMismatch(productName, match.name || match.nativeName || "");
+    return mismatch ? { ...match, available: false, volumeMismatch: mismatch } : match;
+  });
+}
+
 function priceMasterTesterFlag(value) {
   const text = normalizeSearchText(value);
   return /\b(test|tester|пробник|тестер)\b/i.test(text);

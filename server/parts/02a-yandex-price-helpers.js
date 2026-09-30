@@ -93,7 +93,7 @@ async function buildYandexPriceOverrideLookup(products = [], shops = [], warehou
       const yandexLinks = Array.isArray(yandexProduct?.links) && yandexProduct.links.length ? yandexProduct.links : product.links;
       const markupOverride = yandexExportProductMarkup(product, yandexProduct);
       const suppliers = (Array.isArray(yandexLinks) ? yandexLinks.map(normalizeWarehouseLink) : [])
-        .flatMap((link) => (matchMap.get(link.id) || []).map((match) => {
+        .flatMap((link) => markVolumeMismatchedMatches(matchMap.get(link.id) || [], yandexProduct?.name || product.name).map((match) => {
           const markupCoefficient = resolveMarkupCoefficient({
             productMarkup: markupOverride,
             marketplace: "yandex",

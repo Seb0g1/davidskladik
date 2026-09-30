@@ -91,7 +91,8 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
     // price nor stock, and a Yandex card that is itself a single sample gets no supplier at all.
     const yandexSampleCard = product.marketplace === "yandex" && isSingleSampleName(product.name);
     const linkMatches = (link) => {
-      const matched = matchMap.get(link.id) || [];
+      // A row for another bottle (60 ml card, 120 ml row) never supplies this card.
+      const matched = markVolumeMismatchedMatches(matchMap.get(link.id) || [], product.name);
       if (product.marketplace !== "yandex") return matched;
       return yandexSampleCard ? [] : matched.filter((match) => !isNotForYandexSupplierRowName(match.name));
     };
@@ -133,6 +134,7 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
         priceEligible: availableMatches.some((item) => item.priceEligible !== false && item.stockOnly !== true),
         missingInPriceMaster: availableMatches.length === 0,
         unavailableInPriceMaster: matched.length > 0 && availableMatches.length === 0,
+        volumeMismatch: matched.find((item) => item.volumeMismatch)?.volumeMismatch || null,
       };
     });
     const fallbackMarkup = product.marketplace === "ozon"
