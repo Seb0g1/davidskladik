@@ -4,7 +4,8 @@ import { ReactNode, useEffect, useRef, useSyncExternalStore } from "react";
 // Всплывающие уведомления: сообщения об успехе/ошибке появляются в углу и исчезают сами,
 // не сдвигая страницу (раньше это были полосы внутри вёрстки).
 export type ToastTone = "success" | "error" | "info";
-type ToastItem = { id: number; tone: ToastTone; message: ReactNode; leaving?: boolean };
+type ToastAction = { label: string; onClick: () => void };
+type ToastItem = { id: number; tone: ToastTone; message: ReactNode; leaving?: boolean; action?: ToastAction; durationMs: number };
 
 let items: ToastItem[] = [];
 let seq = 0;
@@ -20,17 +21,49 @@ function dismiss(id: number) {
   }, 220);
 }
 
-export function toast(message: ReactNode, tone: ToastTone = "success", durationMs?: number) {
+export function toast(message: ReactNode, tone: ToastTone = "success", durationMs?: number, action?: ToastAction) {
   const id = ++seq;
+  const duration = durationMs ?? (tone === "error" ? 7000 : 3800);
   // Одинаковое сообщение подряд не плодим: повторный клик просто продлевает показ.
   if (typeof message === "string") {
     const same = items.find((item) => !item.leaving && item.message === message);
     if (same) dismiss(same.id);
   }
-  items = [...items.slice(-4), { id, tone, message }];
+  items = [...items.slice(-4), { id, tone, message, action, durationMs: duration }];
   emit();
-  window.setTimeout(() => dismiss(id), durationMs ?? (tone === "error" ? 7000 : 3800));
+  window.setTimeout(() => dismiss(id), duration);
   return id;
+}
+
+// Удаление с «Отменить»: действие выполняется только через несколько секунд, пока тост
+// висит на экране. Кнопка «Отменить» в тосте его отменяет — быстрее, чем диалог «Вы уверены?».
+const pendingCommits = new Map<number, () => void>();
+export function undoable(message: ReactNode, commit: () => void, options: { delayMs?: number; onUndo?: () => void } = {}) {
+  const delayMs = options.delayMs ?? 6000;
+  let done = false;
+  const key = ++seq;
+  const run = () => {
+    if (done) return;
+    done = true;
+    pendingCommits.delete(key);
+    commit();
+  };
+  pendingCommits.set(key, run);
+  const toastId = toast(message, "info", delayMs, {
+    label: "Отменить",
+    onClick: () => {
+      if (done) return;
+      done = true;
+      pendingCommits.delete(key);
+      options.onUndo?.();
+    },
+  });
+  window.setTimeout(run, delayMs);
+  return toastId;
+}
+// Закрытие вкладки не должно терять удаление, которое ещё ждёт своего таймера.
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", () => { for (const run of Array.from(pendingCommits.values())) run(); });
 }
 
 toast.success = (message: ReactNode) => toast(message, "success");
@@ -52,8 +85,11 @@ export function Toaster() {
             {item.tone === "success" ? <CheckCircle2 size={17} /> : item.tone === "error" ? <XCircle size={17} /> : <Info size={17} />}
           </span>
           <div className="toast-body">{item.message}</div>
+          {item.action ? (
+            <button type="button" className="toast-action" onClick={(event) => { event.stopPropagation(); item.action?.onClick(); dismiss(item.id); }}>{item.action.label}</button>
+          ) : null}
           <button type="button" className="toast-close" aria-label="Закрыть" onClick={(event) => { event.stopPropagation(); dismiss(item.id); }}><X size={14} /></button>
-          <span className="toast-timer" />
+          <span className="toast-timer" style={{ animationDuration: `${item.durationMs}ms` }} />
         </div>
       ))}
     </div>

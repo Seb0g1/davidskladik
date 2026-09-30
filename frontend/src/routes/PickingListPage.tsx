@@ -6,6 +6,7 @@ import { fetchJson, mutationBody, patchBody } from "../api";
 import { DiagnosticValue } from "../components/DiagnosticValue";
 import { MarketplaceBadge } from "../components/MarketplaceBadge";
 import { PageHeader } from "../components/PageHeader";
+import { PickerLedger } from "../components/PickerLedger";
 import { SelectField } from "../components/SelectField";
 import { ListSkeleton } from "../components/Skeleton";
 import { Stat } from "../components/Stat";
@@ -1555,130 +1556,16 @@ export function PickingListPage() {
               })() : null}
               {returnCashMutation.error ? <div className="inline-error pl-error-mt">{errorMessage(returnCashMutation.error)}</div> : null}
             </div>
-            {issuePickerDraft && (() => {
-              const b = allBalances.find((x) => x.username === issuePickerDraft);
-              const credits = b?.credits ?? [];
-              return (
-                <div className="picker-credit-history">
-                  <div className="picker-credit-history-label">История выдач — {issuePickerDraft} {credits.length ? `(${credits.length})` : ""}</div>
-                  {credits.length === 0 ? (
-                    <p className="picker-balance-empty-hint">Выдач ещё не было.</p>
-                  ) : groupByDay(credits.slice().reverse(), (c) => c.createdAt).map((day) => {
-                    const dayIssued = day.items.reduce((sum, c) => sum + Math.max(0, Number(c.amount) || 0), 0);
-                    const daySpent = day.items.reduce((sum, c) => sum + Math.max(0, -(Number(c.amount) || 0)), 0);
-                    return (
-                    <div className="picker-day-group" key={day.key}>
-                      <div className="picker-day-head">
-                        <span className="picker-day-head-label">{day.label}</span>
-                        <span className="picker-day-head-count">{day.items.length} опер.</span>
-                        {dayIssued ? <span className="tone-success">+{balanceStr(dayIssued)}</span> : null}
-                        {daySpent ? <span className="tone-danger">−{balanceStr(daySpent)}</span> : null}
-                      </div>
-                      {day.items.map((c) => {
-                    const isEditing = editCredit?.id === c.id && editCredit?.username === issuePickerDraft;
-                    if (isEditing) {
-                      return (
-                        <div className="picker-credit-row picker-credit-row--edit" key={c.id}>
-                          <input
-                            type="number"
-                            min="1"
-                            className="picker-credit-edit-amount"
-                            value={editCredit.amount}
-                            onChange={(e) => setEditCredit((prev) => prev ? { ...prev, amount: e.target.value } : prev)}
-                            autoFocus
-                          />
-                          <input
-                            className="picker-credit-edit-note"
-                            placeholder="Комментарий"
-                            value={editCredit.note}
-                            onChange={(e) => setEditCredit((prev) => prev ? { ...prev, note: e.target.value } : prev)}
-                          />
-                          <button
-                            className="icon-action success-action"
-                            type="button"
-                            title="Сохранить"
-                            disabled={editBalanceCreditMutation.isPending || !(Number(editCredit.amount) > 0)}
-                            onClick={() => editBalanceCreditMutation.mutate({ username: issuePickerDraft, id: c.id, amount: Math.round(Number(editCredit.amount) * usdRate), originalUsd: Number(editCredit.amount), note: editCredit.note })}
-                          >
-                            {editBalanceCreditMutation.isPending ? <Loader2 className="spin" size={12} /> : <Check size={12} />}
-                          </button>
-                          <button className="icon-action" type="button" title="Отмена" onClick={() => setEditCredit(null)}>
-                            <X size={12} />
-                          </button>
-                        </div>
-                      );
-                    }
-                    return (
-                      <div className="picker-credit-row" key={c.id}>
-                        <span className={`picker-credit-amount${Number(c.amount) >= 0 ? " tone-success" : " tone-danger"}`}>{Number(c.amount) >= 0 ? "+" : "−"}{balanceStr(Math.abs(Number(c.amount)))}</span>
-                        <span className="muted-note picker-credit-note">{Number(c.amount) >= 0 ? `Выдано${c.note ? ` · ${c.note}` : ""}` : (c.note || "—")}</span>
-                        <span className="muted-note picker-credit-date" title={compactDate(c.createdAt ?? null)}>{timeOf(c.createdAt)}</span>
-                        <button
-                          className="icon-action"
-                          type="button"
-                          title="Редактировать"
-                          onClick={() => { const origUsd = Number((c as Record<string, unknown>).originalUsd ?? (c.amount / usdRate)); setEditCredit({ username: issuePickerDraft, id: c.id, amount: String(origUsd), note: c.note ?? "", originalUsd: origUsd }); }}
-                        >
-                          <Pencil size={11} />
-                        </button>
-                        <button
-                          className="icon-action danger-action"
-                          type="button"
-                          title="Удалить"
-                          disabled={deleteBalanceCreditMutation.isPending}
-                          onClick={() => deleteBalanceCreditMutation.mutate({ username: issuePickerDraft, id: c.id })}
-                        >
-                          <Trash2 size={11} />
-                        </button>
-                      </div>
-                    );
-                  })}
-                  </div>
-                  );
-                  })}
-                  {editBalanceCreditMutation.error ? <div className="inline-error pl-error-mt4">{errorMessage(editBalanceCreditMutation.error)}</div> : null}
-                </div>
-              );
-            })()}
-            {issuePickerDraft ? (() => {
-              const spending = pickerSpendingQuery.data;
-              const entries = spending?.entries ?? [];
-              const usdTotal = spending?.usdTotal ?? 0;
-              const rubTotal = spending?.rubTotal ?? 0;
-              const totalLabel = [usdTotal > 0 ? moneyAmount(usdTotal, "USD") : null, rubTotal > 0 ? moneyAmount(rubTotal, "RUB") : null].filter(Boolean).join(" + ");
-              return (
-                <div className="picker-credit-history">
-                  <div className="picker-credit-history-label">
-                    Выплачено поставщикам — {issuePickerDraft}{totalLabel ? ` · ${totalLabel}` : ""}
-                  </div>
-                  {pickerSpendingQuery.isPending ? (
-                    <p className="picker-balance-empty-hint">Загрузка…</p>
-                  ) : entries.length === 0 ? (
-                    <p className="picker-balance-empty-hint">Выплат ещё не было.</p>
-                  ) : groupByDay(entries, (e) => e.occurredAt).map((day) => {
-                    const dayUsd = day.items.filter((e) => e.currency === "USD").reduce((sum, e) => sum + Math.abs(e.amount), 0);
-                    const dayRub = day.items.filter((e) => e.currency !== "USD").reduce((sum, e) => sum + Math.abs(e.amount), 0);
-                    return (
-                      <div className="picker-day-group" key={day.key}>
-                        <div className="picker-day-head">
-                          <span className="picker-day-head-label">{day.label}</span>
-                          <span className="picker-day-head-count">{day.items.length} опл.</span>
-                          {dayUsd ? <span className="tone-danger">−{moneyAmount(dayUsd, "USD")}</span> : null}
-                          {dayRub ? <span className="tone-danger">−{moneyAmount(dayRub, "RUB")}</span> : null}
-                        </div>
-                        {day.items.map((e) => (
-                          <div className="picker-credit-row" key={e.id}>
-                            <span className="picker-credit-amount tone-danger">−{moneyAmount(Math.abs(e.amount), e.currency === "USD" ? "USD" : "RUB")}</span>
-                            <span className="muted-note picker-credit-note">{e.supplierName || "—"}{e.note ? ` · ${e.note}` : ""}</span>
-                            <span className="muted-note picker-credit-date" title={compactDate(e.occurredAt ?? null)}>{timeOf(e.occurredAt)}</span>
-                          </div>
-                        ))}
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-            })() : null}
+            {issuePickerDraft ? (
+              <PickerLedger
+                key={issuePickerDraft}
+                username={issuePickerDraft}
+                credits={allBalances.find((x) => x.username === issuePickerDraft)?.credits ?? []}
+                usdRate={usdRate}
+                spending={pickerSpendingQuery.data?.entries ?? []}
+                spendingLoading={pickerSpendingQuery.isPending}
+              />
+            ) : <p className="picker-balance-empty-hint picker-ledger-pick">Выберите сборщика выше — появится его журнал по дням со сверкой и выгрузкой в Excel.</p>}
             {(dailyTotal > 0 || dailyItems > 0) ? (
               <div className="picker-day-summary pl-summary-divider">
                 <div className="picker-select-label pl-label-flush"><ClipboardList size={13} /> Итог заказа сегодня</div>

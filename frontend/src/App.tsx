@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, ChevronDown, Keyboard, LogOut, Menu, PanelLeft, RefreshCw, Search, Star, X } from "lucide-react";
-import { Activity, Suspense, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { Activity, Component, ErrorInfo, ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { CommandPalette, PaletteAction } from "./components/CommandPalette";
 import { NotificationsBell } from "./components/NotificationsBell";
 import { SystemHealthIndicator } from "./components/SystemHealthIndicator";
@@ -46,6 +46,28 @@ function findPageSearchInput(): HTMLInputElement | null {
     '.search-box input, input[type="search"], input[placeholder*="Поиск"], input[placeholder*="поиск"], input[placeholder*="SKU"]',
   ));
   return candidates.find((input) => input.offsetParent !== null && !input.disabled) || null;
+}
+
+// Ошибка в одном разделе больше не роняет всё приложение: показываем её на месте раздела
+// с кнопкой перезагрузки, остальные разделы и меню продолжают работать.
+class RouteErrorBoundary extends Component<{ children: ReactNode; label: string }, { error: Error | null }> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) { return { error }; }
+  componentDidCatch(error: Error, info: ErrorInfo) { console.error("[route crash]", this.props.label, error, info.componentStack); }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <section className="route-error" role="alert">
+        <strong>Раздел «{this.props.label}» не открылся</strong>
+        <span className="muted">Остальные разделы работают. Попробуйте открыть его заново; если ошибка повторяется — пришлите текст ниже.</span>
+        <code>{String(this.state.error?.message || this.state.error)}</code>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button type="button" className="primary-action" onClick={() => this.setState({ error: null })}>Открыть заново</button>
+          <button type="button" className="secondary-action" onClick={() => window.location.reload()}>Перезагрузить страницу</button>
+        </div>
+      </section>
+    );
+  }
 }
 
 function RoutePage({ route, isAdmin }: { route: AppRoute; isAdmin: boolean }) {
@@ -486,7 +508,9 @@ function AppShell() {
           {sessionReady ? alive.filter((item) => allowedRoutes.has(item)).map((item) => (
             <Activity key={`${item}-${remountKeys[item] || 0}`} mode={item === route && !accessDenied ? "visible" : "hidden"}>
               <div className="route-view" data-route={item}>
-                <RoutePage route={item} isAdmin={isAdmin} />
+                <RouteErrorBoundary label={navItems.find((nav) => nav.route === item)?.label || item}>
+                  <RoutePage route={item} isAdmin={isAdmin} />
+                </RouteErrorBoundary>
               </div>
             </Activity>
           )) : null}
