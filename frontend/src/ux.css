@@ -1290,3 +1290,101 @@ body:has(.bulk-action-bar) .toast-stack { bottom: 88px; }
   .app-content .warehouse-table-head { display: none; }
 }
 @media (hover: none) { .search-kbd, .topbar-search kbd { display: none; } }
+
+/* ------------------------------------------------------------------ */
+/* Сборка → Балансы                                                    */
+/* ------------------------------------------------------------------ */
+/* На вкладках «Балансы» и «Отчёт» фильтры списка сборки не нужны */
+.picking-page:is(.view-balances, .view-report) :is(.dashboard-metrics, .picking-status-chips, .picking-supplier-mobile-filter, .picking-toolbar, .picking-help-collapsible) { display: none !important; }
+
+.picking-page .table-panel:has(> .picker-balance-panel--tab) { padding: 0; border: 0; background: transparent; box-shadow: none; }
+.picker-balance-panel.picker-balance-panel--tab {
+  position: static;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+  animation: none;
+}
+.picker-balance-panel--tab > .picker-balance-panel-my {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 16px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--ux-border);
+  background: var(--ux-panel);
+}
+.picker-balance-panel--tab > .picker-balance-panel-my .picker-balance-panel-total { font-size: 18px; margin: 0; }
+.picker-balance-panel--tab > .picker-balance-panel-my .picker-balance-history { display: none; }
+.picker-balance-panel--tab > .picker-balance-panel-my .picker-balance-empty-hint { margin: 0; }
+.picker-balance-panel--tab > .picker-balance-panel-my .picker-day-summary { display: flex; gap: 14px; margin: 0; padding: 0; border: 0; }
+
+.picker-balance-panel--tab > .picker-balance-panel-admin {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.picker-balance-panel--tab > .picker-balance-panel-admin > * { margin: 0; min-width: 0; }
+.picker-balance-panel--tab > .picker-balance-panel-admin > :is(.picker-select-section, .inline-error, .picker-day-summary, div[style]) { grid-column: 1 / -1; }
+.picker-balance-panel--tab > .picker-balance-panel-admin > :is(.picker-select-section, .picker-issue-body, .picker-return-body, .picker-credit-history, .picker-day-summary) {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--ux-border);
+  background: var(--ux-panel);
+}
+.picker-balance-panel--tab .picker-issue-body { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.picker-balance-panel--tab .picker-return-body .picker-issue-body { padding: 0; border: 0; background: transparent; margin-top: 8px; }
+.picker-balance-panel--tab .picker-issue-amount-wrap { flex: 0 0 130px; display: flex; align-items: center; gap: 6px; height: var(--ux-control-h); padding: 0 10px; border-radius: 9px; border: 1px solid var(--ux-border); background: var(--field-bg); }
+.picker-balance-panel--tab .picker-issue-amount-wrap:focus-within { border-color: rgba(var(--accent-rgb), 0.6); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.14); }
+.picker-balance-panel--tab .picker-issue-currency { color: var(--muted); font-weight: 700; }
+.picker-balance-panel--tab .picker-issue-amount-input { flex: 1 1 auto; min-width: 0; height: 100%; border: 0 !important; background: transparent !important; box-shadow: none !important; color: var(--text); font-size: 15px; font-weight: 700; padding: 0; }
+.picker-balance-panel--tab .picker-issue-note-input { flex: 1 1 160px; min-width: 0; height: var(--ux-control-h); padding: 0 11px; border-radius: 9px; border: 1px solid var(--ux-border); background: var(--field-bg) !important; color: var(--text); font-size: 13.5px; }
+.picker-balance-panel--tab .picker-issue-submit { flex: 1 1 100%; height: var(--ux-control-h); min-height: var(--ux-control-h); justify-content: center; }
+.picker-balance-panel--tab .picker-select-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.picker-balance-panel--tab .picker-select-chip { transition: border-color 140ms ease, background-color 140ms ease, transform 120ms ease; }
+.picker-balance-panel--tab .picker-select-chip:active { transform: scale(0.97); }
+.picker-balance-panel--tab .picker-credit-history { max-height: 70vh; overflow-y: auto; }
+
+/* История по дням */
+.picker-day-group { margin: 0 0 6px; }
+.picker-day-group + .picker-day-group { margin-top: 4px; }
+.picker-day-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  padding: 7px 4px 5px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--ux-border);
+  font-size: 12px;
+  font-weight: 700;
+}
+.picker-day-head-label { color: var(--text); font-size: 12.5px; text-transform: capitalize; }
+.picker-day-head-count { color: var(--muted); font-weight: 600; margin-right: auto; }
+.picker-day-group .picker-credit-row { padding-left: 4px; }
+
+@media (max-width: 900px) {
+  .picker-balance-panel--tab > .picker-balance-panel-admin { grid-template-columns: 1fr; }
+}
+.picker-balance-panel--tab .picker-issue-body { flex-direction: row; }
+.picker-day-head-label { text-transform: none !important; }
+.picker-day-head-label::first-letter { text-transform: uppercase; }
+@media (max-width: 760px) { .picker-balance-panel.picker-balance-panel--tab { position: static !important; inset: auto !important; transform: none !important; width: 100% !important; } }

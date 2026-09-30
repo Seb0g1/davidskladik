@@ -71,6 +71,41 @@ const currentGroupTotalRub = (rows: PickingRow[], rate: number) => rows.reduce((
   return sum + priceRub * quantity;
 }, 0);
 
+// Группировка истории по дням: «Сегодня», «Вчера», дальше — дата с днём недели.
+function dayKeyOf(value?: string | null): string {
+  if (!value) return "unknown";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "unknown";
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+function dayLabelOf(key: string): string {
+  if (key === "unknown") return "Без даты";
+  const today = dayKeyOf(new Date().toISOString());
+  const yesterday = dayKeyOf(new Date(Date.now() - 86_400_000).toISOString());
+  if (key === today) return "Сегодня";
+  if (key === yesterday) return "Вчера";
+  const [y, m, d] = key.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  const sameYear = y === new Date().getFullYear();
+  return date.toLocaleDateString("ru-RU", { weekday: "short", day: "numeric", month: "long", ...(sameYear ? {} : { year: "numeric" }) });
+}
+function timeOf(value?: string | null): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+}
+function groupByDay<T>(items: T[], getDate: (item: T) => string | null | undefined): Array<{ key: string; label: string; items: T[] }> {
+  const map = new Map<string, T[]>();
+  for (const item of items) {
+    const key = dayKeyOf(getDate(item));
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(item);
+  }
+  return Array.from(map.entries())
+    .sort((a, b) => (a[0] === "unknown" ? 1 : b[0] === "unknown" ? -1 : b[0].localeCompare(a[0])))
+    .map(([key, dayItems]) => ({ key, label: dayLabelOf(key), items: dayItems }));
+}
+
 export function PickingListPage() {
   const [view, setView] = useState<"list" | "sheets" | "report" | "balances">("list");
   const [reportDate, setReportDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -614,7 +649,7 @@ export function PickingListPage() {
   };
 
   return (
-    <section className="page-section picking-page">
+    <section className={`page-section picking-page view-${view}`}>
       <PageHeader
         title="Сборка"
         subtitle="Лист закупки: собрать товар у поставщика или отметить, что товара не было."
@@ -835,7 +870,18 @@ export function PickingListPage() {
                     <div className="picker-credit-history-label">История выдач — {issuePickerDraft} {credits.length ? `(${credits.length})` : ""}</div>
                     {credits.length === 0 ? (
                       <p className="picker-balance-empty-hint">Выдач ещё не было.</p>
-                    ) : credits.slice().reverse().map((c) => {
+                    ) : groupByDay(credits.slice().reverse(), (c) => c.createdAt).map((day) => {
+                    const dayIssued = day.items.reduce((sum, c) => sum + Math.max(0, Number(c.amount) || 0), 0);
+                    const daySpent = day.items.reduce((sum, c) => sum + Math.max(0, -(Number(c.amount) || 0)), 0);
+                    return (
+                    <div className="picker-day-group" key={day.key}>
+                      <div className="picker-day-head">
+                        <span className="picker-day-head-label">{day.label}</span>
+                        <span className="picker-day-head-count">{day.items.length} опер.</span>
+                        {dayIssued ? <span className="tone-success">+{balanceStr(dayIssued)}</span> : null}
+                        {daySpent ? <span className="tone-danger">−{balanceStr(daySpent)}</span> : null}
+                      </div>
+                      {day.items.map((c) => {
                       const isEditing = editCredit?.id === c.id && editCredit?.username === issuePickerDraft;
                       if (isEditing) {
                         return (
@@ -873,7 +919,7 @@ export function PickingListPage() {
                         <div className="picker-credit-row" key={c.id}>
                           <span className={`picker-credit-amount${Number(c.amount) >= 0 ? " tone-success" : " tone-danger"}`}>{Number(c.amount) >= 0 ? "+" : "−"}{(c as Record<string, unknown>).originalUsd != null ? `${Math.abs(Number((c as Record<string, unknown>).originalUsd)).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $` : balanceStr(Math.abs(Number(c.amount)))}</span>
                           <span className="muted-note picker-credit-note">{Number(c.amount) >= 0 ? `Выдано${c.note ? ` · ${c.note}` : ""}` : (c.note || "—")}</span>
-                          <span className="muted-note picker-credit-date">{compactDate(c.createdAt ?? null)}</span>
+                          <span className="muted-note picker-credit-date" title={compactDate(c.createdAt ?? null)}>{timeOf(c.createdAt)}</span>
                           <button
                             className="icon-action"
                             type="button"
@@ -893,6 +939,9 @@ export function PickingListPage() {
                           </button>
                         </div>
                       );
+                    })}
+                    </div>
+                    );
                     })}
                     {editBalanceCreditMutation.error ? <div className="inline-error pl-error-mt4">{errorMessage(editBalanceCreditMutation.error)}</div> : null}
                   </div>
@@ -915,11 +964,19 @@ export function PickingListPage() {
                       <p className="picker-balance-empty-hint">Загрузка…</p>
                     ) : entries.length === 0 ? (
                       <p className="picker-balance-empty-hint">Выплат ещё не было.</p>
-                    ) : entries.map((e) => (
-                      <div className="picker-credit-row" key={e.id}>
-                        <span className="picker-credit-amount tone-danger">−{moneyAmount(Math.abs(e.amount), e.currency === "USD" ? "USD" : "RUB")}</span>
-                        <span className="muted-note picker-credit-note">{e.supplierName || "—"}{e.note ? ` · ${e.note}` : ""}</span>
-                        <span className="muted-note picker-credit-date">{compactDate(e.occurredAt ?? null)}</span>
+                    ) : groupByDay(entries, (e) => e.occurredAt).map((day) => (
+                      <div className="picker-day-group" key={day.key}>
+                        <div className="picker-day-head">
+                          <span className="picker-day-head-label">{day.label}</span>
+                          <span className="picker-day-head-count">{day.items.length} опл.</span>
+                        </div>
+                        {day.items.map((e) => (
+                          <div className="picker-credit-row" key={e.id}>
+                            <span className="picker-credit-amount tone-danger">−{moneyAmount(Math.abs(e.amount), e.currency === "USD" ? "USD" : "RUB")}</span>
+                            <span className="muted-note picker-credit-note">{e.supplierName || "—"}{e.note ? ` · ${e.note}` : ""}</span>
+                            <span className="muted-note picker-credit-date" title={compactDate(e.occurredAt ?? null)}>{timeOf(e.occurredAt)}</span>
+                          </div>
+                        ))}
                       </div>
                     ))}
                   </div>
@@ -1506,7 +1563,18 @@ export function PickingListPage() {
                   <div className="picker-credit-history-label">История выдач — {issuePickerDraft} {credits.length ? `(${credits.length})` : ""}</div>
                   {credits.length === 0 ? (
                     <p className="picker-balance-empty-hint">Выдач ещё не было.</p>
-                  ) : credits.slice().reverse().map((c) => {
+                  ) : groupByDay(credits.slice().reverse(), (c) => c.createdAt).map((day) => {
+                    const dayIssued = day.items.reduce((sum, c) => sum + Math.max(0, Number(c.amount) || 0), 0);
+                    const daySpent = day.items.reduce((sum, c) => sum + Math.max(0, -(Number(c.amount) || 0)), 0);
+                    return (
+                    <div className="picker-day-group" key={day.key}>
+                      <div className="picker-day-head">
+                        <span className="picker-day-head-label">{day.label}</span>
+                        <span className="picker-day-head-count">{day.items.length} опер.</span>
+                        {dayIssued ? <span className="tone-success">+{balanceStr(dayIssued)}</span> : null}
+                        {daySpent ? <span className="tone-danger">−{balanceStr(daySpent)}</span> : null}
+                      </div>
+                      {day.items.map((c) => {
                     const isEditing = editCredit?.id === c.id && editCredit?.username === issuePickerDraft;
                     if (isEditing) {
                       return (
@@ -1544,7 +1612,7 @@ export function PickingListPage() {
                       <div className="picker-credit-row" key={c.id}>
                         <span className={`picker-credit-amount${Number(c.amount) >= 0 ? " tone-success" : " tone-danger"}`}>{Number(c.amount) >= 0 ? "+" : "−"}{balanceStr(Math.abs(Number(c.amount)))}</span>
                         <span className="muted-note picker-credit-note">{Number(c.amount) >= 0 ? `Выдано${c.note ? ` · ${c.note}` : ""}` : (c.note || "—")}</span>
-                        <span className="muted-note picker-credit-date">{compactDate(c.createdAt ?? null)}</span>
+                        <span className="muted-note picker-credit-date" title={compactDate(c.createdAt ?? null)}>{timeOf(c.createdAt)}</span>
                         <button
                           className="icon-action"
                           type="button"
@@ -1565,6 +1633,9 @@ export function PickingListPage() {
                       </div>
                     );
                   })}
+                  </div>
+                  );
+                  })}
                   {editBalanceCreditMutation.error ? <div className="inline-error pl-error-mt4">{errorMessage(editBalanceCreditMutation.error)}</div> : null}
                 </div>
               );
@@ -1584,13 +1655,27 @@ export function PickingListPage() {
                     <p className="picker-balance-empty-hint">Загрузка…</p>
                   ) : entries.length === 0 ? (
                     <p className="picker-balance-empty-hint">Выплат ещё не было.</p>
-                  ) : entries.map((e) => (
-                    <div className="picker-credit-row" key={e.id}>
-                      <span className="picker-credit-amount tone-danger">−{moneyAmount(Math.abs(e.amount), e.currency === "USD" ? "USD" : "RUB")}</span>
-                      <span className="muted-note picker-credit-note">{e.supplierName || "—"}{e.note ? ` · ${e.note}` : ""}</span>
-                      <span className="muted-note picker-credit-date">{compactDate(e.occurredAt ?? null)}</span>
-                    </div>
-                  ))}
+                  ) : groupByDay(entries, (e) => e.occurredAt).map((day) => {
+                    const dayUsd = day.items.filter((e) => e.currency === "USD").reduce((sum, e) => sum + Math.abs(e.amount), 0);
+                    const dayRub = day.items.filter((e) => e.currency !== "USD").reduce((sum, e) => sum + Math.abs(e.amount), 0);
+                    return (
+                      <div className="picker-day-group" key={day.key}>
+                        <div className="picker-day-head">
+                          <span className="picker-day-head-label">{day.label}</span>
+                          <span className="picker-day-head-count">{day.items.length} опл.</span>
+                          {dayUsd ? <span className="tone-danger">−{moneyAmount(dayUsd, "USD")}</span> : null}
+                          {dayRub ? <span className="tone-danger">−{moneyAmount(dayRub, "RUB")}</span> : null}
+                        </div>
+                        {day.items.map((e) => (
+                          <div className="picker-credit-row" key={e.id}>
+                            <span className="picker-credit-amount tone-danger">−{moneyAmount(Math.abs(e.amount), e.currency === "USD" ? "USD" : "RUB")}</span>
+                            <span className="muted-note picker-credit-note">{e.supplierName || "—"}{e.note ? ` · ${e.note}` : ""}</span>
+                            <span className="muted-note picker-credit-date" title={compactDate(e.occurredAt ?? null)}>{timeOf(e.occurredAt)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
                 </div>
               );
             })() : null}
