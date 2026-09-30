@@ -258,6 +258,10 @@ function startBackgroundSchedulers() {
     schedulePmChangeWatch(30_000);
     logger.info("pm change watcher enabled", { intervalSeconds: Math.round(pmChangeWatchIntervalMs / 1000) });
   }
+  if (ozonActionGuardEnabled) {
+    scheduleOzonActionGuard(60_000);
+    logger.info("ozon action guard enabled", { intervalMinutes: Math.round(ozonActionGuardIntervalMs / 60_000), removeManual: ozonActionGuardRemoveManual });
+  }
   startMarketplaceVerifyScheduler();
   if (snoozeSweepEnabled) {
     scheduleSnoozeSweep(5 * 60_000);
