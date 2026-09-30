@@ -1564,3 +1564,58 @@ body:has(.bulk-action-bar) .toast-stack { bottom: 88px; }
   .app-content .page-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; overflow: visible; }
   .app-content .page-tab-btn { justify-content: center; min-width: 0; height: 38px; padding: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 }
+
+/* ------------------------------------------------------------------ */
+/* Сборка на телефоне: все действия видны сразу, как на ПК             */
+/* ------------------------------------------------------------------ */
+@media (max-width: 760px) {
+  .picking-page .picking-row .picking-actions > * { max-height: none; }
+  .picking-page .picking-more-btn { display: none !important; }
+  .picking-page .picking-secondary-actions,
+  .picking-page .picking-secondary-actions.is-open {
+    display: grid !important;
+    grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+    gap: 6px;
+    flex: 1 1 100%;
+    width: 100%;
+    order: 0;
+    padding: 0;
+  }
+  .picking-page .picking-secondary-actions:empty { display: none !important; }
+  .picking-page .picking-secondary-actions .secondary-action {
+    width: 100%;
+    height: 40px !important;
+    min-height: 40px !important;
+    justify-content: center;
+    padding: 0 6px !important;
+    font-size: 13px !important;
+    white-space: nowrap;
+  }
+  .picking-page .picking-actions > .secondary-action.danger-action { flex: 1 1 100%; }
+
+  /* «Все собрал» для группы и окно подтверждения со скидкой */
+  .picking-page .picking-group-header { flex-wrap: wrap; padding: 10px 12px; }
+  .picking-page .picking-group-pick-all { display: block; margin: 0; padding: 0 12px 10px; }
+  .picking-page .picking-group-pick-all > .primary-action { width: 100%; height: 44px !important; min-height: 44px !important; font-size: 15px !important; justify-content: center; }
+  .picking-page .pick-all-confirm { width: 100%; padding: 12px; border-radius: 12px; }
+  .picking-page .pick-all-confirm-fields { display: flex; flex-direction: column; gap: 8px; }
+  .picking-page .pick-all-confirm-discount-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .picking-page .pick-all-confirm-input-wrap { flex: 1 1 140px; display: flex; align-items: center; gap: 6px; }
+  .picking-page .pick-all-confirm-input { flex: 1 1 auto; width: auto; height: 44px; min-height: 44px; font-size: 16px; }
+  .picking-page .pick-all-confirm-actions { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+  .picking-page .pick-all-confirm-actions .primary-action,
+  .picking-page .pick-all-confirm-actions .secondary-action { height: 44px !important; min-height: 44px !important; font-size: 15px !important; justify-content: center; }
+}
+@media (max-width: 760px) {
+  .picking-page .picking-row .picking-actions { flex-direction: row !important; align-items: stretch; height: auto; }
+  .picking-page .picking-row .picking-actions > .picking-action-pick-group,
+  .picking-page .picking-row .picking-actions > .picking-price-wrap,
+  .picking-page .picking-row .picking-actions > .picking-secondary-actions { flex: 1 1 100%; }
+  .picking-page .picking-row .picking-actions > .danger-action:not(.picking-secondary-actions *) { flex: 1 1 100%; height: 42px !important; }
+}
+.picking-page .primary-action.success-action { color: #fff; }
+.picking-page .primary-action.success-action svg { color: #fff; }
+@media (max-width: 760px) {
+  .picking-page .picking-row .picking-actions > .picking-price-wrap { flex: 1 1 55%; }
+  .picking-page .picking-row .picking-actions > .danger-action:not(.picking-secondary-actions *) { flex: 1 1 35%; height: 44px !important; min-height: 44px !important; }
+}
