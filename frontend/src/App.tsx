@@ -3,6 +3,7 @@ import { AlertCircle, ChevronDown, Keyboard, LogOut, Menu, PanelLeft, RefreshCw,
 import { Activity, Component, ErrorInfo, ReactNode, Suspense, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { CommandPalette, PaletteAction } from "./components/CommandPalette";
 import { NotificationsBell } from "./components/NotificationsBell";
+import { PingIndicator } from "./components/PingIndicator";
 import { SystemHealthIndicator } from "./components/SystemHealthIndicator";
 import { ThemeSwitcher } from "./components/ThemeSwitcher";
 import { AppRoute, NAV_SECTIONS, navItems, NavItem, pageComponent, prefetchRoute, prefetchRoutesWhenIdle, routeFromPath } from "./lib/nav";
@@ -477,6 +478,7 @@ function AppShell() {
           </button>
           <div className="topbar-spacer" />
           <div className="topbar-actions">
+            <PingIndicator />
             <ThemeSwitcher />
             {isAdmin ? <SystemHealthIndicator /> : null}
             <NotificationsBell />

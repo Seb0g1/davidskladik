@@ -1619,3 +1619,14 @@ body:has(.bulk-action-bar) .toast-stack { bottom: 88px; }
   .picking-page .picking-row .picking-actions > .picking-price-wrap { flex: 1 1 55%; }
   .picking-page .picking-row .picking-actions > .danger-action:not(.picking-secondary-actions *) { flex: 1 1 35%; height: 44px !important; min-height: 44px !important; }
 }
+/* Пинг до сервера в верхней панели */
+.ping-indicator { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border-radius: 99px; border: 1px solid var(--ux-border); background: rgba(var(--surface-rgb-1), 0.5); color: var(--muted); font-size: 12px; font-weight: 650; font-variant-numeric: tabular-nums; white-space: nowrap; cursor: help; transition: border-color 200ms ease, color 200ms ease; }
+.ping-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.ping-good .ping-dot { background: var(--green); box-shadow: 0 0 0 3px rgba(49, 208, 123, 0.18); }
+.ping-ok .ping-dot { background: var(--yellow); box-shadow: 0 0 0 3px rgba(242, 184, 27, 0.18); }
+.ping-bad .ping-dot, .ping-down .ping-dot { background: var(--red); box-shadow: 0 0 0 3px rgba(245, 96, 111, 0.2); animation: pingPulse 1.4s ease-in-out infinite; }
+.ping-bad, .ping-down { color: var(--red); border-color: rgba(245, 96, 111, 0.45); }
+.ping-idle .ping-dot { animation: pingPulse 1s ease-in-out infinite; }
+@keyframes pingPulse { 50% { opacity: 0.35; } }
+@media (max-width: 760px) { .ping-indicator { height: 28px; padding: 0 8px; font-size: 11px; } }
+@media (max-width: 380px) { .ping-indicator .ping-value { display: none; } .ping-indicator { padding: 0 9px; } }
