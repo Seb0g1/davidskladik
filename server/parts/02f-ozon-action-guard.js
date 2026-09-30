@@ -1,14 +1,15 @@
 // Ozon action guard: Ozon keeps adding our products to its special offers (акции) on its own.
-// Every OZON_ACTION_GUARD_INTERVAL_MINUTES (default 15) the worker walks every special offer of
+// Every OZON_ACTION_GUARD_INTERVAL_MINUTES (default 5) the worker walks every special offer of
 // every Ozon account and removes the products Ozon added (add_mode other than MANUAL).
 // Products a person added by hand in the cabinet (MANUAL) stay, unless
 // OZON_ACTION_GUARD_REMOVE_MANUAL=true. Offers in their freeze period reject removal; that is
 // logged and retried on the next tick.
 
 const ozonActionGuardEnabled = process.env.OZON_ACTION_GUARD_ENABLED !== "false";
+// An idle pass costs one GET /v1/actions per account (offers with no products are skipped).
 const ozonActionGuardIntervalMs = Math.max(
-  5 * 60_000,
-  Number(process.env.OZON_ACTION_GUARD_INTERVAL_MINUTES || 15) * 60_000 || 15 * 60_000,
+  2 * 60_000,
+  Number(process.env.OZON_ACTION_GUARD_INTERVAL_MINUTES || 5) * 60_000 || 5 * 60_000,
 );
 const ozonActionGuardRemoveManual = process.env.OZON_ACTION_GUARD_REMOVE_MANUAL === "true";
 const OZON_ACTION_PAGE_SIZE = 500;

@@ -15,6 +15,8 @@ function buildOzonPricePayload(item = {}) {
   if (parseBooleanSetting(process.env.OZON_PRICE_PUSH_DISABLE_AUTO_ACTIONS, true)) {
     payload.auto_action_enabled = "DISABLED";
     payload.price_strategy_enabled = "DISABLED";
+    // Otherwise Ozon adds the product to "Эластичный бустинг" whenever the new price fits it.
+    payload.manage_elastic_boosting_through_price = false;
   }
   if (parseBooleanSetting(process.env.OZON_PRICE_PUSH_SET_MIN_PRICE, false)) {
     payload.min_price = String(price);

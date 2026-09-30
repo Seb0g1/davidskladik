@@ -3111,6 +3111,7 @@ test("Ozon price payload disables auto price controls by default", () => {
       old_price: "35178",
       auto_action_enabled: "DISABLED",
       price_strategy_enabled: "DISABLED",
+      manage_elastic_boosting_through_price: false,
     });
   } finally {
     if (previous === undefined) delete process.env.OZON_PRICE_PUSH_DISABLE_AUTO_ACTIONS;
