@@ -806,10 +806,16 @@ model ConsignmentInvoice {
   totalAmount  Float    @default(0) @map("total_amount")
   createdBy    String?  @map("created_by")
   createdAt    DateTime @default(now()) @map("created_at")
+  // posted | draft. A posted invoice owns receive/purchase operations (raw.invoiceId).
+  status       String   @default("posted")
+  fromBalance  Boolean  @default(false) @map("from_balance")
+  postedAt     DateTime? @map("posted_at")
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at")
 
   items ConsignmentInvoiceItem[]
 
   @@index([createdAt])
+  @@index([status])
   @@map("consignment_invoices")
 }
 

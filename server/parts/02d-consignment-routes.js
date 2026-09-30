@@ -1155,8 +1155,17 @@ function scheduleConsignmentPmSync(delayMs = consignmentPmSyncIntervalMs) {
 }
 
 // ─── Приходные накладные ────────────────────────────────────────────────────
+//
+// A posted invoice owns one receive (from the sponsor) or purchase (paid from the common balance)
+// operation per line, tagged raw.invoiceId. Money on this page is the sum of operations, so
+// unposting deletes those operations and takes the quantities back off the stock; the invoice
+// becomes a draft whose lines, prices, supplier and «с баланса» flag can be edited, and posting
+// it again creates the operations from the current lines. Status and flag columns are read and
+// written with SQL, so the running Prisma client does not need to be regenerated for them.
 
-function consignmentInvoiceFromPostgres(row = {}) {
+const CONSIGNMENT_INVOICE_OP_TYPES = ["receive", "purchase"];
+
+function consignmentInvoiceFromPostgres(row = {}, meta = {}) {
   return {
     id: row.id,
     number: row.number,
@@ -1165,6 +1174,10 @@ function consignmentInvoiceFromPostgres(row = {}) {
     totalAmount: Number(row.totalAmount || 0),
     createdBy: row.createdBy || null,
     createdAt: row.createdAt?.toISOString?.() || null,
+    status: meta.status === "draft" ? "draft" : "posted",
+    fromBalance: Boolean(meta.fromBalance),
+    postedAt: meta.postedAt ? new Date(meta.postedAt).toISOString() : null,
+    updatedAt: meta.updatedAt ? new Date(meta.updatedAt).toISOString() : null,
     items: (row.items || []).map((it) => ({
       id: it.id,
       invoiceId: it.invoiceId,
@@ -1177,17 +1190,159 @@ function consignmentInvoiceFromPostgres(row = {}) {
   };
 }
 
-async function generateInvoiceNumber(prisma) {
-  const count = await prisma.consignmentInvoice.count();
-  return `ПН-${String(count + 1).padStart(3, "0")}`;
+async function readConsignmentInvoiceMeta(db, ids = []) {
+  if (!ids.length) return new Map();
+  const rows = await db.$queryRawUnsafe(
+    `SELECT id, status, from_balance AS "fromBalance", posted_at AS "postedAt", updated_at AS "updatedAt"
+     FROM consignment_invoices WHERE id = ANY($1::text[])`,
+    ids,
+  );
+  return new Map(rows.map((row) => [row.id, row]));
 }
+
+async function readConsignmentInvoice(db, id) {
+  const invoice = await db.consignmentInvoice.findUnique({ where: { id }, include: { items: true } });
+  if (!invoice) return null;
+  const meta = (await readConsignmentInvoiceMeta(db, [id])).get(id) || {};
+  return consignmentInvoiceFromPostgres(invoice, meta);
+}
+
+// ПН-001, ПН-002, … — next after the highest number, so a deleted draft never duplicates one.
+async function generateInvoiceNumber(db) {
+  const rows = await db.$queryRawUnsafe(
+    `SELECT COALESCE(MAX(CAST(SUBSTRING(number FROM '[0-9]+$') AS INTEGER)), 0) AS max FROM consignment_invoices WHERE number ~ '[0-9]+$'`,
+  );
+  return `ПН-${String(Number(rows[0]?.max || 0) + 1).padStart(3, "0")}`;
+}
+
+function consignmentInvoiceLinesInput(items = []) {
+  return (Array.isArray(items) ? items : [])
+    .map((line) => ({
+      itemId: cleanText(line?.itemId) || null,
+      name: cleanText(line?.name),
+      article: cleanText(line?.article) || null,
+      quantity: Math.max(1, Math.round(Number(line?.quantity || 1) || 1)),
+      unitPrice: normalizeFinanceMoney(Math.max(0, Number(line?.unitPrice || 0) || 0), 0),
+    }))
+    .filter((line) => line.name);
+}
+
+function consignmentInvoiceTotal(lines = []) {
+  return normalizeFinanceMoney(lines.reduce((sum, line) => sum + Number(line.unitPrice || 0) * Number(line.quantity || 0), 0), 0);
+}
+
+// Operations of this invoice: tagged with its id, or (made before the tag existed) carrying its note.
+async function consignmentInvoiceOperations(tx, invoice) {
+  const candidates = await tx.consignmentOperation.findMany({
+    where: {
+      type: { in: CONSIGNMENT_INVOICE_OP_TYPES },
+      OR: [{ raw: { path: ["invoiceId"], equals: invoice.id } }, { note: `Накладная ${invoice.number}` }],
+    },
+  });
+  return candidates.filter((op) => {
+    const taggedId = op.raw && typeof op.raw === "object" ? cleanText(op.raw.invoiceId) : "";
+    return taggedId ? taggedId === invoice.id : op.note === `Накладная ${invoice.number}`;
+  });
+}
+
+// Finds the stock item for an invoice line: the saved item, then the article, then the name;
+// creates it when none exists. Stock and purchase price are raised by the caller.
+async function resolveConsignmentInvoiceItem(tx, line) {
+  if (line.itemId) {
+    const saved = await tx.consignmentItem.findUnique({ where: { id: line.itemId } });
+    if (saved) return saved;
+  }
+  if (line.article) {
+    const byArticle = await tx.consignmentItem.findFirst({ where: { article: line.article, archived: false }, orderBy: { createdAt: "desc" } });
+    if (byArticle) return byArticle;
+  }
+  const byName = await tx.consignmentItem.findFirst({ where: { name: { equals: line.name, mode: "insensitive" }, archived: false }, orderBy: { createdAt: "desc" } });
+  if (byName) return byName;
+  return tx.consignmentItem.create({
+    data: { name: line.name, article: line.article || undefined, purchasePrice: line.unitPrice, salePrice: line.unitPrice, quantity: 0 },
+  });
+}
+
+async function postConsignmentInvoice(tx, invoiceId, username) {
+  const invoice = await tx.consignmentInvoice.findUnique({ where: { id: invoiceId }, include: { items: true } });
+  const meta = (await readConsignmentInvoiceMeta(tx, [invoiceId])).get(invoiceId) || {};
+  if (!invoice) return { failure: { status: 404, error: "Накладная не найдена.", code: "consignment_invoice_not_found" } };
+  if (meta.status !== "draft") return { failure: { status: 400, error: "Накладная уже проведена.", code: "consignment_invoice_posted" } };
+  if (!invoice.items.length) return { failure: { status: 400, error: "В накладной нет позиций.", code: "consignment_invoice_empty" } };
+  const fromBalance = Boolean(meta.fromBalance);
+  for (const line of invoice.items) {
+    const unitPrice = normalizeFinanceMoney(line.unitPrice, 0);
+    const item = await resolveConsignmentInvoiceItem(tx, { itemId: line.itemId, name: line.name, article: line.article, unitPrice });
+    await tx.consignmentItem.update({
+      where: { id: item.id },
+      data: { quantity: { increment: line.quantity }, purchasePrice: unitPrice },
+    });
+    if (line.itemId !== item.id) await tx.consignmentInvoiceItem.update({ where: { id: line.id }, data: { itemId: item.id } });
+    await tx.consignmentOperation.create({
+      data: {
+        itemId: item.id,
+        itemName: line.name,
+        type: fromBalance ? "purchase" : "receive",
+        quantity: line.quantity,
+        unitPurchase: unitPrice,
+        balanceDelta: fromBalance ? normalizeFinanceMoney(-(unitPrice * line.quantity), 0) : 0,
+        sponsorDelta: 0,
+        myDelta: 0,
+        note: `Накладная ${invoice.number}`,
+        createdBy: username || null,
+        raw: { invoiceId: invoice.id, invoiceItemId: line.id },
+      },
+    });
+  }
+  const total = consignmentInvoiceTotal(invoice.items);
+  await tx.$executeRawUnsafe(
+    `UPDATE consignment_invoices SET status = 'posted', posted_at = NOW(), updated_at = NOW(), total_amount = $2 WHERE id = $1`,
+    invoiceId,
+    total,
+  );
+  return { ok: true };
+}
+
+async function unpostConsignmentInvoice(tx, invoiceId) {
+  const invoice = await tx.consignmentInvoice.findUnique({ where: { id: invoiceId } });
+  const meta = (await readConsignmentInvoiceMeta(tx, [invoiceId])).get(invoiceId) || {};
+  if (!invoice) return { failure: { status: 404, error: "Накладная не найдена.", code: "consignment_invoice_not_found" } };
+  if (meta.status === "draft") return { failure: { status: 400, error: "Накладная уже снята с проводки.", code: "consignment_invoice_draft" } };
+  const operations = await consignmentInvoiceOperations(tx, invoice);
+  // Goods already sold or written off cannot leave the stock again.
+  const needByItem = new Map();
+  for (const op of operations) if (op.itemId) needByItem.set(op.itemId, (needByItem.get(op.itemId) || 0) + op.quantity);
+  const shortages = [];
+  for (const [itemId, need] of needByItem) {
+    const item = await tx.consignmentItem.findUnique({ where: { id: itemId } });
+    if (item && item.quantity < need) shortages.push(`${item.name}: на складе ${item.quantity} шт, по накладной ${need} шт`);
+  }
+  if (shortages.length) {
+    return {
+      failure: {
+        status: 409,
+        code: "consignment_invoice_stock_used",
+        error: `Часть товара из накладной уже продана или списана — снять с проводки нельзя. ${shortages.join("; ")}.`,
+        shortages,
+      },
+    };
+  }
+  for (const [itemId, need] of needByItem) {
+    await tx.consignmentItem.update({ where: { id: itemId }, data: { quantity: { decrement: need } } });
+  }
+  if (operations.length) await tx.consignmentOperation.deleteMany({ where: { id: { in: operations.map((op) => op.id) } } });
+  await tx.$executeRawUnsafe(`UPDATE consignment_invoices SET status = 'draft', posted_at = NULL, updated_at = NOW() WHERE id = $1`, invoiceId);
+  return { ok: true, removedOperations: operations.length, restoredItems: needByItem.size };
+}
+
+const consignmentInvoiceTx = { timeout: 60_000, maxWait: 10_000 };
 
 app.get("/api/consignment/invoices", requireAdmin, async (request, response, next) => {
   try {
     if (consignmentStorageUnavailable(response)) return;
     const prisma = getPrisma();
     const page = Math.max(0, Number(request.query.page || 0) || 0);
-    const limit = Math.min(100, Math.max(1, Number(request.query.limit || 20) || 20));
+    const limit = Math.min(200, Math.max(1, Number(request.query.limit || 50) || 50));
     const [invoices, total] = await Promise.all([
       prisma.consignmentInvoice.findMany({
         orderBy: { createdAt: "desc" },
@@ -1197,7 +1352,8 @@ app.get("/api/consignment/invoices", requireAdmin, async (request, response, nex
       }),
       prisma.consignmentInvoice.count(),
     ]);
-    response.json({ ok: true, invoices: invoices.map(consignmentInvoiceFromPostgres), total, page });
+    const meta = await readConsignmentInvoiceMeta(prisma, invoices.map((invoice) => invoice.id));
+    response.json({ ok: true, invoices: invoices.map((invoice) => consignmentInvoiceFromPostgres(invoice, meta.get(invoice.id))), total, page });
   } catch (error) {
     next(error);
   }
@@ -1206,99 +1362,169 @@ app.get("/api/consignment/invoices", requireAdmin, async (request, response, nex
 app.get("/api/consignment/invoices/:id", requireAdmin, async (request, response, next) => {
   try {
     if (consignmentStorageUnavailable(response)) return;
-    const prisma = getPrisma();
-    const invoice = await prisma.consignmentInvoice.findUnique({
-      where: { id: request.params.id },
-      include: { items: true },
-    });
+    const invoice = await readConsignmentInvoice(getPrisma(), cleanText(request.params.id));
     if (!invoice) return response.status(404).json({ error: "Накладная не найдена" });
-    response.json({ ok: true, invoice: consignmentInvoiceFromPostgres(invoice) });
+    response.json({ ok: true, invoice });
   } catch (error) {
     next(error);
   }
 });
 
+// Creates an invoice and posts it right away, or keeps it as a draft with post: false.
 app.post("/api/consignment/invoices", requireAdmin, async (request, response, next) => {
   try {
     if (consignmentStorageUnavailable(response)) return;
     const prisma = getPrisma();
-    const { supplierName, note, fromBalance = false, items = [] } = request.body || {};
-    if (!Array.isArray(items) || items.length === 0) {
-      return response.status(400).json({ error: "Нет позиций в накладной" });
-    }
-
-    const invoiceNumber = await generateInvoiceNumber(prisma);
-    let totalAmount = 0;
-    const invoiceItemsData = [];
-    const consignmentOps = [];
-
-    for (const line of items) {
-      const name = cleanText(line.name);
-      if (!name) continue;
-      const quantity = Math.max(1, Math.round(Number(line.quantity || 1) || 1));
-      const unitPrice = Math.max(0, Number(line.unitPrice || 0) || 0);
-      const article = cleanText(line.article) || null;
-      totalAmount += unitPrice * quantity;
-
-      // Find or create ConsignmentItem
-      let consignmentItem = null;
-      if (article) {
-        consignmentItem = await prisma.consignmentItem.findFirst({ where: { article } });
-      }
-      if (!consignmentItem) {
-        consignmentItem = await prisma.consignmentItem.findFirst({
-          where: { name: { equals: name, mode: "insensitive" } },
-        });
-      }
-      if (!consignmentItem) {
-        consignmentItem = await prisma.consignmentItem.create({
-          data: { name, article: article || undefined, purchasePrice: unitPrice, salePrice: unitPrice, quantity: 0 },
-        });
-      }
-
-      // Update item quantity and purchase price
-      await prisma.consignmentItem.update({
-        where: { id: consignmentItem.id },
-        data: { quantity: { increment: quantity }, purchasePrice: unitPrice },
-      });
-
-      invoiceItemsData.push({ id: require("crypto").randomUUID(), name, article, quantity, unitPrice, itemId: consignmentItem.id });
-      consignmentOps.push({ itemId: consignmentItem.id, itemName: name, quantity, unitPrice });
-    }
-
-    const invoice = await prisma.$transaction(async (tx) => {
-      const inv = await tx.consignmentInvoice.create({
+    const body = request.body || {};
+    const lines = consignmentInvoiceLinesInput(body.items);
+    if (!lines.length) return response.status(400).json({ error: "Нет позиций в накладной", code: "consignment_invoice_empty" });
+    const post = body.post !== false;
+    const username = requestUsername(request);
+    let failure = null;
+    const invoiceId = await prisma.$transaction(async (tx) => {
+      const number = await generateInvoiceNumber(tx);
+      const created = await tx.consignmentInvoice.create({
         data: {
-          number: invoiceNumber,
-          supplierName: cleanText(supplierName) || null,
-          note: cleanText(note) || null,
-          totalAmount,
-          createdBy: request.session?.user?.username || null,
-          items: {
-            create: invoiceItemsData.map(({ id: _id, itemId, ...rest }) => ({ ...rest, itemId })),
-          },
+          number,
+          supplierName: cleanText(body.supplierName) || null,
+          note: cleanText(body.note) || null,
+          totalAmount: consignmentInvoiceTotal(lines),
+          createdBy: username || null,
+          items: { create: lines.map((line) => ({ name: line.name, article: line.article, quantity: line.quantity, unitPrice: line.unitPrice, itemId: line.itemId })) },
         },
-        include: { items: true },
       });
-      for (const op of consignmentOps) {
-        await tx.consignmentOperation.create({
-          data: {
-            itemId: op.itemId,
-            itemName: op.itemName,
-            type: fromBalance ? "purchase" : "receive",
-            quantity: op.quantity,
-            unitPurchase: op.unitPrice,
-            balanceDelta: fromBalance ? -(op.unitPrice * op.quantity) : 0,
-            sponsorDelta: 0,
-            myDelta: 0,
-            note: `Накладная ${invoiceNumber}`,
-          },
+      await tx.$executeRawUnsafe(
+        `UPDATE consignment_invoices SET status = 'draft', from_balance = $2, posted_at = NULL, updated_at = NOW() WHERE id = $1`,
+        created.id,
+        Boolean(body.fromBalance),
+      );
+      if (post) {
+        const result = await postConsignmentInvoice(tx, created.id, username);
+        if (result.failure) {
+          failure = result.failure;
+          throw new Error(result.failure.error);
+        }
+      }
+      return created.id;
+    }, consignmentInvoiceTx).catch((error) => {
+      if (failure) return null;
+      throw error;
+    });
+    if (failure) return response.status(failure.status).json({ error: failure.error, code: failure.code });
+    const invoice = await readConsignmentInvoice(prisma, invoiceId);
+    await appendAudit(request, post ? "consignment.invoice.post" : "consignment.invoice.draft", { entityType: "consignment_invoice", entityId: invoiceId, newValue: invoice });
+    response.status(201).json({ ok: true, invoice, invoices: [invoice] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Edits a draft: header, «с баланса» and the whole list of lines.
+app.patch("/api/consignment/invoices/:id", requireAdmin, async (request, response, next) => {
+  try {
+    if (consignmentStorageUnavailable(response)) return;
+    const prisma = getPrisma();
+    const id = cleanText(request.params.id);
+    const body = request.body || {};
+    const before = await readConsignmentInvoice(prisma, id);
+    if (!before) return response.status(404).json({ error: "Накладная не найдена.", code: "consignment_invoice_not_found" });
+    if (before.status !== "draft") {
+      return response.status(400).json({ error: "Проведённую накладную нельзя менять — сначала снимите её с проводки.", code: "consignment_invoice_posted" });
+    }
+    const lines = body.items === undefined ? null : consignmentInvoiceLinesInput(body.items);
+    if (lines && !lines.length) return response.status(400).json({ error: "Нет позиций в накладной", code: "consignment_invoice_empty" });
+    await prisma.$transaction(async (tx) => {
+      const data = {};
+      if (body.supplierName !== undefined) data.supplierName = cleanText(body.supplierName) || null;
+      if (body.note !== undefined) data.note = cleanText(body.note) || null;
+      if (lines) {
+        data.totalAmount = consignmentInvoiceTotal(lines);
+        await tx.consignmentInvoiceItem.deleteMany({ where: { invoiceId: id } });
+        await tx.consignmentInvoiceItem.createMany({
+          data: lines.map((line) => ({ invoiceId: id, name: line.name, article: line.article, quantity: line.quantity, unitPrice: line.unitPrice, itemId: line.itemId })),
         });
       }
-      return inv;
-    });
+      if (Object.keys(data).length) await tx.consignmentInvoice.update({ where: { id }, data });
+      if (body.fromBalance !== undefined) {
+        await tx.$executeRawUnsafe(`UPDATE consignment_invoices SET from_balance = $2, updated_at = NOW() WHERE id = $1`, id, Boolean(body.fromBalance));
+      } else {
+        await tx.$executeRawUnsafe(`UPDATE consignment_invoices SET updated_at = NOW() WHERE id = $1`, id);
+      }
+    }, consignmentInvoiceTx);
+    const invoice = await readConsignmentInvoice(prisma, id);
+    await appendAudit(request, "consignment.invoice.edit", { entityType: "consignment_invoice", entityId: id, oldValue: before, newValue: invoice });
+    response.json({ ok: true, invoice, invoices: [invoice] });
+  } catch (error) {
+    next(error);
+  }
+});
 
-    response.json({ ok: true, invoice: consignmentInvoiceFromPostgres(invoice) });
+app.post("/api/consignment/invoices/:id/post", requireAdmin, async (request, response, next) => {
+  try {
+    if (consignmentStorageUnavailable(response)) return;
+    const prisma = getPrisma();
+    const id = cleanText(request.params.id);
+    let failure = null;
+    await prisma.$transaction(async (tx) => {
+      const result = await postConsignmentInvoice(tx, id, requestUsername(request));
+      if (result.failure) {
+        failure = result.failure;
+        throw new Error(result.failure.error);
+      }
+    }, consignmentInvoiceTx).catch((error) => {
+      if (!failure) throw error;
+    });
+    if (failure) return response.status(failure.status).json({ error: failure.error, code: failure.code });
+    const invoice = await readConsignmentInvoice(prisma, id);
+    await appendAudit(request, "consignment.invoice.post", { entityType: "consignment_invoice", entityId: id, newValue: invoice });
+    response.json({ ok: true, invoice, invoices: [invoice] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/consignment/invoices/:id/unpost", requireAdmin, async (request, response, next) => {
+  try {
+    if (consignmentStorageUnavailable(response)) return;
+    const prisma = getPrisma();
+    const id = cleanText(request.params.id);
+    let failure = null;
+    let result = null;
+    await prisma.$transaction(async (tx) => {
+      result = await unpostConsignmentInvoice(tx, id);
+      if (result.failure) {
+        failure = result.failure;
+        throw new Error(result.failure.error);
+      }
+    }, consignmentInvoiceTx).catch((error) => {
+      if (!failure) throw error;
+    });
+    if (failure) return response.status(failure.status).json({ error: failure.error, code: failure.code, shortages: failure.shortages || [] });
+    const invoice = await readConsignmentInvoice(prisma, id);
+    await appendAudit(request, "consignment.invoice.unpost", {
+      entityType: "consignment_invoice",
+      entityId: id,
+      newValue: { ...invoice, removedOperations: result.removedOperations },
+    });
+    response.json({ ok: true, invoice, invoices: [invoice], removedOperations: result.removedOperations });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/consignment/invoices/:id", requireAdmin, async (request, response, next) => {
+  try {
+    if (consignmentStorageUnavailable(response)) return;
+    const prisma = getPrisma();
+    const id = cleanText(request.params.id);
+    const before = await readConsignmentInvoice(prisma, id);
+    if (!before) return response.status(404).json({ error: "Накладная не найдена.", code: "consignment_invoice_not_found" });
+    if (before.status !== "draft") {
+      return response.status(400).json({ error: "Удалить можно только черновик — сначала снимите накладную с проводки.", code: "consignment_invoice_posted" });
+    }
+    await prisma.consignmentInvoice.delete({ where: { id } });
+    await appendAudit(request, "consignment.invoice.delete", { entityType: "consignment_invoice", entityId: id, oldValue: before });
+    response.json({ ok: true, deleted: before });
   } catch (error) {
     next(error);
   }

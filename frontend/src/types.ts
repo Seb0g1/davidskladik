@@ -1214,6 +1214,10 @@ export const ConsignmentInvoiceSchema = z.object({
   totalAmount: z.number(),
   createdBy: z.string().nullable().optional(),
   createdAt: z.string().nullable().optional(),
+  status: z.enum(["posted", "draft"]).optional().default("posted"),
+  fromBalance: z.boolean().optional().default(false),
+  postedAt: z.string().nullable().optional(),
+  updatedAt: z.string().nullable().optional(),
   items: z.array(ConsignmentInvoiceItemSchema).optional().default([]),
 }).passthrough();
 export type ConsignmentInvoice = z.infer<typeof ConsignmentInvoiceSchema>;

@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Banknote, Boxes, Check, ChevronDown, ChevronRight, FileText, HandCoins, History, ListPlus, Loader2, Package, PackageMinus, PackagePlus, Plus, RefreshCw, RotateCcw, Search, ShoppingCart, Trash2, TrendingUp, Upload, Wallet, X } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { PmChipInput } from "../components/PmChipInput";
+import { ConsignmentInvoices } from "../components/ConsignmentInvoices";
 import {
   ConsignmentBulkCreateSchema,
   ConsignmentGroupMutationSchema,
@@ -12,7 +13,6 @@ import {
   ConsignmentMutationSchema,
   ConsignmentOperation,
   ConsignmentOperationsSchema,
-  ConsignmentInvoicesSchema,
   ConsignmentPmNomenclatureAddSchema,
   ConsignmentPmNomenclatureSchema,
   ConsignmentPmNewItemsSchema,
@@ -180,15 +180,6 @@ export function ConsignmentPage() {
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [draftItems, setDraftItems] = useState<DraftItem[]>([]);
   const [pmSyncResult, setPmSyncResult] = useState<ConsignmentPmSync | null>(null);
-  const [invoicesOpen, setInvoicesOpen] = useState(false);
-  const [invoicePmQuery, setInvoicePmQuery] = useState("");
-  const [invoicePmPage, setInvoicePmPage] = useState(1);
-  const [invoiceForm, setInvoiceForm] = useState<{
-    supplierName: string;
-    note: string;
-    fromBalance: boolean;
-    lines: Array<{ name: string; article: string; quantity: string; unitPrice: string }>;
-  }>({ supplierName: "", note: "", fromBalance: false, lines: [] });
 
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ["consignment"] });
 
@@ -230,40 +221,6 @@ export function ConsignmentPage() {
     staleTime: 4 * 60 * 1000,
   });
   const pmNewCount = pmNewItems.data?.newCount || 0;
-
-  const invoicesList = useQuery({
-    queryKey: ["consignment", "invoices"],
-    queryFn: () => fetchJson("/api/consignment/invoices?limit=20", ConsignmentInvoicesSchema),
-    enabled: invoicesOpen,
-  });
-
-  const invoicePmNomenclature = useQuery({
-    queryKey: ["consignment", "invoice-pm-nomenclature", invoicePmQuery, invoicePmPage],
-    queryFn: () => fetchJson(
-      `/api/consignment/pm-nomenclature?q=${encodeURIComponent(invoicePmQuery)}&page=${invoicePmPage}&limit=30`,
-      ConsignmentPmNomenclatureSchema,
-    ),
-    enabled: invoicesOpen,
-  });
-
-  const createInvoice = useMutation({
-    mutationFn: () => fetchJson("/api/consignment/invoices", ConsignmentInvoicesSchema, mutationBody({
-      supplierName: invoiceForm.supplierName || null,
-      note: invoiceForm.note || null,
-      fromBalance: invoiceForm.fromBalance,
-      items: invoiceForm.lines.filter(l => l.name.trim()).map(l => ({
-        name: l.name.trim(),
-        article: l.article.trim() || null,
-        quantity: Math.max(1, Number(l.quantity) || 1),
-        unitPrice: Number(l.unitPrice) || 0,
-      })),
-    })),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["consignment", "invoices"] });
-      void queryClient.invalidateQueries({ queryKey: ["consignment", "items"] });
-      setInvoiceForm({ supplierName: "", note: "", fromBalance: false, lines: [] });
-    },
-  });
 
   const addFromNomenclature = useMutation({
     mutationFn: ({ productId, purchasePrice, quantity }: { productId: string; purchasePrice: number; quantity: number }) =>
@@ -370,15 +327,23 @@ export function ConsignmentPage() {
   });
 
   // Подстраница операций: /app/consignment/operations (не в сайдбаре).
-  const [view, setView] = useState<"main" | "operations">(() => (window.location.pathname.includes("/operations") ? "operations" : "main"));
+  // Подстраницы: /app/consignment/operations и /app/consignment/invoices (не в сайдбаре).
+  const viewFromPath = (): "main" | "operations" | "invoices" => (
+    window.location.pathname.includes("/operations") ? "operations" : window.location.pathname.includes("/invoices") ? "invoices" : "main"
+  );
+  const [view, setView] = useState<"main" | "operations" | "invoices">(viewFromPath);
   useEffect(() => {
-    const onPop = () => setView(window.location.pathname.includes("/operations") ? "operations" : "main");
+    const onPop = () => setView(viewFromPath());
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
   const openOperations = () => {
     window.history.pushState(null, "", "/app/consignment/operations");
     setView("operations");
+  };
+  const openInvoices = () => {
+    window.history.pushState(null, "", "/app/consignment/invoices");
+    setView("invoices");
   };
   const backToMain = () => {
     window.history.pushState(null, "", "/app/consignment");
@@ -561,6 +526,10 @@ export function ConsignmentPage() {
     </div>
   );
 
+  if (view === "invoices") {
+    return <ConsignmentInvoices onBack={() => { backToMain(); invalidate(); }} />;
+  }
+
   if (view === "operations") {
     return (
       <section className="page-section consignment-page">
@@ -589,53 +558,46 @@ export function ConsignmentPage() {
         title="Реализация (товар спонсора)"
         subtitle="Товар от спонсора: остатки, продажи с профитом 50/50, списания, возвраты, общий баланс и закупки со свободных денег."
         action={(
-          <div className="row-actions">
+          <div className="row-actions cn-header-actions">
+            <button className="primary-action" type="button" onClick={openInvoices} title="Приходные накладные: провести, снять с проводки, исправить">
+              <FileText size={16} /> Накладные
+            </button>
             <button className="secondary-action" type="button" onClick={openOperations}>
               <History size={16} /> Операции ({operations.data?.operations?.length ?? "…"})
             </button>
-            <button
-              className="secondary-action"
-              type="button"
-              onClick={() => { setPmNomenclatureOpen(true); setPmNomenclatureQuery(""); setPmNomenclaturePage(1); }}
-              title="Добавить товар из номенклатуры PriceMaster"
-            >
-              <Package size={16} /> Из PM
-              {pmNewCount > 0 && (
-                <span className="cn-accent-badge">
-                  +{pmNewCount}
-                </span>
-              )}
+            <span className="cn-header-group" aria-label="PriceMaster">
+              <button
+                className="secondary-action"
+                type="button"
+                onClick={() => { setPmNomenclatureOpen(true); setPmNomenclatureQuery(""); setPmNomenclaturePage(1); }}
+                title="Добавить товар из номенклатуры PriceMaster"
+              >
+                <Package size={16} /> Из PM
+                {pmNewCount > 0 && <span className="cn-accent-badge">+{pmNewCount}</span>}
+              </button>
+              <button
+                className="secondary-action"
+                type="button"
+                disabled={pmSync.isPending}
+                onClick={() => { setPmSyncResult(null); pmSync.mutate(); }}
+                title="Импортировать продажи из PriceMaster"
+              >
+                {pmSync.isPending ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
+                {pmSync.isPending ? "Синк PM…" : "Синк PM"}
+              </button>
+            </span>
+            <button className="icon-action" type="button" onClick={invalidate} title="Обновить данные">
+              <RefreshCw size={16} />
             </button>
             <button
-              className="secondary-action"
-              type="button"
-              onClick={() => setInvoicesOpen(true)}
-              title="Приходные накладные"
-            >
-              <FileText size={16} /> Накладные
-            </button>
-            <button
-              className="secondary-action"
-              type="button"
-              disabled={pmSync.isPending}
-              onClick={() => { setPmSyncResult(null); pmSync.mutate(); }}
-              title="Импортировать продажи из PriceMaster автоматически"
-            >
-              {pmSync.isPending ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
-              {pmSync.isPending ? "Синк PM…" : "Синк PM"}
-            </button>
-            <button
-              className="secondary-action"
+              className="secondary-action danger cn-header-danger"
               type="button"
               disabled={pmReset.isPending}
-              onClick={() => { if (confirm("Удалить все PM-продажи и восстановить остатки?")) pmReset.mutate(); }}
+              onClick={() => { if (confirm("Удалить все продажи, импортированные из PriceMaster, и вернуть остатки? Это действие нельзя отменить.")) pmReset.mutate(); }}
               title="Удалить все операции pm_sale_* и восстановить остатки товаров"
             >
               {pmReset.isPending ? <Loader2 className="spin" size={16} /> : <RotateCcw size={16} />}
               Сброс PM
-            </button>
-            <button className="secondary-action" type="button" onClick={invalidate}>
-              <RefreshCw size={16} /> Обновить
             </button>
           </div>
         )}
@@ -769,207 +731,6 @@ export function ConsignmentPage() {
                 </div>
               </div>
             )}
-          </div>
-        </div>
-      )}
-
-      {invoicesOpen && (
-        <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) { setInvoicesOpen(false); setInvoicePmQuery(""); setInvoicePmPage(1); } }}>
-          <div className="modal-panel cn-modal-lg">
-            <div className="section-title cn-title-mb">
-              <div>
-                <span>Реализация</span>
-                <h3>Приходная накладная</h3>
-              </div>
-              <button className="icon-action" type="button" onClick={() => { setInvoicesOpen(false); setInvoicePmQuery(""); setInvoicePmPage(1); }}><X size={16} /></button>
-            </div>
-
-            {/* Новая накладная */}
-            <div className="cn-section-div">
-              <div className="settings-form-row cn-row-mb12">
-                <input
-                  placeholder="Поставщик (необязательно)"
-                  value={invoiceForm.supplierName}
-                  onChange={(e) => setInvoiceForm({ ...invoiceForm, supplierName: e.target.value })}
-                />
-                <input
-                  placeholder="Примечание к накладной"
-                  value={invoiceForm.note}
-                  onChange={(e) => setInvoiceForm({ ...invoiceForm, note: e.target.value })}
-                />
-              </div>
-
-              {/* PM-номенклатура: выбор товаров */}
-              <div className="cn-nm-panel">
-                <div className="cn-nm-head">
-                  <Search size={14} />
-                  <input
-                    placeholder="Поиск по номенклатуре PM (название или ID)"
-                    value={invoicePmQuery}
-                    onChange={(e) => { setInvoicePmQuery(e.target.value); setInvoicePmPage(1); }}
-                    className="cn-nm-search"
-                  />
-                </div>
-                <div className="cn-nm-list">
-                  {invoicePmNomenclature.isLoading && <div className="empty-state" style={{ padding: 12 }}>Загрузка номенклатуры…</div>}
-                  {(invoicePmNomenclature.data?.items || []).map((product) => {
-                    const alreadyInLines = invoiceForm.lines.some(l => l.article === `pm:${product.productId}`);
-                    return (
-                      <div
-                        key={product.productId}
-                        style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", borderBottom: "1px solid var(--border-light, #eee)", cursor: alreadyInLines ? "default" : "pointer" }}
-                        onClick={() => {
-                          if (alreadyInLines) return;
-                          setInvoiceForm(f => ({
-                            ...f,
-                            lines: [...f.lines, {
-                              name: product.name,
-                              article: `pm:${product.productId}`,
-                              quantity: "1",
-                              unitPrice: String(product.purchasePrice || ""),
-                            }],
-                          }));
-                        }}
-                      >
-                        <span className="cn-nm-id">{product.productId}</span>
-                        <span className="cn-nm-name">{product.name || "-"}</span>
-                        <span className="cn-nm-price">{money(product.purchasePrice)}</span>
-                        {alreadyInLines
-                          ? <span className="cn-nm-added">✓ добавлен</span>
-                          : <span className="cn-nm-pick"><Plus size={12} /> выбрать</span>}
-                      </div>
-                    );
-                  })}
-                  {!invoicePmNomenclature.isLoading && !(invoicePmNomenclature.data?.items || []).length && (
-                    <div className="empty-state cn-empty-p12">Ничего не найдено.</div>
-                  )}
-                </div>
-                {(invoicePmNomenclature.data?.total ?? 0) > 0 && (
-                  <div className="cn-nm-pager">
-                    <span className="muted-note">Всего: {invoicePmNomenclature.data?.total} товаров</span>
-                    <div className="row-actions">
-                      <button className="secondary-action cn-nm-pager-btn" type="button" disabled={invoicePmPage <= 1} onClick={() => setInvoicePmPage(p => p - 1)}>← Пред.</button>
-                      <span className="muted-note">стр. {invoicePmPage}</span>
-                      <button className="secondary-action cn-nm-pager-btn" type="button" disabled={!invoicePmNomenclature.data?.hasMore} onClick={() => setInvoicePmPage(p => p + 1)}>След. →</button>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Строки накладной */}
-              {invoiceForm.lines.length > 0 && (
-                <>
-                  <div className="cn-table-scroll">
-                  <table className="cn-lines-table">
-                    <thead>
-                      <tr>
-                        <th className="cn-th-left">Товар</th>
-                        <th className="cn-th-qty">Кол-во</th>
-                        <th className="cn-th-price">Цена, $</th>
-                        <th className="cn-th-del"></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {invoiceForm.lines.map((line, idx) => (
-                        <tr key={idx}>
-                          <td className="cn-td-name">
-                            <div className="cn-td-name-text">{line.name || "-"}</div>
-                            {line.article && <div className="cn-td-article">{line.article}</div>}
-                          </td>
-                          <td className="cn-td-center">
-                            <input
-                              type="number"
-                              min="1"
-                              className="cn-td-input"
-                              value={line.quantity}
-                              onChange={(e) => setInvoiceForm(f => ({ ...f, lines: f.lines.map((l, i) => i === idx ? { ...l, quantity: e.target.value } : l) }))}
-                            />
-                          </td>
-                          <td className="cn-td-center">
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              placeholder="0.00"
-                              className="cn-td-input"
-                              value={line.unitPrice}
-                              onChange={(e) => setInvoiceForm(f => ({ ...f, lines: f.lines.map((l, i) => i === idx ? { ...l, unitPrice: e.target.value } : l) }))}
-                            />
-                          </td>
-                          <td>
-                            <button
-                              className="icon-action"
-                              type="button"
-                              title="Удалить строку"
-                              onClick={() => setInvoiceForm(f => ({ ...f, lines: f.lines.filter((_, i) => i !== idx) }))}
-                            >
-                              <X size={14} />
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  </div>
-                  <div className="cn-invoice-footer">
-                    <span className="muted-note">
-                      {invoiceForm.lines.length} поз. · Итого: {money(invoiceForm.lines.reduce((s, l) => s + (Number(l.unitPrice) || 0) * (Number(l.quantity) || 0), 0))}
-                    </span>
-                    <div className="cn-invoice-actions">
-                      <label className="cn-invoice-check-label">
-                        <input
-                          type="checkbox"
-                          checked={invoiceForm.fromBalance}
-                          onChange={(e) => setInvoiceForm(f => ({ ...f, fromBalance: e.target.checked }))}
-                        />
-                        Закупка с баланса
-                      </label>
-                      <button
-                        className="secondary-action"
-                        type="button"
-                        onClick={() => setInvoiceForm(f => ({ ...f, lines: [] }))}
-                      >
-                        <Trash2 size={14} /> Очистить список
-                      </button>
-                      <button
-                        className="primary-action"
-                        type="button"
-                        disabled={createInvoice.isPending || !invoiceForm.lines.some(l => l.name.trim())}
-                        onClick={() => createInvoice.mutate()}
-                      >
-                        {createInvoice.isPending ? <Loader2 className="spin" size={14} /> : <Check size={14} />} Провести накладную
-                      </button>
-                    </div>
-                  </div>
-                </>
-              )}
-              {!invoiceForm.lines.length && (
-                <div className="empty-state">Выберите товары из списка номенклатуры выше.</div>
-              )}
-              {createInvoice.isSuccess && <div className="success-strip cn-strip-mt8">Накладная проведена. Остатки обновлены.</div>}
-              {createInvoice.isError && <div className="inline-error cn-strip-mt8">{errorMessage(createInvoice.error)}</div>}
-            </div>
-
-            {/* История накладных */}
-            <div>
-              <h4 className="cn-h4-mb">История накладных</h4>
-              {invoicesList.isLoading && <div className="empty-state">Загрузка…</div>}
-              {(invoicesList.data?.invoices || []).map((inv) => (
-                <div key={inv.id} className="cn-inv-row">
-                  <div className="cn-inv-head">
-                    <strong className="cn-inv-num">{inv.number}</strong>
-                    <span className="muted-note">{inv.createdAt ? new Date(inv.createdAt).toLocaleDateString("ru-RU") : ""}</span>
-                  </div>
-                  {inv.supplierName && <div className="muted-note cn-inv-supplier">{inv.supplierName}</div>}
-                  <div className="cn-inv-summary">
-                    {(inv.items || []).length} поз. · {money(inv.totalAmount)}
-                  </div>
-                </div>
-              ))}
-              {!invoicesList.isLoading && !(invoicesList.data?.invoices || []).length && (
-                <div className="empty-state">Накладных пока нет.</div>
-              )}
-            </div>
           </div>
         </div>
       )}
@@ -1282,10 +1043,14 @@ export function ConsignmentPage() {
       <section className="settings-panel settings-panel-wide">
         <div className="section-title">
           <div>
-            <span>Выплаты</span>
-            <h3>Вывести деньги с балансов</h3>
+            <span>Деньги</span>
+            <h3>Выплаты и пополнения</h3>
           </div>
+          <span className="muted-note">Общий баланс: <strong>{money(s?.balance)}</strong> · профит спонсора {money(s?.sponsorProfit)} · мой {money(s?.myProfit)}</span>
         </div>
+        <div className="cn-money-grid">
+        <div className="cn-money-block">
+        <h4><Banknote size={15} /> Вывести с балансов</h4>
         <div className="settings-form-row">
           <SelectField
             ariaLabel="Тип выплаты"
@@ -1317,17 +1082,11 @@ export function ConsignmentPage() {
         </div>
         {payout.error ? <div className="inline-error">{errorMessage(payout.error)}</div> : null}
         {payout.isSuccess ? <div className="success-strip">Выплата записана.</div> : null}
-      </section>
-
-      <section className="settings-panel settings-panel-wide">
-        <div className="section-title">
-          <div>
-            <span>Пополнение</span>
-            <h3>Пополнить баланс спонсора</h3>
-          </div>
         </div>
+        <div className="cn-money-block">
+        <h4><HandCoins size={15} /> Пополнить баланс спонсора</h4>
         <span className="muted-note">
-          Довнесение денег на общий баланс — например, компенсация за испорченный товар в поставке. Текущий баланс: {money(s?.balance)}.
+          Довнесение денег на общий баланс — например, компенсация за испорченный товар в поставке.
         </span>
         <div className="settings-form-row">
           <input type="number" min="0" step="0.01" placeholder="Сумма, $" value={topupForm.amount} onChange={(event) => setTopupForm({ ...topupForm, amount: event.target.value })} />
@@ -1343,6 +1102,8 @@ export function ConsignmentPage() {
         </div>
         {topup.error ? <div className="inline-error">{errorMessage(topup.error)}</div> : null}
         {topup.isSuccess ? <div className="success-strip">Пополнение записано — баланс обновлён.</div> : null}
+        </div>
+        </div>
       </section>
 
       <button className="consignment-operations-link" type="button" onClick={openOperations}>
