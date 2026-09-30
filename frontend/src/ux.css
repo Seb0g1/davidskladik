@@ -1559,3 +1559,8 @@ body:has(.bulk-action-bar) .toast-stack { bottom: 88px; }
   .app-content .dashboard-metrics .stat-card .stat-trend { display: none; }
 }
 @media (max-width: 760px) { .app-content .statistics-table .table-head { display: none; } }
+/* Телефон: вкладки страниц переносятся на новую строку — ни одна не уезжает за край (раньше «Балансы» были скрыты) */
+@media (max-width: 760px) {
+  .app-content .page-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; overflow: visible; }
+  .app-content .page-tab-btn { justify-content: center; min-width: 0; height: 38px; padding: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}
