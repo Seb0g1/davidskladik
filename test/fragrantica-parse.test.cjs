@@ -13,7 +13,7 @@ const zlib = require("zlib");
 const source = fs.readFileSync(path.join(__dirname, "..", "server", "parts", "02a-fragrantica-catalog-parse.js"), "utf8");
 const ctx = vm.createContext({});
 vm.runInContext(`${source}
-this.api = { parseFragranticaDesignersIndex, parseFragranticaBrandPage, parseFragranticaPerfumePage, fragPerfumeIdFromUrl, fragGenderFromText, fragranticaNoteIconLarge };`, ctx);
+this.api = { parseFragranticaBrandInfo, parseFragranticaDesignersIndex, parseFragranticaBrandPage, parseFragranticaPerfumePage, fragPerfumeIdFromUrl, fragGenderFromText, fragranticaNoteIconLarge };`, ctx);
 const frag = ctx.api;
 const fixture = (name) => zlib.gunzipSync(fs.readFileSync(path.join(__dirname, "fixtures", "fragrantica", name))).toString("utf8");
 const plain = (value) => JSON.parse(JSON.stringify(value));
@@ -82,4 +82,9 @@ test("helpers", () => {
   assert.equal(frag.fragPerfumeIdFromUrl("https://www.fragrantica.ru/perfume/Dior/Sauvage-31861.html?x=1"), 31861);
   assert.equal(frag.fragGenderFromText("для мужчин и женщин"), "unisex");
   assert.equal(frag.fragranticaNoteIconLarge("https://fimgs.net/mdimg/sastojci/t.75.jpg"), "https://fimgs.net/mdimg/sastojci/o.75.jpg");
+});
+
+test("brand info: country and licence owner from the brand page", () => {
+  assert.deepEqual(plain(frag.parseFragranticaBrandInfo(fixture("brand-dior.html.gz"))), { country: "France", owner: "LVMH" });
+  assert.deepEqual(plain(frag.parseFragranticaBrandInfo("<div>нет данных</div>")), { country: "", owner: "" });
 });

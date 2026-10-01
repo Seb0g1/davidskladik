@@ -198,3 +198,12 @@ function parseFragranticaPerfumePage(html, { url = "" } = {}) {
 function fragranticaNoteIconLarge(icon) {
   return String(icon || "").replace(/\/sastojci\/t\.(\d+)\./, "/sastojci/o.$1.");
 }
+
+// Карточка бренда: «Страна: France», «Владелец лицензии: LVMH» — страна идёт в «Страну-изготовителя».
+function parseFragranticaBrandInfo(html) {
+  const source = String(html || "");
+  const country = fragText((source.match(/Страна:\s*<a[^>]*href="\/country\/[^"]*"[^>]*>([\s\S]*?)<\/a>/) || [])[1]);
+  const countrySlug = (source.match(/Страна:\s*<a[^>]*href="\/country\/([^".]+)\.html"/) || [])[1] || "";
+  const owner = fragText((source.match(/Владелец(?: лицензии)?:\s*(?:<a[^>]*>)?([^<]{2,80})/) || [])[1]);
+  return { country: country || countrySlug.replace(/-/g, " "), owner };
+}

@@ -177,6 +177,68 @@
   .fr-link-price { grid-column: 2; justify-items: start; }
 }
 
+/* Шапка, НДС, автозаполнение, шаблоны габаритов */
+.fr-head-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 14px; justify-content: flex-end; }
+.fr-vat { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 0; }
+.fr-autofill { display: flex; gap: 10px; align-items: flex-start; padding: 11px 14px; margin: 4px 0 10px; border-radius: 12px; background: rgba(var(--accent-rgb), .09); border: 1px solid rgba(var(--accent-rgb), .28); font-size: 13px; line-height: 1.5; color: var(--text-soft); }
+.fr-autofill svg { flex: none; margin-top: 2px; color: var(--accent-strong); }
+.fr-settings { width: min(720px, 100%); padding-bottom: 28px; }
+.fr-settings h2 { margin: 6px 0 6px; font-size: 22px; }
+.fr-dims { display: grid; gap: 6px; margin-top: 14px; }
+.fr-dims-row { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)) 36px; gap: 8px; align-items: center; }
+.fr-dims-row.is-head span { font-size: 12px; font-weight: 600; color: var(--muted); }
+.fr-dims-row input { height: 38px; border-radius: 10px; border: 1px solid var(--line); background: var(--field-bg); color: var(--text); padding: 0 10px; font-size: 14px; width: 100%; }
+.fr-dims-row input:focus { outline: none; border-color: rgba(var(--accent-rgb), .75); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .18); }
+
+/* ── Движение ───────────────────────────────────────────────────────────── */
+@keyframes frFadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+@keyframes frFade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes frSlideIn { from { transform: translateX(48px); opacity: .4; } to { transform: none; opacity: 1; } }
+@keyframes frShimmer { from { background-position: -200% 0; } to { background-position: 200% 0; } }
+
+/* каталог: карточки появляются каскадом при загрузке страницы/фильтра */
+.fr-appear { animation: frFadeUp .5s cubic-bezier(.2, .7, .2, 1) both; animation-delay: calc(min(var(--i, 0), 24) * 26ms); }
+.fr-card { transition: border-color .18s, transform .18s, box-shadow .18s; }
+.fr-card:hover { transform: translateY(-3px); box-shadow: 0 14px 30px rgba(0, 0, 0, .28); }
+.fr-card-img img { animation: frFade .6s ease both; }
+.fr-card.is-skeleton { cursor: default; pointer-events: none; }
+.fr-card.is-skeleton .fr-card-img, .fr-card.is-skeleton i {
+  background: linear-gradient(90deg, rgba(var(--accent-rgb), .06) 25%, rgba(var(--accent-rgb), .16) 50%, rgba(var(--accent-rgb), .06) 75%);
+  background-size: 200% 100%;
+  animation: frShimmer 1.4s linear infinite;
+}
+.fr-card.is-skeleton i { display: block; height: 11px; border-radius: 6px; margin: 4px 0; }
+.fr-card.is-skeleton i:nth-child(2) { width: 80%; height: 14px; }
+.fr-card.is-skeleton i:nth-child(3) { width: 55%; }
+
+/* панель аромата и шаблоны: затемнение и выезд справа */
+.fr-drawer-overlay { animation: frFade .2s ease both; }
+.fr-drawer { animation: frSlideIn .34s cubic-bezier(.2, .8, .2, 1) both; }
+.fr-hero, .fr-pyramid, .fr-description-box, .fr-cta { animation: frFadeUp .45s cubic-bezier(.2, .7, .2, 1) both; }
+.fr-pyramid { animation-delay: 80ms; }
+.fr-description-box { animation-delay: 140ms; }
+.fr-cta { animation-delay: 190ms; }
+.fr-note { animation: frFadeUp .4s ease both; }
+.fr-spectrum.is-tall span { transform-origin: left; animation: frGrow .7s cubic-bezier(.2, .8, .2, 1) both; }
+@keyframes frGrow { from { transform: scaleX(0); } to { transform: none; } }
+
+/* форма: шаги, магазины и результаты появляются по очереди */
+.fr-form { animation: frFadeUp .4s cubic-bezier(.2, .7, .2, 1) both; }
+.fr-step, .fr-shops, .fr-links, .fr-autofill { animation: frFadeUp .45s cubic-bezier(.2, .7, .2, 1) both; }
+.fr-shop { transition: opacity .2s, border-color .2s, transform .2s; }
+.fr-shop.is-on { transform: translateY(-2px); }
+.fr-photo-frame img { animation: frFade .5s ease both; }
+.fr-link-row { transition: border-color .15s, background .15s; }
+.fr-result { animation: frFadeUp .35s ease both; }
+.fr-footer { animation: frFadeUp .4s ease both; }
+
+@media (max-width: 720px) {
+  .fr-dims-row { grid-template-columns: repeat(5, minmax(0, 1fr)) 30px; gap: 4px; }
+  .fr-dims-row input { padding: 0 6px; font-size: 13px; }
+  .fr-head-actions { justify-content: flex-start; }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .fr-card, .fr-shop { transition: none; }
+  .fr-page *, .fr-drawer-overlay, .fr-drawer, .fr-drawer * { animation: none !important; transition: none !important; }
+  .fr-card:hover, .fr-shop.is-on { transform: none; }
 }

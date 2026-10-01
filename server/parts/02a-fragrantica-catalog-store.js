@@ -51,6 +51,7 @@ async function ensureFragranticaTables() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`);
+  await prisma.$executeRawUnsafe(`ALTER TABLE fragrantica_brands ADD COLUMN IF NOT EXISTS country TEXT, ADD COLUMN IF NOT EXISTS owner TEXT`);
   await prisma.$executeRawUnsafe(`ALTER TABLE fragrantica_perfumes ADD COLUMN IF NOT EXISTS pm_rows INTEGER, ADD COLUMN IF NOT EXISTS pm_min_usd NUMERIC, ADD COLUMN IF NOT EXISTS pm_volumes JSONB, ADD COLUMN IF NOT EXISTS pm_checked_at TIMESTAMPTZ`);
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS fragrantica_perfumes_pm_idx ON fragrantica_perfumes (pm_rows DESC NULLS LAST) WHERE pm_rows > 0`);
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS fragrantica_perfumes_brand_idx ON fragrantica_perfumes (brand_slug)`);
@@ -103,6 +104,29 @@ async function requireFragranticaTables() {
 
 function fragranticaSearchText(...parts) {
   return parts.join(" ").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+async function saveFragranticaBrandInfo(slug, info = {}) {
+  const prisma = await requireFragranticaTables();
+  await prisma.$executeRawUnsafe(
+    `UPDATE fragrantica_brands SET country = COALESCE(NULLIF($2, ''), country), owner = COALESCE(NULLIF($3, ''), owner) WHERE slug = $1`,
+    slug,
+    cleanText(info.country),
+    cleanText(info.owner),
+  );
+}
+
+// Страна и владелец бренда (страница бренда Фрагрантики); нет в базе — загрузим один раз.
+async function fragranticaBrandInfo(brandSlug) {
+  const slug = cleanText(brandSlug);
+  if (!slug) return { country: "", owner: "" };
+  const prisma = await requireFragranticaTables();
+  const rows = await prisma.$queryRawUnsafe(`SELECT url, country, owner FROM fragrantica_brands WHERE slug = $1`, slug);
+  if (rows[0]?.country) return { country: rows[0].country, owner: rows[0].owner || "" };
+  const url = rows[0]?.url || `https://www.fragrantica.ru/designers/${slug}.html`;
+  const info = parseFragranticaBrandInfo(await fetchFragranticaHtml(url));
+  if (rows[0]) await saveFragranticaBrandInfo(slug, info);
+  return info;
 }
 
 async function fragranticaManagedOfferIds() {

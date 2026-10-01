@@ -64,6 +64,7 @@ async function fragranticaCrawlStepBrand(prisma) {
     const html = await fetchFragranticaHtml(brand.url);
     const perfumes = parseFragranticaBrandPage(html, { brandSlug: brand.slug });
     await upsertFragranticaListedPerfumes(perfumes);
+    await saveFragranticaBrandInfo(brand.slug, parseFragranticaBrandInfo(html));
     await prisma.$executeRawUnsafe(
       `UPDATE fragrantica_brands SET crawled_at = now(), error = NULL, perfume_count = COALESCE(NULLIF($2, 0), perfume_count) WHERE slug = $1`,
       brand.slug,

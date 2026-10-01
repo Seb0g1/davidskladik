@@ -211,3 +211,72 @@ test("PriceMaster availability: real rows match the model, clones/flankers/teste
   assert.deepEqual(coco, { count: 1, minUsd: 167, volumes: [100] });
   assert.equal(ctx.pm.matchFragranticaPmIndex(index, { brand: "Creed", name: "Aventus" }).count, 0);
 });
+
+test("full card: VAT per cabinet, country, producer, weights, packaging, units, shelf life 900", () => {
+  vm.runInContext("this.x = { fragranticaVatForClientId, fragranticaCountryRu, fragOzonNetWeight, buildFragranticaYandexParameters };", ctx);
+  assert.equal(ctx.x.fragranticaVatForClientId("1304220"), "0.05");
+  assert.equal(ctx.x.fragranticaVatForClientId("2533393"), "0");
+  assert.equal(ctx.x.fragranticaVatForClientId("2533393", { "2533393": "0.05" }), "0.05");
+  assert.equal(ctx.x.fragranticaCountryRu("France"), "Франция");
+  assert.equal(ctx.x.fragranticaCountryRu("United-Arab-Emirates"), "ОАЭ");
+  const prefill = b.buildFragranticaOzonPrefill({
+    perfume: { brand: "Guerlain", name: "L'Heure Bleue" }, typeKey: "edp", volume: 50, offerId: "FR1-50",
+    lookups: { country: { id: 90304, value: "Франция" } },
+  });
+  const byId = Object.fromEntries(prefill.attributes.map((a) => [a.id, a.values]));
+  assert.equal(byId[4389][0].dictionary_value_id, 90304);
+  assert.equal(byId[23487][0].value, "Guerlain");
+  assert.equal(byId[4383][0].value, "200");
+  assert.equal(byId[8044][0].value, "200");
+  assert.equal(byId[4386][0].dictionary_value_id, 85921);
+  assert.equal(byId[8962][0].value, "1");
+  assert.equal(byId[11650][0].value, "1");
+  assert.equal(byId[22270][0].dictionary_value_id, 971417785);
+  assert.equal(byId[8205][0].value, "900");
+  const tester = b.buildFragranticaOzonPrefill({ perfume: { brand: "A", name: "B" }, typeKey: "edp", volume: 100, tester: true, offerId: "FR1-100T" });
+  assert.equal(Object.fromEntries(tester.attributes.map((a) => [a.id, a.values]))[4386][0].dictionary_value_id, 115933094);
+});
+
+test("Market parameters from the real «Парфюмерия» category (15927546)", () => {
+  const category = [
+    { id: 21194330, name: "Тип", values: [{ id: 22843950, value: "парфюмерная вода" }, { id: 22844210, value: "туалетная вода" }] },
+    { id: 14805991, name: "Пол", values: [{ id: 14805993, value: "женский" }, { id: 14805992, value: "мужской" }, { id: 14805994, value: "унисекс" }] },
+    { id: 37901030, name: "Семейство", values: [{ id: 38324286, value: "восточные" }, { id: 38324293, value: "восточные цветочные" }, { id: 38324264, value: "древесные" }, { id: 38324299, value: "восточные фужерные" }, { id: 1, value: "фужерные" }, { id: 2, value: "цветочные" }] },
+    { id: 27144551, name: "Год", values: [{ id: 5, value: "2015" }] },
+    { id: 15927566, name: "Верхние ноты" }, { id: 15927560, name: "Средние ноты" }, { id: 15927641, name: "Базовые ноты" },
+    { id: 23674510, name: "Вес" }, { id: 33663230, name: "Количество упаковок в товаре" }, { id: 14805583, name: "Единиц в одной упаковке" },
+    { id: 53763303, name: "Тестер" },
+  ];
+  const params = plain(ctx.x.buildFragranticaYandexParameters(category, {
+    typeLabel: "Парфюмерная вода", gender: "мужской", family: "фужерные", accords: ["древесный", "амбровый"], year: 2015,
+    topNotes: ["Бергамот", "Перец"], middleNotes: ["Лаванда"], baseNotes: ["Кедр"], netWeight: 300, tester: false,
+  }));
+  const byId = Object.fromEntries(params.map((p) => [p.parameterId, p]));
+  assert.equal(byId[21194330].valueId, 22843950);
+  assert.equal(byId[14805991].valueId, 14805992);
+  assert.deepEqual(params.filter((p) => p.parameterId === 37901030).map((p) => p.value), ["фужерные", "древесные"]);
+  assert.equal(byId[27144551].valueId, 5);
+  assert.equal(byId[15927566].value, "Бергамот, Перец");
+  assert.equal(byId[23674510].value, "300");
+  assert.equal(byId[33663230].value, "1");
+  assert.equal(byId[14805583].value, "1");
+  assert.equal(byId[53763303].value, "false");
+  // nothing known → nothing invented
+  const empty = plain(ctx.x.buildFragranticaYandexParameters(category, {}));
+  assert.deepEqual(empty.map((p) => p.parameterId), [33663230, 14805583, 53763303]);
+});
+
+test("dimension templates by volume: exact, next bigger, biggest; built-in table when empty", () => {
+  vm.runInContext("this.d = { fragOzonDimensions, normalizeFragranticaDimsTemplates };", ctx);
+  const rows = [
+    { volume: 100, depth: 160, width: 130, height: 120, weight: 450 },
+    { volume: "50", depth: "140", width: 120, height: 110, weight: 300 },
+    { volume: 10, depth: 0, width: 1, height: 1, weight: 1 },
+  ];
+  assert.equal(ctx.d.normalizeFragranticaDimsTemplates(rows).length, 2);
+  assert.deepEqual(plain(ctx.d.fragOzonDimensions(50, rows)), { depth: 140, width: 120, height: 110, weight: 300 });
+  assert.deepEqual(plain(ctx.d.fragOzonDimensions(30, rows)), { depth: 140, width: 120, height: 110, weight: 300 });
+  assert.deepEqual(plain(ctx.d.fragOzonDimensions(75, rows)), { depth: 160, width: 130, height: 120, weight: 450 });
+  assert.deepEqual(plain(ctx.d.fragOzonDimensions(200, rows)), { depth: 160, width: 130, height: 120, weight: 450 });
+  assert.equal(ctx.d.fragOzonDimensions(60, []).weight, 350);
+});

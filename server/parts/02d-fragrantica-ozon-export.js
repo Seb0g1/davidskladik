@@ -192,15 +192,21 @@ app.get("/api/fragrantica/ozon/form", requireAdmin, async (request, response, ne
     const volume = fragFormatVolume(request.query.volume) || "";
     const tester = request.query.tester === "1" || request.query.tester === "true";
 
-    const [categoryAttrs, brand, genderDict, classificationDict, tnved] = await Promise.all([
+    const brandInfo = await fragranticaBrandInfo(perfume.brandSlug).catch(() => ({ country: "", owner: "" }));
+    const countryRu = fragranticaCountryRu(brandInfo.country);
+    const [categoryAttrs, brand, genderDict, classificationDict, tnved, countryValues] = await Promise.all([
       ozonGetCategoryAttributes(account, FRAG_OZON_CATEGORY_ID, type.typeId),
       fragranticaFindBrand(account, type.typeId, perfume.brand),
       fragranticaDictValues(account, type.typeId, FRAG_OZON_ATTR.gender).catch(() => []),
       fragranticaDictValues(account, type.typeId, FRAG_OZON_ATTR.classification).catch(() => []),
       fragranticaFindTnved(account, type.typeId, volume),
+      countryRu ? fragranticaSearchDict(account, type.typeId, FRAG_OZON_ATTR.country, countryRu, 10).catch(() => []) : Promise.resolve([]),
     ]);
+    const country = countryValues.find((v) => v.value.toLowerCase() === countryRu.toLowerCase()) || null;
     const offerId = buildFragranticaOfferId({ perfumeId, volume, tester });
+    const dimsTemplates = (await readFragranticaState("settings").catch(() => ({}))).dimsTemplates || [];
     const prefill = buildFragranticaOzonPrefill({
+      dimsTemplates,
       perfume,
       typeKey,
       volume,
@@ -212,6 +218,8 @@ app.get("/api/fragrantica/ozon/form", requireAdmin, async (request, response, ne
         gender: fragGenderValues(perfume.gender, genderDict),
         classification: matchFragranticaClassification(perfume, classificationDict),
         tnved,
+        country,
+        producer: perfume.brand,
       },
     });
     const values = Object.fromEntries(prefill.attributes.map((a) => [a.id, a.values]));
@@ -239,6 +247,10 @@ app.get("/api/fragrantica/ozon/form", requireAdmin, async (request, response, ne
       offerId,
       name: prefill.name,
       vat: FRAG_OZON_DEFAULTS.vat,
+      vatByTarget: Object.fromEntries(fragranticaTargets().map((t) => [t.key, t.kind === "ozon"
+        ? fragranticaVatForClientId(cleanText(getOzonAccounts().find((a) => cleanText(a.id) === t.id)?.clientId), fragranticaEnvMap("FRAGRANTICA_VAT_BY_ACCOUNT"))
+        : "0.05"])),
+      country: brandInfo.country ? { source: brandInfo.country, ozon: country?.value || null } : null,
       dims: prefill.dims,
       attributes,
       brandMatched: Boolean(brand.match),
@@ -284,6 +296,27 @@ app.post("/api/fragrantica/ozon/describe", requireAdmin, async (request, respons
       seoKeywords: (Array.isArray(data.seoKeywords) ? data.seoKeywords : []).map((b) => cleanText(b)).filter(Boolean).slice(0, 12),
       model: cleanText(completion?.model),
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Настройки страницы «Фрагрантика»: шаблоны габаритов по объёму.
+app.get("/api/fragrantica/settings", requireAdmin, async (_request, response, next) => {
+  try {
+    const settings = await readFragranticaState("settings");
+    response.json({ ok: true, dimsTemplates: normalizeFragranticaDimsTemplates(settings.dimsTemplates) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/fragrantica/settings", requireAdmin, async (request, response, next) => {
+  try {
+    const dimsTemplates = normalizeFragranticaDimsTemplates(request.body?.dimsTemplates);
+    await writeFragranticaState("settings", { dimsTemplates });
+    await appendAudit(request, "fragrantica.settings.update", { entityType: "fragrantica_settings", newValue: { dimsTemplates } });
+    response.json({ ok: true, dimsTemplates });
   } catch (error) {
     next(error);
   }
@@ -523,6 +556,7 @@ function fragranticaSyntheticOzonProduct(row) {
       pictures: item.yandexPictures || [],
       description: attr(FRAG_OZON_ATTR.annotation),
       price: Number(item.price) || undefined,
+      extra: item.yandexExtra || {},
     },
   };
 }
@@ -540,11 +574,12 @@ async function submitFragranticaYandexExport(row) {
     }
     const result = await exportOzonProductsToYandex([product], [shop], { reason: "fragrantica_export" });
     if (result.sentOfferIds.has(cleanText(row.offer_id).toLowerCase())) {
+      const vat = await sendFragranticaYandexVatPrice(shop, row.offer_id, row.item?.price);
       return updateFragranticaExport(row.id, {
         status: "imported",
         attempts,
         error: null,
-        result: { ...(row.result || {}), market: "sent", links: Array.isArray(row.links) && row.links.length ? "pending" : "none" },
+        result: { ...(row.result || {}), market: "sent", ...vat, links: Array.isArray(row.links) && row.links.length ? "pending" : "none" },
       });
     }
     const failure = (result.results || []).find((r) => !r.ok);
@@ -552,6 +587,32 @@ async function submitFragranticaYandexExport(row) {
     return updateFragranticaExport(row.id, { status: "failed", attempts, error: `Маркет: ${message}`.slice(0, 2000) });
   } catch (error) {
     return updateFragranticaExport(row.id, { status: "failed", attempts, error: `Маркет: ${error?.message || error}`.slice(0, 2000) });
+  }
+}
+
+const fragranticaYandexParamsCache = new Map();
+async function fragranticaYandexCategoryParams(shop, categoryId) {
+  const key = `${shop.businessId}:${categoryId}`;
+  const cached = fragranticaYandexParamsCache.get(key);
+  if (cached && Date.now() - cached.at < 12 * 3_600_000) return cached.params;
+  const data = await yandexRequest(shop, "POST", `/v2/category/${Number(categoryId)}/parameters`, {});
+  const params = data?.result?.parameters || [];
+  fragranticaYandexParamsCache.set(key, { at: Date.now(), params });
+  return params;
+}
+
+// Код НДС Маркета (VatType): 10 — 5% УСН. FRAGRANTICA_YANDEX_VAT переопределяет.
+const fragranticaYandexVat = Number(process.env.FRAGRANTICA_YANDEX_VAT || 10) || 10;
+
+async function sendFragranticaYandexVatPrice(shop, offerId, price) {
+  if (!shop?.campaignId || !(Number(price) > 0)) return { vat: "skipped" };
+  try {
+    await yandexRequest(shop, "POST", `/v2/campaigns/${shop.campaignId}/offer-prices/updates`, {
+      offers: [{ offerId, price: { value: Math.round(Number(price)), currencyId: "RUR", vat: fragranticaYandexVat } }],
+    });
+    return { vat: String(fragranticaYandexVat) };
+  } catch (error) {
+    return { vat: "failed", vatError: cleanText(error?.message).slice(0, 300) };
   }
 }
 
@@ -590,7 +651,7 @@ async function refreshFragranticaExport(row) {
     const item = (data?.result?.items || []).find((i) => i.offer_id === row.offer_id) || data?.result?.items?.[0];
     if (!item) return row;
     const errors = (item.errors || []).filter((e) => cleanText(e.level).toLowerCase() !== "warning");
-    if (item.status === "imported" || (item.product_id && !errors.length && item.status !== "failed" && item.status !== "pending")) {
+    if (item.status === "imported" || (item.product_id && !errors.length && item.status !== "failed")) {
       const updated = await updateFragranticaExport(row.id, {
         status: "imported",
         product_id: item.product_id || null,
@@ -656,34 +717,40 @@ app.post("/api/fragrantica/ozon/export", requireAdmin, async (request, response,
       return response.status(400).json({ error: `Заполните: ${missing.join(", ")}`, code: "fragrantica_export_missing", missing });
     }
 
-    // Один свободный артикул для всех выбранных магазинов (наша история, кабинеты Ozon, склад Маркета).
+    // Один артикул на все магазины (FR<id>-<мл>[T]). Повторная отправка того же аромата не плодит
+    // дубли: карточка с этим артикулом обновляется (Ozon /v3/product/import и Маркет обновляют по offer_id).
     const prisma = await requireFragranticaTables();
-    const base = baseItem.offer_id;
-    const candidates = [base, ...Array.from({ length: 9 }, (_, i) => `${base}-${i + 2}`)];
-    const ourRows = await prisma.$queryRawUnsafe(
-      `SELECT offer_id, status FROM fragrantica_exports WHERE offer_id = ANY($1::text[])`,
-      candidates,
-    );
-    // A failed attempt keeps its offer id: sending again updates that (possibly half-created) card.
-    const retryable = new Set(ourRows.filter((r) => r.status === "failed").map((r) => r.offer_id));
-    const taken = new Set(ourRows.map((r) => r.offer_id));
-    for (const target of wanted.filter((t) => t.kind === "ozon")) {
-      const existing = await ozonRequest("/v3/product/info/list", { offer_id: candidates }, fragranticaResolveOzonAccount(target.id)).catch(() => ({ items: [] }));
-      for (const it of existing.items || []) if (!retryable.has(it.offer_id)) taken.add(it.offer_id);
-    }
-    if (wanted.some((t) => t.kind === "yandex")) {
-      const yandexRows = await prisma.warehouseProduct.findMany({ where: { marketplace: "yandex", offerId: { in: candidates } }, select: { offerId: true } }).catch(() => []);
-      for (const r of yandexRows) if (!retryable.has(r.offerId)) taken.add(r.offerId);
-    }
-    for (const offer of retryable) if (!ourRows.some((r) => r.offer_id === offer && r.status !== "failed")) taken.delete(offer);
-    const offerId = fragranticaUniqueOfferId(base, taken);
-    if (retryable.has(offerId)) {
-      await prisma.$executeRawUnsafe(`DELETE FROM fragrantica_exports WHERE offer_id = $1 AND status = 'failed'`, offerId);
-    }
+    const offerId = baseItem.offer_id;
     for (const attr of baseItem.attributes) {
       if (attr.id === FRAG_OZON_ATTR.sellerCode) attr.values = [{ value: offerId }];
     }
-    baseItem.offer_id = offerId;
+
+    // Маркет: характеристики категории, ТН ВЭД + ОКПД2, срок годности — по фактам Фрагрантики
+    let yandexExtra = null;
+    if (wanted.some((t) => t.kind === "yandex")) {
+      const shop = fragranticaYandexShops().find((x) => wanted.some((t) => t.kind === "yandex" && t.id === cleanText(x.id)));
+      const category = resolveYandexCategoryForOzonProduct({ typeId: type.typeId, name: baseItem.name });
+      const params = category.categoryId && shop ? await fragranticaYandexCategoryParams(shop, category.categoryId).catch(() => []) : [];
+      const facts = fragranticaFactsFromDetail(perfume);
+      const tester = Boolean(body.tester);
+      yandexExtra = {
+        commodityCodes: [{ code: fragranticaTnvedCode(type.typeId), type: "CUSTOMS_COMMODITY_CODE" }, { code: FRAG_OZON_DEFAULTS.okpd2, type: "OKPD2_CODE" }],
+        shelfLife: { timePeriod: Number(FRAG_OZON_DEFAULTS.shelfLifeDays), timeUnit: "DAY" },
+        parameterValues: buildFragranticaYandexParameters(params, {
+          typeLabel: type.nameLabel.toLowerCase(),
+          gender: { male: "мужской", female: "женский", unisex: "унисекс" }[perfume.gender] || "",
+          family: facts.family,
+          accords: facts.accords,
+          year: facts.year,
+          topNotes: facts.topNotes,
+          middleNotes: facts.middleNotes,
+          baseNotes: facts.baseNotes,
+          netWeight: fragOzonNetWeight(fragFormatVolume((baseItem.attributes.find((a) => a.id === FRAG_OZON_ATTR.volume)?.values || [])[0]?.value)),
+          tester,
+        }),
+      };
+    }
+    const vatOverrides = fragranticaEnvMap("FRAGRANTICA_VAT_BY_ACCOUNT");
 
     const volumeAttr = baseItem.attributes.find((a) => a.id === FRAG_OZON_ATTR.volume);
     const links = JSON.stringify((Array.isArray(body.links) ? body.links : []).slice(0, 10).map(fragranticaLinkDraft));
@@ -694,12 +761,18 @@ app.post("/api/fragrantica/ozon/export", requireAdmin, async (request, response,
       const ozonAttributes = baseItem.attributes.map((a) => (a.id === FRAG_OZON_ATTR.annotation
         ? { ...a, values: a.values.map((v) => ({ ...v, value: formatDescriptionForMarketplace(v.value, "ozon") })) }
         : a));
+      const ozonAccount = target.kind === "ozon" ? getOzonAccounts().find((a) => cleanText(a.id) === target.id) : null;
       const item = target.kind === "ozon"
-        ? { ...baseItem, attributes: ozonAttributes, primary_image: bottle, images: notes ? [notes] : [] }
-        : { ...baseItem, price: String(yandexPrice), yandexPictures: [bottle, notes].filter(Boolean) };
+        ? { ...baseItem, vat: fragranticaVatForClientId(cleanText(ozonAccount?.clientId), vatOverrides), attributes: ozonAttributes, primary_image: bottle, images: notes ? [notes] : [] }
+        : { ...baseItem, price: String(yandexPrice), yandexPictures: [bottle, notes].filter(Boolean), yandexExtra };
+      // the same perfume+volume already sent to this shop → update that row (and that card), no duplicate
       const inserted = await prisma.$queryRawUnsafe(
         `INSERT INTO fragrantica_exports (perfume_id, marketplace, account_id, account_name, offer_id, volume_ml, tester, status, item, created_by, links)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'new', $8::jsonb, $9, $10::jsonb) RETURNING *`,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'new', $8::jsonb, $9, $10::jsonb)
+         ON CONFLICT (account_id, offer_id) DO UPDATE SET perfume_id = EXCLUDED.perfume_id, account_name = EXCLUDED.account_name,
+           volume_ml = EXCLUDED.volume_ml, tester = EXCLUDED.tester, status = 'new', item = EXCLUDED.item, links = EXCLUDED.links,
+           error = NULL, attempts = 0, next_attempt_at = NULL, task_id = NULL, updated_at = now()
+         RETURNING *`,
         perfumeId,
         target.kind,
         target.id,

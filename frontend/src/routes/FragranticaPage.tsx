@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ExternalLink, Loader2, Pause, Play, RefreshCw, Search, Send, Sparkles, X } from "lucide-react";
+import { Check, ExternalLink, Loader2, Pause, Play, Plus, RefreshCw, Ruler, Search, Send, Sparkles, Trash2, X } from "lucide-react";
 import { z } from "zod";
 import { fetchJson, mutationBody } from "../api";
 import { PageHeader } from "../components/PageHeader";
@@ -57,7 +57,10 @@ type OzonForm = {
   brandCandidates: Array<{ id: number; value: string }>;
   sourceImage: string;
   exports: ExportRow[];
+  vatByTarget?: Record<string, string>;
+  country?: { source: string; ozon: string | null } | null;
 };
+type DimsRow = { volume: number | string; depth: number | string; width: number | string; height: number | string; weight: number | string };
 type LinkRow = {
   id: string; rowId: string; article: string; name: string; supplierName: string; partnerId: string;
   price: number; priceCurrency: string; volumeOk: boolean; nameOk: boolean; recommended: boolean; issues?: string[];
@@ -141,6 +144,7 @@ export function FragranticaPage() {
   const [pm, setPm] = useState("");
   const [importUrl, setImportUrl] = useState("");
   const [openId, setOpenId] = useState<number | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const queryClient = useQueryClient();
   const debouncedQ = useDebounced(q, 350);
 
@@ -196,7 +200,11 @@ export function FragranticaPage() {
         title="Фрагрантика"
         subtitle="Каталог ароматов fragrantica.ru: выберите аромат и создайте карточку в своих магазинах"
         action={
-          stats ? (
+          <div className="fr-head-actions">
+          <button className="secondary-action compact" type="button" onClick={() => setSettingsOpen(true)}>
+            <Ruler size={14} /> Шаблоны габаритов
+          </button>
+          {stats ? (
             <div className="fr-status">
               <div className="fr-status-line">
                 <i className={`fr-dot${crawler.data?.paused ? " is-paused" : blocked ? " is-blocked" : ""}`} />
@@ -218,9 +226,11 @@ export function FragranticaPage() {
               </button>
               {blocked ? <span className="fr-hint">Фрагрантика не отвечает, повтор {formatDateTime(crawler.data?.status?.blockedUntil)}</span> : null}
             </div>
-          ) : null
+          ) : null}
+          </div>
         }
       />
+      {settingsOpen ? <DimsTemplatesPanel onClose={() => setSettingsOpen(false)} /> : null}
 
       <div className="fr-filters">
         <label className="fr-search">
@@ -274,8 +284,9 @@ export function FragranticaPage() {
       {list.isError ? <div className="inline-error">{errorMessage(list.error)}</div> : null}
 
       <div className="fr-grid">
-        {items.map((item) => (
-          <button key={item.id} type="button" className={`fr-card${item.exported.length ? " is-added" : ""}`} onClick={() => setOpenId(item.id)}>
+        {list.isLoading ? Array.from({ length: 12 }, (_, i) => <div key={`sk-${i}`} className="fr-card is-skeleton" aria-hidden="true"><div className="fr-card-img" /><div className="fr-card-body"><i /><i /><i /></div></div>) : null}
+        {items.map((item, index) => (
+          <button key={item.id} type="button" className={`fr-card fr-appear${item.exported.length ? " is-added" : ""}`} style={{ ["--i" as string]: index % 60 }} onClick={() => setOpenId(item.id)}>
             <div className="fr-card-img">
               <img src={item.thumb} alt="" loading="lazy" />
             </div>
@@ -595,7 +606,6 @@ function CardStep({ perfume, typeKey, volume, tester, onBack }: {
   const [price, setPrice] = useState("");
   const [oldPrice, setOldPrice] = useState("");
   const [yandexPrice, setYandexPrice] = useState("");
-  const [vat, setVat] = useState("0.05");
   const [description, setDescription] = useState("");
   const [dims, setDims] = useState({ depth: "", width: "", height: "", weight: "" });
   const [values, setValues] = useState<Record<number, DictValue[]>>({});
@@ -607,7 +617,6 @@ function CardStep({ perfume, typeKey, volume, tester, onBack }: {
     if (!data) return;
     setName(data.name);
     setOfferId(data.offerId);
-    setVat(data.vat);
     setDims({ depth: String(data.dims.depth), width: String(data.dims.width), height: String(data.dims.height), weight: String(data.dims.weight) });
     setValues(Object.fromEntries(data.attributes.map((a) => [a.id, a.values])));
     setDescription(data.attributes.find((a) => a.id === 4191)?.values?.[0]?.value || "");
@@ -703,7 +712,7 @@ function CardStep({ perfume, typeKey, volume, tester, onBack }: {
         typeId: d.typeId,
         typeKey: d.typeKey,
         targets: chosen.map((t) => ({ key: t.key, notes: approved[t.key] ? imageResult?.notes?.[t.style] || null : null })),
-        offerId, name, price, oldPrice, yandexPrice, vat,
+        offerId, name, price, oldPrice, yandexPrice,
         depth: dims.depth, width: dims.width, height: dims.height, weight: dims.weight, tester,
         images: [mainImage],
         attributes,
@@ -828,9 +837,13 @@ function CardStep({ perfume, typeKey, volume, tester, onBack }: {
         ) : null}
         <div className="fr-field">
           <span>НДС</span>
-          <select value={vat} onChange={(e) => setVat(e.target.value)}>
-            {VAT_OPTIONS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
-          </select>
+          <div className="fr-vat">
+            {chosen.map((t) => {
+              const v = data.vatByTarget?.[t.key];
+              return <span key={t.key} className="fr-chip">{t.label}: {v === "0" ? "без НДС" : `${Math.round(Number(v || 0.05) * 100)}%`}</span>;
+            })}
+          </div>
+          <span className="fr-hint">Ставится по магазину автоматически</span>
         </div>
       </div>
       {pricePreview.data?.price ? (
@@ -881,6 +894,14 @@ function CardStep({ perfume, typeKey, volume, tester, onBack }: {
       ) : null}
 
       <div className="fr-step"><span className="fr-step-n">4</span>Характеристики Ozon</div>
+      <div className="fr-autofill">
+        <Sparkles size={14} />
+        <span>
+          Заполнено автоматически: {data.attributes.filter((a) => (values[a.id] || []).length).length} из {data.attributes.length} характеристик
+          {data.country?.ozon ? `, страна ${data.country.ozon}` : data.country?.source ? `, страна с Фрагрантики «${data.country.source}» не найдена в справочнике Ozon — выберите вручную` : ", страну бренда Фрагрантика не указала"}.
+          На Маркет уходят тип, пол, семейство, год, ноты, вес, срок годности 900 дней, ТН ВЭД и ОКПД2.
+        </span>
+      </div>
       <div className="fr-form-grid">{required.map(renderAttr)}</div>
       <button className="fr-link-button" type="button" onClick={() => setShowOptional((v) => !v)}>
         {showOptional ? "Скрыть необязательные характеристики" : `Показать необязательные характеристики (${optional.length})`}
@@ -943,4 +964,78 @@ function ExportStatus({ id }: { id: number }) {
     return <div className="fr-result is-bad">{shop}: карточку {row.offerId} не приняли. {row.error}</div>;
   }
   return <div className="fr-result is-wait"><Loader2 size={14} className="spin" /> {shop}: {STATUS_LABEL[row.status] || row.status}…</div>;
+}
+
+// ─── Шаблоны габаритов ──────────────────────────────────────────────────────
+
+const DEFAULT_DIMS: DimsRow[] = [
+  { volume: 10, depth: 150, width: 125, height: 60, weight: 50 },
+  { volume: 30, depth: 195, width: 125, height: 115, weight: 300 },
+  { volume: 50, depth: 140, width: 120, height: 110, weight: 300 },
+  { volume: 60, depth: 190, width: 120, height: 110, weight: 350 },
+  { volume: 100, depth: 200, width: 130, height: 120, weight: 450 },
+  { volume: 200, depth: 220, width: 140, height: 130, weight: 600 },
+];
+
+function DimsTemplatesPanel({ onClose }: { onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const settings = useQuery({
+    queryKey: ["fragrantica", "settings"],
+    queryFn: () => apiJson<{ dimsTemplates: DimsRow[] }>("/api/fragrantica/settings"),
+  });
+  const [rows, setRows] = useState<DimsRow[] | null>(null);
+  useEffect(() => {
+    if (settings.data && rows === null) setRows(settings.data.dimsTemplates.length ? settings.data.dimsTemplates : DEFAULT_DIMS);
+  }, [settings.data, rows]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const save = useMutation({
+    mutationFn: () => apiJson<{ dimsTemplates: DimsRow[] }>("/api/fragrantica/settings", { method: "PUT", body: JSON.stringify({ dimsTemplates: rows || [] }) }),
+    onSuccess: (res) => {
+      setRows(res.dimsTemplates);
+      queryClient.invalidateQueries({ queryKey: ["fragrantica", "settings"] });
+      queryClient.invalidateQueries({ queryKey: ["fragrantica", "ozon-form"] });
+      toast.success(`Шаблоны сохранены: ${res.dimsTemplates.length}`);
+    },
+    onError: (error) => toast.error(errorMessage(error)),
+  });
+  const update = (index: number, key: keyof DimsRow, value: string) =>
+    setRows((prev) => (prev || []).map((row, i) => (i === index ? { ...row, [key]: value.replace(/[^\d.,]/g, "") } : row)));
+  const cols: Array<[keyof DimsRow, string]> = [["volume", "Объём, мл"], ["depth", "Длина, мм"], ["width", "Ширина, мм"], ["height", "Высота, мм"], ["weight", "Вес, г"]];
+  return (
+    <div className="fr-drawer-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <aside className="fr-drawer fr-settings" role="dialog" aria-modal="true" aria-label="Шаблоны габаритов">
+        <button className="icon-action fr-drawer-close" type="button" onClick={onClose} aria-label="Закрыть"><X size={18} /></button>
+        <h2>Шаблоны габаритов</h2>
+        <p className="fr-hint">
+          Габариты коробки и вес с упаковкой подставляются в карточку по объёму: берётся строка с этим объёмом,
+          а если её нет — ближайшая большая. Их можно поправить в самой карточке перед отправкой.
+        </p>
+        {settings.isLoading ? <div className="empty-state"><Loader2 size={16} className="spin" /> Загрузка…</div> : null}
+        {rows ? (
+          <div className="fr-dims">
+            <div className="fr-dims-row is-head">{cols.map(([, label]) => <span key={label}>{label}</span>)}<span /></div>
+            {rows.map((row, index) => (
+              <div key={index} className="fr-dims-row fr-appear" style={{ ["--i" as string]: index }}>
+                {cols.map(([key, label]) => (
+                  <input key={key} aria-label={label} inputMode="decimal" value={String(row[key] ?? "")} onChange={(e) => update(index, key, e.target.value)} />
+                ))}
+                <button className="icon-action" type="button" aria-label="Удалить строку" onClick={() => setRows((prev) => (prev || []).filter((_, i) => i !== index))}><Trash2 size={15} /></button>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        <div className="fr-actions">
+          <button className="secondary-action compact" type="button" onClick={() => setRows((prev) => [...(prev || []), { volume: "", depth: "", width: "", height: "", weight: "" }])}><Plus size={14} /> Добавить объём</button>
+          <button className="secondary-action compact" type="button" onClick={() => setRows(DEFAULT_DIMS)}>Вернуть стандартные</button>
+          <button className="primary-action" type="button" disabled={save.isPending || !rows} onClick={() => save.mutate()}>
+            {save.isPending ? <Loader2 size={14} className="spin" /> : <Check size={14} />} Сохранить
+          </button>
+        </div>
+      </aside>
+    </div>
+  );
 }

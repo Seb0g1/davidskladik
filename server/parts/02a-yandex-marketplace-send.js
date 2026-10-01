@@ -47,6 +47,14 @@ function knownYandexVendorPrefix(value = "") {
   return "";
 }
 
+// Extra characteristics (e.g. from the Fragrantica page) replace generated ones with the same parameterId.
+function mergeYandexParameterValues(base = [], extra = []) {
+  const extraList = (Array.isArray(extra) ? extra : []).filter((p) => Number(p?.parameterId) > 0 && (p.valueId || String(p.value ?? "").trim() !== ""));
+  const ids = new Set(extraList.map((p) => Number(p.parameterId)));
+  const merged = [...(Array.isArray(base) ? base : []).filter((p) => !ids.has(Number(p.parameterId))), ...extraList];
+  return merged.length ? merged : undefined;
+}
+
 function buildYandexOfferMapping(product, overrides = {}) {
   const normalized = normalizeWarehouseProduct(product);
   const ozon = normalized.ozon || {};
@@ -130,7 +138,7 @@ function buildYandexOfferMapping(product, overrides = {}) {
     barcodes: barcodes.length ? barcodes : undefined,
     weightDimensions,
     manufacturerCountries: country ? [country] : undefined,
-    parameterValues: parameterValues.length ? parameterValues : undefined,
+    parameterValues: mergeYandexParameterValues(parameterValues, extra.parameterValues),
     commodityCodes: sanitizeYandexCommodityCodes(extra.commodityCodes),
     certificates: sanitizeYandexCertificates(extra.certificates),
     shelfLife: sanitizeYandexShelfLife(extra.shelfLife),

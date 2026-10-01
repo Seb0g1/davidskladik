@@ -35,15 +35,68 @@ const FRAG_OZON_ATTR = {
   sellerCode: 9024,
   weightPack: 4497,
   hashtags: 23171,
+  country: 4389,
+  producer: 23487,
+  weightNet: 4383,
+  weight: 8044,
+  packaging: 4386,
+  unitsPerItem: 8962,
+  factoryPacks: 11650,
+  releaseKind: 22270,
+  adult: 9070,
 };
 
 const FRAG_OZON_DEFAULTS = {
   vat: "0.05",
   tnvedCode: "3303001000",
-  shelfLifeDays: "1000",
+  shelfLifeDays: "900",
   hazardValueId: 970593909, // Класс 9. Прочие опасные вещества
   audienceValueId: 43241, // Взрослая
+  packagingBoxId: 85921, // Картонная коробка
+  packagingTesterId: 115933094, // Коробка (тестер в простой коробке)
+  releaseFactoryId: 971417785, // Фабричное производство
+  okpd2: "20.42.11.000", // Духи и туалетная вода
 };
+
+// НДС по кабинету (clientId Ozon): AURA — без НДС, остальные — 5% (УСН). FRAGRANTICA_VAT_BY_ACCOUNT переопределяет.
+const FRAG_DEFAULT_VAT_BY_CLIENT = { "2533393": "0" };
+
+function fragranticaVatForClientId(clientId, overrides = {}) {
+  const key = String(clientId || "").trim();
+  if (overrides[key] !== undefined) return String(overrides[key]);
+  if (FRAG_DEFAULT_VAT_BY_CLIENT[key] !== undefined) return FRAG_DEFAULT_VAT_BY_CLIENT[key];
+  return FRAG_OZON_DEFAULTS.vat;
+}
+
+// Страна бренда с Фрагрантики (англ.) → русское название, как в справочниках Ozon и Маркета.
+const FRAG_COUNTRY_RU = {
+  "france": "Франция", "italy": "Италия", "united states": "США", "usa": "США", "united kingdom": "Великобритания",
+  "spain": "Испания", "germany": "Германия", "united arab emirates": "ОАЭ", "uae": "ОАЭ", "switzerland": "Швейцария",
+  "netherlands": "Нидерланды", "belgium": "Бельгия", "sweden": "Швеция", "japan": "Япония", "south korea": "Южная Корея",
+  "russia": "Россия", "saudi arabia": "Саудовская Аравия", "kuwait": "Кувейт", "oman": "Оман", "qatar": "Катар",
+  "bahrain": "Бахрейн", "turkey": "Турция", "brazil": "Бразилия", "canada": "Канада", "australia": "Австралия",
+  "poland": "Польша", "czech republic": "Чехия", "austria": "Австрия", "denmark": "Дания", "norway": "Норвегия",
+  "finland": "Финляндия", "portugal": "Португалия", "greece": "Греция", "india": "Индия", "china": "Китай",
+  "israel": "Израиль", "lebanon": "Ливан", "monaco": "Монако", "ireland": "Ирландия", "hungary": "Венгрия",
+  "romania": "Румыния", "ukraine": "Украина", "belarus": "Беларусь", "mexico": "Мексика", "argentina": "Аргентина",
+  "singapore": "Сингапур", "thailand": "Таиланд", "indonesia": "Индонезия", "pakistan": "Пакистан", "jordan": "Иордания",
+  "egypt": "Египет", "morocco": "Марокко", "south africa": "ЮАР", "new zealand": "Новая Зеландия", "luxembourg": "Люксембург",
+};
+
+function fragranticaCountryRu(country) {
+  const key = String(country || "").trim().toLowerCase().replace(/-/g, " ");
+  return FRAG_COUNTRY_RU[key] || "";
+}
+
+// Вес флакона без коробки, г (оценка по объёму; коробка — в «Весе с упаковкой»).
+function fragOzonNetWeight(volume) {
+  const vol = Number(fragFormatVolume(volume)) || 0;
+  if (vol && vol <= 10) return 25;
+  if (vol && vol <= 35) return 120;
+  if (vol && vol <= 60) return 200;
+  if (vol && vol <= 110) return 300;
+  return 450;
+}
 
 function fragOzonTypeByKey(key) {
   return FRAG_OZON_TYPES.find((t) => t.key === key) || FRAG_OZON_TYPES[0];
@@ -98,8 +151,30 @@ function fragranticaUniqueOfferId(base, taken = new Set()) {
 }
 
 // Габариты коробки и вес по объёму (по существующим карточкам парфюмерии).
-function fragOzonDimensions(volume) {
+// Шаблоны габаритов (страница «Фрагрантика» → «Шаблоны габаритов»): строка с объёмом, равным
+// объёму товара, иначе ближайшая большая, иначе самая большая. Пусто — встроенная таблица ниже.
+function normalizeFragranticaDimsTemplates(rows = []) {
+  return (Array.isArray(rows) ? rows : [])
+    .map((r) => ({
+      volume: Number(String(r?.volume ?? "").replace(",", ".")) || 0,
+      depth: Math.round(Number(r?.depth) || 0),
+      width: Math.round(Number(r?.width) || 0),
+      height: Math.round(Number(r?.height) || 0),
+      weight: Math.round(Number(r?.weight) || 0),
+    }))
+    .filter((r) => r.volume > 0 && r.depth > 0 && r.width > 0 && r.height > 0 && r.weight > 0)
+    .sort((a, b) => a.volume - b.volume)
+    .filter((r, i, list) => i === 0 || list[i - 1].volume !== r.volume)
+    .slice(0, 100);
+}
+
+function fragOzonDimensions(volume, templates = []) {
   const vol = Number(fragFormatVolume(volume)) || 0;
+  const rows = normalizeFragranticaDimsTemplates(templates);
+  if (rows.length) {
+    const row = (vol && rows.find((r) => r.volume >= vol)) || rows[rows.length - 1];
+    return { depth: row.depth, width: row.width, height: row.height, weight: row.weight };
+  }
   if (vol && vol <= 10) return { depth: 150, width: 125, height: 60, weight: 50 };
   if (vol && vol <= 35) return { depth: 195, width: 125, height: 115, weight: 300 };
   if (vol && vol <= 60) return { depth: 190, width: 120, height: 110, weight: 350 };
@@ -186,10 +261,10 @@ function fragAttr(id, values) {
 }
 
 // Предзаполнение атрибутов. lookups: { brand, type, gender[], classification[], tnved } — найденные значения справочников.
-function buildFragranticaOzonPrefill({ perfume = {}, typeKey = "edp", volume, tester = false, offerId = "", lookups = {} } = {}) {
+function buildFragranticaOzonPrefill({ perfume = {}, typeKey = "edp", volume, tester = false, offerId = "", lookups = {}, dimsTemplates = [] } = {}) {
   const name = buildFragranticaOzonName({ perfume, typeKey, volume, tester });
   const model = String(perfume.name || "").trim();
-  const dims = fragOzonDimensions(volume);
+  const dims = fragOzonDimensions(volume, dimsTemplates);
   const attrs = [
     fragAttr(FRAG_OZON_ATTR.brand, lookups.brand ? { dictionary_value_id: lookups.brand.id, value: lookups.brand.value } : null),
     fragAttr(FRAG_OZON_ATTR.type, lookups.type ? { dictionary_value_id: lookups.type.id, value: lookups.type.value } : null),
@@ -210,6 +285,17 @@ function buildFragranticaOzonPrefill({ perfume = {}, typeKey = "edp", volume, te
     fragAttr(FRAG_OZON_ATTR.sellerCode, { value: offerId }),
     fragAttr(FRAG_OZON_ATTR.weightPack, { value: String(dims.weight) }),
     fragAttr(FRAG_OZON_ATTR.hashtags, { value: buildFragranticaHashtags({ perfume, typeKey }) }),
+    fragAttr(FRAG_OZON_ATTR.country, lookups.country ? { dictionary_value_id: lookups.country.id, value: lookups.country.value } : null),
+    fragAttr(FRAG_OZON_ATTR.producer, { value: lookups.producer || perfume.brand || "" }),
+    fragAttr(FRAG_OZON_ATTR.weightNet, { value: String(fragOzonNetWeight(volume)) }),
+    fragAttr(FRAG_OZON_ATTR.weight, { value: String(fragOzonNetWeight(volume)) }),
+    fragAttr(FRAG_OZON_ATTR.packaging, tester
+      ? { dictionary_value_id: FRAG_OZON_DEFAULTS.packagingTesterId, value: "Коробка" }
+      : { dictionary_value_id: FRAG_OZON_DEFAULTS.packagingBoxId, value: "Картонная коробка" }),
+    fragAttr(FRAG_OZON_ATTR.unitsPerItem, { value: "1" }),
+    fragAttr(FRAG_OZON_ATTR.factoryPacks, { value: "1" }),
+    fragAttr(FRAG_OZON_ATTR.releaseKind, { dictionary_value_id: FRAG_OZON_DEFAULTS.releaseFactoryId, value: "Фабричное производство" }),
+    fragAttr(FRAG_OZON_ATTR.adult, { value: "false" }),
   ].filter(Boolean);
   return { name, offerId, dims, attributes: attrs };
 }
@@ -393,6 +479,56 @@ function matchFragranticaPmIndex(index, perfume = {}) {
     for (const v of fragPmVolumes(row.name)) volumes.add(v);
   }
   return { count, minUsd, volumes: [...volumes].sort((a, b) => a - b) };
+}
+
+// ─── Маркет: характеристики категории «Парфюмерия» ───────────────────────────
+// categoryParams — ответ /v2/category/{id}/parameters (id, name, type, values). Параметры ищутся по
+// названию: id у Маркета стабильны, но так переживём и их смену. Пустые факты не передаются.
+function buildFragranticaYandexParameters(categoryParams = [], facts = {}) {
+  const byName = (re) => categoryParams.find((p) => re.test(String(p.name || "")));
+  const out = [];
+  const enumValue = (param, wanted) => {
+    const w = String(wanted || "").toLowerCase().replace(/ё/g, "е").trim();
+    if (!param || !w) return null;
+    return (param.values || []).find((v) => String(v.value || "").toLowerCase().replace(/ё/g, "е").trim() === w) || null;
+  };
+  const pushEnum = (param, wanted) => {
+    const hit = enumValue(param, wanted);
+    if (hit) out.push({ parameterId: Number(param.id), valueId: Number(hit.id), value: String(hit.value) });
+  };
+  const pushText = (param, value) => {
+    const text = String(value ?? "").trim();
+    if (param && text) out.push({ parameterId: Number(param.id), value: text.slice(0, 1000) });
+  };
+  pushEnum(byName(/^Тип$/i), facts.typeLabel);
+  pushEnum(byName(/^Пол$/i), facts.gender);
+  const family = byName(/^Семейство$/i);
+  if (family) {
+    // «фужерные» с Фрагрантики — прямое совпадение; иначе по основе слова аккордов (до 2 значений)
+    const words = [facts.family, ...(facts.accords || [])].filter(Boolean).map((w) => String(w).toLowerCase().replace(/ё/g, "е"));
+    const picked = [];
+    for (const word of words) {
+      if (picked.length >= 2) break;
+      const exact = enumValue(family, word);
+      const stem = word.split(/[^а-яa-z]+/).filter(Boolean).pop() || "";
+      const hit = exact || (stem.length >= 5 && (family.values || []).find((v) => {
+        const name = String(v.value || "").toLowerCase().replace(/ё/g, "е");
+        return !/\s/.test(name) && name.slice(0, 5) === stem.slice(0, 5);
+      }));
+      if (hit && !picked.some((p) => p.id === hit.id)) picked.push(hit);
+    }
+    for (const hit of picked) out.push({ parameterId: Number(family.id), valueId: Number(hit.id), value: String(hit.value) });
+  }
+  pushEnum(byName(/^Год$/i), facts.year ? String(facts.year) : "");
+  pushText(byName(/^Верхние ноты$/i), (facts.topNotes || []).join(", "));
+  pushText(byName(/^Средние ноты$/i), (facts.middleNotes || []).join(", "));
+  pushText(byName(/^Базовые ноты$/i), (facts.baseNotes || []).join(", "));
+  pushText(byName(/^Вес$/i), facts.netWeight ? String(facts.netWeight) : "");
+  pushText(byName(/^Количество упаковок в товаре/i), "1");
+  pushText(byName(/^Единиц в одной упаковке/i), "1");
+  const tester = byName(/^Тестер$/i);
+  if (tester) out.push({ parameterId: Number(tester.id), value: facts.tester ? "true" : "false" });
+  return out;
 }
 
 // Ближайший сброс дневного лимита Ozon (00:00 UTC = 03:00 МСК) + 5 минут запаса.
