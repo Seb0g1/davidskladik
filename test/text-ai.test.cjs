@@ -29,6 +29,11 @@ test("JSON parsing: ```json wrapper and junk around the object", () => {
   assert.deepEqual(plain(ai.extractJsonObjectFromText('```json\n{"name":"A","bulletPoints":["x"]}\n```')), { name: "A", bulletPoints: ["x"] });
   assert.deepEqual(plain(ai.extractJsonObjectFromText('Вот ответ: {"description":"Текст"} — готово')), { description: "Текст" });
   assert.deepEqual(plain(ai.extractJsonObjectFromText("не json")), {});
+  // DeepSeek web: real line breaks inside a JSON string
+  const NL = String.fromCharCode(10);
+  const rawJson = `{"description":"Абзац один.${NL}${NL}Абзац два.","name":"A"}`;
+  assert.throws(() => JSON.parse(rawJson));
+  assert.deepEqual(plain(ai.extractJsonObjectFromText(rawJson)), { description: `Абзац один.${NL}${NL}Абзац два.`, name: "A" });
 });
 
 test("paragraphs survive normalization; spaces inside a paragraph collapse", () => {

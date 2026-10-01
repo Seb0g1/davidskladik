@@ -113,16 +113,60 @@ function getOpenAiClient(aiSettings = {}) {
   return new OpenAI(options);
 }
 
+// DeepSeek (web) often puts real line breaks inside JSON strings («Bad control character in string
+// literal»): those are escaped before a second parse attempt.
+function escapeJsonControlCharsInStrings(text = "") {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (const ch of String(text)) {
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        out += ch;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        out += ch;
+        continue;
+      }
+      if (ch === "\"") inString = false;
+      else if (ch === "\n") {
+        out += "\\n";
+        continue;
+      } else if (ch === "\r") continue;
+      else if (ch === "\t") {
+        out += "\\t";
+        continue;
+      }
+      out += ch;
+      continue;
+    }
+    if (ch === "\"") inString = true;
+    out += ch;
+  }
+  return out;
+}
+
+function parseJsonLenient(text = "") {
+  try {
+    return JSON.parse(text);
+  } catch (_error) {
+    return JSON.parse(escapeJsonControlCharsInStrings(text));
+  }
+}
+
 function extractJsonObjectFromText(text = "") {
   const raw = cleanText(text);
   if (!raw) return {};
   try {
-    return JSON.parse(raw);
+    return parseJsonLenient(raw);
   } catch (_error) {
     const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
     if (fenced?.[1]) {
       try {
-        return JSON.parse(fenced[1]);
+        return parseJsonLenient(fenced[1]);
       } catch (_nestedError) {
         // fall through
       }
@@ -131,7 +175,7 @@ function extractJsonObjectFromText(text = "") {
     const end = raw.lastIndexOf("}");
     if (start >= 0 && end > start) {
       try {
-        return JSON.parse(raw.slice(start, end + 1));
+        return parseJsonLenient(raw.slice(start, end + 1));
       } catch (_nestedError) {
         // fall through
       }
