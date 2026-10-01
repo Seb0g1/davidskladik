@@ -138,3 +138,14 @@ app.get("/uploads/fragrantica/cards/:file", (request, response) => {
   response.set("Cache-Control", "public, max-age=2592000");
   response.type("jpg").sendFile(file);
 });
+
+// Пересчитать «Есть в PriceMaster» сейчас (обычно — раз в 6 ч на worker).
+app.post("/api/fragrantica/pm-match/run", requireAdmin, async (_request, response, next) => {
+  try {
+    if (fragranticaPmMatchRunning) return response.json({ ok: true, started: false, running: true });
+    const wait = runFragranticaPmMatch();
+    response.json({ ok: true, started: true, result: await Promise.race([wait, sleep(2000).then(() => null)]) });
+  } catch (error) {
+    next(error);
+  }
+});
