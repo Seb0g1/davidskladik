@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, Loader2, Pause, Play, RefreshCw, Send, X } from "lucide-react";
+import { Check, ExternalLink, Loader2, Pause, Play, RefreshCw, Search, Send, X } from "lucide-react";
 import { z } from "zod";
 import { fetchJson, mutationBody } from "../api";
 import { PageHeader } from "../components/PageHeader";
@@ -13,26 +13,27 @@ function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
   return fetchJson<T>(url, z.custom<T>(() => true), init);
 }
 
-// ─── Типы ответов /api/fragrantica/* ────────────────────────────────────────
+// ─── Типы ───────────────────────────────────────────────────────────────────
 
 type Gender = "male" | "female" | "unisex" | "";
 type Note = { name: string; icon?: string };
 type Accord = { name: string; share?: number; color?: string; background?: string };
+type PmInfo = { rows: number; minUsd: number | null; volumes: number[] } | null;
+type ExportedChip = { offerId: string; status: string; account: string; marketplace?: string; volume: number | null };
 type ListItem = {
   id: number; url: string; brand: string; name: string; gender: Gender; year: number | null; votes: number | null;
-  thumb: string; hasDetail: boolean; accords: Accord[]; exported: Array<{ offerId: string; status: string; account: string; volume: number | null }>;
+  thumb: string; hasDetail: boolean; accords: Accord[]; exported: ExportedChip[]; pm: PmInfo;
 };
 type ListResponse = { items: ListItem[]; hasMore: boolean; total: number; page: number };
 type CrawlerResponse = {
-  stats: { brands: number; brandsCrawled: number; perfumes: number; details: number; exports: number };
+  stats: { brands: number; brandsCrawled: number; perfumes: number; details: number; exports: number; inPm?: number };
   paused: boolean;
-  indexPages: number | null;
-  status: { lastError?: string | null; blockedUntil?: string | null; lastStepAt?: string | null; enabled?: boolean };
+  status: { lastError?: string | null; blockedUntil?: string | null };
 };
 type Perfume = {
   id: number; url: string; brand: string; name: string; gender: Gender; year: number | null; votes: number | null; rating: number | null;
   family: string; perfumers: string[]; notes: { top: Note[]; middle: Note[]; base: Note[]; flat: Note[] }; accords: Accord[];
-  description: string; image: string;
+  description: string; image: string; pm: PmInfo;
 };
 type DictValue = { dictionary_value_id?: number; value: string };
 type FormAttribute = {
@@ -40,14 +41,14 @@ type FormAttribute = {
   dictionaryId: number; maxValues: number; group: string; values: DictValue[];
 };
 type ExportRow = {
-  id: number; offerId: string; accountName: string; volume: number | null; tester: boolean; status: string;
+  id: number; marketplace?: string; offerId: string; accountName: string; volume: number | null; tester: boolean; status: string;
   productId: number | null; error: string | null; nextAttemptAt?: string | null; createdAt?: string;
-  result?: { barcode?: string; barcodeError?: string; warnings?: string | null; links?: string; linksAdded?: number; linksError?: string } | null;
+  result?: { barcode?: string; warnings?: string | null; links?: string; linksAdded?: number; linksError?: string; market?: string } | null;
 };
+type Target = { key: string; kind: "ozon" | "yandex"; id: string; marketplace: string; label: string; style: string };
 type OzonForm = {
-  perfume: { id: number; brand: string; name: string };
-  accounts: Array<{ id: string; name: string; style: string }>;
-  account: { id: string; name: string; style: string };
+  targets: Target[];
+  account: { id: string; name: string };
   types: Array<{ key: string; typeId: number; label: string; nameLabel: string }>;
   typeKey: string; typeId: number; volume: string; tester: boolean; offerId: string; name: string; vat: string;
   dims: { depth: number; width: number; height: number; weight: number };
@@ -59,21 +60,24 @@ type OzonForm = {
 };
 type LinkRow = {
   id: string; rowId: string; article: string; name: string; supplierName: string; partnerId: string;
-  price: number; priceCurrency: string; updatedAt?: string | null; volumeOk: boolean; nameOk: boolean; recommended: boolean; issues?: string[];
-  markup: number; ozonPrice: number;
+  price: number; priceCurrency: string; volumeOk: boolean; nameOk: boolean; recommended: boolean; issues?: string[];
+  markup: number; ozonPrice: number; yandexPrice?: number;
 };
-type LinkSuggestions = { productName: string; usdRate: number; rows: LinkRow[]; suggested: string[] };
-type PricePreview = { price: number; oldPrice: number; supplierName: string; markup: number };
-type ImageJob = { status: "running" | "done" | "failed"; stage?: string; error?: string | null; result?: { main: string | null; notes: string | null; source: string; warnings: string[] } | null };
+type LinkSuggestions = { productName: string; rows: LinkRow[]; suggested: string[] };
+type PricePreview = { price: number; oldPrice: number; supplierName: string; markup: number; yandexPrice?: number; yandexMarkup?: number };
+type ImageJob = {
+  status: "running" | "done" | "failed"; error?: string | null;
+  result?: { main: string | null; notes: Record<string, string>; source: string; warnings: string[] } | null;
+};
 
 const GENDER_LABEL: Record<string, string> = { male: "мужской", female: "женский", unisex: "унисекс" };
 const VOLUMES = [2, 5, 10, 30, 50, 75, 90, 100, 125, 200];
 const VAT_OPTIONS = [["0", "Без НДС"], ["0.05", "5%"], ["0.07", "7%"], ["0.1", "10%"], ["0.2", "20%"], ["0.22", "22%"]];
 // Атрибуты, которые форма заполняет сама из полей выше
-const AUTO_ATTRS = new Set([4180, 9024, 8229, 4497]);
+const AUTO_ATTRS = new Set([4180, 9024, 8229, 4497, 4191]);
 const TEXTAREA_ATTRS = new Set([4191, 8050, 11254]);
 const STATUS_LABEL: Record<string, string> = {
-  new: "создаётся", pending: "Ozon обрабатывает", imported: "создана", failed: "ошибка", queued_limit: "ждёт лимита Ozon",
+  new: "создаётся", pending: "Ozon проверяет", imported: "создана", failed: "ошибка", queued_limit: "ждёт лимита Ozon",
 };
 
 function plural(n: number, one: string, few: string, many: string) {
@@ -88,6 +92,41 @@ function formatDateTime(value?: string | null) {
   return new Date(value).toLocaleString("ru", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
+function usd(value: number | null | undefined) {
+  return value ? `$${Math.round(value * 10) / 10}` : "";
+}
+
+// Полоса аккордов: цвета Фрагрантики, ширина по доле — аромат «читается» с одного взгляда
+function AccordSpectrum({ accords, tall = false }: { accords: Accord[]; tall?: boolean }) {
+  const list = accords.filter((a) => a.background).slice(0, 8);
+  if (!list.length) return <div className={`fr-spectrum is-empty${tall ? " is-tall" : ""}`} />;
+  const total = list.reduce((sum, a) => sum + Math.max(10, a.share || 50), 0);
+  return (
+    <div className={`fr-spectrum${tall ? " is-tall" : ""}`} title={list.map((a) => a.name).join(", ")}>
+      {list.map((a) => (
+        <span key={a.name} style={{ flexBasis: `${(Math.max(10, a.share || 50) / total) * 100}%`, background: a.background }} />
+      ))}
+    </div>
+  );
+}
+
+function PmBadge({ pm, compact = false }: { pm: PmInfo; compact?: boolean }) {
+  if (!pm) return null;
+  if (!pm.rows) return <span className="fr-badge is-muted">нет в PriceMaster</span>;
+  const vols = pm.volumes.slice(0, compact ? 3 : 8).join(" / ");
+  return (
+    <span className="fr-badge is-pm" title={`${pm.rows} ${plural(pm.rows, "строка", "строки", "строк")} поставщиков${pm.volumes.length ? `, объёмы ${pm.volumes.join(", ")} мл` : ""}`}>
+      <Check size={12} /> в PriceMaster{pm.minUsd ? ` от ${usd(pm.minUsd)}` : ""}{vols ? ` · ${vols} мл` : ""}
+    </span>
+  );
+}
+
+function ShopChips({ exported }: { exported: ExportedChip[] }) {
+  const shops = [...new Set(exported.filter((e) => e.status !== "failed").map((e) => e.account))];
+  if (!shops.length) return null;
+  return <span className="fr-badge is-shop">{shops.join(", ")}</span>;
+}
+
 // ─── Страница ───────────────────────────────────────────────────────────────
 
 export function FragranticaPage() {
@@ -97,6 +136,7 @@ export function FragranticaPage() {
   const [yearTo, setYearTo] = useState("");
   const [sort, setSort] = useState("popular");
   const [exported, setExported] = useState("");
+  const [pm, setPm] = useState("");
   const [importUrl, setImportUrl] = useState("");
   const [openId, setOpenId] = useState<number | null>(null);
   const queryClient = useQueryClient();
@@ -109,8 +149,9 @@ export function FragranticaPage() {
     if (Number(yearFrom)) p.set("yearFrom", yearFrom);
     if (Number(yearTo)) p.set("yearTo", yearTo);
     if (exported) p.set("exported", exported);
+    if (pm) p.set("pm", pm);
     return p.toString();
-  }, [debouncedQ, gender, yearFrom, yearTo, sort, exported]);
+  }, [debouncedQ, gender, yearFrom, yearTo, sort, exported, pm]);
 
   const list = useInfiniteQuery({
     queryKey: ["fragrantica", "catalog", params],
@@ -145,106 +186,117 @@ export function FragranticaPage() {
   const total = list.data?.pages[0]?.total ?? 0;
   const stats = crawler.data?.stats;
   const blocked = Boolean(crawler.data?.status?.blockedUntil && Date.parse(crawler.data.status.blockedUntil) > Date.now());
+  const loadedShare = stats && stats.brands ? Math.round((stats.brandsCrawled / stats.brands) * 100) : 0;
 
   return (
-    <div className="page-shell">
+    <div className="page-shell fr-page">
       <PageHeader
         title="Фрагрантика"
-        subtitle="Каталог ароматов fragrantica.ru — карточка на Ozon одним нажатием"
+        subtitle="Каталог ароматов fragrantica.ru: выберите аромат и создайте карточку в своих магазинах"
         action={
-          <div className="fr-status">
-            {stats ? (
-              <>
-                <span>
-                  <i className={`fr-dot${crawler.data?.paused ? " is-paused" : blocked ? " is-blocked" : ""}`} />
-                  Ароматов: <b>{stats.perfumes.toLocaleString("ru")}</b>
-                </span>
-                <span>с деталями: <b>{stats.details.toLocaleString("ru")}</b></span>
-                <span>брендов обойдено: <b>{stats.brandsCrawled.toLocaleString("ru")}</b> из {stats.brands.toLocaleString("ru")}</span>
-                <button
-                  className="secondary-action compact"
-                  type="button"
-                  disabled={toggleCrawler.isPending}
-                  onClick={() => toggleCrawler.mutate(!crawler.data?.paused)}
-                  title={crawler.data?.paused ? "Продолжить фоновую загрузку каталога" : "Приостановить фоновую загрузку каталога"}
-                >
-                  {crawler.data?.paused ? <Play size={14} /> : <Pause size={14} />}
-                  {crawler.data?.paused ? "Продолжить" : "Пауза"}
-                </button>
-              </>
-            ) : null}
-            {blocked && crawler.data?.status?.lastError ? (
-              <span title={crawler.data.status.lastError}>Фрагрантика не отвечает — повтор {formatDateTime(crawler.data.status.blockedUntil)}</span>
-            ) : null}
-          </div>
+          stats ? (
+            <div className="fr-status">
+              <div className="fr-status-line">
+                <i className={`fr-dot${crawler.data?.paused ? " is-paused" : blocked ? " is-blocked" : ""}`} />
+                <b>{stats.perfumes.toLocaleString("ru")}</b> ароматов
+                {stats.inPm ? <> · <b>{stats.inPm.toLocaleString("ru")}</b> есть в PriceMaster</> : null}
+              </div>
+              <div className="fr-status-progress" title={`Бренды загружены: ${stats.brandsCrawled} из ${stats.brands}`}>
+                <span style={{ width: `${loadedShare}%` }} />
+              </div>
+              <button
+                className="secondary-action compact"
+                type="button"
+                disabled={toggleCrawler.isPending}
+                onClick={() => toggleCrawler.mutate(!crawler.data?.paused)}
+                title={crawler.data?.paused ? "Продолжить фоновую загрузку каталога" : "Приостановить фоновую загрузку каталога"}
+              >
+                {crawler.data?.paused ? <Play size={14} /> : <Pause size={14} />}
+                {crawler.data?.paused ? "Продолжить загрузку" : "Пауза загрузки"}
+              </button>
+              {blocked ? <span className="fr-hint">Фрагрантика не отвечает, повтор {formatDateTime(crawler.data?.status?.blockedUntil)}</span> : null}
+            </div>
+          ) : null
         }
       />
 
-      <div className="fr-toolbar">
-        <input className="fr-search" placeholder="Бренд или название: dior sauvage" value={q} onChange={(e) => setQ(e.target.value)} />
+      <div className="fr-filters">
+        <label className="fr-search">
+          <Search size={16} />
+          <input placeholder="Бренд или название, например dior sauvage" value={q} onChange={(e) => setQ(e.target.value)} />
+        </label>
+        <select value={pm} onChange={(e) => setPm(e.target.value)} aria-label="Наличие у поставщиков">
+          <option value="">Все ароматы</option>
+          <option value="yes">Есть в PriceMaster</option>
+          <option value="no">Нет в PriceMaster</option>
+        </select>
+        <select value={exported} onChange={(e) => setExported(e.target.value)} aria-label="Магазины">
+          <option value="">В магазинах и нет</option>
+          <option value="no">Ещё не добавлены</option>
+          <option value="yes">Уже в магазинах</option>
+        </select>
         <select value={gender} onChange={(e) => setGender(e.target.value)} aria-label="Пол">
           <option value="">Любой пол</option>
           <option value="female">Женские</option>
           <option value="male">Мужские</option>
           <option value="unisex">Унисекс</option>
         </select>
-        <input className="fr-year" inputMode="numeric" placeholder="Год от" value={yearFrom} onChange={(e) => setYearFrom(e.target.value.replace(/\D/g, ""))} />
-        <input className="fr-year" inputMode="numeric" placeholder="Год до" value={yearTo} onChange={(e) => setYearTo(e.target.value.replace(/\D/g, ""))} />
+        <div className="fr-years">
+          <input inputMode="numeric" placeholder="год от" value={yearFrom} onChange={(e) => setYearFrom(e.target.value.replace(/\D/g, ""))} aria-label="Год от" />
+          <input inputMode="numeric" placeholder="до" value={yearTo} onChange={(e) => setYearTo(e.target.value.replace(/\D/g, ""))} aria-label="Год до" />
+        </div>
         <select value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Сортировка">
-          <option value="popular">Популярные</option>
-          <option value="new">Новинки</option>
+          <option value="popular">Сначала популярные</option>
+          <option value="pm">Больше всего у поставщиков</option>
+          <option value="new">Сначала новинки</option>
           <option value="name">По алфавиту</option>
         </select>
-        <select value={exported} onChange={(e) => setExported(e.target.value)} aria-label="Добавленные">
-          <option value="">Все</option>
-          <option value="no">Ещё не добавлены</option>
-          <option value="yes">Уже добавлены</option>
-        </select>
-        <form
-          className="fr-import"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (importUrl.trim()) importByUrl.mutate(importUrl.trim());
-          }}
-        >
-          <input placeholder="Ссылка на аромат fragrantica.ru" value={importUrl} onChange={(e) => setImportUrl(e.target.value)} />
-          <button className="secondary-action" type="submit" disabled={importByUrl.isPending || !importUrl.trim()}>
-            {importByUrl.isPending ? <Loader2 size={14} className="spin" /> : null}Открыть
-          </button>
-        </form>
       </div>
 
-      <div className="muted-note">
-        {list.isLoading ? "Загрузка…" : `Найдено ${total.toLocaleString("ru")} ${plural(total, "аромат", "аромата", "ароматов")}`}
-        {stats && stats.perfumes === 0 ? " — каталог ещё загружается в фоне, а любой аромат можно открыть по ссылке." : ""}
+      <form
+        className="fr-import"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (importUrl.trim()) importByUrl.mutate(importUrl.trim());
+        }}
+      >
+        <input placeholder="Или вставьте ссылку на аромат с fragrantica.ru" value={importUrl} onChange={(e) => setImportUrl(e.target.value)} />
+        <button className="secondary-action" type="submit" disabled={importByUrl.isPending || !importUrl.trim()}>
+          {importByUrl.isPending ? <Loader2 size={14} className="spin" /> : null}Открыть по ссылке
+        </button>
+      </form>
+
+      <div className="fr-count">
+        {list.isLoading ? "Загрузка…" : `${total.toLocaleString("ru")} ${plural(total, "аромат", "аромата", "ароматов")}`}
       </div>
       {list.isError ? <div className="inline-error">{errorMessage(list.error)}</div> : null}
 
-      <div className="fr-grid" style={{ marginTop: 12 }}>
+      <div className="fr-grid">
         {items.map((item) => (
-          <button key={item.id} type="button" className="fr-card" onClick={() => setOpenId(item.id)}>
-            {item.exported.length ? <span className="fr-added">На Ozon</span> : null}
+          <button key={item.id} type="button" className={`fr-card${item.exported.length ? " is-added" : ""}`} onClick={() => setOpenId(item.id)}>
             <div className="fr-card-img">
               <img src={item.thumb} alt="" loading="lazy" />
             </div>
-            <div className="fr-card-brand">{item.brand}</div>
-            <div className="fr-card-name">{item.name}</div>
-            <div className="fr-card-meta">
-              {item.year ? <span>{item.year}</span> : null}
-              {item.gender ? <span>· {GENDER_LABEL[item.gender]}</span> : null}
-              {item.votes ? <span>· {item.votes.toLocaleString("ru")} голосов</span> : null}
-            </div>
-            {item.accords.length ? (
+            <AccordSpectrum accords={item.accords} />
+            <div className="fr-card-body">
+              <div className="fr-card-brand">{item.brand}</div>
+              <div className="fr-card-name">{item.name}</div>
               <div className="fr-card-meta">
-                {item.accords.slice(0, 3).map((a) => (
-                  <span key={a.name} className="fr-chip is-accord" style={{ background: a.background, color: a.color }}>{a.name}</span>
-                ))}
+                {[item.year, item.gender ? GENDER_LABEL[item.gender] : ""].filter(Boolean).join(", ")}
               </div>
-            ) : null}
+              <div className="fr-card-badges">
+                <PmBadge pm={item.pm} compact />
+                <ShopChips exported={item.exported} />
+              </div>
+            </div>
           </button>
         ))}
       </div>
-      {!list.isLoading && !items.length ? <div className="fr-empty">Ничего не найдено. Попробуйте другой запрос или вставьте ссылку на аромат.</div> : null}
+      {!list.isLoading && !items.length ? (
+        <div className="fr-empty">
+          Под эти фильтры ароматов нет. Сбросьте фильтры или откройте аромат по ссылке с fragrantica.ru.
+        </div>
+      ) : null}
       {list.hasNextPage ? (
         <div className="fr-more">
           <button className="secondary-action" type="button" disabled={list.isFetchingNextPage} onClick={() => list.fetchNextPage()}>
@@ -260,25 +312,26 @@ export function FragranticaPage() {
 
 // ─── Карточка аромата ───────────────────────────────────────────────────────
 
-function NotesRow({ title, notes }: { title: string; notes: Note[] }) {
+function NotesTier({ title, notes }: { title: string; notes: Note[] }) {
   if (!notes.length) return null;
   return (
-    <>
-      <div className="fr-section-title">{title}</div>
+    <div className="fr-tier">
+      <div className="fr-tier-title">{title}</div>
       <div className="fr-notes-row">
         {notes.map((note) => (
           <div key={note.name} className="fr-note">
-            {note.icon ? <img src={note.icon} alt="" loading="lazy" /> : null}
+            {note.icon ? <img src={note.icon} alt="" loading="lazy" /> : <span className="fr-note-letter">{note.name.charAt(0)}</span>}
             {note.name}
           </div>
         ))}
       </div>
-    </>
+    </div>
   );
 }
 
 function PerfumeDrawer({ id, onClose }: { id: number; onClose: () => void }) {
   const [adding, setAdding] = useState(false);
+  const [showDescription, setShowDescription] = useState(false);
   const perfume = useQuery({
     queryKey: ["fragrantica", "perfume", id],
     queryFn: () => apiJson<{ perfume: Perfume }>(`/api/fragrantica/catalog/${id}`).then((r) => r.perfume),
@@ -294,55 +347,54 @@ function PerfumeDrawer({ id, onClose }: { id: number; onClose: () => void }) {
   return (
     <div className="fr-drawer-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <aside className="fr-drawer" role="dialog" aria-modal="true" aria-label={p ? `${p.brand} ${p.name}` : "Аромат"}>
-        <div className="fr-drawer-head">
-          <div>
-            <h2>{p ? `${p.brand} — ${p.name}` : "Загрузка…"}</h2>
-            {p ? (
-              <p>
-                {[p.year, p.gender ? GENDER_LABEL[p.gender] : "", p.family, p.perfumers.length ? `парфюмер: ${p.perfumers.join(", ")}` : "", p.rating ? `★ ${p.rating} (${(p.votes || 0).toLocaleString("ru")})` : ""].filter(Boolean).join(" · ")}
-                {" · "}
-                <a href={p.url} target="_blank" rel="noreferrer">Фрагрантика <ExternalLink size={12} /></a>
-              </p>
-            ) : null}
-          </div>
-          <button className="icon-action" type="button" onClick={onClose} aria-label="Закрыть"><X size={18} /></button>
-        </div>
-
+        <button className="icon-action fr-drawer-close" type="button" onClick={onClose} aria-label="Закрыть"><X size={18} /></button>
         {perfume.isLoading ? <div className="empty-state"><Loader2 size={16} className="spin" /> Загружаем страницу аромата…</div> : null}
         {perfume.isError ? <div className="inline-error">{errorMessage(perfume.error)}</div> : null}
 
         {p ? (
           <>
-            <div className="fr-detail">
-              <div className="fr-detail-img"><img src={p.image} alt={`${p.brand} ${p.name}`} /></div>
-              <div>
-                <NotesRow title="Верхние ноты" notes={p.notes.top} />
-                <NotesRow title="Ноты сердца" notes={p.notes.middle} />
-                <NotesRow title="Базовые ноты" notes={p.notes.base} />
-                <NotesRow title="Ноты" notes={p.notes.flat} />
-                {p.accords.length ? (
-                  <>
-                    <div className="fr-section-title">Аккорды</div>
-                    <div className="fr-accords">
-                      {p.accords.slice(0, 8).map((a) => (
-                        <div key={a.name} className="fr-accord" style={{ width: `${Math.max(30, a.share || 50)}%`, background: a.background, color: a.color }}>{a.name}</div>
-                      ))}
-                    </div>
-                  </>
-                ) : null}
+            <div className="fr-hero">
+              <div className="fr-hero-img"><img src={p.image} alt={`${p.brand} ${p.name}`} /></div>
+              <div className="fr-hero-text">
+                <div className="fr-hero-brand">{p.brand}</div>
+                <h2>{p.name}</h2>
+                <p className="fr-hero-meta">
+                  {[p.year, p.gender ? GENDER_LABEL[p.gender] : "", p.family, p.perfumers.length ? `парфюмер ${p.perfumers.join(", ")}` : ""].filter(Boolean).join(", ")}
+                </p>
+                <AccordSpectrum accords={p.accords} tall />
+                <div className="fr-accord-names">
+                  {p.accords.slice(0, 6).map((a) => <span key={a.name}><i style={{ background: a.background }} />{a.name}</span>)}
+                </div>
+                <div className="fr-card-badges">
+                  <PmBadge pm={p.pm} />
+                  {p.rating ? <span className="fr-badge is-muted">★ {p.rating} на Фрагрантике, {(p.votes || 0).toLocaleString("ru")} голосов</span> : null}
+                  <a className="fr-badge is-link" href={p.url} target="_blank" rel="noreferrer">Открыть на Фрагрантике <ExternalLink size={12} /></a>
+                </div>
               </div>
             </div>
+
+            <div className="fr-pyramid">
+              <NotesTier title="Верхние ноты" notes={p.notes.top} />
+              <NotesTier title="Ноты сердца" notes={p.notes.middle} />
+              <NotesTier title="Базовые ноты" notes={p.notes.base} />
+              <NotesTier title="Ноты" notes={p.notes.flat} />
+            </div>
+
             {p.description ? (
-              <>
-                <div className="fr-section-title">Описание</div>
-                <div className="fr-description">{p.description}</div>
-              </>
+              <div className="fr-description-box">
+                <p className={`fr-description${showDescription ? "" : " is-clamped"}`}>{p.description}</p>
+                <button className="fr-link-button" type="button" onClick={() => setShowDescription((v) => !v)}>
+                  {showDescription ? "Свернуть описание" : "Показать описание целиком"}
+                </button>
+              </div>
             ) : null}
+
             {adding ? (
-              <OzonExportForm perfume={p} onCancel={() => setAdding(false)} />
+              <AddToShopsForm perfume={p} onCancel={() => setAdding(false)} />
             ) : (
-              <div className="fr-actions">
-                <button className="primary-action" type="button" onClick={() => setAdding(true)}><Send size={15} /> Добавить на Ozon</button>
+              <div className="fr-cta">
+                <button className="primary-action" type="button" onClick={() => setAdding(true)}><Send size={15} /> Добавить в магазины</button>
+                <span className="fr-hint">Magic Stick, AURA, Яндекс Маркет — выберете на следующем шаге</span>
               </div>
             )}
           </>
@@ -352,101 +404,87 @@ function PerfumeDrawer({ id, onClose }: { id: number; onClose: () => void }) {
   );
 }
 
-// ─── Форма Ozon ─────────────────────────────────────────────────────────────
+// ─── Добавление: шаг 1 — тип и объём ────────────────────────────────────────
 
-function OzonExportForm({ perfume, onCancel }: { perfume: Perfume; onCancel: () => void }) {
-  const [accountId, setAccountId] = useState("");
+function AddToShopsForm({ perfume, onCancel }: { perfume: Perfume; onCancel: () => void }) {
   const [typeKey, setTypeKey] = useState("");
   const [volume, setVolume] = useState("");
   const [tester, setTester] = useState(false);
   const [step, setStep] = useState<"params" | "card">("params");
-  // Шаг 1 — параметры; форма с атрибутами загружается под них (тип = категория атрибутов Ozon)
   const options = useQuery({
-    queryKey: ["fragrantica", "ozon-options", perfume.id, accountId],
-    queryFn: () => apiJson<OzonForm>(`/api/fragrantica/ozon/form?perfumeId=${perfume.id}${accountId ? `&accountId=${encodeURIComponent(accountId)}` : ""}`),
+    queryKey: ["fragrantica", "ozon-options", perfume.id],
+    queryFn: () => apiJson<OzonForm>(`/api/fragrantica/ozon/form?perfumeId=${perfume.id}`),
     staleTime: 5 * 60_000,
   });
   useEffect(() => {
-    if (!options.data) return;
-    if (!accountId) setAccountId(options.data.account.id);
-    if (!typeKey) setTypeKey(options.data.typeKey);
-  }, [options.data, accountId, typeKey]);
+    if (options.data && !typeKey) setTypeKey(options.data.typeKey);
+  }, [options.data, typeKey]);
 
-  const ready = Number(volume.replace(",", ".")) > 0 && typeKey && accountId;
+  const ready = Number(volume.replace(",", ".")) > 0 && Boolean(typeKey);
+  if (step === "card") {
+    return (
+      <CardStep
+        perfume={perfume}
+        typeKey={typeKey}
+        volume={volume.replace(",", ".")}
+        tester={tester}
+        onBack={() => setStep("params")}
+      />
+    );
+  }
   return (
     <section className="fr-form">
-      <h3>Добавить на Ozon</h3>
-      <div className="muted-note">Остаток будет 0 — дальше цена и наличие идут по обычной схеме через привязку к поставщику.</div>
+      <h3>Что добавляем</h3>
       {options.isError ? <div className="inline-error">{errorMessage(options.error)}</div> : null}
-      {step === "params" ? (
-        <>
-          <div className="fr-form-grid">
-            <div className="fr-field">
-              <span>Кабинет Ozon</span>
-              <select value={accountId} onChange={(e) => setAccountId(e.target.value)}>
-                {(options.data?.accounts || []).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-              </select>
-            </div>
-            <div className="fr-field">
-              <span>Тип</span>
-              <select value={typeKey} onChange={(e) => setTypeKey(e.target.value)}>
-                {(options.data?.types || []).map((t) => <option key={t.key} value={t.key}>{t.nameLabel}</option>)}
-              </select>
-            </div>
-            <div className="fr-field">
-              <span>Объём, мл<span className="fr-req">*</span></span>
-              <input inputMode="decimal" value={volume} onChange={(e) => setVolume(e.target.value.replace(/[^\d.,]/g, ""))} placeholder="100" autoFocus />
-            </div>
-            <label className="fr-field" style={{ justifyContent: "flex-end" }}>
-              <span><input type="checkbox" checked={tester} onChange={(e) => setTester(e.target.checked)} style={{ width: "auto", marginRight: 6 }} />Тестер</span>
-            </label>
-          </div>
-          <div className="fr-volumes" style={{ marginTop: 10 }}>
-            {VOLUMES.map((v) => (
-              <button key={v} type="button" className={Number(volume) === v ? "is-active" : ""} onClick={() => setVolume(String(v))}>{v} мл</button>
-            ))}
-          </div>
-          <div className="fr-actions">
-            <button className="primary-action" type="button" disabled={!ready || options.isLoading} onClick={() => setStep("card")}>
-              {options.isLoading ? <Loader2 size={14} className="spin" /> : null}Заполнить карточку
-            </button>
-            <button className="secondary-action" type="button" onClick={onCancel}>Отмена</button>
-          </div>
-          {options.data?.exports.length ? <ExportHistory rows={options.data.exports} /> : null}
-        </>
-      ) : (
-        <OzonCardStep
-          perfume={perfume}
-          accountId={accountId}
-          typeKey={typeKey}
-          volume={volume.replace(",", ".")}
-          tester={tester}
-          onBack={() => setStep("params")}
-        />
-      )}
+      <div className="fr-form-grid">
+        <div className="fr-field">
+          <span>Тип</span>
+          <select value={typeKey} onChange={(e) => setTypeKey(e.target.value)}>
+            {(options.data?.types || []).map((t) => <option key={t.key} value={t.key}>{t.nameLabel}</option>)}
+          </select>
+        </div>
+        <div className="fr-field">
+          <span>Объём, мл<span className="fr-req">*</span></span>
+          <input inputMode="decimal" value={volume} onChange={(e) => setVolume(e.target.value.replace(/[^\d.,]/g, ""))} placeholder="100" autoFocus />
+        </div>
+        <label className="fr-field fr-check">
+          <input type="checkbox" checked={tester} onChange={(e) => setTester(e.target.checked)} />
+          <span>Тестер</span>
+        </label>
+      </div>
+      <div className="fr-volumes">
+        {VOLUMES.map((v) => (
+          <button key={v} type="button" className={Number(volume) === v ? "is-active" : ""} onClick={() => setVolume(String(v))}>{v} мл</button>
+        ))}
+      </div>
+      <div className="fr-actions">
+        <button className="primary-action" type="button" disabled={!ready || options.isLoading} onClick={() => setStep("card")}>
+          {options.isLoading ? <Loader2 size={14} className="spin" /> : null}Дальше: магазины и карточка
+        </button>
+        <button className="secondary-action" type="button" onClick={onCancel}>Отмена</button>
+      </div>
+      {options.data?.exports.length ? <ExportHistory rows={options.data.exports} /> : null}
     </section>
   );
 }
 
 function ExportHistory({ rows }: { rows: ExportRow[] }) {
   return (
-    <>
-      <div className="fr-section-title">Уже создавали</div>
-      <div className="fr-history">
-        {rows.map((row) => (
-          <div key={row.id} className="fr-history-row">
-            <span className="fr-chip">{row.offerId}</span>
-            <span>{row.accountName}</span>
-            {row.volume ? <span>{row.volume} мл{row.tester ? " · тестер" : ""}</span> : null}
-            <b>{STATUS_LABEL[row.status] || row.status}</b>
-            {row.productId ? <span>product_id {row.productId}</span> : null}
-            {row.error ? <span className="fr-hint">{row.error}</span> : null}
-          </div>
-        ))}
-      </div>
-    </>
+    <div className="fr-history">
+      <div className="fr-subtitle">Уже создавали</div>
+      {rows.map((row) => (
+        <div key={row.id} className="fr-history-row">
+          <b>{row.accountName}</b>
+          <span>{row.offerId}{row.volume ? `, ${row.volume} мл` : ""}{row.tester ? ", тестер" : ""}</span>
+          <span className={`fr-status-pill is-${row.status}`}>{STATUS_LABEL[row.status] || row.status}</span>
+          {row.error ? <span className="fr-hint">{row.error}</span> : null}
+        </div>
+      ))}
+    </div>
   );
 }
+
+// ─── Поля атрибутов Ozon ────────────────────────────────────────────────────
 
 function DictionaryField({ attr, value, onChange, accountId, typeId }: {
   attr: FormAttribute; value: DictValue[]; onChange: (next: DictValue[]) => void; accountId: string; typeId: number;
@@ -481,24 +519,24 @@ function DictionaryField({ attr, value, onChange, accountId, typeId }: {
       <div className="fr-dict-selected">
         {value.map((v) => (
           <button key={`${v.dictionary_value_id}-${v.value}`} type="button" title="Убрать" onClick={() => onChange(value.filter((x) => x !== v))}>
-            {v.value} ×
+            {v.value} <X size={11} />
           </button>
         ))}
       </div>
       <input
         value={query}
-        placeholder={value.length >= max ? "" : "Поиск в справочнике Ozon…"}
+        placeholder={value.length >= max ? "" : "Найти в справочнике Ozon"}
         onFocus={() => setOpen(true)}
         onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
       />
       {open ? (
         <div className="fr-dict-results">
-          {results.isLoading ? <div className="fr-hint" style={{ padding: 8 }}>Ищем…</div> : null}
+          {results.isLoading ? <div className="fr-hint fr-pad">Ищем…</div> : null}
           {(results.data?.items || []).map((item) => (
             <button key={item.id} type="button" onClick={() => pick(item)}>{item.value}</button>
           ))}
           {!results.isLoading && !(results.data?.items || []).length ? (
-            <div className="fr-hint" style={{ padding: 8 }}>{debounced.trim().length < 2 ? "Введите хотя бы 2 буквы" : "Ничего не найдено"}</div>
+            <div className="fr-hint fr-pad">{debounced.trim().length < 2 ? "Введите хотя бы 2 буквы" : "Ничего не найдено"}</div>
           ) : null}
         </div>
       ) : null}
@@ -525,28 +563,77 @@ function AttributeInput({ attr, value, onChange, accountId, typeId }: {
   return <input value={text} inputMode={attr.type === "Integer" || attr.type === "Decimal" ? "decimal" : undefined} onChange={(e) => set(e.target.value)} />;
 }
 
-function OzonCardStep({ perfume, accountId, typeKey, volume, tester, onBack }: {
-  perfume: Perfume; accountId: string; typeKey: string; volume: string; tester: boolean; onBack: () => void;
+// ─── Добавление: шаг 2 — магазины, привязка, карточка ───────────────────────
+
+function CardStep({ perfume, typeKey, volume, tester, onBack }: {
+  perfume: Perfume; typeKey: string; volume: string; tester: boolean; onBack: () => void;
 }) {
   const queryClient = useQueryClient();
   const form = useQuery({
-    queryKey: ["fragrantica", "ozon-form", perfume.id, accountId, typeKey, volume, tester],
-    queryFn: () => apiJson<OzonForm>(`/api/fragrantica/ozon/form?perfumeId=${perfume.id}&accountId=${encodeURIComponent(accountId)}&typeKey=${typeKey}&volume=${encodeURIComponent(volume)}&tester=${tester ? 1 : 0}`),
+    queryKey: ["fragrantica", "ozon-form", perfume.id, typeKey, volume, tester],
+    queryFn: () => apiJson<OzonForm>(`/api/fragrantica/ozon/form?perfumeId=${perfume.id}&typeKey=${typeKey}&volume=${encodeURIComponent(volume)}&tester=${tester ? 1 : 0}`),
     staleTime: Infinity,
   });
+  const data = form.data;
+  const targets = data?.targets || [];
+
+  // Магазины: по умолчанию отмечены все; у каждого своя «Пирамида аромата», её нужно одобрить
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const [approved, setApproved] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    if (!targets.length) return;
+    setSelected((prev) => (Object.keys(prev).length ? prev : Object.fromEntries(targets.map((t) => [t.key, true]))));
+  }, [targets]);
+  const chosen = targets.filter((t) => selected[t.key]);
+  const hasOzon = chosen.some((t) => t.kind === "ozon");
+  const hasYandex = chosen.some((t) => t.kind === "yandex");
+
   const [name, setName] = useState("");
   const [offerId, setOfferId] = useState("");
   const [price, setPrice] = useState("");
   const [oldPrice, setOldPrice] = useState("");
+  const [yandexPrice, setYandexPrice] = useState("");
   const [vat, setVat] = useState("0.05");
+  const [description, setDescription] = useState("");
   const [dims, setDims] = useState({ depth: "", width: "", height: "", weight: "" });
   const [values, setValues] = useState<Record<number, DictValue[]>>({});
-  const [useNotesCard, setUseNotesCard] = useState(true);
   const [showOptional, setShowOptional] = useState(false);
   const [missing, setMissing] = useState<string[]>([]);
-  const [exportId, setExportId] = useState<number | null>(null);
+  const [exportIds, setExportIds] = useState<number[]>([]);
 
-  // Предложения привязки: строки PriceMaster по «бренд + название + мл»; цена — как у склада
+  useEffect(() => {
+    if (!data) return;
+    setName(data.name);
+    setOfferId(data.offerId);
+    setVat(data.vat);
+    setDims({ depth: String(data.dims.depth), width: String(data.dims.width), height: String(data.dims.height), weight: String(data.dims.weight) });
+    setValues(Object.fromEntries(data.attributes.map((a) => [a.id, a.values])));
+    setDescription(data.attributes.find((a) => a.id === 4191)?.values?.[0]?.value || "");
+  }, [data]);
+
+  // Фото: флакон с премиум-фоном и пирамиды для всех магазинов разом (parfumdeclaration)
+  const styles = useMemo(() => [...new Set(targets.map((t) => t.style))], [targets]);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const startImages = useMutation({
+    mutationFn: (refresh: boolean) => apiJson<{ jobId: string }>("/api/fragrantica/ozon/images", mutationBody({ perfumeId: perfume.id, styles, refresh })),
+    onSuccess: (res) => { setJobId(res.jobId); setApproved({}); },
+    onError: (error) => toast.error(errorMessage(error)),
+  });
+  const startRef = useRef(startImages.mutate);
+  startRef.current = startImages.mutate;
+  const stylesKey = styles.join(",");
+  useEffect(() => { if (stylesKey) startRef.current(false); }, [perfume.id, stylesKey]);
+  const images = useQuery({
+    queryKey: ["fragrantica", "images", jobId],
+    queryFn: () => apiJson<ImageJob>(`/api/fragrantica/ozon/images/${jobId}`),
+    enabled: Boolean(jobId),
+    refetchInterval: (query) => (query.state.data?.status === "running" ? 2500 : false),
+  });
+  const imageResult = images.data?.status === "done" ? images.data.result : null;
+  const imagesBusy = startImages.isPending || images.data?.status === "running" || (Boolean(jobId) && !images.data);
+  const mainImage = imageResult?.main || data?.sourceImage || "";
+
+  // Привязка к поставщикам и цена
   const [linkQuery, setLinkQuery] = useState("");
   const debouncedLinkQuery = useDebounced(linkQuery, 400);
   const [selectedLinks, setSelectedLinks] = useState<Record<string, LinkRow>>({});
@@ -570,10 +657,13 @@ function OzonCardStep({ perfume, accountId, typeKey, volume, tester, onBack }: {
     queryFn: () => apiJson<PricePreview>("/api/fragrantica/ozon/price-preview", mutationBody({ rows: selectedRows.map((r) => ({ price: r.price, priceCurrency: r.priceCurrency, supplierName: r.supplierName })) })),
     enabled: selectedRows.length > 0,
   });
+  const applyPreview = (preview: PricePreview) => {
+    setPrice(String(preview.price));
+    setOldPrice(String(preview.oldPrice || ""));
+    setYandexPrice(String(preview.yandexPrice || preview.price));
+  };
   useEffect(() => {
-    if (priceTouched || !pricePreview.data?.price) return;
-    setPrice(String(pricePreview.data.price));
-    setOldPrice(String(pricePreview.data.oldPrice || ""));
+    if (!priceTouched && pricePreview.data?.price) applyPreview(pricePreview.data);
   }, [pricePreview.data, priceTouched]);
   const toggleLink = (row: LinkRow) => setSelectedLinks((prev) => {
     const next = { ...prev };
@@ -582,56 +672,33 @@ function OzonCardStep({ perfume, accountId, typeKey, volume, tester, onBack }: {
     return next;
   });
 
-  useEffect(() => {
-    const data = form.data;
-    if (!data) return;
-    setName(data.name);
-    setOfferId(data.offerId);
-    setVat(data.vat);
-    setDims({ depth: String(data.dims.depth), width: String(data.dims.width), height: String(data.dims.height), weight: String(data.dims.weight) });
-    setValues(Object.fromEntries(data.attributes.map((a) => [a.id, a.values])));
-  }, [form.data]);
-
-  // Фото: флакон с премиум-фоном + «Пирамида аромата» (parfumdeclaration)
-  const [jobId, setJobId] = useState<string | null>(null);
-  const startImages = useMutation({
-    mutationFn: (refresh: boolean) => apiJson<{ jobId: string }>("/api/fragrantica/ozon/images", mutationBody({ perfumeId: perfume.id, accountId, refresh })),
-    onSuccess: (data) => setJobId(data.jobId),
-    onError: (error) => toast.error(errorMessage(error)),
-  });
-  const startImagesRef = useRef(startImages.mutate);
-  startImagesRef.current = startImages.mutate;
-  useEffect(() => { startImagesRef.current(false); }, [perfume.id, accountId]);
-  const images = useQuery({
-    queryKey: ["fragrantica", "images", jobId],
-    queryFn: () => apiJson<ImageJob>(`/api/fragrantica/ozon/images/${jobId}`),
-    enabled: Boolean(jobId),
-    refetchInterval: (query) => (query.state.data?.status === "running" ? 2500 : false),
-  });
-  const imageResult = images.data?.status === "done" ? images.data.result : null;
-  const imagesBusy = startImages.isPending || images.data?.status === "running" || (Boolean(jobId) && !images.data);
-
   const submit = useMutation({
     mutationFn: () => {
-      const data = form.data!;
-      const photoList = [imageResult?.main || data.sourceImage, useNotesCard ? imageResult?.notes : null].filter(Boolean);
-      const attributes = data.attributes
+      const d = data!;
+      const attributes = d.attributes
         .filter((a) => !AUTO_ATTRS.has(a.id))
         .map((a) => ({ id: a.id, values: values[a.id] || [] }))
         .filter((a) => a.values.length);
       attributes.push({ id: 4180, values: [{ value: name }] });
       attributes.push({ id: 9024, values: [{ value: offerId }] });
-      attributes.push({ id: 8229, values: [{ dictionary_value_id: data.typeId, value: data.types.find((t) => t.key === data.typeKey)?.label || "" }] });
+      attributes.push({ id: 8229, values: [{ dictionary_value_id: d.typeId, value: d.types.find((t) => t.key === d.typeKey)?.label || "" }] });
+      if (description.trim()) attributes.push({ id: 4191, values: [{ value: description }] });
       if (Number(dims.weight)) attributes.push({ id: 4497, values: [{ value: dims.weight }] });
-      return apiJson<{ export: ExportRow }>("/api/fragrantica/ozon/export", mutationBody({
-        perfumeId: perfume.id, accountId, typeId: data.typeId, typeKey: data.typeKey, offerId, name, price, oldPrice, vat,
-        depth: dims.depth, width: dims.width, height: dims.height, weight: dims.weight, tester, images: photoList, attributes,
+      return apiJson<{ exports: ExportRow[] }>("/api/fragrantica/ozon/export", mutationBody({
+        perfumeId: perfume.id,
+        typeId: d.typeId,
+        typeKey: d.typeKey,
+        targets: chosen.map((t) => ({ key: t.key, notes: approved[t.key] ? imageResult?.notes?.[t.style] || null : null })),
+        offerId, name, price, oldPrice, yandexPrice, vat,
+        depth: dims.depth, width: dims.width, height: dims.height, weight: dims.weight, tester,
+        images: [mainImage],
+        attributes,
         links: selectedRows.map((r) => ({ rowId: r.rowId, article: r.article, name: r.name, supplierName: r.supplierName, partnerId: r.partnerId, priceCurrency: r.priceCurrency })),
       }));
     },
-    onSuccess: (data) => {
+    onSuccess: (res) => {
       setMissing([]);
-      setExportId(data.export.id);
+      setExportIds(res.exports.map((e) => e.id));
       queryClient.invalidateQueries({ queryKey: ["fragrantica", "catalog"] });
     },
     onError: (error) => {
@@ -641,94 +708,126 @@ function OzonCardStep({ perfume, accountId, typeKey, volume, tester, onBack }: {
     },
   });
 
-  const status = useQuery({
-    queryKey: ["fragrantica", "export", exportId],
-    queryFn: () => apiJson<{ export: ExportRow }>(`/api/fragrantica/ozon/exports/${exportId}`).then((r) => r.export),
-    enabled: Boolean(exportId),
-    refetchInterval: (query) => {
-      const s = query.state.data?.status;
-      const r = query.state.data?.result;
-      return s === "pending" || s === "new" || (s === "imported" && (r?.barcode === "pending" || r?.links === "pending")) ? 3000 : false;
-    },
-  });
+  if (form.isLoading) return <section className="fr-form"><div className="empty-state"><Loader2 size={16} className="spin" /> Загружаем характеристики Ozon…</div></section>;
+  if (form.isError || !data) return <section className="fr-form"><div className="inline-error">{errorMessage(form.error)}</div><button className="secondary-action compact" type="button" onClick={onBack}>Назад</button></section>;
 
-  if (form.isLoading) return <div className="empty-state"><Loader2 size={16} className="spin" /> Загружаем характеристики Ozon…</div>;
-  if (form.isError || !form.data) return <div className="inline-error">{errorMessage(form.error)} <button className="secondary-action compact" type="button" onClick={onBack}>Назад</button></div>;
-  const data = form.data;
   const required = data.attributes.filter((a) => a.required && !AUTO_ATTRS.has(a.id));
   const optional = data.attributes.filter((a) => !a.required && !AUTO_ATTRS.has(a.id));
-  const description = data.attributes.find((a) => a.id === 4191);
   const isMissing = (label: string) => missing.includes(label);
-  const result = status.data;
+  const unapproved = chosen.filter((t) => imageResult?.notes?.[t.style] && !approved[t.key]);
+  const sent = exportIds.length > 0;
 
   const renderAttr = (attr: FormAttribute) => (
     <div key={attr.id} className={`fr-field${TEXTAREA_ATTRS.has(attr.id) ? " is-wide" : ""}${isMissing(attr.name) ? " is-missing" : ""}`}>
       <span title={attr.description}>{attr.name}{attr.required ? <span className="fr-req">*</span> : null}</span>
-      <AttributeInput attr={attr} value={values[attr.id] || []} onChange={(next) => setValues((prev) => ({ ...prev, [attr.id]: next }))} accountId={accountId} typeId={data.typeId} />
+      <AttributeInput attr={attr} value={values[attr.id] || []} onChange={(next) => setValues((prev) => ({ ...prev, [attr.id]: next }))} accountId={data.account.id} typeId={data.typeId} />
     </div>
   );
 
   return (
-    <>
-      <div className="fr-section-title">Фото</div>
-      <div className="fr-photos">
-        <div className="fr-photo">
-          <div className="fr-photo-frame">
-            {imageResult?.main ? <img src={imageResult.main} alt="Фото флакона" /> : imagesBusy ? <span><Loader2 size={16} className="spin" /><br />Премиум фон…</span> : <img src={data.sourceImage} alt="Исходное фото" />}
-          </div>
-          1. Флакон {imageResult?.main && imageResult.main !== imageResult.source ? "(премиум фон)" : ""}
-        </div>
-        <div className={`fr-photo${useNotesCard ? "" : " is-off"}`}>
-          <div className="fr-photo-frame">
-            {imageResult?.notes ? <img src={imageResult.notes} alt="Пирамида аромата" /> : imagesBusy ? <span><Loader2 size={16} className="spin" /><br />Рисуем ноты…</span> : <span>Нет картинки</span>}
-          </div>
-          <label><input type="checkbox" checked={useNotesCard} onChange={(e) => setUseNotesCard(e.target.checked)} /> 2. Пирамида аромата</label>
-        </div>
-        <div className="fr-photo fr-photo-auto">
-          <div className="fr-photo-frame">«Секреты нанесения» и «Спасибо» добавит parfumdeclaration сам в течение часа</div>
-          3–4. Фото в конце
-        </div>
+    <section className="fr-form">
+      <div className="fr-form-head">
+        <h3>{name || "Карточка"}</h3>
+        <button className="secondary-action compact" type="button" onClick={onBack} disabled={submit.isPending}>Изменить тип или объём</button>
       </div>
-      <div className="fr-actions" style={{ marginTop: 8 }}>
+
+      <div className="fr-step"><span className="fr-step-n">1</span>Магазины и фото</div>
+      <div className="fr-shops">
+        <div className="fr-shop-bottle">
+          <div className="fr-photo-frame">
+            {imageResult?.main ? <img src={imageResult.main} alt="Флакон" /> : imagesBusy ? <span><Loader2 size={16} className="spin" /> Премиум фон…</span> : <img src={data.sourceImage} alt="Флакон" />}
+          </div>
+          <span className="fr-hint">Фото флакона: общее для всех магазинов</span>
+        </div>
+        {targets.map((t) => {
+          const notes = imageResult?.notes?.[t.style];
+          const on = Boolean(selected[t.key]);
+          return (
+            <div key={t.key} className={`fr-shop${on ? " is-on" : ""}`}>
+              <label className="fr-shop-head">
+                <input type="checkbox" checked={on} onChange={(e) => setSelected((prev) => ({ ...prev, [t.key]: e.target.checked }))} />
+                <span><b>{t.label}</b><small>{t.marketplace}</small></span>
+              </label>
+              <div className="fr-photo-frame">
+                {notes ? <img src={notes} alt={`Пирамида аромата ${t.label}`} /> : imagesBusy ? <span><Loader2 size={16} className="spin" /> Рисуем пирамиду…</span> : <span>Пирамиды нет</span>}
+              </div>
+              <label className={`fr-approve${approved[t.key] ? " is-ok" : ""}`}>
+                <input type="checkbox" disabled={!notes || !on} checked={Boolean(approved[t.key])} onChange={(e) => setApproved((prev) => ({ ...prev, [t.key]: e.target.checked }))} />
+                Пирамида одобрена
+              </label>
+            </div>
+          );
+        })}
+      </div>
+      <div className="fr-actions is-tight">
         <button className="secondary-action compact" type="button" disabled={imagesBusy} onClick={() => startImages.mutate(true)}>
           <RefreshCw size={13} /> Обработать фото заново
         </button>
+        <span className="fr-hint">«Секреты нанесения» и «Спасибо» parfumdeclaration добавит в конец карточки сам, в течение часа.</span>
       </div>
       {images.data?.status === "failed" ? <div className="fr-warn">{images.data.error}</div> : null}
       {(imageResult?.warnings || []).map((w) => <div key={w} className="fr-warn">{w}</div>)}
 
-      <div className="fr-section-title">Предложения привязки</div>
-      <div className="fr-hint" style={{ marginBottom: 8 }}>
-        Строки поставщиков из PriceMaster по названию и объёму. Отмеченные привяжутся к товару на складе сразу после создания карточки — цена ниже считается по ним.
-      </div>
-      <div className="fr-links-search">
-        <input value={linkQuery} onChange={(e) => setLinkQuery(e.target.value)} placeholder={`Свой поиск, например: ${perfume.brand} ${perfume.name} ${volume}`} />
-      </div>
+      <div className="fr-step"><span className="fr-step-n">2</span>Привязка к поставщикам и цена</div>
+      <p className="fr-hint">Отмеченные строки PriceMaster привяжутся к товару на складе сразу после создания карточек, цены ниже считаются по ним.</p>
+      <label className="fr-search is-small">
+        <Search size={14} />
+        <input value={linkQuery} onChange={(e) => setLinkQuery(e.target.value)} placeholder={`Свой поиск, например ${perfume.brand} ${perfume.name} ${volume}`} />
+      </label>
       {suggestions.isLoading ? <div className="fr-hint"><Loader2 size={13} className="spin" /> Ищем у поставщиков…</div> : null}
       {suggestions.isError ? <div className="inline-error">{errorMessage(suggestions.error)}</div> : null}
-      {suggestions.data && !suggestions.data.rows.length ? <div className="fr-hint">Подходящих строк нет — карточку можно создать без привязки и привязать позже на складе.</div> : null}
+      {suggestions.data && !suggestions.data.rows.length ? <div className="fr-hint">Подходящих строк нет. Карточку можно создать без привязки и привязать позже на складе.</div> : null}
       <div className="fr-links">
         {[...selectedRows.filter((r) => !(suggestions.data?.rows || []).some((x) => x.id === r.id)), ...(suggestions.data?.rows || [])].map((row) => (
-          <label key={row.id} className={`fr-link-row${selectedLinks[row.id] ? " is-on" : ""}`}>
+          <label key={row.id} className={`fr-link-row${selectedLinks[row.id] ? " is-on" : ""}${row.recommended ? " is-recommended" : ""}`}>
             <input type="checkbox" checked={Boolean(selectedLinks[row.id])} onChange={() => toggleLink(row)} />
             <span className="fr-link-name">
               {row.name}
-              <span className="fr-hint"> · {row.supplierName}{row.article ? ` · арт. ${row.article}` : ""}</span>
-            </span>
-            <span className="fr-link-flags">
-              {row.nameOk ? <span className="fr-chip">название ✓</span> : null}
-              {row.volumeOk ? <span className="fr-chip">объём ✓</span> : null}
-              {row.recommended ? <span className="fr-chip is-recommended">подходит</span> : null}
-              {(row.issues || []).map((issue) => <span key={issue} className="fr-chip is-issue">{issue}</span>)}
+              <small>{row.supplierName}{row.article ? `, арт. ${row.article}` : ""}{(row.issues || []).length ? ` · ${(row.issues || []).join(", ")}` : ""}</small>
             </span>
             <span className="fr-link-price">
-              {row.price.toLocaleString("ru")} {row.priceCurrency === "RUB" ? "₽" : "$"} → <b>{row.ozonPrice.toLocaleString("ru")} ₽</b>
+              <small>{row.price.toLocaleString("ru")} {row.priceCurrency === "RUB" ? "₽" : "$"}</small>
+              <b>{row.ozonPrice.toLocaleString("ru")} ₽</b>
             </span>
           </label>
         ))}
       </div>
 
-      <div className="fr-section-title">Основное</div>
+      <div className="fr-form-grid">
+        {hasOzon ? (
+          <>
+            <div className={`fr-field${isMissing("Цена") ? " is-missing" : ""}`}>
+              <span>Цена на Ozon, ₽<span className="fr-req">*</span></span>
+              <input inputMode="numeric" value={price} onChange={(e) => { setPriceTouched(true); setPrice(e.target.value.replace(/[^\d]/g, "")); }} />
+            </div>
+            <div className="fr-field">
+              <span>Цена до скидки, ₽</span>
+              <input inputMode="numeric" value={oldPrice} onChange={(e) => { setPriceTouched(true); setOldPrice(e.target.value.replace(/[^\d]/g, "")); }} />
+            </div>
+          </>
+        ) : null}
+        {hasYandex ? (
+          <div className="fr-field">
+            <span>Цена на Маркете, ₽</span>
+            <input inputMode="numeric" value={yandexPrice} onChange={(e) => { setPriceTouched(true); setYandexPrice(e.target.value.replace(/[^\d]/g, "")); }} />
+          </div>
+        ) : null}
+        <div className="fr-field">
+          <span>НДС</span>
+          <select value={vat} onChange={(e) => setVat(e.target.value)}>
+            {VAT_OPTIONS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+          </select>
+        </div>
+      </div>
+      {pricePreview.data?.price ? (
+        <div className="fr-hint">
+          По привязке: Ozon {pricePreview.data.price.toLocaleString("ru")} ₽ (наценка ×{pricePreview.data.markup}, {pricePreview.data.supplierName})
+          {pricePreview.data.yandexPrice ? `, Маркет ${pricePreview.data.yandexPrice.toLocaleString("ru")} ₽` : ""}.
+          {priceTouched ? <button type="button" className="fr-link-button" onClick={() => { setPriceTouched(false); applyPreview(pricePreview.data!); }}>Вернуть цены по привязке</button> : null}
+        </div>
+      ) : null}
+
+      <div className="fr-step"><span className="fr-step-n">3</span>Карточка</div>
       <div className="fr-form-grid">
         <div className={`fr-field is-wide${isMissing("Название") ? " is-missing" : ""}`}>
           <span>Название<span className="fr-req">*</span></span>
@@ -737,27 +836,6 @@ function OzonCardStep({ perfume, accountId, typeKey, volume, tester, onBack }: {
         <div className={`fr-field${isMissing("Артикул") ? " is-missing" : ""}`}>
           <span>Артикул<span className="fr-req">*</span></span>
           <input value={offerId} onChange={(e) => setOfferId(e.target.value)} />
-          <span className="fr-hint">Если занят — добавим -2, -3…</span>
-        </div>
-        <div className={`fr-field${isMissing("Цена") ? " is-missing" : ""}`}>
-          <span>Цена, ₽<span className="fr-req">*</span></span>
-          <input inputMode="numeric" value={price} onChange={(e) => { setPriceTouched(true); setPrice(e.target.value.replace(/[^\d]/g, "")); }} />
-          {pricePreview.data?.price ? (
-            <span className="fr-hint">
-              По привязке: {pricePreview.data.price.toLocaleString("ru")} ₽ ({pricePreview.data.supplierName}, ×{pricePreview.data.markup})
-              {priceTouched ? <> · <button type="button" className="fr-collapse" style={{ margin: 0 }} onClick={() => { setPriceTouched(false); setPrice(String(pricePreview.data!.price)); setOldPrice(String(pricePreview.data!.oldPrice || "")); }}>подставить</button></> : null}
-            </span>
-          ) : null}
-        </div>
-        <div className="fr-field">
-          <span>Цена до скидки, ₽</span>
-          <input inputMode="numeric" value={oldPrice} onChange={(e) => { setPriceTouched(true); setOldPrice(e.target.value.replace(/[^\d]/g, "")); }} />
-        </div>
-        <div className="fr-field">
-          <span>НДС</span>
-          <select value={vat} onChange={(e) => setVat(e.target.value)}>
-            {VAT_OPTIONS.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
-          </select>
         </div>
         {(["depth", "width", "height"] as const).map((key) => (
           <div key={key} className={`fr-field${isMissing({ depth: "Длина", width: "Ширина", height: "Высота" }[key]) ? " is-missing" : ""}`}>
@@ -769,66 +847,79 @@ function OzonCardStep({ perfume, accountId, typeKey, volume, tester, onBack }: {
           <span>Вес с упаковкой, г</span>
           <input inputMode="numeric" value={dims.weight} onChange={(e) => setDims((d) => ({ ...d, weight: e.target.value.replace(/[^\d]/g, "") }))} />
         </div>
+        <div className="fr-field is-wide">
+          <span>Описание</span>
+          <textarea value={description} onChange={(e) => setDescription(e.target.value)} />
+        </div>
       </div>
       {!data.brandMatched ? (
         <div className="fr-warn">
-          Бренд «{perfume.brand}» не нашёлся в справочнике Ozon дословно — выберите его в поле «Бренд»
-          {data.brandCandidates.length ? `: похожие — ${data.brandCandidates.slice(0, 5).map((c) => c.value).join(", ")}` : ""}.
+          Бренда «{perfume.brand}» нет в справочнике Ozon в точности. Выберите его в поле «Бренд»
+          {data.brandCandidates.length ? `, похожие: ${data.brandCandidates.slice(0, 5).map((c) => c.value).join(", ")}` : ""}.
         </div>
       ) : null}
 
-      {description ? (
-        <>
-          <div className="fr-section-title">Описание (аннотация)</div>
-          {renderAttr(description)}
-        </>
-      ) : null}
-
-      <div className="fr-section-title">Обязательные характеристики Ozon</div>
+      <div className="fr-step"><span className="fr-step-n">4</span>Характеристики Ozon</div>
       <div className="fr-form-grid">{required.map(renderAttr)}</div>
-
-      <button className="fr-collapse" type="button" onClick={() => setShowOptional((v) => !v)}>
-        {showOptional ? "Скрыть" : "Показать"} остальные характеристики ({optional.length - (description ? 1 : 0)})
+      <button className="fr-link-button" type="button" onClick={() => setShowOptional((v) => !v)}>
+        {showOptional ? "Скрыть необязательные характеристики" : `Показать необязательные характеристики (${optional.length})`}
       </button>
-      {showOptional ? <div className="fr-form-grid">{optional.filter((a) => a.id !== 4191).map(renderAttr)}</div> : null}
+      {showOptional ? <div className="fr-form-grid">{optional.map(renderAttr)}</div> : null}
 
-      <div className="fr-actions">
-        <button className="primary-action" type="button" disabled={submit.isPending || Boolean(exportId && result?.status !== "failed")} onClick={() => submit.mutate()}>
-          {submit.isPending ? <Loader2 size={14} className="spin" /> : <Send size={14} />} Создать карточку на Ozon
+      <div className="fr-footer">
+        <div className="fr-footer-text">
+          {chosen.length ? (
+            <>Создать <b>{offerId}</b> в {chosen.map((t) => t.label).join(", ")}</>
+          ) : "Отметьте хотя бы один магазин"}
+          {unapproved.length ? <span className="fr-warn"> Пирамида не одобрена для {unapproved.map((t) => t.label).join(", ")}: карточка уйдёт без неё.</span> : null}
+          {missing.length ? <span className="fr-warn"> Не заполнено: {missing.join(", ")}</span> : null}
+        </div>
+        <button className="primary-action" type="button" disabled={!chosen.length || submit.isPending || sent} onClick={() => submit.mutate()}>
+          {submit.isPending ? <Loader2 size={14} className="spin" /> : <Send size={14} />}
+          {chosen.length > 1 ? `Создать в ${chosen.length} ${plural(chosen.length, "магазине", "магазинах", "магазинах")}` : "Создать карточку"}
         </button>
-        <button className="secondary-action" type="button" onClick={onBack} disabled={submit.isPending}>Назад к параметрам</button>
-        <span className="fr-hint">Кабинет: {data.account.name}</span>
       </div>
-      {missing.length ? <div className="fr-warn">Не заполнено: {missing.join(", ")}</div> : null}
 
-      {result ? <ExportResult row={result} /> : exportId ? <div className="fr-result is-wait"><Loader2 size={14} className="spin" /> Отправляем…</div> : null}
-    </>
+      {sent ? (
+        <div className="fr-results">
+          {exportIds.map((id) => <ExportStatus key={id} id={id} />)}
+          <button className="secondary-action compact" type="button" onClick={() => setExportIds([])}>Отправить ещё раз с правками</button>
+        </div>
+      ) : null}
+    </section>
   );
 }
 
-function ExportResult({ row }: { row: ExportRow }) {
+function ExportStatus({ id }: { id: number }) {
+  const status = useQuery({
+    queryKey: ["fragrantica", "export", id],
+    queryFn: () => apiJson<{ export: ExportRow }>(`/api/fragrantica/ozon/exports/${id}`).then((r) => r.export),
+    refetchInterval: (query) => {
+      const row = query.state.data;
+      if (!row) return 3000;
+      const r = row.result;
+      return row.status === "pending" || row.status === "new" || (row.status === "imported" && (r?.barcode === "pending" || r?.links === "pending")) ? 3000 : false;
+    },
+  });
+  const row = status.data;
+  if (!row) return <div className="fr-result is-wait"><Loader2 size={14} className="spin" /> Отправляем…</div>;
+  const shop = <b>{row.accountName}</b>;
   if (row.status === "imported") {
     return (
       <div className="fr-result is-ok">
-        Карточка создана: <b>{row.offerId}</b>{row.productId ? ` (product_id ${row.productId})` : ""}.
-        {row.result?.barcode === "generated" ? " Штрихкод сгенерирован." : row.result?.barcode === "pending" ? " Штрихкод сгенерируем, как только Ozon позволит." : ""}
-        {row.result?.links === "linked" ? ` Привязано поставщиков: ${row.result.linksAdded ?? 0} — цена и остаток пойдут автоматически.` : row.result?.links === "pending" ? " Привязываем поставщиков…" : ""}
-        {row.result?.linksError ? <div className="fr-hint">Привязка: {row.result.linksError} — повторим автоматически.</div> : null}
+        {shop}: карточка {row.offerId} создана{row.productId ? ` (product_id ${row.productId})` : ""}.
+        {row.result?.links === "linked" ? ` Привязано поставщиков: ${row.result.linksAdded ?? 0}, цена и остаток пойдут автоматически.` : row.result?.links === "pending" ? " Привязываем поставщиков…" : ""}
+        {row.result?.barcode === "generated" ? " Штрихкод сгенерирован." : ""}
+        {row.result?.linksError ? <div className="fr-hint">Привязка: {row.result.linksError}. Повторим автоматически.</div> : null}
         {row.result?.warnings ? <div className="fr-hint">Замечания Ozon: {row.result.warnings}</div> : null}
-        <div className="fr-hint">Фото в конце добавит parfumdeclaration в течение часа; дальше — привязка к поставщику на складе.</div>
       </div>
     );
   }
   if (row.status === "queued_limit") {
-    return (
-      <div className="fr-result is-wait">
-        Дневной лимит Ozon на создание карточек исчерпан — карточка <b>{row.offerId}</b> в очереди и уйдёт автоматически
-        {row.nextAttemptAt ? ` около ${formatDateTime(row.nextAttemptAt)}` : " после 03:00 МСК"}.
-      </div>
-    );
+    return <div className="fr-result is-wait">{shop}: дневной лимит Ozon исчерпан, карточка уйдёт сама{row.nextAttemptAt ? ` около ${formatDateTime(row.nextAttemptAt)}` : " после 03:00 МСК"}.</div>;
   }
   if (row.status === "failed") {
-    return <div className="fr-result is-bad">Ozon не принял карточку <b>{row.offerId}</b>: {row.error}. Исправьте поля и отправьте ещё раз.</div>;
+    return <div className="fr-result is-bad">{shop}: карточку {row.offerId} не приняли. {row.error}</div>;
   }
-  return <div className="fr-result is-wait"><Loader2 size={14} className="spin" /> {STATUS_LABEL[row.status] || row.status}: {row.offerId}…</div>;
+  return <div className="fr-result is-wait"><Loader2 size={14} className="spin" /> {shop}: {STATUS_LABEL[row.status] || row.status}…</div>;
 }

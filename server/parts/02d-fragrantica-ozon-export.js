@@ -221,7 +221,7 @@ app.get("/api/fragrantica/ozon/form", requireAdmin, async (request, response, ne
       .map((attr) => ({ ...attr, values: values[attr.id] || [] }));
     const prisma = await requireFragranticaTables();
     const exports = await prisma.$queryRawUnsafe(
-      `SELECT id, account_name AS "accountName", offer_id AS "offerId", volume_ml AS "volume", tester, status, product_id AS "productId", error, created_at AS "createdAt"
+      `SELECT id, marketplace, account_name AS "accountName", offer_id AS "offerId", volume_ml AS "volume", tester, status, product_id AS "productId", error, created_at AS "createdAt"
        FROM fragrantica_exports WHERE perfume_id = $1 ORDER BY id DESC`,
       perfumeId,
     );

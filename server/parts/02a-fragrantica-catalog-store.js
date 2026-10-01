@@ -379,7 +379,7 @@ async function listFragranticaPerfumes(query = {}) {
     `SELECT p.id, p.url, p.brand, p.brand_slug, p.name, p.gender, p.year, p.votes, p.rating, p.detail_at,
             p.pm_rows, p.pm_min_usd, p.pm_volumes, p.pm_checked_at,
             jsonb_build_object('accords', p.detail->'accords') AS detail,
-            (SELECT COALESCE(jsonb_agg(jsonb_build_object('offerId', e.offer_id, 'status', e.status, 'account', e.account_name, 'volume', e.volume_ml) ORDER BY e.id), '[]'::jsonb)
+            (SELECT COALESCE(jsonb_agg(jsonb_build_object('offerId', e.offer_id, 'status', e.status, 'account', e.account_name, 'marketplace', e.marketplace, 'volume', e.volume_ml) ORDER BY e.id), '[]'::jsonb)
                FROM fragrantica_exports e WHERE e.perfume_id = p.id) AS exported
      FROM fragrantica_perfumes p ${whereSql}
      ORDER BY ${order} LIMIT ${limit + 1} OFFSET ${(page - 1) * limit}`,
