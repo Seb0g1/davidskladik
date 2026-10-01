@@ -384,6 +384,8 @@ function matchFragranticaPmIndex(index, perfume = {}) {
     if (!nameTokens.every((w) => tokens.has(w))) continue;
     const row = index.rows[i];
     if (fragPmIsTesterOrSample(row.name)) continue;
+    const rowVolumes = fragPmVolumes(row.name);
+    if (rowVolumes.length && Math.max(...rowVolumes) <= 3) continue; // пробник / отливант
     const check = assessFragranticaSupplierRow(row.name, { brand: perfume.brand, name: perfume.name, typeKey: "edp" });
     if (check.clone || check.notPerfume || check.missingNameWords.length || check.extraWords.length) continue;
     count += 1;

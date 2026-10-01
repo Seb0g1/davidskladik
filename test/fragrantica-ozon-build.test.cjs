@@ -200,6 +200,7 @@ test("PriceMaster availability: real rows match the model, clones/flankers/teste
     { name: "Dior EAU SAUVAGE parfum 100 ml m", usd: 119.9 },
     { name: "Chanel Coco Mademoiselle w 100ml edp", usd: 167 },
     { name: "Chanel  COCO 100ml edP", usd: 145 },
+    { name: "Dior Sauvage edp 1ml", usd: 1.7 },
   ];
   const index = ctx.pm.buildFragranticaPmIndex(rows);
   const sauvage = plain(ctx.pm.matchFragranticaPmIndex(index, { brand: "Dior", name: "Sauvage" }));
