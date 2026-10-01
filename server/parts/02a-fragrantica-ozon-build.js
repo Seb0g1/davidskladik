@@ -256,6 +256,76 @@ function buildFragranticaOzonItem(input = {}, categoryAttributes = []) {
   return { item, missing };
 }
 
+// ─── Оценка строки поставщика для «Предложений привязки» ─────────────────────
+// Строки PriceMaster пишут по-разному: «C.Dior Sauvage men 60ml edt», «DIOR SAUVAGE (M) EDT 60 ML».
+// Отсекаются клоны (оригинал только в скобках: «AREEJ DIORIT 100 ml (Sauvage Dior)»), не-парфюм
+// (лосьон/бальзам после бритья, дезодорант, мист, гель…), другая концентрация и фланкеры
+// («Sauvage Elixir» для «Sauvage»: лишние значимые слова → не рекомендуем).
+
+const FRAG_ROW_STOP_WORDS = new Set([
+  "ml", "мл", "m", "w", "l", "u", "men", "man", "women", "woman", "lady", "unisex", "унисекс", "муж", "жен", "мужской", "женский",
+  "мужская", "женская", "edp", "edt", "edc", "eau", "de", "parfum", "perfume", "toilette", "cologne", "туалетная", "парфюмерная",
+  "вода", "духи", "одеколон", "spray", "vapo", "спрей", "new", "шт", "оригинал", "original", "lux", "люкс", "box", "без", "коробки",
+  "коробка", "christian", "c", "for", "pour", "для", "и", "the", "tester", "тестер", "edition", "version", "версия",
+]);
+const FRAG_ROW_NOT_PERFUME = new Set([
+  "lotion", "лосьон", "balm", "бальзам", "deo", "deodorant", "дезодорант", "mist", "мист", "gel", "гель", "shower", "душа",
+  "cream", "крем", "soap", "мыло", "shampoo", "шампунь", "aftershave", "stick", "стик", "body", "hair", "волос", "candle", "свеча",
+  "powder", "пудра", "oil", "масло", "milk", "молочко", "refill", "рефил",
+]);
+
+const FRAG_BRAND_ALIASES = {
+  "yves saint laurent": ["ysl"],
+  "dolce gabbana": ["d&g", "dg"],
+  "calvin klein": ["ck"],
+  "jean paul gaultier": ["jpg", "gaultier"],
+  "maison francis kurkdjian": ["mfk", "kurkdjian"],
+  "giorgio armani": ["armani"],
+  "carolina herrera": ["herrera"],
+  "hugo boss": ["boss"],
+  "paco rabanne": ["rabanne"],
+  "rabanne": ["paco"],
+  "christian louboutin": ["louboutin"],
+  "abercrombie fitch": ["a&f", "abercrombie"],
+  "estee lauder": ["lauder"],
+  "van cleef arpels": ["vca", "arpels"],
+};
+
+function fragRowTokens(text) {
+  return String(text || "").toLowerCase().replace(/ё/g, "е").split(/[^0-9a-zа-я]+/i).filter(Boolean);
+}
+
+function fragRowConcentration(tokens, text) {
+  const t = new Set(tokens);
+  if (t.has("edp") || t.has("парфюмерная") || /eau\s+de\s+parfum/.test(text)) return "edp";
+  if (t.has("edt") || t.has("туалетная") || /eau\s+de\s+toilette/.test(text)) return "edt";
+  if (t.has("edc") || t.has("cologne") || t.has("одеколон")) return "cologne";
+  if (t.has("extrait") || t.has("духи") || (t.has("parfum") && !t.has("eau"))) return "parfum";
+  return "";
+}
+
+function assessFragranticaSupplierRow(rowName, { brand = "", name = "", typeKey = "edp", oilAllowed = false } = {}) {
+  const text = String(rowName || "").toLowerCase().replace(/ё/g, "е");
+  const outside = text.replace(/\([^)]*\)/g, " ");
+  const outsideTokens = fragRowTokens(outside);
+  const outsideSet = new Set(outsideTokens);
+  const brandTokens = fragRowTokens(brand).filter((w) => w.length >= 3);
+  const nameTokens = fragRowTokens(name);
+  // The brand must be named outside the brackets (half of its words or a common abbreviation)
+  const present = brandTokens.filter((w) => outsideSet.has(w)).length;
+  const aliases = FRAG_BRAND_ALIASES[fragRowTokens(brand).join(" ")] || [];
+  const aliasHit = aliases.some((alias) => (alias.includes("&") ? outside.includes(alias) : outsideSet.has(alias)));
+  const clone = brandTokens.length > 0 && present < Math.ceil(brandTokens.length / 2) && !aliasHit;
+  const afterShave = /after\s*-?\s*shave|a\s*\/\s*sh(?![a-z])|после\s+бритья/.test(text);
+  const notPerfume = afterShave || fragRowTokens(text).some((w) => FRAG_ROW_NOT_PERFUME.has(w) && !(oilAllowed && (w === "oil" || w === "масло")));
+  const concentration = fragRowConcentration(outsideTokens, outside);
+  const wanted = typeKey === "oil" ? "parfum" : typeKey;
+  const concentrationOk = !concentration || concentration === wanted;
+  const known = new Set([...brandTokens, ...fragRowTokens(brand), ...nameTokens]);
+  const extraWords = outsideTokens.filter((w) => !known.has(w) && !FRAG_ROW_STOP_WORDS.has(w) && !/^\d/.test(w) && w.length >= 3);
+  return { clone, notPerfume, concentration, concentrationOk, extraWords };
+}
+
 // Ближайший сброс дневного лимита Ozon (00:00 UTC = 03:00 МСК) + 5 минут запаса.
 function fragranticaNextOzonLimitReset(now = new Date(), resetAt = null) {
   const parsed = resetAt ? Date.parse(resetAt) : NaN;

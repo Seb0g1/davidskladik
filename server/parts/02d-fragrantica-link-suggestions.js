@@ -103,10 +103,21 @@ app.get("/api/fragrantica/ozon/link-suggestions", requireAdmin, async (request, 
       .filter((row) => custom || !supplierRowVolumeMismatch(productName, row.name))
       .filter((row) => custom || isTesterOrDecantSupplierRowName(row.name) === tester)
       .filter((row) => custom || volume <= 3 || !isSingleSampleName(row.name))
-      .map((row) => {
+      .map((row) => ({ row, check: assessFragranticaSupplierRow(row.name, { brand: perfume.brand, name: perfume.name, typeKey, oilAllowed: typeKey === "oil" }) }))
+      // Клоны («… (Sauvage Dior)») и не-парфюм (лосьон, дезодорант, мист…) не предлагаем вовсе
+      .filter(({ check }) => custom || (!check.clone && !check.notPerfume))
+      .map(({ row, check }) => {
         const volumes = priceMasterBottleVolumes(row.name);
         const volumeOk = Boolean(volume) && volumes.some((v) => Math.abs(v - volume) < 0.01);
-        const nameOk = pmRowConfirmsPinnedName(row, anchor);
+        const nameOk = !check.clone && pmRowConfirmsPinnedName(row, anchor);
+        const recommended = volumeOk && nameOk && !check.notPerfume && check.concentrationOk && !check.extraWords.length;
+        const issues = [
+          check.clone ? "клон/аналог" : "",
+          check.notPerfume ? "не парфюм" : "",
+          check.concentration && !check.concentrationOk ? `другая концентрация (${check.concentration.toUpperCase()})` : "",
+          check.extraWords.length ? `лишние слова: ${check.extraWords.slice(0, 3).join(", ")}` : "",
+          volume && !volumeOk ? "объём не указан" : "",
+        ].filter(Boolean);
         const { markup, price } = fragranticaRowPrice(row, { usdRate, settings });
         return {
           id: row.id,
@@ -120,12 +131,13 @@ app.get("/api/fragrantica/ozon/link-suggestions", requireAdmin, async (request, 
           updatedAt: row.updatedAt,
           volumeOk,
           nameOk,
-          recommended: volumeOk && nameOk,
+          recommended,
+          issues,
           markup,
           ozonPrice: price,
         };
       })
-      .sort((a, b) => Number(b.recommended) - Number(a.recommended) || Number(b.nameOk) - Number(a.nameOk) || a.ozonPrice - b.ozonPrice)
+      .sort((a, b) => Number(b.recommended) - Number(a.recommended) || a.issues.length - b.issues.length || Number(b.nameOk) - Number(a.nameOk) || a.ozonPrice - b.ozonPrice)
       .slice(0, 40);
 
     // Предвыбор: рекомендованные строки — по одной (самой дешёвой) у каждого поставщика, до трёх.

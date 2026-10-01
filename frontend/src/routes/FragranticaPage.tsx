@@ -59,7 +59,7 @@ type OzonForm = {
 };
 type LinkRow = {
   id: string; rowId: string; article: string; name: string; supplierName: string; partnerId: string;
-  price: number; priceCurrency: string; updatedAt?: string | null; volumeOk: boolean; nameOk: boolean; recommended: boolean;
+  price: number; priceCurrency: string; updatedAt?: string | null; volumeOk: boolean; nameOk: boolean; recommended: boolean; issues?: string[];
   markup: number; ozonPrice: number;
 };
 type LinkSuggestions = { productName: string; usdRate: number; rows: LinkRow[]; suggested: string[] };
@@ -718,6 +718,8 @@ function OzonCardStep({ perfume, accountId, typeKey, volume, tester, onBack }: {
             <span className="fr-link-flags">
               {row.nameOk ? <span className="fr-chip">название ✓</span> : null}
               {row.volumeOk ? <span className="fr-chip">объём ✓</span> : null}
+              {row.recommended ? <span className="fr-chip is-recommended">подходит</span> : null}
+              {(row.issues || []).map((issue) => <span key={issue} className="fr-chip is-issue">{issue}</span>)}
             </span>
             <span className="fr-link-price">
               {row.price.toLocaleString("ru")} {row.priceCurrency === "RUB" ? "₽" : "$"} → <b>{row.ozonPrice.toLocaleString("ru")} ₽</b>
