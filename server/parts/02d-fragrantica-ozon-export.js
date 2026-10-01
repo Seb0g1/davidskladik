@@ -612,7 +612,11 @@ async function sendFragranticaYandexVatPrice(shop, offerId, price) {
     });
     return { vat: String(fragranticaYandexVat) };
   } catch (error) {
-    return { vat: "failed", vatError: cleanText(error?.message).slice(0, 300) };
+    const message = cleanText(error?.message);
+    // «Partner use only default price; LOCKED»: the cabinet sells at one basic price — its VAT comes from
+    // the Market cabinet settings, not from the API
+    if (/LOCKED|default price/i.test(message)) return { vat: "cabinet" };
+    return { vat: "failed", vatError: message.slice(0, 300) };
   }
 }
 
@@ -681,7 +685,7 @@ async function refreshFragranticaExport(row) {
       linkResult = await applyFragranticaExportLinks(row);
     } catch (error) {
       linkResult = { links: "pending", linksError: error?.message || String(error) };
-      logger.warn("fragrantica export links failed", { id: row.id, detail: linkResult.linksError });
+      logger.warn("fragrantica export links failed", { id: Number(row.id), detail: linkResult.linksError });
     }
     const updated = await updateFragranticaExport(row.id, { result: { ...(row.result || {}), ...linkResult } });
     if (linkResult.links === "pending") return updated;
@@ -817,7 +821,7 @@ app.get("/api/fragrantica/ozon/exports/:id", requireAdmin, async (request, respo
     let row = await readFragranticaExport(request.params.id);
     if (!row) return response.status(404).json({ error: "Экспорт не найден." });
     row = await refreshFragranticaExport(row).catch((error) => {
-      logger.warn("fragrantica export refresh failed", { id: row.id, detail: error?.message });
+      logger.warn("fragrantica export refresh failed", { id: Number(row.id), detail: error?.message });
       return row;
     });
     response.json({ ok: true, export: fragranticaExportFromRow(row) });
@@ -861,7 +865,7 @@ async function runFragranticaExportQueueTick() {
         await refreshFragranticaExport(row);
       }
     } catch (error) {
-      logger.warn("fragrantica export queue item failed", { id: row.id, detail: error?.message });
+      logger.warn("fragrantica export queue item failed", { id: Number(row.id), detail: error?.message });
     }
   }
   if (due.length) logger.info("fragrantica export queue tick", { due: due.length, sent });
