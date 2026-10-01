@@ -83,7 +83,19 @@
 .fr-warn { margin-top: 8px; font-size: 13px; color: var(--yellow); }
 .fr-collapse { margin-top: 14px; border: 0; background: transparent; color: var(--accent-strong); cursor: pointer; padding: 0; font-size: 13px; font-weight: 600; }
 
+/* Предложения привязки */
+.fr-links-search input { width: 100%; height: 36px; border-radius: 10px; border: 1px solid var(--line); background: var(--field-bg); color: var(--text); padding: 0 12px; margin-bottom: 8px; }
+.fr-links { display: grid; gap: 6px; max-height: 360px; overflow-y: auto; padding-right: 4px; }
+.fr-link-row { display: grid; grid-template-columns: auto 1fr auto auto; gap: 10px; align-items: center; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; cursor: pointer; font-size: 13px; }
+.fr-link-row.is-on { border-color: rgba(var(--accent-rgb), .7); background: rgba(var(--accent-rgb), .1); }
+.fr-link-name { min-width: 0; color: var(--text); }
+.fr-link-flags { display: flex; gap: 4px; }
+.fr-link-price { white-space: nowrap; color: var(--text-soft); }
+
 @media (max-width: 720px) {
+  .fr-link-row { grid-template-columns: auto 1fr; }
+  .fr-link-flags, .fr-link-price { grid-column: 2; }
+
   .fr-detail { grid-template-columns: 1fr; }
   .fr-detail-img { max-width: 260px; }
   .fr-drawer { padding: 14px 16px 60px; }

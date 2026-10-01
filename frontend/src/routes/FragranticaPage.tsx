@@ -42,7 +42,7 @@ type FormAttribute = {
 type ExportRow = {
   id: number; offerId: string; accountName: string; volume: number | null; tester: boolean; status: string;
   productId: number | null; error: string | null; nextAttemptAt?: string | null; createdAt?: string;
-  result?: { barcode?: string; barcodeError?: string; warnings?: string | null } | null;
+  result?: { barcode?: string; barcodeError?: string; warnings?: string | null; links?: string; linksAdded?: number; linksError?: string } | null;
 };
 type OzonForm = {
   perfume: { id: number; brand: string; name: string };
@@ -57,6 +57,13 @@ type OzonForm = {
   sourceImage: string;
   exports: ExportRow[];
 };
+type LinkRow = {
+  id: string; rowId: string; article: string; name: string; supplierName: string; partnerId: string;
+  price: number; priceCurrency: string; updatedAt?: string | null; volumeOk: boolean; nameOk: boolean; recommended: boolean;
+  markup: number; ozonPrice: number;
+};
+type LinkSuggestions = { productName: string; usdRate: number; rows: LinkRow[]; suggested: string[] };
+type PricePreview = { price: number; oldPrice: number; supplierName: string; markup: number };
 type ImageJob = { status: "running" | "done" | "failed"; stage?: string; error?: string | null; result?: { main: string | null; notes: string | null; source: string; warnings: string[] } | null };
 
 const GENDER_LABEL: Record<string, string> = { male: "мужской", female: "женский", unisex: "унисекс" };
@@ -539,6 +546,42 @@ function OzonCardStep({ perfume, accountId, typeKey, volume, tester, onBack }: {
   const [missing, setMissing] = useState<string[]>([]);
   const [exportId, setExportId] = useState<number | null>(null);
 
+  // Предложения привязки: строки PriceMaster по «бренд + название + мл»; цена — как у склада
+  const [linkQuery, setLinkQuery] = useState("");
+  const debouncedLinkQuery = useDebounced(linkQuery, 400);
+  const [selectedLinks, setSelectedLinks] = useState<Record<string, LinkRow>>({});
+  const [priceTouched, setPriceTouched] = useState(false);
+  const suggestions = useQuery({
+    queryKey: ["fragrantica", "links", perfume.id, typeKey, volume, tester, debouncedLinkQuery.trim()],
+    queryFn: () => apiJson<LinkSuggestions>(`/api/fragrantica/ozon/link-suggestions?perfumeId=${perfume.id}&typeKey=${typeKey}&volume=${encodeURIComponent(volume)}&tester=${tester ? 1 : 0}&q=${encodeURIComponent(debouncedLinkQuery.trim())}`),
+    staleTime: 5 * 60_000,
+  });
+  const suggestedApplied = useRef(false);
+  useEffect(() => {
+    if (suggestedApplied.current || !suggestions.data || debouncedLinkQuery.trim()) return;
+    suggestedApplied.current = true;
+    const ids = suggestions.data.suggested;
+    setSelectedLinks(Object.fromEntries(suggestions.data.rows.filter((r) => ids.includes(r.id)).map((r) => [r.id, r])));
+  }, [suggestions.data, debouncedLinkQuery]);
+  const selectedRows = Object.values(selectedLinks);
+  const selectionKey = selectedRows.map((r) => r.id).sort().join(",");
+  const pricePreview = useQuery({
+    queryKey: ["fragrantica", "price-preview", selectionKey],
+    queryFn: () => apiJson<PricePreview>("/api/fragrantica/ozon/price-preview", mutationBody({ rows: selectedRows.map((r) => ({ price: r.price, priceCurrency: r.priceCurrency, supplierName: r.supplierName })) })),
+    enabled: selectedRows.length > 0,
+  });
+  useEffect(() => {
+    if (priceTouched || !pricePreview.data?.price) return;
+    setPrice(String(pricePreview.data.price));
+    setOldPrice(String(pricePreview.data.oldPrice || ""));
+  }, [pricePreview.data, priceTouched]);
+  const toggleLink = (row: LinkRow) => setSelectedLinks((prev) => {
+    const next = { ...prev };
+    if (next[row.id]) delete next[row.id];
+    else next[row.id] = row;
+    return next;
+  });
+
   useEffect(() => {
     const data = form.data;
     if (!data) return;
@@ -583,6 +626,7 @@ function OzonCardStep({ perfume, accountId, typeKey, volume, tester, onBack }: {
       return apiJson<{ export: ExportRow }>("/api/fragrantica/ozon/export", mutationBody({
         perfumeId: perfume.id, accountId, typeId: data.typeId, typeKey: data.typeKey, offerId, name, price, oldPrice, vat,
         depth: dims.depth, width: dims.width, height: dims.height, weight: dims.weight, tester, images: photoList, attributes,
+        links: selectedRows.map((r) => ({ rowId: r.rowId, article: r.article, name: r.name, supplierName: r.supplierName, partnerId: r.partnerId, priceCurrency: r.priceCurrency })),
       }));
     },
     onSuccess: (data) => {
@@ -603,7 +647,8 @@ function OzonCardStep({ perfume, accountId, typeKey, volume, tester, onBack }: {
     enabled: Boolean(exportId),
     refetchInterval: (query) => {
       const s = query.state.data?.status;
-      return s === "pending" || s === "new" || (s === "imported" && query.state.data?.result?.barcode === "pending") ? 3000 : false;
+      const r = query.state.data?.result;
+      return s === "pending" || s === "new" || (s === "imported" && (r?.barcode === "pending" || r?.links === "pending")) ? 3000 : false;
     },
   });
 
@@ -652,6 +697,35 @@ function OzonCardStep({ perfume, accountId, typeKey, volume, tester, onBack }: {
       {images.data?.status === "failed" ? <div className="fr-warn">{images.data.error}</div> : null}
       {(imageResult?.warnings || []).map((w) => <div key={w} className="fr-warn">{w}</div>)}
 
+      <div className="fr-section-title">Предложения привязки</div>
+      <div className="fr-hint" style={{ marginBottom: 8 }}>
+        Строки поставщиков из PriceMaster по названию и объёму. Отмеченные привяжутся к товару на складе сразу после создания карточки — цена ниже считается по ним.
+      </div>
+      <div className="fr-links-search">
+        <input value={linkQuery} onChange={(e) => setLinkQuery(e.target.value)} placeholder={`Свой поиск, например: ${perfume.brand} ${perfume.name} ${volume}`} />
+      </div>
+      {suggestions.isLoading ? <div className="fr-hint"><Loader2 size={13} className="spin" /> Ищем у поставщиков…</div> : null}
+      {suggestions.isError ? <div className="inline-error">{errorMessage(suggestions.error)}</div> : null}
+      {suggestions.data && !suggestions.data.rows.length ? <div className="fr-hint">Подходящих строк нет — карточку можно создать без привязки и привязать позже на складе.</div> : null}
+      <div className="fr-links">
+        {[...selectedRows.filter((r) => !(suggestions.data?.rows || []).some((x) => x.id === r.id)), ...(suggestions.data?.rows || [])].map((row) => (
+          <label key={row.id} className={`fr-link-row${selectedLinks[row.id] ? " is-on" : ""}`}>
+            <input type="checkbox" checked={Boolean(selectedLinks[row.id])} onChange={() => toggleLink(row)} />
+            <span className="fr-link-name">
+              {row.name}
+              <span className="fr-hint"> · {row.supplierName}{row.article ? ` · арт. ${row.article}` : ""}</span>
+            </span>
+            <span className="fr-link-flags">
+              {row.nameOk ? <span className="fr-chip">название ✓</span> : null}
+              {row.volumeOk ? <span className="fr-chip">объём ✓</span> : null}
+            </span>
+            <span className="fr-link-price">
+              {row.price.toLocaleString("ru")} {row.priceCurrency === "RUB" ? "₽" : "$"} → <b>{row.ozonPrice.toLocaleString("ru")} ₽</b>
+            </span>
+          </label>
+        ))}
+      </div>
+
       <div className="fr-section-title">Основное</div>
       <div className="fr-form-grid">
         <div className={`fr-field is-wide${isMissing("Название") ? " is-missing" : ""}`}>
@@ -665,11 +739,17 @@ function OzonCardStep({ perfume, accountId, typeKey, volume, tester, onBack }: {
         </div>
         <div className={`fr-field${isMissing("Цена") ? " is-missing" : ""}`}>
           <span>Цена, ₽<span className="fr-req">*</span></span>
-          <input inputMode="numeric" value={price} onChange={(e) => setPrice(e.target.value.replace(/[^\d]/g, ""))} />
+          <input inputMode="numeric" value={price} onChange={(e) => { setPriceTouched(true); setPrice(e.target.value.replace(/[^\d]/g, "")); }} />
+          {pricePreview.data?.price ? (
+            <span className="fr-hint">
+              По привязке: {pricePreview.data.price.toLocaleString("ru")} ₽ ({pricePreview.data.supplierName}, ×{pricePreview.data.markup})
+              {priceTouched ? <> · <button type="button" className="fr-collapse" style={{ margin: 0 }} onClick={() => { setPriceTouched(false); setPrice(String(pricePreview.data!.price)); setOldPrice(String(pricePreview.data!.oldPrice || "")); }}>подставить</button></> : null}
+            </span>
+          ) : null}
         </div>
         <div className="fr-field">
           <span>Цена до скидки, ₽</span>
-          <input inputMode="numeric" value={oldPrice} onChange={(e) => setOldPrice(e.target.value.replace(/[^\d]/g, ""))} />
+          <input inputMode="numeric" value={oldPrice} onChange={(e) => { setPriceTouched(true); setOldPrice(e.target.value.replace(/[^\d]/g, "")); }} />
         </div>
         <div className="fr-field">
           <span>НДС</span>
@@ -730,6 +810,8 @@ function ExportResult({ row }: { row: ExportRow }) {
       <div className="fr-result is-ok">
         Карточка создана: <b>{row.offerId}</b>{row.productId ? ` (product_id ${row.productId})` : ""}.
         {row.result?.barcode === "generated" ? " Штрихкод сгенерирован." : row.result?.barcode === "pending" ? " Штрихкод сгенерируем, как только Ozon позволит." : ""}
+        {row.result?.links === "linked" ? ` Привязано поставщиков: ${row.result.linksAdded ?? 0} — цена и остаток пойдут автоматически.` : row.result?.links === "pending" ? " Привязываем поставщиков…" : ""}
+        {row.result?.linksError ? <div className="fr-hint">Привязка: {row.result.linksError} — повторим автоматически.</div> : null}
         {row.result?.warnings ? <div className="fr-hint">Замечания Ozon: {row.result.warnings}</div> : null}
         <div className="fr-hint">Фото в конце добавит parfumdeclaration в течение часа; дальше — привязка к поставщику на складе.</div>
       </div>

@@ -77,6 +77,7 @@ async function ensureFragranticaTables() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`);
+  await prisma.$executeRawUnsafe(`ALTER TABLE fragrantica_exports ADD COLUMN IF NOT EXISTS links JSONB`);
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS fragrantica_exports_perfume_idx ON fragrantica_exports (perfume_id)`);
   await prisma.$executeRawUnsafe(`CREATE UNIQUE INDEX IF NOT EXISTS fragrantica_exports_offer_idx ON fragrantica_exports (account_id, offer_id)`);
   await prisma.$executeRawUnsafe(`

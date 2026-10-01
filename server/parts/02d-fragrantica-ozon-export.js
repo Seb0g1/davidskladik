@@ -334,6 +334,7 @@ function fragranticaExportFromRow(row = {}) {
     status: row.status,
     productId: row.product_id ? Number(row.product_id) : null,
     result: row.result || null,
+    links: Array.isArray(row.links) ? row.links : [],
     error: row.error || null,
     nextAttemptAt: row.next_attempt_at || null,
     createdAt: row.created_at,
@@ -353,7 +354,7 @@ async function updateFragranticaExport(id, fields = {}) {
   const params = [Number(id)];
   for (const [column, value] of Object.entries(fields)) {
     params.push(value !== null && typeof value === "object" && !(value instanceof Date) ? JSON.stringify(value) : value);
-    sets.push(`${column} = $${params.length}${column === "result" || column === "item" ? "::jsonb" : ""}`);
+    sets.push(`${column} = $${params.length}${["result", "item", "links"].includes(column) ? "::jsonb" : ""}`);
   }
   await prisma.$executeRawUnsafe(`UPDATE fragrantica_exports SET ${sets.join(", ")}, updated_at = now() WHERE id = $1`, ...params);
   return readFragranticaExport(id);
@@ -426,7 +427,12 @@ async function refreshFragranticaExport(row) {
         status: "imported",
         product_id: item.product_id || null,
         error: null,
-        result: { ...(row.result || {}), warnings: fragranticaOzonErrorsText(item.errors || []) || null, barcode: "pending" },
+        result: {
+          ...(row.result || {}),
+          warnings: fragranticaOzonErrorsText(item.errors || []) || null,
+          barcode: "pending",
+          links: Array.isArray(row.links) && row.links.length ? "pending" : "none",
+        },
       });
       return refreshFragranticaExport(updated);
     }
@@ -439,6 +445,18 @@ async function refreshFragranticaExport(row) {
       });
     }
     return row;
+  }
+  if (row.status === "imported" && row.product_id && row.result?.links === "pending") {
+    let linkResult;
+    try {
+      linkResult = await applyFragranticaExportLinks(row);
+    } catch (error) {
+      linkResult = { links: "pending", linksError: error?.message || String(error) };
+      logger.warn("fragrantica export links failed", { id: row.id, detail: linkResult.linksError });
+    }
+    const updated = await updateFragranticaExport(row.id, { result: { ...(row.result || {}), ...linkResult } });
+    if (linkResult.links === "pending") return updated;
+    return refreshFragranticaExport(updated);
   }
   if (row.status === "imported" && row.product_id && row.result?.barcode === "pending") {
     const barcode = await generateFragranticaBarcode(row, account);
@@ -465,22 +483,28 @@ app.post("/api/fragrantica/ozon/export", requireAdmin, async (request, response,
     const prisma = await requireFragranticaTables();
     const base = item.offer_id;
     const candidates = [base, ...Array.from({ length: 9 }, (_, i) => `${base}-${i + 2}`)];
-    const takenRows = await prisma.$queryRawUnsafe(
-      `SELECT offer_id FROM fragrantica_exports WHERE account_id = $1 AND offer_id = ANY($2::text[])`,
+    const ourRows = await prisma.$queryRawUnsafe(
+      `SELECT offer_id, status FROM fragrantica_exports WHERE account_id = $1 AND offer_id = ANY($2::text[])`,
       cleanText(account.id),
       candidates,
     );
+    // A failed attempt keeps its offer id: sending again updates that (possibly half-created) Ozon card.
+    const retryable = new Set(ourRows.filter((r) => r.status === "failed").map((r) => r.offer_id));
     const ozonExisting = await ozonRequest("/v3/product/info/list", { offer_id: candidates }, account).catch(() => ({ items: [] }));
-    const taken = new Set([...takenRows.map((r) => r.offer_id), ...(ozonExisting.items || []).map((i) => i.offer_id)]);
+    const taken = new Set([...ourRows.map((r) => r.offer_id), ...(ozonExisting.items || []).map((i) => i.offer_id)]);
+    for (const offer of retryable) taken.delete(offer);
     item.offer_id = fragranticaUniqueOfferId(base, taken);
+    if (retryable.has(item.offer_id)) {
+      await prisma.$executeRawUnsafe(`DELETE FROM fragrantica_exports WHERE account_id = $1 AND offer_id = $2 AND status = 'failed'`, cleanText(account.id), item.offer_id);
+    }
     for (const attr of item.attributes) {
       if (attr.id === FRAG_OZON_ATTR.sellerCode) attr.values = [{ value: item.offer_id }];
     }
 
     const volumeAttr = item.attributes.find((a) => a.id === FRAG_OZON_ATTR.volume);
     const inserted = await prisma.$queryRawUnsafe(
-      `INSERT INTO fragrantica_exports (perfume_id, marketplace, account_id, account_name, offer_id, volume_ml, tester, status, item, created_by)
-       VALUES ($1, 'ozon', $2, $3, $4, $5, $6, 'new', $7::jsonb, $8) RETURNING *`,
+      `INSERT INTO fragrantica_exports (perfume_id, marketplace, account_id, account_name, offer_id, volume_ml, tester, status, item, created_by, links)
+       VALUES ($1, 'ozon', $2, $3, $4, $5, $6, 'new', $7::jsonb, $8, $9::jsonb) RETURNING *`,
       perfumeId,
       cleanText(account.id),
       cleanText(account.name),
@@ -489,6 +513,7 @@ app.post("/api/fragrantica/ozon/export", requireAdmin, async (request, response,
       Boolean(body.tester),
       JSON.stringify(item),
       cleanText(request.session?.username) || null,
+      JSON.stringify((Array.isArray(body.links) ? body.links : []).slice(0, 10).map(fragranticaLinkDraft)),
     );
     const submitted = await submitFragranticaExport(inserted[0]);
     await appendAudit(request, "fragrantica.ozon.export", {
@@ -551,6 +576,7 @@ async function runFragranticaExportQueueTick() {
     `SELECT * FROM fragrantica_exports
      WHERE (status = 'queued_limit' AND (next_attempt_at IS NULL OR next_attempt_at <= now()))
         OR (status = 'pending' AND updated_at < now() - interval '1 minute')
+        OR (status = 'imported' AND result->>'links' = 'pending' AND updated_at < now() - interval '2 minutes')
         OR (status = 'imported' AND result->>'barcode' = 'pending' AND updated_at < now() - interval '30 minutes')
      ORDER BY id LIMIT 50`,
   );

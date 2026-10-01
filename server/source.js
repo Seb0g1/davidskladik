@@ -192,6 +192,7 @@ const partFiles = [
   "02d-fragrantica-routes.js",
   "02d-fragrantica-catalog-routes.js",
   "02d-fragrantica-ozon-export.js",
+  "02d-fragrantica-link-suggestions.js",
   "02d-fragrance-notes-routes.js",
   "02d-warehouse-repair-routes.js",
   "02d-warehouse-product-patch-routes.js",
