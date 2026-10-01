@@ -110,12 +110,13 @@ app.get("/api/fragrantica/ozon/link-suggestions", requireAdmin, async (request, 
         const volumes = priceMasterBottleVolumes(row.name);
         const volumeOk = Boolean(volume) && volumes.some((v) => Math.abs(v - volume) < 0.01);
         const nameOk = !check.clone && pmRowConfirmsPinnedName(row, anchor);
-        const recommended = volumeOk && nameOk && !check.notPerfume && check.concentrationOk && !check.extraWords.length;
+        const recommended = volumeOk && nameOk && !check.notPerfume && check.concentrationOk && !check.extraWords.length && !check.missingNameWords.length;
         const issues = [
           check.clone ? "клон/аналог" : "",
           check.notPerfume ? "не парфюм" : "",
           check.concentration && !check.concentrationOk ? `другая концентрация (${check.concentration.toUpperCase()})` : "",
           check.extraWords.length ? `лишние слова: ${check.extraWords.slice(0, 3).join(", ")}` : "",
+          check.missingNameWords.length ? `нет слов: ${check.missingNameWords.slice(0, 3).join(", ")}` : "",
           volume && !volumeOk ? "объём не указан" : "",
         ].filter(Boolean);
         const { markup, price } = fragranticaRowPrice(row, { usdRate, settings });

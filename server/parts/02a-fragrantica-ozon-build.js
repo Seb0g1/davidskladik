@@ -264,7 +264,7 @@ function buildFragranticaOzonItem(input = {}, categoryAttributes = []) {
 
 const FRAG_ROW_STOP_WORDS = new Set([
   "ml", "мл", "m", "w", "l", "u", "men", "man", "women", "woman", "lady", "unisex", "унисекс", "муж", "жен", "мужской", "женский",
-  "мужская", "женская", "edp", "edt", "edc", "eau", "de", "parfum", "perfume", "toilette", "cologne", "туалетная", "парфюмерная",
+  "мужская", "женская", "edp", "edt", "edc", "parfum", "perfume", "toilette", "cologne", "туалетная", "парфюмерная",
   "вода", "духи", "одеколон", "spray", "vapo", "спрей", "new", "шт", "оригинал", "original", "lux", "люкс", "box", "без", "коробки",
   "коробка", "christian", "c", "for", "pour", "для", "и", "the", "tester", "тестер", "edition", "version", "версия",
 ]);
@@ -322,8 +322,13 @@ function assessFragranticaSupplierRow(rowName, { brand = "", name = "", typeKey 
   const wanted = typeKey === "oil" ? "parfum" : typeKey;
   const concentrationOk = !concentration || concentration === wanted;
   const known = new Set([...brandTokens, ...fragRowTokens(brand), ...nameTokens]);
-  const extraWords = outsideTokens.filter((w) => !known.has(w) && !FRAG_ROW_STOP_WORDS.has(w) && !/^\d/.test(w) && w.length >= 3);
-  return { clone, notPerfume, concentration, concentrationOk, extraWords };
+  // «eau de parfum» is a concentration, a lone «eau» is part of a name (Eau Sauvage ≠ Sauvage)
+  const wordsOutside = fragRowTokens(outside.replace(/eau\s+de\s+(parfum|toilette|cologne)/g, " "));
+  const extraWords = wordsOutside.filter((w) => !known.has(w) && !FRAG_ROW_STOP_WORDS.has(w) && !/^\d/.test(w) && (w.length >= 3 || w === "eau"));
+  // Every word of the perfume name must be there: «Chanel Coco» is not «Coco Mademoiselle»
+  const insideAll = new Set(fragRowTokens(text));
+  const missingNameWords = nameTokens.filter((w) => !brandTokens.includes(w) && !FRAG_ROW_STOP_WORDS.has(w) && w.length >= 2 && !insideAll.has(w));
+  return { clone, notPerfume, concentration, concentrationOk, extraWords, missingNameWords };
 }
 
 // Ближайший сброс дневного лимита Ozon (00:00 UTC = 03:00 МСК) + 5 минут запаса.

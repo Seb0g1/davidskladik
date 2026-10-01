@@ -178,4 +178,12 @@ test("supplier row assessment: clones, non-perfume, concentration, flankers (rea
   assert.equal(a("MAISON MARGIELA REPLICA JAZZ CLUB edt 100ml", { brand: "Maison Martin Margiela", name: "Replica Jazz Club" }).clone, false);
   assert.equal(a("YSL Libre edp 90ml", { brand: "Yves Saint Laurent", name: "Libre" }).clone, false);
   assert.equal(a("D&G Light Blue edt 100ml", { brand: "Dolce&Gabbana", name: "Light Blue" }).clone, false);
+  // Eau Sauvage is another perfume; «eau de parfum» is just the concentration
+  assert.deepEqual(a("Dior EAU SAUVAGE parfum 100 ml m").extraWords, ["eau"]);
+  assert.deepEqual(a("Dior Sauvage Eau de Parfum 100 ml").extraWords, []);
+  // Chanel Coco is not Coco Mademoiselle
+  const coco = (row) => plain(ctx.assess(row, { brand: "Chanel", name: "Coco Mademoiselle", typeKey: "edp" }));
+  assert.deepEqual(coco("Chanel  COCO 100ml edP").missingNameWords, ["mademoiselle"]);
+  assert.deepEqual(coco("CHANEL COCO MADEMOISELLE (W) EDP 100 ML").missingNameWords, []);
+  assert.deepEqual(coco("Chanel - Coco Mademoiselle Парфюмерная вода 100 мл").missingNameWords, []);
 });
