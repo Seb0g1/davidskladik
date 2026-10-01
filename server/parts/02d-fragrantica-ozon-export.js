@@ -12,8 +12,6 @@
 // сброса (00:00 UTC = 03:00 МСК). После imported Ozon генерирует штрихкод (/v1/barcode/generate).
 // Фото в конце карточки («Секреты нанесения», «Спасибо») добавляет parfumdeclaration сам, ежечасно.
 
-const fragranticaPdToolsUrl = cleanText(process.env.PD_TOOLS_URL || "https://parfumdeclaration.ru").replace(/\/+$/, "");
-const fragranticaPdToolsToken = cleanText(process.env.PD_TOOLS_TOKEN || "");
 const fragranticaExportQueueEnabled = process.env.FRAGRANTICA_EXPORT_QUEUE_ENABLED !== "false";
 const fragranticaExportQueueIntervalMs = 5 * 60_000;
 const fragranticaDictCache = new Map();

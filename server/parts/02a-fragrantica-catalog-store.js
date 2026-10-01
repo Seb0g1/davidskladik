@@ -8,6 +8,13 @@
 
 const fragFs = require("fs");
 const fragranticaMediaDir = path.join(publicDir, "uploads", "fragrantica");
+// parfumdeclaration.ru: обработка фото / картинка нот и прокси страниц Фрагрантики (IP davidsklad
+// получает от Cloudflare проверку «Just a moment», сервер parfumdeclaration — нет).
+const fragranticaPdToolsUrl = cleanText(process.env.PD_TOOLS_URL || "https://parfumdeclaration.ru").replace(/\/+$/, "");
+const fragranticaPdToolsToken = cleanText(process.env.PD_TOOLS_TOKEN || "");
+// auto — напрямую, при проверке Cloudflare через parfumdeclaration (6 ч); direct | pd — принудительно.
+const fragranticaFetchMode = cleanText(process.env.FRAGRANTICA_FETCH_VIA || "auto").toLowerCase();
+let fragranticaDirectBlockedUntil = 0;
 const fragranticaUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36";
 
 let fragranticaTablesReady = false;
@@ -187,7 +194,38 @@ class FragranticaHttpError extends Error {
   }
 }
 
+async function fetchFragranticaHtmlViaPd(url) {
+  if (!fragranticaPdToolsToken) throw new FragranticaHttpError(403, url);
+  const response = await fetch(`${fragranticaPdToolsUrl}/api/tools/fragrantica/fetch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-tools-token": fragranticaPdToolsToken },
+    body: JSON.stringify({ url }),
+    signal: AbortSignal.timeout(60_000),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `parfumdeclaration ответил ${response.status}`);
+  if (Number(data.status) !== 200) throw new FragranticaHttpError(Number(data.status) || 502, url);
+  const html = String(data.html || "");
+  if (/<title>\s*Just a moment|cf-chl-|challenge-platform/i.test(html.slice(0, 5000))) throw new FragranticaHttpError(403, url);
+  return html;
+}
+
 async function fetchFragranticaHtml(url) {
+  const viaPd = fragranticaPdToolsToken && (fragranticaFetchMode === "pd" || (fragranticaFetchMode === "auto" && Date.now() < fragranticaDirectBlockedUntil));
+  if (viaPd) return fetchFragranticaHtmlViaPd(url);
+  try {
+    return await fetchFragranticaHtmlDirect(url);
+  } catch (error) {
+    if (fragranticaFetchMode === "auto" && fragranticaPdToolsToken && error instanceof FragranticaHttpError && error.status === 403) {
+      fragranticaDirectBlockedUntil = Date.now() + 6 * 3_600_000;
+      logger.info("fragrantica direct fetch challenged, using parfumdeclaration proxy for 6 h");
+      return fetchFragranticaHtmlViaPd(url);
+    }
+    throw error;
+  }
+}
+
+async function fetchFragranticaHtmlDirect(url) {
   const response = await fetch(url, {
     headers: {
       "User-Agent": fragranticaUserAgent,
