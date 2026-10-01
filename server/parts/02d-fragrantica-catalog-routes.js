@@ -23,6 +23,7 @@ function fragranticaDetailResponse(row) {
     image: fragranticaMediaUrl("images", `${Number(row.id)}.jpg`),
     detailAt: row.detail_at || null,
     detailError: row.detail_error || null,
+    pm: fragranticaPmFromRow(row),
   };
 }
 

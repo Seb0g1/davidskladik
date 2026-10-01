@@ -276,6 +276,7 @@ const partFiles = [
   "02f-pm-change-watcher.js",
   "02f-ozon-action-guard.js",
   "02f-fragrantica-crawler.js",
+  "02f-fragrantica-pm-match.js",
   "02f-marketplace-verify-scheduler.js",
   "02f-zero-stock-sweep.js",
   "02f-avito-feed-refresh.js",

@@ -265,6 +265,9 @@ function startBackgroundSchedulers() {
   if (fragranticaExportQueueEnabled) {
     scheduleFragranticaExportQueue(2 * 60_000);
   }
+  if (fragranticaPmMatchEnabled) {
+    scheduleFragranticaPmMatch(5 * 60_000);
+  }
   if (ozonActionGuardEnabled) {
     scheduleOzonActionGuard(60_000);
     logger.info("ozon action guard enabled", { intervalMinutes: Math.round(ozonActionGuardIntervalMs / 60_000), removeManual: ozonActionGuardRemoveManual });

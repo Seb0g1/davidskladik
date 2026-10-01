@@ -195,6 +195,9 @@ async function runOzonYandexAutoImport({ limit = ozonYandexAutoImportPerRunLimit
       select: { offerId: true },
     });
     const existingOfferIds = new Set(yandexRows.map((row) => cleanText(row.offerId).toLowerCase()).filter(Boolean));
+    // Cards created from the «Фрагрантика» page: the Market card (with its own pictures) is made
+    // there, or deliberately not made at all — never transfer them from Ozon.
+    const fragranticaOffers = typeof fragranticaManagedOfferIds === "function" ? await fragranticaManagedOfferIds().catch(() => new Set()) : new Set();
 
     const selected = [];
     let skippedBlocked = 0;
@@ -223,7 +226,7 @@ async function runOzonYandexAutoImport({ limit = ozonYandexAutoImportPerRunLimit
         scanned += 1;
         const offerKey = cleanText(row.offerId).toLowerCase();
         if (!offerKey) continue;
-        if (existingOfferIds.has(offerKey)) {
+        if (existingOfferIds.has(offerKey) || fragranticaOffers.has(offerKey)) {
           skippedExisting += 1;
           continue;
         }

@@ -60,16 +60,16 @@ function fragranticaRowRubContext(row = {}) {
   return { ...row, rubNative: currency === "RUB" || currency === "RUR" };
 }
 
-function fragranticaRowPrice(row, { usdRate, settings, supplierCount = 1 }) {
+function fragranticaRowPrice(row, { usdRate, settings, supplierCount = 1, marketplace = "ozon" }) {
   const baseMarkup = resolveMarkupCoefficient({
     productMarkup: 0,
-    marketplace: "ozon",
+    marketplace,
     supplierUsdPrice: row.price,
     supplierPriceCurrency: row.priceCurrency || row.currency,
     usdRate,
     appSettings: settings,
   });
-  const policy = resolveAvailabilityPolicy({ marketplace: "ozon", availableSupplierCount: supplierCount, baseMarkup, appSettings: settings });
+  const policy = resolveAvailabilityPolicy({ marketplace, availableSupplierCount: supplierCount, baseMarkup, appSettings: settings });
   const markup = Number(policy?.markupCoefficient || baseMarkup);
   return { markup, price: calculateRubPrice(row.price, usdRate, markup, fragranticaRowRubContext(row)) };
 }
@@ -120,6 +120,7 @@ app.get("/api/fragrantica/ozon/link-suggestions", requireAdmin, async (request, 
           volume && !volumeOk ? "объём не указан" : "",
         ].filter(Boolean);
         const { markup, price } = fragranticaRowPrice(row, { usdRate, settings });
+        const yandexPrice = fragranticaRowPrice(row, { usdRate, settings, marketplace: "yandex" }).price;
         return {
           id: row.id,
           rowId: row.rowId,
@@ -136,6 +137,7 @@ app.get("/api/fragrantica/ozon/link-suggestions", requireAdmin, async (request, 
           issues,
           markup,
           ozonPrice: price,
+          yandexPrice,
         };
       })
       .sort((a, b) => Number(b.recommended) - Number(a.recommended) || a.issues.length - b.issues.length || Number(b.nameOk) - Number(a.nameOk) || a.ozonPrice - b.ozonPrice)
@@ -159,13 +161,21 @@ app.get("/api/fragrantica/ozon/link-suggestions", requireAdmin, async (request, 
 async function fragranticaPricePreview(rows = []) {
   const settings = await readAppSettings();
   const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
-  const priced = rows
+  const cheapest = (marketplace) => rows
     .filter((row) => Number(row.price) > 0)
-    .map((row) => ({ row, ...fragranticaRowPrice(row, { usdRate, settings, supplierCount: rows.length }) }))
-    .sort((a, b) => a.price - b.price);
-  const best = priced[0];
-  if (!best) return { price: 0, oldPrice: 0, supplierName: "", markup: 0 };
-  return { price: best.price, oldPrice: resolveOzonOldPrice(best.price), supplierName: cleanText(best.row.supplierName), markup: best.markup };
+    .map((row) => ({ row, ...fragranticaRowPrice(row, { usdRate, settings, supplierCount: rows.length, marketplace }) }))
+    .sort((a, b) => a.price - b.price)[0];
+  const best = cheapest("ozon");
+  if (!best) return { price: 0, oldPrice: 0, supplierName: "", markup: 0, yandexPrice: 0 };
+  const yandex = cheapest("yandex");
+  return {
+    price: best.price,
+    oldPrice: resolveOzonOldPrice(best.price),
+    supplierName: cleanText(best.row.supplierName),
+    markup: best.markup,
+    yandexPrice: yandex?.price || 0,
+    yandexMarkup: yandex?.markup || 0,
+  };
 }
 
 app.post("/api/fragrantica/ozon/price-preview", requireAdmin, async (request, response, next) => {
@@ -193,10 +203,22 @@ function fragranticaLinkDraft(row = {}) {
 // Завести созданную карточку на склад (как discovery) и привязать выбранные строки (как кнопка на складе).
 async function applyFragranticaExportLinks(row) {
   const drafts = Array.isArray(row.links) ? row.links : [];
-  if (!drafts.length || !row.product_id) return { links: "none" };
-  const account = fragranticaResolveOzonAccount(row.account_id);
-  const productId = ozonWarehouseProductId(account, row.offer_id);
-  let product = await findWarehouseProductById(productId);
+  if (!drafts.length) return { links: "none" };
+  let productId;
+  let product = null;
+  if (row.marketplace === "yandex") {
+    // The Market row was written by exportOzonProductsToYandex
+    const found = await getPrisma().warehouseProduct.findFirst({ where: { marketplace: "yandex", target: cleanText(row.account_id), offerId: row.offer_id }, select: { id: true } })
+      || await getPrisma().warehouseProduct.findFirst({ where: { marketplace: "yandex", offerId: row.offer_id }, select: { id: true } });
+    if (!found) throw new Error("Карточка Маркета ещё не появилась на складе");
+    productId = found.id;
+    product = await findWarehouseProductById(productId);
+  } else {
+    if (!row.product_id) return { links: "none" };
+    productId = ozonWarehouseProductId(fragranticaResolveOzonAccount(row.account_id), row.offer_id);
+    product = await findWarehouseProductById(productId);
+  }
+  const account = row.marketplace === "yandex" ? null : fragranticaResolveOzonAccount(row.account_id);
   if (!product) {
     const offerIds = [row.offer_id];
     const [infoMap, stockMap, priceMap] = await Promise.all([

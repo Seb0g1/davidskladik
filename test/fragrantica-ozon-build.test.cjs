@@ -187,3 +187,26 @@ test("supplier row assessment: clones, non-perfume, concentration, flankers (rea
   assert.deepEqual(coco("CHANEL COCO MADEMOISELLE (W) EDP 100 ML").missingNameWords, []);
   assert.deepEqual(coco("Chanel - Coco Mademoiselle Парфюмерная вода 100 мл").missingNameWords, []);
 });
+
+test("PriceMaster availability: real rows match the model, clones/flankers/testers/lotions do not", () => {
+  vm.runInContext("this.pm = { buildFragranticaPmIndex, matchFragranticaPmIndex };", ctx);
+  const rows = [
+    { name: "C.Dior Sauvage men  60ml edt", usd: 79 },
+    { name: "DIOR SAUVAGE (M) EDP 100 ML", usd: 114.1 },
+    { name: "Dior Sauvage Elixir 60ml", usd: 140 },
+    { name: "AREEJ DIORIT SOVGEE 100 ml M ( Sauvage Dior )", usd: 25 },
+    { name: "Dior Sauvage M A/Sh Lotion 100ml New 2015", usd: 65 },
+    { name: "Dior Sauvage edp 100ml TESTER", usd: 90 },
+    { name: "Dior EAU SAUVAGE parfum 100 ml m", usd: 119.9 },
+    { name: "Chanel Coco Mademoiselle w 100ml edp", usd: 167 },
+    { name: "Chanel  COCO 100ml edP", usd: 145 },
+  ];
+  const index = ctx.pm.buildFragranticaPmIndex(rows);
+  const sauvage = plain(ctx.pm.matchFragranticaPmIndex(index, { brand: "Dior", name: "Sauvage" }));
+  assert.deepEqual(sauvage, { count: 2, minUsd: 79, volumes: [60, 100] });
+  const eau = plain(ctx.pm.matchFragranticaPmIndex(index, { brand: "Dior", name: "Eau Sauvage" }));
+  assert.equal(eau.count, 1);
+  const coco = plain(ctx.pm.matchFragranticaPmIndex(index, { brand: "Chanel", name: "Coco Mademoiselle" }));
+  assert.deepEqual(coco, { count: 1, minUsd: 167, volumes: [100] });
+  assert.equal(ctx.pm.matchFragranticaPmIndex(index, { brand: "Creed", name: "Aventus" }).count, 0);
+});

@@ -51,6 +51,8 @@ async function ensureFragranticaTables() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`);
+  await prisma.$executeRawUnsafe(`ALTER TABLE fragrantica_perfumes ADD COLUMN IF NOT EXISTS pm_rows INTEGER, ADD COLUMN IF NOT EXISTS pm_min_usd NUMERIC, ADD COLUMN IF NOT EXISTS pm_volumes JSONB, ADD COLUMN IF NOT EXISTS pm_checked_at TIMESTAMPTZ`);
+  await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS fragrantica_perfumes_pm_idx ON fragrantica_perfumes (pm_rows DESC NULLS LAST) WHERE pm_rows > 0`);
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS fragrantica_perfumes_brand_idx ON fragrantica_perfumes (brand_slug)`);
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS fragrantica_perfumes_year_idx ON fragrantica_perfumes (year DESC NULLS LAST)`);
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS fragrantica_perfumes_votes_idx ON fragrantica_perfumes (votes DESC NULLS LAST)`);
@@ -101,6 +103,13 @@ async function requireFragranticaTables() {
 
 function fragranticaSearchText(...parts) {
   return parts.join(" ").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+async function fragranticaManagedOfferIds() {
+  const prisma = getPrisma();
+  if (!prisma || !shouldUsePostgresStorage()) return new Set();
+  const rows = await prisma.$queryRawUnsafe(`SELECT DISTINCT lower(offer_id) AS offer FROM fragrantica_exports`).catch(() => []);
+  return new Set(rows.map((r) => r.offer));
 }
 
 async function readFragranticaState(key) {
@@ -311,6 +320,15 @@ async function ensureFragranticaPerfumeImage(id) {
 
 // ─── Каталог: список и карточка ─────────────────────────────────────────────
 
+function fragranticaPmFromRow(row = {}) {
+  if (!row.pm_checked_at) return null;
+  return {
+    rows: Number(row.pm_rows || 0),
+    minUsd: row.pm_min_usd === null || row.pm_min_usd === undefined ? null : Number(row.pm_min_usd),
+    volumes: Array.isArray(row.pm_volumes) ? row.pm_volumes.map(Number) : [],
+  };
+}
+
 function fragranticaRowToListItem(row = {}) {
   const detail = row.detail || null;
   return {
@@ -327,6 +345,7 @@ function fragranticaRowToListItem(row = {}) {
     hasDetail: Boolean(row.detail_at),
     accords: detail?.accords ? detail.accords.slice(0, 4).map((a) => ({ name: a.name, background: a.background, color: a.color })) : [],
     exported: Array.isArray(row.exported) ? row.exported : [],
+    pm: fragranticaPmFromRow(row),
   };
 }
 
@@ -345,16 +364,20 @@ async function listFragranticaPerfumes(query = {}) {
   if (Number(query.yearTo)) add("p.year <= ?", Number(query.yearTo));
   if (query.exported === "yes") where.push("EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.perfume_id = p.id)");
   if (query.exported === "no") where.push("NOT EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.perfume_id = p.id)");
+  if (query.pm === "yes") where.push("p.pm_rows > 0");
+  if (query.pm === "no") where.push("COALESCE(p.pm_rows, 0) = 0");
   const order = {
     popular: "p.votes DESC NULLS LAST, p.year DESC NULLS LAST, p.id DESC",
     new: "p.year DESC NULLS LAST, p.id DESC",
     name: "p.brand ASC, p.name ASC",
+    pm: "p.pm_rows DESC NULLS LAST, p.votes DESC NULLS LAST, p.id DESC",
   }[query.sort] || "p.votes DESC NULLS LAST, p.year DESC NULLS LAST, p.id DESC";
   const limit = Math.min(120, Math.max(1, Number(query.limit) || 60));
   const page = Math.max(1, Number(query.page) || 1);
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const rows = await prisma.$queryRawUnsafe(
     `SELECT p.id, p.url, p.brand, p.brand_slug, p.name, p.gender, p.year, p.votes, p.rating, p.detail_at,
+            p.pm_rows, p.pm_min_usd, p.pm_volumes, p.pm_checked_at,
             jsonb_build_object('accords', p.detail->'accords') AS detail,
             (SELECT COALESCE(jsonb_agg(jsonb_build_object('offerId', e.offer_id, 'status', e.status, 'account', e.account_name, 'volume', e.volume_ml) ORDER BY e.id), '[]'::jsonb)
                FROM fragrantica_exports e WHERE e.perfume_id = p.id) AS exported
@@ -395,7 +418,8 @@ async function readFragranticaCatalogStats() {
       (SELECT COUNT(*)::int FROM fragrantica_brands WHERE crawled_at IS NOT NULL) AS brands_crawled,
       (SELECT COUNT(*)::int FROM fragrantica_perfumes) AS perfumes,
       (SELECT COUNT(*)::int FROM fragrantica_perfumes WHERE detail_at IS NOT NULL) AS details,
-      (SELECT COUNT(*)::int FROM fragrantica_exports) AS exports`);
+      (SELECT COUNT(*)::int FROM fragrantica_exports) AS exports,
+      (SELECT COUNT(*)::int FROM fragrantica_perfumes WHERE pm_rows > 0) AS in_pm`);
   const row = rows[0] || {};
   return {
     brands: row.brands || 0,
@@ -403,5 +427,6 @@ async function readFragranticaCatalogStats() {
     perfumes: row.perfumes || 0,
     details: row.details || 0,
     exports: row.exports || 0,
+    inPm: row.in_pm || 0,
   };
 }

@@ -331,6 +331,68 @@ function assessFragranticaSupplierRow(rowName, { brand = "", name = "", typeKey 
   return { clone, notPerfume, concentration, concentrationOk, extraWords, missingNameWords };
 }
 
+// ─── «Есть в PriceMaster» для каталога ───────────────────────────────────────
+// Индекс слов по всем активным строкам PriceMaster; аромат «найден», если есть строка с брендом вне
+// скобок, всеми словами названия, без лишних слов (фланкеры) и не тестер/пробник/лосьон.
+
+function fragPmIsTesterOrSample(name) {
+  const text = String(name || "").toLowerCase().replace(/ё/g, "е");
+  return /(^|[^a-zа-я])(tester|testr|тестер|sample|vial|пробник|отливант|распив|decant)/.test(text);
+}
+
+function fragPmVolumes(name) {
+  return [...String(name || "").toLowerCase().matchAll(/(\d+(?:[.,]\d+)?)\s*(?:ml|мл)(?![a-zа-я])/g)]
+    .map((m) => Number(m[1].replace(",", ".")))
+    .filter((v) => v > 0 && v < 2000);
+}
+
+function buildFragranticaPmIndex(rows = []) {
+  const postings = new Map();
+  const tokenSets = rows.map((row, index) => {
+    const tokens = new Set(fragRowTokens(row.name));
+    for (const token of tokens) {
+      let list = postings.get(token);
+      if (!list) postings.set(token, (list = []));
+      list.push(index);
+    }
+    return tokens;
+  });
+  return { rows, postings, tokenSets };
+}
+
+function matchFragranticaPmIndex(index, perfume = {}) {
+  const nameTokens = [...new Set(fragRowTokens(perfume.name).filter((w) => !FRAG_ROW_STOP_WORDS.has(w)))];
+  const brandTokens = fragRowTokens(perfume.brand).filter((w) => w.length >= 3);
+  const required = [...new Set([...nameTokens, ...brandTokens])];
+  if (!nameTokens.length) return { count: 0, minUsd: null, volumes: [] };
+  let best = null;
+  for (const token of required) {
+    const list = index.postings.get(token);
+    if (!list) {
+      // a brand word may be abbreviated (YSL, D&G) — only name words are hard requirements
+      if (nameTokens.includes(token)) return { count: 0, minUsd: null, volumes: [] };
+      continue;
+    }
+    if (!best || list.length < best.length) best = list;
+  }
+  if (!best) return { count: 0, minUsd: null, volumes: [] };
+  let count = 0;
+  let minUsd = null;
+  const volumes = new Set();
+  for (const i of best) {
+    const tokens = index.tokenSets[i];
+    if (!nameTokens.every((w) => tokens.has(w))) continue;
+    const row = index.rows[i];
+    if (fragPmIsTesterOrSample(row.name)) continue;
+    const check = assessFragranticaSupplierRow(row.name, { brand: perfume.brand, name: perfume.name, typeKey: "edp" });
+    if (check.clone || check.notPerfume || check.missingNameWords.length || check.extraWords.length) continue;
+    count += 1;
+    if (Number(row.usd) > 0 && (minUsd === null || Number(row.usd) < minUsd)) minUsd = Number(row.usd);
+    for (const v of fragPmVolumes(row.name)) volumes.add(v);
+  }
+  return { count, minUsd, volumes: [...volumes].sort((a, b) => a - b) };
+}
+
 // Ближайший сброс дневного лимита Ozon (00:00 UTC = 03:00 МСК) + 5 минут запаса.
 function fragranticaNextOzonLimitReset(now = new Date(), resetAt = null) {
   const parsed = resetAt ? Date.parse(resetAt) : NaN;
