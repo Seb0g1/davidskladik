@@ -112,6 +112,40 @@ async function fragranticaManagedOfferIds() {
   return new Set(rows.map((r) => r.offer));
 }
 
+// Факты Фрагрантики для описания товара склада: бренд совпадает, все слова названия аромата есть
+// в названии товара (из нескольких — самый длинный, т. е. самый точный: «Sauvage Elixir» > «Sauvage»).
+async function fragranticaFactsForProductName(brand, productName) {
+  const prisma = getPrisma();
+  if (!prisma || !cleanText(brand) || !cleanText(productName)) return null;
+  const rows = await prisma.$queryRawUnsafe(
+    `SELECT id, name, detail FROM fragrantica_perfumes WHERE lower(brand) = lower($1) AND detail_at IS NOT NULL LIMIT 2000`,
+    cleanText(brand),
+  ).catch(() => []);
+  const productTokens = new Set(fragranticaSearchText(productName).split(/[^0-9a-zа-я]+/).filter(Boolean));
+  const best = rows
+    .map((r) => ({ r, tokens: fragranticaSearchText(r.name).split(/[^0-9a-zа-я]+/).filter(Boolean) }))
+    .filter((x) => x.tokens.length && x.tokens.every((t) => productTokens.has(t)))
+    .sort((a, b) => b.tokens.length - a.tokens.length)[0];
+  return best ? fragranticaFactsFromDetail(best.r.detail || {}) : null;
+}
+
+function fragranticaFactsFromDetail(detail = {}) {
+  const names = (list) => (Array.isArray(list) ? list.map((n) => cleanText(n.name)).filter(Boolean) : []);
+  const notes = detail.notes || {};
+  const facts = {
+    topNotes: names(notes.top),
+    middleNotes: names(notes.middle),
+    baseNotes: names(notes.base),
+    notes: names(notes.flat),
+    accords: (detail.accords || []).slice(0, 6).map((a) => cleanText(a.name)).filter(Boolean),
+    family: cleanText(detail.family) || undefined,
+    perfumers: (detail.perfumers || []).filter(Boolean),
+    year: detail.year || undefined,
+    fragranceDescription: cleanText(detail.description).slice(0, 1500) || undefined,
+  };
+  return Object.fromEntries(Object.entries(facts).filter(([, v]) => (Array.isArray(v) ? v.length : v !== undefined && v !== "")));
+}
+
 async function readFragranticaState(key) {
   const prisma = await requireFragranticaTables();
   const rows = await prisma.$queryRawUnsafe(`SELECT value FROM fragrantica_state WHERE key = $1`, key);

@@ -58,6 +58,8 @@ registerSettingsRoutes(app, {
   createOpenAiChatCompletionWithFallback,
   shouldPreferCompatibleOpenAiChatRequest,
   openaiTextModel,
+  createTextAiChat,
+  resolveTextAiProvider,
   priceAffectingSettingsChanged,
   queueImmediateAutoPricePush,
   queueAuthoritativePriceReprice,

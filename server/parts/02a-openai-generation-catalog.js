@@ -1,16 +1,6 @@
-async function createOpenAiJsonChat(messages = []) {
-  const aiSettings = await readEffectiveAiSettings();
-  assertTextGenerationConfigured(aiSettings);
-  const client = getOpenAiClient(aiSettings);
-  const request = {
-    model: aiSettings.textModel || openaiTextModel,
-    messages,
-    temperature: 0.2,
-    response_format: { type: "json_object" },
-  };
-  return createOpenAiChatCompletionWithFallback(client, request, {
-    preferCompatible: shouldPreferCompatibleOpenAiChatRequest(aiSettings),
-  });
+// Служебные JSON-задачи: текстовый провайдер (02a-text-ai-client.js), низкая температура.
+async function createOpenAiJsonChat(messages = [], options = {}) {
+  return createTextAiChat(messages, { json: true, temperature: 0.2, ...options });
 }
 
 async function imageBase64FromOpenAiImageResult(result) {

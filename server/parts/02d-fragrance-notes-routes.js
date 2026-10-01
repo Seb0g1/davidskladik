@@ -10,9 +10,8 @@ const _fnBatch = { running: false, total: 0, done: 0, errors: 0, startedAt: null
 
 async function generateNotesForProduct(brand, name) {
   const aiSettings = await readEffectiveAiSettings();
-  if (!isOpenAiDirectConfigured(aiSettings)) return null;
+  if (!isOpenAiDirectConfigured(aiSettings) && !effectiveTextAiSettings(aiSettings).configured) return null;
 
-  const client = getOpenAiClient(aiSettings);
   const prompt = `You are a fragrance expert. Return JSON with the fragrance notes for "${name}" by ${brand}.
 JSON format: {"topNotes":[],"middleNotes":[],"baseNotes":[],"accords":[],"gender":"male|female|unisex","seasons":["spring|summer|fall|winter"]}
 - topNotes: 2-4 top/opening notes (e.g. "Bergamot","Lemon")
@@ -24,13 +23,7 @@ JSON format: {"topNotes":[],"middleNotes":[],"baseNotes":[],"accords":[],"gender
 Return ONLY valid JSON, no other text.`;
 
   try {
-    const completion = await createOpenAiChatCompletionWithFallback(client, {
-      model: aiSettings.textModel || "gpt-4o-mini",
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 400,
-      temperature: 0.2,
-      response_format: { type: "json_object" },
-    });
+    const completion = await createTextAiChat([{ role: "user", content: prompt }], { json: true, temperature: 0.2, maxTokens: 400, aiSettings });
     const text = completion.choices[0]?.message?.content || "{}";
     const parsed = extractJsonObjectFromText(text);
     if (!parsed || !Array.isArray(parsed.topNotes)) return null;

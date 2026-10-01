@@ -79,6 +79,7 @@ const partFiles = [
   "02a-ozon-product-builders.js",
   "02a-ai-image-presets.js",
   "02a-openai-client-config.js",
+  "02a-text-ai-client.js",
   "02a-openai-generation-catalog.js",
   "02a-openai-image-core.js",
   "02a-yandex-marketplace-send.js",

@@ -282,20 +282,10 @@ app.post("/api/reviews/ai-draft", requireAdmin, async (request, response, next) 
 
     const userPrompt = `${productPart} Рейтинг: ${rating}/5 (${ratingLabel}). ${reviewBody || "Текст отзыва отсутствует."}`;
 
-    const client = getOpenAiClient(aiSettings);
-    const completion = await createOpenAiChatCompletionWithFallback(
-      client,
-      {
-        model: aiSettings.textModel,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        max_tokens: 400,
-        temperature: 0.7,
-      },
-      { preferCompatible: shouldPreferCompatibleOpenAiChatRequest(aiSettings) },
-    );
+    const completion = await createTextAiChat([
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ], { json: false, temperature: 0.7, maxTokens: 400, aiSettings });
 
     const draft = cleanText(completion.choices?.[0]?.message?.content || "");
     if (!draft) return response.status(502).json({ error: "AI не вернул текст." });

@@ -251,6 +251,44 @@ app.get("/api/fragrantica/ozon/form", requireAdmin, async (request, response, ne
   }
 });
 
+// «Написать описание ИИ» в форме: тот же промпт, что у склада, по фактам Фрагрантики.
+// marketplace=yandex, если среди магазинов есть Маркет (у него правила строже — текст годится обоим).
+app.post("/api/fragrantica/ozon/describe", requireAdmin, async (request, response, next) => {
+  try {
+    const body = request.body || {};
+    const perfume = await fragranticaPerfumeForExport(Number(body.perfumeId));
+    const type = fragOzonTypeByKey(body.typeKey);
+    const marketplace = body.marketplace === "ozon" ? "ozon" : "yandex";
+    const volume = fragFormatVolume(body.volume);
+    const tester = Boolean(body.tester);
+    const genderLabel = { male: "мужской", female: "женский", unisex: "унисекс" }[perfume.gender] || undefined;
+    const source = Object.fromEntries(Object.entries({
+      marketplace,
+      name: cleanText(body.name) || buildFragranticaOzonName({ perfume, typeKey: type.key, volume, tester }),
+      brand: perfume.brand,
+      perfume: perfume.name,
+      type: type.nameLabel,
+      volumeMl: volume ? [Number(volume)] : undefined,
+      gender: genderLabel,
+      tester: tester || undefined,
+      ...fragranticaFactsFromDetail(perfume),
+    }).filter(([, v]) => v !== undefined));
+    const { data, completion } = await createTextAiJson(buildPerfumeCopyMessages(source, marketplace), { temperature: 0.7 });
+    const description = normalizeParagraphText(data.description, 5000);
+    if (!description) return response.status(502).json({ error: "AI не вернул описание. Попробуйте ещё раз.", code: "text_ai_empty" });
+    response.json({
+      ok: true,
+      description,
+      name: cleanText(data.name).slice(0, 200),
+      bulletPoints: (Array.isArray(data.bulletPoints) ? data.bulletPoints : []).map((b) => cleanText(b)).filter(Boolean).slice(0, 8),
+      seoKeywords: (Array.isArray(data.seoKeywords) ? data.seoKeywords : []).map((b) => cleanText(b)).filter(Boolean).slice(0, 12),
+      model: cleanText(completion?.model),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/fragrantica/ozon/attribute-values", requireAdmin, async (request, response, next) => {
   try {
     const account = fragranticaResolveOzonAccount(request.query.accountId);
@@ -653,8 +691,11 @@ app.post("/api/fragrantica/ozon/export", requireAdmin, async (request, response,
     const results = [];
     for (const target of wanted) {
       const notes = target.notes ? fragranticaAbsoluteUrl(target.notes) : "";
+      const ozonAttributes = baseItem.attributes.map((a) => (a.id === FRAG_OZON_ATTR.annotation
+        ? { ...a, values: a.values.map((v) => ({ ...v, value: formatDescriptionForMarketplace(v.value, "ozon") })) }
+        : a));
       const item = target.kind === "ozon"
-        ? { ...baseItem, primary_image: bottle, images: notes ? [notes] : [] }
+        ? { ...baseItem, attributes: ozonAttributes, primary_image: bottle, images: notes ? [notes] : [] }
         : { ...baseItem, price: String(yandexPrice), yandexPictures: [bottle, notes].filter(Boolean) };
       const inserted = await prisma.$queryRawUnsafe(
         `INSERT INTO fragrantica_exports (perfume_id, marketplace, account_id, account_name, offer_id, volume_ml, tester, status, item, created_by, links)

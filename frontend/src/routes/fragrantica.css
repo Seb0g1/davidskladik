@@ -94,6 +94,10 @@
 .fr-field .fr-req { color: var(--red); margin-left: 3px; }
 .fr-field input, .fr-field select, .fr-field textarea { border-radius: 10px; border: 1px solid var(--line); background: var(--field-bg); color: var(--text); padding: 9px 11px; font-size: 14px; width: 100%; }
 .fr-field textarea { min-height: 120px; resize: vertical; line-height: 1.5; }
+.fr-field textarea.fr-description-input { min-height: 280px; }
+.fr-field-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.fr-field-head small { font-weight: 400; color: var(--muted); }
+.fr-field-head .secondary-action { margin-left: auto; }
 .fr-field.is-missing input, .fr-field.is-missing .fr-dict { border-color: var(--red); }
 .fr-check { flex-direction: row; align-items: center; gap: 8px; align-self: end; height: 40px; }
 .fr-check input { width: auto; }

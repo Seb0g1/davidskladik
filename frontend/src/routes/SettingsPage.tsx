@@ -1273,6 +1273,30 @@ export function SettingsPage() {
           {testAi.error && <div className="inline-error">{errorMessage(testAi.error)}</div>}
           {testAi.isSuccess && <div className="success-strip">AI подключен.</div>}
         </div>
+        <div className="settings-panel">
+          <div className="section-title">
+            <div><span>AI</span><h3>Текст: описания, отзывы, ноты</h3></div>
+          </div>
+          <div className="settings-hint">
+            Отдельный провайдер для текста (DeepSeek-прокси ai.sebog1.ru). Картинки остаются на провайдере выше.
+            Пустые поля — значения из .env сервера (AI_TEXT_BASE_URL / AI_TEXT_API_KEY / AI_TEXT_MODEL).
+            Сейчас текст идёт: {asRecord(ai.textProvider).kind === "text" ? `${String(asRecord(ai.textProvider).baseUrl || "")}, модель ${String(asRecord(ai.textProvider).model || "")}` : "через провайдер выше"}.
+          </div>
+          <label>Текст: адрес<input placeholder="https://ai.sebog1.ru/v1" value={String(draftAi.textBaseUrl ?? ai.textBaseUrl ?? "")} onChange={(event) => updateAi({ textBaseUrl: event.target.value })} /></label>
+          <label>Текст: ключ<input type="password" placeholder={ai.textApiKeySet ? (ai.textSource === "env" ? "ключ из .env" : "ключ сохранен") : "вставьте ключ"} onChange={(event) => updateAi({ textApiKey: event.target.value })} /></label>
+          <label>Текст: модель
+            <select value={String(draftAi.textProviderModel ?? ai.textProviderModel ?? "")} onChange={(event) => updateAi({ textProviderModel: event.target.value })}>
+              <option value="">из .env (по умолчанию deepseek-chat)</option>
+              <option value="deepseek-chat">deepseek-chat — быстрая</option>
+              <option value="deepseek-reasoner">deepseek-reasoner — с рассуждениями, медленнее</option>
+              <option value="deepseek-v4-pro">deepseek-v4-pro</option>
+            </select>
+          </label>
+          <label className="settings-check">
+            <input type="checkbox" checked={Boolean(draftAi.textFallback ?? ai.textFallback)} onChange={(event) => updateAi({ textFallback: event.target.checked })} />
+            Если DeepSeek недоступен — писать через провайдер выше
+          </label>
+        </div>
       </section>}
 
       {activeTab === "marketplaces" && <section className="settings-grid pricing-settings-grid">

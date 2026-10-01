@@ -249,7 +249,7 @@ const openaiImageModel = (() => {
   const normalized = cleanText(rawOpenaiImageModel).toLowerCase();
   return normalized.startsWith("gpt-image") || normalized.startsWith("dall-e") ? rawOpenaiImageModel : "gpt-image-2";
 })();
-const openaiTextModel = cleanText(process.env.OPENAI_TEXT_MODEL || process.env.AI_TEXT_MODEL || "gpt-5.4-mini");
+const openaiTextModel = cleanText(process.env.OPENAI_TEXT_MODEL || (process.env.AI_TEXT_BASE_URL ? "" : process.env.AI_TEXT_MODEL) || "gpt-5.4-mini");
 const openaiImageSize = cleanText(process.env.OPENAI_IMAGE_SIZE || "1024x1024");
 const ozonAiImageTargetPx = (() => {
   const raw = process.env.OZON_AI_IMAGE_TARGET_PX;

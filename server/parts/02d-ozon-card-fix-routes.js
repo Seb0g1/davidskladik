@@ -132,21 +132,10 @@ app.post("/api/ozon/card-errors/ai-fix", async (request, response, next) => {
       "Верни только JSON: { \"name\": \"...\", \"description\": \"...\" }.",
     ].join(" ");
 
-    const client = getOpenAiClient(aiSettings);
-    const completion = await createOpenAiChatCompletionWithFallback(
-      client,
-      {
-        model: aiSettings.textModel,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: JSON.stringify({ name: cleanText(name), description: cleanText(description) }) },
-        ],
-        response_format: { type: "json_object" },
-        max_tokens: 2000,
-        temperature: 0.3,
-      },
-      { preferCompatible: isCodexSaleAiProvider(aiSettings) },
-    );
+    const completion = await createTextAiChat([
+      { role: "system", content: systemPrompt },
+      { role: "user", content: JSON.stringify({ name: cleanText(name), description: cleanText(description) }) },
+    ], { json: true, temperature: 0.3, maxTokens: 2000, aiSettings });
 
     const rawContent = completion?.choices?.[0]?.message?.content || "";
     const parsed = extractJsonObjectFromText(rawContent);
@@ -168,7 +157,7 @@ app.post("/api/ozon/card-errors/ai-fix", async (request, response, next) => {
         name: fixedName || cleanText(name),
         description: fixedDescription || cleanText(description),
       },
-      model: cleanText(completion?.model) || aiSettings.textModel,
+      model: cleanText(completion?.model) || resolveTextAiProvider(aiSettings).model,
     });
   } catch (error) {
     next(error);

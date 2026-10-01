@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ExternalLink, Loader2, Pause, Play, RefreshCw, Search, Send, X } from "lucide-react";
+import { Check, ExternalLink, Loader2, Pause, Play, RefreshCw, Search, Send, Sparkles, X } from "lucide-react";
 import { z } from "zod";
 import { fetchJson, mutationBody } from "../api";
 import { PageHeader } from "../components/PageHeader";
@@ -674,6 +674,18 @@ function CardStep({ perfume, typeKey, volume, tester, onBack }: {
     return next;
   });
 
+  // «Написать описание ИИ»: DeepSeek по фактам Фрагрантики (ноты, семейство, парфюмер, год)
+  const describe = useMutation({
+    mutationFn: () => apiJson<{ description: string; bulletPoints: string[]; model: string }>("/api/fragrantica/ozon/describe", mutationBody({
+      perfumeId: perfume.id, typeKey, volume, tester, name, marketplace: hasYandex ? "yandex" : "ozon",
+    })),
+    onSuccess: (res) => {
+      setDescription(res.description);
+      toast.success(`Описание готово: ${res.description.length.toLocaleString("ru")} знаков`);
+    },
+    onError: (error) => toast.error(errorMessage(error)),
+  });
+
   const submit = useMutation({
     mutationFn: () => {
       const d = data!;
@@ -850,8 +862,15 @@ function CardStep({ perfume, typeKey, volume, tester, onBack }: {
           <input inputMode="numeric" value={dims.weight} onChange={(e) => setDims((d) => ({ ...d, weight: e.target.value.replace(/[^\d]/g, "") }))} />
         </div>
         <div className="fr-field is-wide">
-          <span>Описание</span>
-          <textarea value={description} onChange={(e) => setDescription(e.target.value)} />
+          <span className="fr-field-head">
+            Описание <small>{description.length.toLocaleString("ru")} знаков</small>
+            <button className="secondary-action compact" type="button" disabled={describe.isPending} onClick={() => describe.mutate()}>
+              {describe.isPending ? <Loader2 size={13} className="spin" /> : <Sparkles size={13} />}
+              {describe.isPending ? "Пишем описание…" : "Написать описание ИИ"}
+            </button>
+          </span>
+          <textarea className="fr-description-input" value={description} onChange={(e) => setDescription(e.target.value)} />
+          <span className="fr-hint">ИИ пишет 1500–2500 знаков по нотам и фактам Фрагрантики{hasYandex ? " по правилам Маркета, они строже, так что текст подходит и Ozon" : ""}. Абзацы сохранятся в карточке.</span>
         </div>
       </div>
       {!data.brandMatched ? (

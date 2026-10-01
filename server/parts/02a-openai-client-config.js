@@ -92,7 +92,7 @@ function assertTextGenerationConfigured(aiSettings = {}) {
     error.code = "openai_disabled";
     throw error;
   }
-  if (isOpenAiDirectConfigured(aiSettings)) return;
+  if (isOpenAiDirectConfigured(aiSettings) || effectiveTextAiSettings(aiSettings).configured) return;
   const error = new Error("AI-описание недоступно: задайте API key и Base endpoint в настройках сайта.");
   error.statusCode = 400;
   error.code = "openai_text_not_configured";

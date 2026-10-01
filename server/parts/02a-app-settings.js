@@ -27,6 +27,10 @@ function defaultAppSettings() {
       baseUrl: openaiBaseUrl || "https://codex.sale/v1",
       apiKey: "",
       textModel: openaiTextModel,
+      textBaseUrl: "",
+      textApiKey: "",
+      textProviderModel: "",
+      textFallback: false,
       imageModel: openaiImageModel,
       imageSize: openaiImageSize,
       imageQuality: openaiImageQuality,
@@ -177,12 +181,21 @@ function normalizeAiSettings(input = {}, fallback = defaultAppSettings().ai) {
   const textModel = cleanText(raw.textModel || raw.text_model || fallback.textModel || openaiTextModel);
   const baseUrl = normalizeOpenAiCompatibleBaseUrl(cleanText(raw.baseUrl || raw.base_url || fallback.baseUrl || openaiBaseUrl));
   const apiKey = hasApiKey ? cleanText(raw.apiKey ?? raw.api_key ?? "") : cleanText(fallback.apiKey);
+  // Текстовый провайдер (DeepSeek-прокси): свои адрес/ключ/модель, картинки их не используют
+  const has = (key) => Object.prototype.hasOwnProperty.call(raw, key);
+  const textBaseUrl = normalizeOpenAiCompatibleBaseUrl(cleanText(has("textBaseUrl") ? raw.textBaseUrl : fallback.textBaseUrl));
+  const textApiKeyRaw = has("textApiKey") ? cleanText(raw.textApiKey) : cleanText(fallback.textApiKey);
+  const textProviderModel = cleanText(has("textProviderModel") ? raw.textProviderModel : fallback.textProviderModel);
   return {
     enabled: parseBooleanSetting(raw.enabled, fallback.enabled !== false),
     providerId: cleanText(raw.providerId || raw.provider_id || fallback.providerId || "codexsale"),
     baseUrl,
     apiKey: apiKey === maskedSecretValue ? cleanText(fallback.apiKey) : apiKey,
     textModel,
+    textBaseUrl,
+    textApiKey: textApiKeyRaw === maskedSecretValue ? cleanText(fallback.textApiKey) : textApiKeyRaw,
+    textProviderModel,
+    textFallback: parseBooleanSetting(raw.textFallback, fallback.textFallback === true),
     imageModel: effectiveOpenAiImageModel(imageModel || "gpt-image-2", { providerId: raw.providerId || raw.provider_id || fallback.providerId, baseUrl }),
     imageSize: imageSize || "1024x1024",
     imageQuality: imageQuality || "auto",
@@ -273,6 +286,11 @@ function publicAppSettings(settings = {}) {
       apiKeyMasked: maskSecret(normalized.ai.apiKey),
       apiKeySet: Boolean(effectiveAiApiKey),
       source: normalized.ai.apiKey ? "settings" : (effectiveAiApiKey ? "env" : "empty"),
+      textApiKey: normalized.ai.textApiKey ? maskedSecretValue : "",
+      textApiKeyMasked: maskSecret(normalized.ai.textApiKey),
+      textApiKeySet: Boolean(normalized.ai.textApiKey || cleanText(process.env.AI_TEXT_API_KEY)),
+      textSource: normalized.ai.textApiKey ? "settings" : (cleanText(process.env.AI_TEXT_API_KEY) ? "env" : "empty"),
+      textProvider: resolveTextAiProvider(normalized.ai),
     },
   };
 }
