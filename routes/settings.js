@@ -14,6 +14,8 @@ function registerSettingsRoutes(app, deps) {
     createOpenAiChatCompletionWithFallback,
     shouldPreferCompatibleOpenAiChatRequest,
     openaiTextModel,
+    createTextAiChat,
+    resolveTextAiProvider,
     priceAffectingSettingsChanged,
     queueImmediateAutoPricePush,
     queueAuthoritativePriceReprice,
@@ -95,6 +97,13 @@ async function saveSettingsHandler(request, response, next) {
         rawSettings.ai = { ...rawSettings.ai, apiKey: "" };
       } else if (!incomingKey || incomingKey === maskedSecretValue) {
         rawSettings.ai = { ...rawSettings.ai, apiKey: previous.ai?.apiKey || "" };
+      }
+      // Ключ текстового AI: «маска» / пусто — оставить прежний, clearTextApiKey — стереть
+      const incomingTextKey = cleanText(rawSettings.ai.textApiKey);
+      if (rawSettings.ai.clearTextApiKey === true) {
+        rawSettings.ai = { ...rawSettings.ai, textApiKey: "" };
+      } else if (!incomingTextKey || incomingTextKey === maskedSecretValue) {
+        rawSettings.ai = { ...rawSettings.ai, textApiKey: previous.ai?.textApiKey || "" };
       }
     }
     const settings = await writeAppSettings(rawSettings);
@@ -530,26 +539,21 @@ app.post("/api/settings/ai/test", requireAdmin, async (request, response, next) 
       ...rawAi,
       apiKey: clearKey ? "" : ((!incomingKey || incomingKey === maskedSecretValue) ? previous.ai?.apiKey || "" : incomingKey),
     }, previous.ai || defaultAppSettings().ai);
+    const incomingTextKey = cleanText(rawAi.textApiKey);
+    ai.textApiKey = (!incomingTextKey || incomingTextKey === maskedSecretValue) ? previous.ai?.textApiKey || "" : incomingTextKey;
     const effective = effectiveAiSettingsFromAppSettings({ ...previous, ai });
-    assertTextGenerationConfigured(effective);
-    const client = getOpenAiClient(effective);
+    const provider = resolveTextAiProvider(effective);
     const startedAt = Date.now();
-    const result = await createOpenAiChatCompletionWithFallback(client, {
-      model: effective.textModel || openaiTextModel,
-      messages: [
-        { role: "system", content: "Return JSON only." },
-        { role: "user", content: "{\"ok\":true}" },
-      ],
-      temperature: 0,
-      response_format: { type: "json_object" },
-    }, {
-      preferCompatible: shouldPreferCompatibleOpenAiChatRequest(effective),
-    });
+    // Проверка идёт тем же путём, что и все текстовые функции (DeepSeek-прокси или старый провайдер)
+    const result = await createTextAiChat([
+      { role: "system", content: "Return JSON only." },
+      { role: "user", content: "{\"ok\":true}" },
+    ], { json: true, temperature: 0, aiSettings: effective });
     response.json({
       ok: true,
-      providerId: effective.providerId,
-      baseUrl: effective.baseUrl,
-      model: cleanText(result?.model) || effective.textModel,
+      providerId: provider.kind === "text" ? "text" : effective.providerId,
+      baseUrl: provider.baseUrl || effective.baseUrl,
+      model: cleanText(result?.model) || provider.model,
       latencyMs: Date.now() - startedAt,
     });
   } catch (error) {
