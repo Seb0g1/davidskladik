@@ -281,3 +281,15 @@ test("dimension templates by volume: exact, next bigger, biggest; built-in table
   assert.deepEqual(plain(ctx.d.fragOzonDimensions(200, rows)), { depth: 160, width: 130, height: 120, weight: 450 });
   assert.equal(ctx.d.fragOzonDimensions(60, []).weight, 350);
 });
+
+test("OKPD2 by type and GTIN check digit", () => {
+  vm.runInContext("this.g = { fragOkpd2ForType, fragValidGtin, buildFragranticaOzonItem };", ctx);
+  assert.equal(ctx.g.fragOkpd2ForType("edp"), "20.42.11.120");
+  assert.equal(ctx.g.fragOkpd2ForType("parfum"), "20.42.11.110");
+  assert.equal(ctx.g.fragOkpd2ForType("cologne"), "20.42.11.130");
+  assert.equal(ctx.g.fragValidGtin("3348901250146"), "3348901250146");
+  assert.equal(ctx.g.fragValidGtin("3348901250147"), "");
+  assert.equal(ctx.g.fragValidGtin("OZN123"), "");
+  assert.equal(ctx.g.buildFragranticaOzonItem({ typeId: 93403, barcode: "3348901250146" }, []).item.barcode, "3348901250146");
+  assert.equal(ctx.g.buildFragranticaOzonItem({ typeId: 93403, barcode: "123" }, []).item.barcode, undefined);
+});

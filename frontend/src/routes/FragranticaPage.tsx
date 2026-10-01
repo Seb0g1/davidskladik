@@ -603,6 +603,7 @@ function CardStep({ perfume, typeKey, volume, tester, onBack }: {
 
   const [name, setName] = useState("");
   const [offerId, setOfferId] = useState("");
+  const [barcode, setBarcode] = useState("");
   const [price, setPrice] = useState("");
   const [oldPrice, setOldPrice] = useState("");
   const [yandexPrice, setYandexPrice] = useState("");
@@ -712,7 +713,7 @@ function CardStep({ perfume, typeKey, volume, tester, onBack }: {
         typeId: d.typeId,
         typeKey: d.typeKey,
         targets: chosen.map((t) => ({ key: t.key, notes: approved[t.key] ? imageResult?.notes?.[t.style] || null : null })),
-        offerId, name, price, oldPrice, yandexPrice,
+        offerId, name, price, oldPrice, yandexPrice, barcode,
         depth: dims.depth, width: dims.width, height: dims.height, weight: dims.weight, tester,
         images: [mainImage],
         attributes,
@@ -859,6 +860,11 @@ function CardStep({ perfume, typeKey, volume, tester, onBack }: {
         <div className={`fr-field is-wide${isMissing("Название") ? " is-missing" : ""}`}>
           <span>Название<span className="fr-req">*</span></span>
           <input value={name} onChange={(e) => setName(e.target.value)} />
+        </div>
+        <div className="fr-field">
+          <span>Штрихкод производителя (EAN)</span>
+          <input inputMode="numeric" placeholder="3348901250146" value={barcode} onChange={(e) => setBarcode(e.target.value.replace(/[^\d]/g, ""))} />
+          <span className="fr-hint">{barcode && ![8, 12, 13, 14].includes(barcode.length) ? "EAN — 8, 12, 13 или 14 цифр" : hasYandex ? "Маркету нужен для маркированного товара; без него Ozon сделает свой, а Маркет не опубликует" : "Пусто — Ozon сгенерирует штрихкод сам"}</span>
         </div>
         <div className={`fr-field${isMissing("Артикул") ? " is-missing" : ""}`}>
           <span>Артикул<span className="fr-req">*</span></span>

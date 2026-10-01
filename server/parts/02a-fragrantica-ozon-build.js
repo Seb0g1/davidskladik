@@ -55,8 +55,24 @@ const FRAG_OZON_DEFAULTS = {
   packagingBoxId: 85921, // Картонная коробка
   packagingTesterId: 115933094, // Коробка (тестер в простой коробке)
   releaseFactoryId: 971417785, // Фабричное производство
-  okpd2: "20.42.11.000", // Духи и туалетная вода
 };
+
+// ОКПД2 как в действующих карточках Маркета: духи .110, парфюмерная/туалетная вода .120, одеколон .130.
+function fragOkpd2ForType(typeKey = "edp") {
+  if (typeKey === "parfum" || typeKey === "oil") return "20.42.11.110";
+  if (typeKey === "cologne") return "20.42.11.130";
+  return "20.42.11.120";
+}
+
+// Штрихкод производителя: только настоящий GTIN (8/12/13/14 цифр с верной контрольной цифрой).
+function fragValidGtin(value) {
+  const digits = String(value || "").replace(/\s+/g, "");
+  if (!/^(\d{8}|\d{12}|\d{13}|\d{14})$/.test(digits)) return "";
+  const nums = digits.split("").map(Number);
+  const check = nums.pop();
+  const sum = nums.reverse().reduce((acc, n, i) => acc + n * (i % 2 === 0 ? 3 : 1), 0);
+  return (10 - (sum % 10)) % 10 === check ? digits : "";
+}
 
 // НДС по кабинету (clientId Ozon): AURA — без НДС, остальные — 5% (УСН). FRAGRANTICA_VAT_BY_ACCOUNT переопределяет.
 const FRAG_DEFAULT_VAT_BY_CLIENT = { "2533393": "0" };
@@ -328,6 +344,8 @@ function buildFragranticaOzonItem(input = {}, categoryAttributes = []) {
     images: images.slice(1),
     attributes,
   };
+  const gtin = fragValidGtin(input.barcode);
+  if (gtin) item.barcode = gtin;
   if (!item.old_price) delete item.old_price;
   const missing = [];
   if (!item.offer_id) missing.push("Артикул");

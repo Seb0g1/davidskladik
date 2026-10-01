@@ -550,7 +550,8 @@ function fragranticaSyntheticOzonProduct(row) {
       weightUnit: "g",
       images: [],
       primaryImage: "",
-      barcodes: [],
+      barcodes: item.barcode ? [item.barcode] : [],
+      barcode: item.barcode || "",
     },
     yandex: {
       pictures: item.yandexPictures || [],
@@ -701,6 +702,9 @@ async function refreshFragranticaExport(row) {
     if (linkResult.links === "pending") return updated;
     return refreshFragranticaExport(updated);
   }
+  if (row.status === "imported" && row.product_id && row.result?.barcode === "pending" && row.item?.barcode) {
+    return updateFragranticaExport(row.id, { result: { ...(row.result || {}), barcode: "manufacturer" } });
+  }
   if (row.status === "imported" && row.product_id && row.result?.barcode === "pending") {
     const barcode = await generateFragranticaBarcode(row, account);
     return updateFragranticaExport(row.id, { result: { ...(row.result || {}), ...barcode } });
@@ -748,7 +752,7 @@ app.post("/api/fragrantica/ozon/export", requireAdmin, async (request, response,
       const facts = fragranticaFactsFromDetail(perfume);
       const tester = Boolean(body.tester);
       yandexExtra = {
-        commodityCodes: [{ code: fragranticaTnvedCode(type.typeId), type: "CUSTOMS_COMMODITY_CODE" }, { code: FRAG_OZON_DEFAULTS.okpd2, type: "OKPD2_CODE" }],
+        commodityCodes: [{ code: fragranticaTnvedCode(type.typeId), type: "CUSTOMS_COMMODITY_CODE" }, { code: fragOkpd2ForType(type.key), type: "OKPD2_CODE" }],
         shelfLife: { timePeriod: Number(FRAG_OZON_DEFAULTS.shelfLifeDays), timeUnit: "DAY" },
         parameterValues: buildFragranticaYandexParameters(params, {
           typeLabel: type.nameLabel.toLowerCase(),
