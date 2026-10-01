@@ -655,6 +655,16 @@ async function refreshFragranticaExport(row) {
     const item = (data?.result?.items || []).find((i) => i.offer_id === row.offer_id) || data?.result?.items?.[0];
     if (!item) return row;
     const errors = (item.errors || []).filter((e) => cleanText(e.level).toLowerCase() !== "warning");
+    // «исчерпали суточный лимит на обновление товаров» — the card was not updated: resend after 03:00 MSK
+    const limitText = (item.errors || []).map((e) => cleanText(e.description || e.message || e.code)).find((t) => isOzonLimitErrorText(t));
+    if (limitText) {
+      return updateFragranticaExport(row.id, {
+        status: "queued_limit",
+        product_id: item.product_id || row.product_id || null,
+        error: `Ozon: ${limitText.slice(0, 300)} — отправим ещё раз после сброса лимита.`,
+        next_attempt_at: fragranticaNextOzonLimitReset(new Date()),
+      });
+    }
     if (item.status === "imported" || (item.product_id && !errors.length && item.status !== "failed")) {
       const updated = await updateFragranticaExport(row.id, {
         status: "imported",

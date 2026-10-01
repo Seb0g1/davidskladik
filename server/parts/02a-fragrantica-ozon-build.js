@@ -540,5 +540,5 @@ function fragranticaNextOzonLimitReset(now = new Date(), resetAt = null) {
 }
 
 function isOzonLimitErrorText(text) {
-  return /limit|лимит/i.test(String(text || "")) && /(exceed|превыш|исчерпан|reached|daily|суточн|дневн)/i.test(String(text || ""));
+  return /limit|лимит/i.test(String(text || "")) && /(exceed|превыш|исчерпа|reached|daily|суточн|дневн)/i.test(String(text || ""));
 }

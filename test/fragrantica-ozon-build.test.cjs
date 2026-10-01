@@ -142,6 +142,7 @@ test("limit reset: Ozon reset_at, else next 00:05 UTC (03:05 MSK)", () => {
   assert.equal(b.isOzonLimitErrorText("daily create limit exceeded"), true);
   assert.equal(b.isOzonLimitErrorText("Превышен лимит на создание товаров"), true);
   assert.equal(b.isOzonLimitErrorText("invalid attribute"), false);
+  assert.equal(b.isOzonLimitErrorText("Не получится загрузить товары: вы исчерпали суточный лимит на обновление товаров."), true);
 });
 
 test("type guess and hashtags", () => {
