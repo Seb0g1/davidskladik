@@ -258,6 +258,13 @@ function startBackgroundSchedulers() {
     schedulePmChangeWatch(30_000);
     logger.info("pm change watcher enabled", { intervalSeconds: Math.round(pmChangeWatchIntervalMs / 1000) });
   }
+  if (fragranticaCrawlEnabled) {
+    scheduleFragranticaCrawl(90_000);
+    logger.info("fragrantica crawler enabled", { delayMs: fragranticaCrawlDelayMs });
+  }
+  if (fragranticaExportQueueEnabled) {
+    scheduleFragranticaExportQueue(2 * 60_000);
+  }
   if (ozonActionGuardEnabled) {
     scheduleOzonActionGuard(60_000);
     logger.info("ozon action guard enabled", { intervalMinutes: Math.round(ozonActionGuardIntervalMs / 60_000), removeManual: ozonActionGuardRemoveManual });

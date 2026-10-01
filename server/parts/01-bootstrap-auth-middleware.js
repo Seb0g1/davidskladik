@@ -22,6 +22,8 @@ function requireAuth(request, response, next) {
   if (request.path.startsWith("/uploads/images/")) return next();
   if (request.path.startsWith("/uploads/ai-images/")) return next();
   if (request.path.startsWith("/uploads/branding/")) return next();
+  // Fragrantica catalog photos and processed card pictures: Ozon downloads them by URL.
+  if (request.path.startsWith("/uploads/fragrantica/")) return next();
   // Фид Avito Автозагрузки: Авито скачивает XML без сессии, доступ по секретному
   // токену в URL (проверяется в самом роуте).
   if (request.path.startsWith("/public/avito-feed/")) return next();

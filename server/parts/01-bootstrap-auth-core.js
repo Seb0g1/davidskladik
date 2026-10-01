@@ -126,7 +126,7 @@ const APP_PAGE_KEYS = [
   "dashboard", "warehouse", "suppliers", "picking-list", "reviews", "chats",
   "import", "avito", "statistics", "settings", "questions", "prices", "operations",
   "supplier-cart", "recovery-queue", "problem-products", "finance",
-  "consignment", "system", "ai-drafts", "no-supplier",
+  "consignment", "system", "ai-drafts", "no-supplier", "fragrantica",
 ];
 
 const DEFAULT_MANAGER_PAGES = ["warehouse", "picking-list", "chats", "reviews", "questions"];
@@ -149,6 +149,7 @@ function effectiveAllowedPages(user = {}) {
 // style admin surfaces beyond the ones listed here.
 const API_PREFIX_PAGE_KEYS = [
   ["/api/consignment", "consignment"],
+  ["/api/fragrantica", "fragrantica"],
   ["/api/finance", "finance"],
   ["/api/dashboard", "dashboard"],
   ["/api/suppliers", "suppliers"],
