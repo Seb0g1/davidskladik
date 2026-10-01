@@ -113,10 +113,12 @@ function AccordSpectrum({ accords, tall = false }: { accords: Accord[]; tall?: b
 function PmBadge({ pm, compact = false }: { pm: PmInfo; compact?: boolean }) {
   if (!pm) return null;
   if (!pm.rows) return <span className="fr-badge is-muted">нет в PriceMaster</span>;
-  const vols = pm.volumes.slice(0, compact ? 3 : 8).join(" / ");
+  const vols = pm.volumes.filter((v) => v > 3);
+  const shown = compact ? vols.slice(0, 4) : vols;
   return (
-    <span className="fr-badge is-pm" title={`${pm.rows} ${plural(pm.rows, "строка", "строки", "строк")} поставщиков${pm.volumes.length ? `, объёмы ${pm.volumes.join(", ")} мл` : ""}`}>
-      <Check size={12} /> в PriceMaster{pm.minUsd ? ` от ${usd(pm.minUsd)}` : ""}{vols ? ` · ${vols} мл` : ""}
+    <span className="fr-pm" title={`${pm.rows} ${plural(pm.rows, "строка", "строки", "строк")} поставщиков${vols.length ? `, объёмы ${vols.join(", ")} мл` : ""}`}>
+      <span className="fr-badge is-pm"><Check size={12} /> PriceMaster{pm.minUsd ? ` от ${usd(pm.minUsd)}` : ""}</span>
+      {shown.length ? <span className="fr-pm-vols">{shown.join(" · ")} мл{vols.length > shown.length ? " …" : ""}</span> : null}
     </span>
   );
 }
