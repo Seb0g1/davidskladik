@@ -528,12 +528,13 @@ async function submitFragranticaExport(row) {
 function fragranticaSyntheticOzonProduct(row) {
   const item = row.item || {};
   const attr = (id) => cleanText((item.attributes || []).find((a) => Number(a.id) === id)?.values?.[0]?.value);
-  const ozonAccount = getOzonAccounts().find((a) => a.importEnabled !== false) || getOzonAccounts()[0] || {};
   return {
     id: `fragrantica-yandex-${row.offer_id}`,
     offerId: row.offer_id,
     marketplace: "ozon",
-    target: cleanText(ozonAccount.id) || "ozon",
+    // Not an Ozon cabinet on purpose: the Ozon→Market export would otherwise re-read the Ozon card with
+    // the same offer id (enrichOzonProductsForYandexExport) and send its older dimensions/attributes.
+    target: "fragrantica",
     name: item.name,
     imageUrl: "",
     links: [],
