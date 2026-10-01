@@ -1,0 +1,91 @@
+/* Страница «Фрагрантика» (FragranticaPage.tsx). Префикс fr- */
+.fr-toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 14px 0; }
+.fr-toolbar input, .fr-toolbar select { height: 38px; border-radius: 10px; border: 1px solid var(--line); background: var(--field-bg); color: var(--text); padding: 0 12px; }
+.fr-toolbar .fr-search { flex: 1 1 260px; min-width: 200px; }
+.fr-toolbar .fr-year { width: 92px; }
+.fr-import { display: flex; gap: 8px; flex: 1 1 320px; }
+.fr-import input { flex: 1; }
+
+.fr-status { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); }
+.fr-status b { color: var(--text); font-weight: 600; }
+.fr-status .fr-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); display: inline-block; margin-right: 4px; }
+.fr-status .fr-dot.is-paused { background: var(--yellow); }
+.fr-status .fr-dot.is-blocked { background: var(--red); }
+
+.fr-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(178px, 1fr)); gap: 14px; }
+.fr-card { position: relative; display: flex; flex-direction: column; text-align: left; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); color: var(--text); padding: 10px; cursor: pointer; transition: border-color .15s, transform .15s; }
+.fr-card:hover { border-color: rgba(var(--accent-rgb), .6); transform: translateY(-1px); }
+.fr-card:focus-visible { outline: 2px solid rgba(var(--accent-rgb), .8); outline-offset: 2px; }
+.fr-card-img { aspect-ratio: 1; border-radius: 10px; background: #fff; display: grid; place-items: center; overflow: hidden; }
+.fr-card-img img { width: 100%; height: 100%; object-fit: contain; }
+.fr-card-brand { margin-top: 8px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.fr-card-name { font-size: 14px; font-weight: 600; line-height: 1.3; margin-top: 2px; }
+.fr-card-meta { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; font-size: 11px; color: var(--muted); }
+.fr-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); font-size: 11px; color: var(--text-soft); background: rgba(var(--accent-rgb), .06); }
+.fr-chip.is-accord { border: 0; font-weight: 600; }
+.fr-added { position: absolute; top: 14px; right: 14px; background: var(--green); color: #052012; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+.fr-more { display: flex; justify-content: center; margin: 18px 0; }
+.fr-empty { padding: 40px 0; text-align: center; color: var(--muted); }
+
+/* Боковая панель аромата */
+.fr-drawer-overlay { position: fixed; inset: 0; z-index: 210; background: rgba(2, 8, 18, .6); display: flex; justify-content: flex-end; }
+.fr-drawer { width: min(980px, 100%); height: 100%; overflow-y: auto; background: var(--bg); border-left: 1px solid var(--line); padding: 20px 22px 60px; }
+.fr-drawer-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.fr-drawer-head h2 { margin: 0; font-size: 22px; }
+.fr-drawer-head p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+.fr-detail { display: grid; grid-template-columns: 240px 1fr; gap: 20px; margin-top: 16px; }
+.fr-detail-img { border-radius: 14px; background: #fff; overflow: hidden; align-self: start; }
+.fr-detail-img img { width: 100%; display: block; }
+.fr-section-title { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 14px 0 8px; font-weight: 700; }
+.fr-notes-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.fr-note { display: flex; flex-direction: column; align-items: center; width: 76px; text-align: center; font-size: 11px; color: var(--text-soft); }
+.fr-note img { width: 52px; height: 52px; border-radius: 50%; object-fit: cover; background: #fff; border: 1px solid var(--line); margin-bottom: 4px; }
+.fr-accords { display: grid; gap: 5px; max-width: 420px; }
+.fr-accord { height: 22px; border-radius: 6px; font-size: 12px; font-weight: 600; display: flex; align-items: center; padding: 0 8px; }
+.fr-description { white-space: pre-line; line-height: 1.5; font-size: 14px; color: var(--text-soft); }
+
+/* Форма Ozon */
+.fr-form { margin-top: 22px; border: 1px solid rgba(var(--accent-rgb), .35); border-radius: 16px; padding: 18px; background: var(--panel); }
+.fr-form h3 { margin: 0 0 4px; font-size: 18px; }
+.fr-form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; margin-top: 12px; }
+.fr-field { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); min-width: 0; }
+.fr-field.is-wide { grid-column: 1 / -1; }
+.fr-field label, .fr-field > span { font-weight: 600; }
+.fr-field .fr-req { color: var(--red); margin-left: 3px; }
+.fr-field input, .fr-field select, .fr-field textarea { border-radius: 10px; border: 1px solid var(--line); background: var(--field-bg); color: var(--text); padding: 8px 10px; font-size: 14px; width: 100%; }
+.fr-field textarea { min-height: 120px; resize: vertical; line-height: 1.45; }
+.fr-field.is-missing input, .fr-field.is-missing .fr-dict { border-color: var(--red); }
+.fr-hint { font-size: 11px; color: var(--muted); font-weight: 400; }
+.fr-volumes { display: flex; flex-wrap: wrap; gap: 6px; }
+.fr-volumes button { border: 1px solid var(--line); background: transparent; color: var(--text); border-radius: 8px; padding: 4px 10px; cursor: pointer; font-size: 13px; }
+.fr-volumes button.is-active { background: rgba(var(--accent-rgb), .25); border-color: rgba(var(--accent-rgb), .7); }
+.fr-photos { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; }
+.fr-photo { width: 150px; display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); }
+.fr-photo-frame { aspect-ratio: 3 / 4; border-radius: 10px; overflow: hidden; background: #fff; border: 1px solid var(--line); display: grid; place-items: center; color: #667; font-size: 12px; text-align: center; padding: 0; }
+.fr-photo-frame img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.fr-photo.is-off .fr-photo-frame { opacity: .35; }
+.fr-photo-auto .fr-photo-frame { background: rgba(var(--accent-rgb), .08); color: var(--muted); padding: 10px; }
+.fr-dict { border: 1px solid var(--line); border-radius: 10px; background: var(--field-bg); padding: 6px; position: relative; }
+.fr-dict-selected { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
+.fr-dict-selected:empty { display: none; }
+.fr-dict-selected button { border: 0; background: rgba(var(--accent-rgb), .22); color: var(--text); border-radius: 999px; padding: 2px 8px; font-size: 12px; cursor: pointer; }
+.fr-dict input { border: 0 !important; background: transparent !important; padding: 4px !important; }
+.fr-dict-results { position: absolute; left: 0; right: 0; top: 100%; z-index: 5; max-height: 240px; overflow-y: auto; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; margin-top: 4px; box-shadow: 0 12px 30px rgba(0, 0, 0, .35); }
+.fr-dict-results button { display: block; width: 100%; text-align: left; border: 0; background: transparent; color: var(--text); padding: 7px 10px; font-size: 13px; cursor: pointer; }
+.fr-dict-results button:hover { background: rgba(var(--accent-rgb), .18); }
+.fr-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 16px; }
+.fr-result { margin-top: 14px; border-radius: 12px; padding: 12px 14px; font-size: 14px; line-height: 1.45; border: 1px solid var(--line); }
+.fr-result.is-ok { border-color: rgba(80, 216, 144, .6); background: rgba(80, 216, 144, .1); }
+.fr-result.is-wait { border-color: rgba(255, 209, 102, .6); background: rgba(255, 209, 102, .1); }
+.fr-result.is-bad { border-color: rgba(255, 107, 122, .6); background: rgba(255, 107, 122, .1); }
+.fr-history { margin-top: 10px; display: grid; gap: 6px; font-size: 13px; }
+.fr-history-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--text-soft); }
+.fr-warn { margin-top: 8px; font-size: 13px; color: var(--yellow); }
+.fr-collapse { margin-top: 14px; border: 0; background: transparent; color: var(--accent-strong); cursor: pointer; padding: 0; font-size: 13px; font-weight: 600; }
+
+@media (max-width: 720px) {
+  .fr-detail { grid-template-columns: 1fr; }
+  .fr-detail-img { max-width: 260px; }
+  .fr-drawer { padding: 14px 16px 60px; }
+  .fr-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+}

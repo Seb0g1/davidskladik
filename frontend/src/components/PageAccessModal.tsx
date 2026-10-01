@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Activity, AlertCircle, AlertTriangle, BadgeDollarSign, BarChart3, Check, CirclePlay, ClipboardList, Eye, HandCoins, HelpCircle, Home, Loader2, MessageCircle, PackageCheck, RefreshCcw, Settings, ShoppingCart, Sparkles, Star, Truck, Upload, X } from "lucide-react";
+import { Activity, AlertCircle, Flower2, AlertTriangle, BadgeDollarSign, BarChart3, Check, CirclePlay, ClipboardList, Eye, HandCoins, HelpCircle, Home, Loader2, MessageCircle, PackageCheck, RefreshCcw, Settings, ShoppingCart, Sparkles, Star, Truck, Upload, X } from "lucide-react";
 import type { ReactNode } from "react";
 
 export type PageCatalogItem = {
@@ -18,6 +18,7 @@ export const PAGE_CATALOG: PageCatalogItem[] = [
   { key: "picking-list", label: "Сборка", description: "Лист сборки заказов", href: "/app/picking-list", icon: <ClipboardList size={15} /> },
   { key: "reviews", label: "Отзывы", description: "Отзывы с маркетплейсов", href: "/app/reviews", icon: <Star size={15} /> },
   { key: "chats", label: "Чаты", description: "Чаты с покупателями", href: "/app/chats", icon: <MessageCircle size={15} /> },
+  { key: "fragrantica", label: "Фрагрантика", description: "Каталог ароматов и создание карточек Ozon", href: "/app/fragrantica", icon: <Flower2 size={15} /> },
   { key: "import", label: "Импорт на Яндекс", description: "Перенос карточек Ozon на Яндекс", href: "/app/import", icon: <Upload size={15} /> },
   { key: "avito", label: "Автозагрузка Avito", description: "Фид Автозагрузки и правила импорта с Ozon", href: "/app/avito", icon: <Upload size={15} /> },
   { key: "statistics", label: "Статистика", description: "Статистика сотрудников и продаж", href: "/app/statistics", icon: <BarChart3 size={15} /> },
