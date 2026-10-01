@@ -367,8 +367,13 @@ function startBackgroundSchedulers() {
     });
   }
   // Автосинк продаж PriceMaster → реализация (каждые CONSIGNMENT_PM_SYNC_HOURS, деф. 2 ч).
-  scheduleConsignmentPmSync(60_000);
-  logger.info("consignment pm sync scheduler enabled", {
-    everyHours: Math.round(consignmentPmSyncIntervalMs / 3_600_000),
-  });
+  // CONSIGNMENT_PM_SYNC_ENABLED=false выключает его; ручной POST /api/consignment/pm-sync остаётся.
+  if (String(process.env.CONSIGNMENT_PM_SYNC_ENABLED ?? "true").trim().toLowerCase() !== "false") {
+    scheduleConsignmentPmSync(60_000);
+    logger.info("consignment pm sync scheduler enabled", {
+      everyHours: Math.round(consignmentPmSyncIntervalMs / 3_600_000),
+    });
+  } else {
+    logger.info("consignment pm sync scheduler disabled by CONSIGNMENT_PM_SYNC_ENABLED=false");
+  }
 }
