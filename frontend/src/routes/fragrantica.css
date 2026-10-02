@@ -1,7 +1,7 @@
 /* Страница «Фрагрантика» (FragranticaPage.tsx). Префикс fr-. Цвета — токены приложения;
    единственный «свой» элемент — полоса аккордов (.fr-spectrum) из цветов Фрагрантики. */
 
-.fr-page { --fr-radius: 14px; --fr-ok: var(--green); --fr-warn: var(--yellow); }
+.fr-page, .fr-drawer-overlay { --fr-radius: 14px; --fr-ok: var(--green); --fr-warn: var(--yellow); }
 
 /* Шапка: статус загрузки каталога */
 .fr-status { display: grid; gap: 6px; justify-items: end; font-size: 13px; color: var(--muted); }

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, ExternalLink, Loader2, Pause, Play, Plus, RefreshCw, Ruler, Search, Send, Sparkles, Trash2, X } from "lucide-react";
 import { z } from "zod";
@@ -361,8 +362,15 @@ function PerfumeDrawer({ id, onClose }: { id: number; onClose: () => void }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // The drawer is portalled to <body> (an animated ancestor would pin a fixed overlay to the top of the page)
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = prev; };
+  }, []);
+
   const p = perfume.data;
-  return (
+  return createPortal(
     <div className="fr-drawer-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <aside className="fr-drawer" role="dialog" aria-modal="true" aria-label={p ? `${p.brand} ${p.name}` : "Аромат"}>
         <button className="icon-action fr-drawer-close" type="button" onClick={onClose} aria-label="Закрыть"><X size={18} /></button>
@@ -420,7 +428,8 @@ function PerfumeDrawer({ id, onClose }: { id: number; onClose: () => void }) {
           </>
         ) : null}
       </aside>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -1109,7 +1118,7 @@ function DimsTemplatesPanel({ onClose }: { onClose: () => void }) {
   const update = (index: number, key: keyof DimsRow, value: string) =>
     setRows((prev) => (prev || []).map((row, i) => (i === index ? { ...row, [key]: value.replace(/[^\d.,]/g, "") } : row)));
   const cols: Array<[keyof DimsRow, string]> = [["volume", "Объём, мл"], ["depth", "Длина, мм"], ["width", "Ширина, мм"], ["height", "Высота, мм"], ["weight", "Вес, г"]];
-  return (
+  return createPortal(
     <div className="fr-drawer-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <aside className="fr-drawer fr-settings" role="dialog" aria-modal="true" aria-label="Шаблоны габаритов">
         <button className="icon-action fr-drawer-close" type="button" onClick={onClose} aria-label="Закрыть"><X size={18} /></button>
@@ -1140,6 +1149,7 @@ function DimsTemplatesPanel({ onClose }: { onClose: () => void }) {
           </button>
         </div>
       </aside>
-    </div>
+    </div>,
+    document.body,
   );
 }
