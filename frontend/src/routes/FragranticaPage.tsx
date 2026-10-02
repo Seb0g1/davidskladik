@@ -21,10 +21,13 @@ type Note = { name: string; icon?: string };
 type Accord = { name: string; share?: number; color?: string; background?: string };
 type PmInfo = { rows: number; minUsd: number | null; volumes: number[] } | null;
 type ExportedChip = { offerId: string; status: string; account: string; accountId?: string; marketplace?: string; volume: number | null; tester?: boolean; error?: string | null };
-type Shop = { id: string; kind: "ozon" | "yandex"; label: string; marketplace: string; added: number; pending: number; failed: number; offers: number };
+type Shop = { id: string; kind: "ozon" | "yandex"; label: string; marketplace: string; added: number; pending: number; failed: number; offers: number; stock?: number };
+type StockMap = Record<string, { n: number; v: number[] }>;
 type ListItem = {
   id: number; url: string; brand: string; name: string; gender: Gender; year: number | null; votes: number | null;
   thumb: string; hasDetail: boolean; accords: Accord[]; exported: ExportedChip[]; pm: PmInfo;
+  /** Cards already on the shops before Fragrantica (warehouse), by shop id */
+  stock?: Record<string, { n: number; v: number[] }>;
 };
 type ListResponse = { items: ListItem[]; hasMore: boolean; total: number; page: number };
 type CrawlerResponse = {
@@ -130,13 +133,14 @@ function PmBadge({ pm, compact = false }: { pm: PmInfo; compact?: boolean }) {
 }
 
 const PENDING = new Set(["new", "pending", "running", "queued_limit"]);
-type ShopState = "ok" | "pending" | "failed" | "none";
-const STATE_TEXT: Record<ShopState, string> = { ok: "добавлен", pending: "в очереди", failed: "ошибка", none: "не добавлен" };
+type ShopState = "ok" | "stock" | "pending" | "failed" | "none";
+const STATE_TEXT: Record<ShopState, string> = { ok: "добавлен через Фрагрантику", stock: "уже был в магазине (склад)", pending: "в очереди", failed: "ошибка", none: "не добавлен" };
 
-/** One shop's state for a perfume: any live card wins over a failed one. */
-function shopState(exported: ExportedChip[], shop: Shop): { state: ShopState; rows: ExportedChip[] } {
+/** One shop's state for a perfume: our card > a card that was there before (warehouse) > queue > error. */
+function shopState(exported: ExportedChip[], shop: Shop, stock?: StockMap): { state: ShopState; rows: ExportedChip[] } {
   const rows = exported.filter((e) => (e.accountId ? e.accountId === shop.id : e.account === shop.label));
   if (rows.some((e) => e.status !== "failed" && !PENDING.has(e.status))) return { state: "ok", rows };
+  if (stock?.[shop.id]?.n) return { state: "stock", rows };
   if (rows.some((e) => PENDING.has(e.status))) return { state: "pending", rows };
   if (rows.length) return { state: "failed", rows };
   return { state: "none", rows };
@@ -145,18 +149,22 @@ function shopState(exported: ExportedChip[], shop: Shop): { state: ShopState; ro
 const shortShop = (label: string) => (label.length <= 9 ? label : label.split(/\s+/)[0].slice(0, 9));
 
 /** Every shop on the card: added (with volumes), waiting, failed or not added. */
-function ShopChips({ exported, shops }: { exported: ExportedChip[]; shops: Shop[] }) {
+function ShopChips({ exported, shops, stock }: { exported: ExportedChip[]; shops: Shop[]; stock?: StockMap }) {
   if (!shops.length) return null;
   return (
     <span className="fr-shops-row">
       {shops.map((shop) => {
-        const { state, rows } = shopState(exported, shop);
-        const vols = [...new Set(rows.filter((r) => r.status !== "failed").map((r) => `${r.volume ?? "?"}${r.tester ? "T" : ""}`))];
+        const { state, rows } = shopState(exported, shop, stock);
+        const had = stock?.[shop.id];
+        const vols = state === "stock" && had
+          ? had.v.map(String)
+          : [...new Set(rows.filter((r) => r.status !== "failed").map((r) => `${r.volume ?? "?"}${r.tester ? "T" : ""}`))];
         const title = `${shop.label} (${shop.marketplace}): ${STATE_TEXT[state]}`
+          + (had ? `\nНа складе: ${had.n} ${plural(had.n, "карточка", "карточки", "карточек")}${had.v.length ? `, ${had.v.join(" / ")} мл` : ""}` : "")
           + (rows.length ? `\n${rows.map((r) => `${r.offerId} — ${r.status}${r.error ? `: ${r.error}` : ""}`).join("\n")}` : "");
         return (
           <span key={shop.id} className={`fr-shop-chip is-${state} is-${shop.kind}`} title={title}>
-            <i aria-hidden="true" />{shortShop(shop.label)}{state === "ok" && vols.length ? <small>{vols.join("·")}</small> : null}
+            <i aria-hidden="true" />{shortShop(shop.label)}{(state === "ok" || state === "stock") && vols.length ? <small>{vols.join("·")}</small> : null}
           </span>
         );
       })}
@@ -174,9 +182,10 @@ function ShopsBar({ shops, value, onPick }: { shops: Shop[]; value: string; onPi
         <div key={s.id} className={`fr-shops-card is-${s.kind}`}>
           <div className="fr-shops-name">{s.label}<span>{s.marketplace}</span></div>
           <div className="fr-shops-nums">
-            <button type="button" className={value === `in:${s.id}` ? "is-on" : ""} onClick={() => pick(`in:${s.id}`)} title="Показать ароматы, которые уже есть в магазине">
-              <b>{s.added.toLocaleString("ru")}</b> добавлено
+            <button type="button" className={value === `in:${s.id}` ? "is-on" : ""} onClick={() => pick(`in:${s.id}`)} title="Ароматы, которые есть в магазине: были на складе раньше или добавлены через Фрагрантику">
+              <b>{((s.stock || 0) + s.added).toLocaleString("ru")}</b> в магазине
             </button>
+            {s.added ? <span className="is-ours" title="Добавлено через Фрагрантику">{s.added} через Фрагрантику</span> : null}
             <button type="button" className={value === `out:${s.id}` ? "is-on" : ""} onClick={() => pick(`out:${s.id}`)} title="Показать ароматы, которых в этом магазине ещё нет">
               ещё нет
             </button>
@@ -190,11 +199,12 @@ function ShopsBar({ shops, value, onPick }: { shops: Shop[]; value: string; onPi
 }
 
 /** Card frame: everywhere / partly / failed. */
-function cardClass(exported: ExportedChip[], shops: Shop[]): string {
-  if (!exported.length || !shops.length) return "";
-  const states = shops.map((s) => shopState(exported, s).state);
-  if (states.every((s) => s === "ok")) return " is-added is-everywhere";
-  if (states.some((s) => s === "ok")) return " is-added";
+function cardClass(exported: ExportedChip[], shops: Shop[], stock?: StockMap): string {
+  if (!shops.length || (!exported.length && !Object.keys(stock || {}).length)) return "";
+  const states = shops.map((s) => shopState(exported, s, stock).state);
+  const present = (s: ShopState) => s === "ok" || s === "stock";
+  if (states.every(present)) return " is-added is-everywhere";
+  if (states.some(present)) return " is-added";
   if (states.some((s) => s === "failed")) return " is-failed";
   return "";
 }
@@ -320,7 +330,8 @@ export function FragranticaPage() {
         <select value={exported} onChange={(e) => setExported(e.target.value)} aria-label="Магазины">
           <option value="">В магазинах и нет</option>
           <option value="no">Нигде не добавлены</option>
-          <option value="yes">Добавлены хоть куда-то</option>
+          <option value="yes">Есть хоть в одном магазине</option>
+          <option value="stock">Были в магазинах до Фрагрантики</option>
           <option value="ozon">Есть на Ozon</option>
           <option value="yandex">Есть на Яндекс Маркете</option>
           {shops.map((s) => <option key={`in-${s.id}`} value={`in:${s.id}`}>Есть в {s.label}</option>)}
@@ -367,7 +378,7 @@ export function FragranticaPage() {
       <div className="fr-grid">
         {list.isLoading ? Array.from({ length: 12 }, (_, i) => <div key={`sk-${i}`} className="fr-card is-skeleton" aria-hidden="true"><div className="fr-card-img" /><div className="fr-card-body"><i /><i /><i /></div></div>) : null}
         {items.map((item, index) => (
-          <button key={item.id} type="button" className={`fr-card fr-appear${cardClass(item.exported, shops)}`} style={{ ["--i" as string]: index % 60 }} onClick={() => setOpenId(item.id)}>
+          <button key={item.id} type="button" className={`fr-card fr-appear${cardClass(item.exported, shops, item.stock)}`} style={{ ["--i" as string]: index % 60 }} onClick={() => setOpenId(item.id)}>
             <div className="fr-card-img">
               <img src={item.thumb} alt="" loading="lazy" />
             </div>
@@ -380,7 +391,7 @@ export function FragranticaPage() {
               </div>
               <div className="fr-card-badges">
                 <PmBadge pm={item.pm} compact />
-                <ShopChips exported={item.exported} shops={shops} />
+                <ShopChips exported={item.exported} shops={shops} stock={item.stock} />
               </div>
             </div>
           </button>

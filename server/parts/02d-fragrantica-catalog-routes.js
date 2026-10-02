@@ -118,7 +118,7 @@ app.get("/api/fragrantica/crawler", requireAdmin, async (_request, response, nex
     // Every shop cards are sent to, with how many perfumes are already there (control bar + card chips)
     const shops = fragranticaTargets().map((t) => {
       const c = counts.get(t.id) || {};
-      return { id: t.id, kind: t.kind, label: t.label, marketplace: t.marketplace, added: c.added || 0, pending: c.pending || 0, failed: c.failed || 0, offers: c.offers || 0 };
+      return { id: t.id, kind: t.kind, label: t.label, marketplace: t.marketplace, added: c.added || 0, pending: c.pending || 0, failed: c.failed || 0, offers: c.offers || 0, stock: c.stock || 0 };
     });
     response.json({
       ok: true,

@@ -54,6 +54,9 @@ async function ensureFragranticaTables() {
   await prisma.$executeRawUnsafe(`ALTER TABLE fragrantica_brands ADD COLUMN IF NOT EXISTS country TEXT, ADD COLUMN IF NOT EXISTS owner TEXT`);
   await prisma.$executeRawUnsafe(`ALTER TABLE fragrantica_perfumes ADD COLUMN IF NOT EXISTS pm_rows INTEGER, ADD COLUMN IF NOT EXISTS pm_min_usd NUMERIC, ADD COLUMN IF NOT EXISTS pm_volumes JSONB, ADD COLUMN IF NOT EXISTS pm_checked_at TIMESTAMPTZ`);
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS fragrantica_perfumes_pm_idx ON fragrantica_perfumes (pm_rows DESC NULLS LAST) WHERE pm_rows > 0`);
+  // Cards that were in the shops before Fragrantica: { "<shop id>": { n: cards, v: [volumes] } } from the warehouse
+  await prisma.$executeRawUnsafe(`ALTER TABLE fragrantica_perfumes ADD COLUMN IF NOT EXISTS shop_stock JSONB`);
+  await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS fragrantica_perfumes_shop_stock_idx ON fragrantica_perfumes USING gin (shop_stock)`);
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS fragrantica_perfumes_brand_idx ON fragrantica_perfumes (brand_slug)`);
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS fragrantica_perfumes_year_idx ON fragrantica_perfumes (year DESC NULLS LAST)`);
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS fragrantica_perfumes_votes_idx ON fragrantica_perfumes (votes DESC NULLS LAST)`);
@@ -476,6 +479,7 @@ function fragranticaRowToListItem(row = {}) {
     hasDetail: Boolean(row.detail_at),
     accords: detail?.accords ? detail.accords.slice(0, 4).map((a) => ({ name: a.name, background: a.background, color: a.color })) : [],
     exported: Array.isArray(row.exported) ? row.exported : [],
+    stock: row.shop_stock && typeof row.shop_stock === "object" ? row.shop_stock : {},
     pm: fragranticaPmFromRow(row),
   };
 }
@@ -493,7 +497,13 @@ async function fragranticaShopCounts() {
             COUNT(*) FILTER (WHERE status NOT IN ('failed'))::int AS offers
        FROM fragrantica_exports GROUP BY account_id`,
   );
-  return new Map(rows.map((r) => [String(r.accountId), r]));
+  const stock = await prisma.$queryRawUnsafe(
+    `SELECT k AS "accountId", COUNT(*)::int AS n FROM fragrantica_perfumes p, jsonb_object_keys(p.shop_stock) k
+      WHERE p.shop_stock IS NOT NULL GROUP BY k`,
+  );
+  const map = new Map(rows.map((r) => [String(r.accountId), { ...r }]));
+  for (const s of stock) map.set(String(s.accountId), { ...(map.get(String(s.accountId)) || {}), stock: s.n });
+  return map;
 }
 
 async function listFragranticaPerfumes(query = {}) {
@@ -509,18 +519,31 @@ async function listFragranticaPerfumes(query = {}) {
   if (["male", "female", "unisex"].includes(query.gender)) add("p.gender = ?", query.gender);
   if (Number(query.yearFrom)) add("p.year >= ?", Number(query.yearFrom));
   if (Number(query.yearTo)) add("p.year <= ?", Number(query.yearTo));
-  // Shop filters: a failed export does not count as «added»
+  // Shop filters: «in a shop» = a live Fragrantica export OR the card was already on the warehouse
+  // (shop_stock); a failed export does not count
   const exported = cleanText(query.exported);
   const live = "e.status <> 'failed'";
-  if (exported === "yes") where.push(`EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.perfume_id = p.id AND ${live})`);
-  if (exported === "no") where.push(`NOT EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.perfume_id = p.id AND ${live})`);
-  if (exported === "ozon" || exported === "yandex") add(`EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.perfume_id = p.id AND ${live} AND e.marketplace = ?)`, exported);
+  const inStock = "(p.shop_stock IS NOT NULL AND p.shop_stock <> '{}'::jsonb)";
+  if (exported === "yes") where.push(`(EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.perfume_id = p.id AND ${live}) OR ${inStock})`);
+  if (exported === "no") where.push(`(NOT EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.perfume_id = p.id AND ${live}) AND NOT ${inStock})`);
+  if (exported === "stock") where.push(inStock);
+  if (exported === "ozon" || exported === "yandex") {
+    const ids = fragranticaTargets().filter((t) => t.kind === exported).map((t) => t.id);
+    params.push(exported, ids);
+    where.push(`(EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.perfume_id = p.id AND ${live} AND e.marketplace = $${params.length - 1}) OR COALESCE(p.shop_stock, '{}'::jsonb) ?| $${params.length}::text[])`);
+  }
   if (exported === "failed") where.push("EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.perfume_id = p.id AND e.status = 'failed')");
   if (exported === "pending") where.push(`EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.perfume_id = p.id AND e.status IN ${FRAGRANTICA_PENDING_SQL})`);
   const shopIn = /^in:(.+)$/.exec(exported);
   const shopOut = /^out:(.+)$/.exec(exported);
-  if (shopIn) add(`EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.perfume_id = p.id AND ${live} AND e.account_id = ?)`, shopIn[1]);
-  if (shopOut) add(`NOT EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.perfume_id = p.id AND ${live} AND e.account_id = ?)`, shopOut[1]);
+  if (shopIn) {
+    params.push(shopIn[1]);
+    where.push(`(EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.perfume_id = p.id AND ${live} AND e.account_id = $${params.length}) OR COALESCE(p.shop_stock, '{}'::jsonb) ? $${params.length})`);
+  }
+  if (shopOut) {
+    params.push(shopOut[1]);
+    where.push(`(NOT EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.perfume_id = p.id AND ${live} AND e.account_id = $${params.length}) AND NOT COALESCE(p.shop_stock, '{}'::jsonb) ? $${params.length})`);
+  }
   if (query.pm === "yes") where.push("p.pm_rows > 0");
   if (query.pm === "no") where.push("COALESCE(p.pm_rows, 0) = 0");
   const order = {
@@ -534,7 +557,7 @@ async function listFragranticaPerfumes(query = {}) {
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const rows = await prisma.$queryRawUnsafe(
     `SELECT p.id, p.url, p.brand, p.brand_slug, p.name, p.gender, p.year, p.votes, p.rating, p.detail_at,
-            p.pm_rows, p.pm_min_usd, p.pm_volumes, p.pm_checked_at,
+            p.pm_rows, p.pm_min_usd, p.pm_volumes, p.pm_checked_at, p.shop_stock,
             jsonb_build_object('accords', p.detail->'accords') AS detail,
             (SELECT COALESCE(jsonb_agg(jsonb_build_object('offerId', e.offer_id, 'status', e.status, 'account', e.account_name, 'accountId', e.account_id, 'marketplace', e.marketplace, 'volume', e.volume_ml, 'tester', e.tester, 'error', left(e.error, 300)) ORDER BY e.id), '[]'::jsonb)
                FROM fragrantica_exports e WHERE e.perfume_id = p.id) AS exported

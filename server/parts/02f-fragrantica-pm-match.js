@@ -64,7 +64,8 @@ async function runFragranticaPmMatch() {
       // let HTTP / other jobs run between batches
       await new Promise((resolve) => setImmediate(resolve));
     }
-    const result = { status: "ok", pmRows: pmRows.length, checked, found, elapsedMs: Date.now() - startedAt };
+    const shops = await runFragranticaShopStockMatch(prisma).catch((error) => ({ status: "error", error: error?.message || String(error) }));
+    const result = { status: "ok", pmRows: pmRows.length, checked, found, shops, elapsedMs: Date.now() - startedAt };
     logger.info("fragrantica pm match complete", result);
     await writeFragranticaState("pm_match", { ...result, at: new Date().toISOString() });
     return result;
@@ -74,6 +75,50 @@ async function runFragranticaPmMatch() {
   } finally {
     fragranticaPmMatchRunning = false;
   }
+}
+
+/**
+ * «Уже есть в магазине» — cards that were on the shops before Fragrantica: every active warehouse product
+ * (warehouse_products, per shop = target) is indexed like a PriceMaster row and every catalog perfume is
+ * matched against each shop's index (brand + all name words, no flankers / testers / samples).
+ * Result: fragrantica_perfumes.shop_stock = { "<shop id>": { n: cards, v: [volumes] } }.
+ */
+async function runFragranticaShopStockMatch(prisma) {
+  const products = await prisma.$queryRawUnsafe(
+    `SELECT target, name, brand FROM warehouse_products WHERE target IS NOT NULL AND name <> ''`,
+  );
+  const byShop = new Map();
+  for (const p of products) {
+    const name = cleanText(p.name);
+    const brand = cleanText(p.brand);
+    const text = brand && !name.toLowerCase().includes(brand.toLowerCase()) ? `${brand} ${name}` : name;
+    if (!byShop.has(p.target)) byShop.set(p.target, []);
+    byShop.get(p.target).push({ name: text, usd: 0 });
+  }
+  const indexes = [...byShop.entries()].map(([shop, rows]) => [shop, buildFragranticaPmIndex(rows)]);
+  let lastId = 0;
+  let found = 0;
+  for (;;) {
+    const perfumes = await prisma.$queryRawUnsafe(`SELECT id, brand, name FROM fragrantica_perfumes WHERE id > $1 ORDER BY id LIMIT 2000`, lastId);
+    if (!perfumes.length) break;
+    lastId = perfumes[perfumes.length - 1].id;
+    const results = perfumes.map((perfume) => {
+      const stock = {};
+      for (const [shop, index] of indexes) {
+        const m = matchFragranticaPmIndex(index, perfume);
+        if (m.count) stock[shop] = { n: m.count, v: m.volumes };
+      }
+      if (Object.keys(stock).length) found += 1;
+      return { id: perfume.id, stock };
+    });
+    await prisma.$executeRawUnsafe(
+      `UPDATE fragrantica_perfumes p SET shop_stock = NULLIF(x->'stock', '{}'::jsonb)
+         FROM jsonb_array_elements($1::jsonb) x WHERE p.id = (x->>'id')::int`,
+      JSON.stringify(results),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  return { status: "ok", products: products.length, shops: byShop.size, found };
 }
 
 function scheduleFragranticaPmMatch(delayMs = fragranticaPmMatchIntervalMs) {
