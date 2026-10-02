@@ -105,9 +105,15 @@ async function fragranticaDictValues(account, typeId, attributeId) {
   return values;
 }
 
+// Dictionary searches repeat for every volume of a perfume (brand, country, TN VED) — cached 6 h
+const fragranticaDictSearchCache = new Map();
+
 async function fragranticaSearchDict(account, typeId, attributeId, value, limit = 20) {
   const query = cleanText(value);
   if (query.length < 2) return [];
+  const key = `${cleanText(account?.id)}:${Number(typeId)}:${Number(attributeId)}:${query.toLowerCase()}:${limit}`;
+  const cached = fragranticaDictSearchCache.get(key);
+  if (cached && Date.now() - cached.at < 6 * 3_600_000) return cached.values;
   const data = await ozonRequest("/v1/description-category/attribute/values/search", {
     description_category_id: FRAG_OZON_CATEGORY_ID,
     type_id: Number(typeId),
@@ -115,7 +121,10 @@ async function fragranticaSearchDict(account, typeId, attributeId, value, limit 
     value: query,
     limit,
   }, account);
-  return (data.result || []).map((v) => ({ id: Number(v.id), value: String(v.value || ""), info: v.info || "" }));
+  const values = (data.result || []).map((v) => ({ id: Number(v.id), value: String(v.value || ""), info: v.info || "" }));
+  if (fragranticaDictSearchCache.size > 5000) fragranticaDictSearchCache.clear();
+  fragranticaDictSearchCache.set(key, { at: Date.now(), values });
+  return values;
 }
 
 function fragBrandKey(text) {

@@ -611,7 +611,7 @@ function planFragranticaVolumes(rows = [], perfume = {}) {
     if (fragPmIsTesterOrSample(name) || FRAG_SET_RE.test(name)) continue;
     const volumes = fragPmVolumes(name);
     if (volumes.length !== 1 || volumes[0] <= 3) continue;
-    const check = assessFragranticaSupplierRow(name, { brand: perfume.brand, name: perfume.name, typeKey: "edp" });
+    const check = assessFragranticaSupplierRow(name, { brand: perfume.brand, name: fragStripConcentration(perfume.name), typeKey: "edp" });
     if (check.clone || check.notPerfume || check.extraWords.length || check.missingNameWords.length) continue;
     good.push({ volume: volumes[0], concentration: check.concentration });
   }
@@ -759,4 +759,51 @@ function fragranticaMediaExtrasFailed(errors = []) {
     const text = `${e?.attribute_name || ""} ${e?.description || ""} ${e?.message || ""} ${e?.code || ""}`;
     return id === FRAG_RICH_ATTR || id === 21845 || /rich|видеообложк|video|21845|11254/i.test(text);
   });
+}
+
+// ─── Конвейер: индекс строк PriceMaster в памяти ─────────────────────────────
+// Вместо SQL-поиска на каждый аромат и объём — все активные строки последних прайсов один раз
+// (02d-fragrantica-drafts.js, кэш 10 мин) и поиск по словам названия за миллисекунды.
+
+// «Eau de Parfum», «Extrait de Parfum» в названии аромата — это концентрация, у поставщиков её пишут «EDP»
+const FRAG_CONCENTRATION_PHRASE_RE = /\b(eau\s+de\s+(parfum|toilette|cologne)|extrait\s+de\s+parfum|parfum\s+extrait|eau\s+fraiche)\b/gi;
+
+function fragStripConcentration(name) {
+  return String(name || "").replace(FRAG_CONCENTRATION_PHRASE_RE, " ").replace(/\s+/g, " ").trim();
+}
+
+function fragPmSearchTokens(text) {
+  return fragRowTokens(String(text || "").normalize("NFD").replace(/[̀-ͯ]/g, ""));
+}
+
+function buildFragranticaRowIndex(rows = []) {
+  const postings = new Map();
+  const tokenSets = rows.map((row, index) => {
+    const tokens = new Set(fragPmSearchTokens(row.name));
+    for (const token of tokens) {
+      let list = postings.get(token);
+      if (!list) postings.set(token, (list = []));
+      list.push(index);
+    }
+    return tokens;
+  });
+  return { rows, postings, tokenSets };
+}
+
+/** Rows that contain every word of the perfume name (accents ignored, concentration words dropped). */
+function findFragranticaPmCandidates(index, perfume = {}, limit = 600) {
+  const nameTokens = [...new Set(fragPmSearchTokens(fragStripConcentration(perfume.name)).filter((w) => !FRAG_ROW_STOP_WORDS.has(w)))];
+  if (!nameTokens.length || !index?.postings) return [];
+  let best = null;
+  for (const token of nameTokens) {
+    const list = index.postings.get(token);
+    if (!list) return [];
+    if (!best || list.length < best.length) best = list;
+  }
+  const out = [];
+  for (const i of best) {
+    if (nameTokens.every((w) => index.tokenSets[i].has(w))) out.push(index.rows[i]);
+    if (out.length >= limit) break;
+  }
+  return out;
 }

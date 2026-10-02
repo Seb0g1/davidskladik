@@ -89,7 +89,14 @@ async function fragranticaLinkSuggestionsData(query = {}) {
   let found = [];
   let usdRate = 95;
   let settings = {};
-  for (const q of queries) {
+  // Conveyor: candidate rows from the in-memory PriceMaster index (no SQL per volume)
+  const preloaded = !custom && Array.isArray(query.rows) && query.rows.length ? query.rows : null;
+  if (preloaded) {
+    found = preloaded;
+    usdRate = Number(query.usdRate) || usdRate;
+    settings = query.settings || settings;
+  }
+  for (const q of preloaded ? [] : queries) {
     const result = await fragranticaSearchPmRows(q, 60);
     usdRate = result.usdRate;
     settings = result.settings;
@@ -102,7 +109,7 @@ async function fragranticaLinkSuggestionsData(query = {}) {
     .filter((row) => custom || !supplierRowVolumeMismatch(productName, row.name))
     .filter((row) => custom || isTesterOrDecantSupplierRowName(row.name) === tester)
     .filter((row) => custom || volume <= 3 || !isSingleSampleName(row.name))
-    .map((row) => ({ row, check: assessFragranticaSupplierRow(row.name, { brand: perfume.brand, name: perfume.name, typeKey, oilAllowed: typeKey === "oil" }) }))
+    .map((row) => ({ row, check: assessFragranticaSupplierRow(row.name, { brand: perfume.brand, name: fragStripConcentration(perfume.name), typeKey, oilAllowed: typeKey === "oil" }) }))
     // Клоны («… (Sauvage Dior)») и не-парфюм (лосьон, дезодорант, мист…) не предлагаем вовсе
     .filter(({ check }) => custom || (!check.clone && !check.notPerfume))
     .map(({ row, check }) => {

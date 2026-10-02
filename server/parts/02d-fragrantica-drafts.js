@@ -18,7 +18,7 @@
 
 const fragranticaDraftsEnabled = process.env.FRAGRANTICA_DRAFTS_ENABLED !== "false";
 const fragranticaDraftsTickMs = 10_000;
-const fragranticaDraftsParallel = Math.max(1, Number(process.env.FRAGRANTICA_DRAFTS_PARALLEL || 2) || 2);
+const fragranticaDraftsParallel = Math.max(1, Number(process.env.FRAGRANTICA_DRAFTS_PARALLEL || 3) || 3);
 const FRAG_DRAFT_ACTIVE = "('queued', 'working', 'ready', 'attention', 'approved', 'sending', 'failed')";
 let fragranticaDraftsTablesReady = false;
 let fragranticaDraftsRunning = false;
@@ -98,6 +98,66 @@ function fragranticaTargetsMissingVolume(targets, presence, volume, tester = fal
   return targets.filter((t) => !fragranticaVolumeInShop({ ...presence, shopId: t.id, volume, tester }));
 }
 
+// ─── Индекс PriceMaster в памяти ───────────────────────────────────────────
+// Все активные строки последних прайсов одним запросом (~190k строк, доли секунды), дальше поиск
+// объёмов и поставщиков — по словам в памяти. Кэш FRAGRANTICA_PM_INDEX_MINUTES (деф. 10), потом
+// отпускается, чтобы не держать память worker без дела.
+
+const fragranticaPmIndexTtlMs = Math.max(1, Number(process.env.FRAGRANTICA_PM_INDEX_MINUTES || 10) || 10) * 60_000;
+let fragranticaPmIndexCache = null;
+let fragranticaPmIndexLoading = null;
+
+async function loadFragranticaPmRowIndex() {
+  const settings = await readAppSettings();
+  const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
+  const cte = await pmLatestDocsCteSql();
+  const startedAt = Date.now();
+  const [raw] = await pool.query(
+    `${cte}
+     SELECT r.NativeID AS article, r.NativeName AS name, r.BarCode AS barcode, r.NativePrice AS price, r.Active AS active,
+            r.RowID AS rowId, d.DocDate AS docDate, d.PartnerID AS partnerId, p.PartnerName AS partnerName
+     FROM pm_latest_docs ld
+     JOIN OfferDocs d ON d.DocID = ld.DocID
+     JOIN OfferRows r ON r.DocID = d.DocID
+     LEFT JOIN Partners p ON p.PartnerID = d.PartnerID
+     WHERE r.Ignored = 0 AND r.Active != 0 AND r.NativePrice > 0`,
+  );
+  const maps = managedSupplierMaps();
+  const rows = raw.map((row) => {
+    const m = mapPriceMasterSearchResponseRow(row, usdRate, maps);
+    return {
+      id: m.id, rowId: m.rowId, article: m.article, name: m.name, supplierName: m.supplierName, partnerId: m.partnerId,
+      price: m.price, priceCurrency: m.priceCurrency, currency: m.currency, available: m.available, updatedAt: m.updatedAt,
+    };
+  });
+  const index = buildFragranticaRowIndex(rows);
+  logger.info("fragrantica pm index loaded", { rows: rows.length, ms: Date.now() - startedAt });
+  return { at: Date.now(), index, usdRate, settings };
+}
+
+async function getFragranticaPmRowIndex() {
+  if (fragranticaPmIndexCache && Date.now() - fragranticaPmIndexCache.at < fragranticaPmIndexTtlMs) return fragranticaPmIndexCache;
+  if (!fragranticaPmIndexLoading) {
+    fragranticaPmIndexLoading = loadFragranticaPmRowIndex()
+      .then((cache) => { fragranticaPmIndexCache = cache; return cache; })
+      .finally(() => { fragranticaPmIndexLoading = null; });
+  }
+  return fragranticaPmIndexLoading;
+}
+
+/** PriceMaster rows of a perfume: from the memory index, SQL search only when the index finds nothing. */
+async function fragranticaPerfumePmRows(perfume) {
+  try {
+    const cache = await getFragranticaPmRowIndex();
+    const rows = findFragranticaPmCandidates(cache.index, perfume);
+    if (rows.length) return { rows, usdRate: cache.usdRate, settings: cache.settings, source: "index" };
+  } catch (error) {
+    logger.warn("fragrantica pm index failed, using search", { detail: error?.message || String(error) });
+  }
+  const result = await fragranticaSearchPmRows(fragNameWithBrand(perfume), 80);
+  return { ...result, source: "search" };
+}
+
 // ─── Сборка ────────────────────────────────────────────────────────────────
 
 // Аромат → черновики по объёмам из PriceMaster (только тех магазинов, где этого объёма ещё нет).
@@ -111,7 +171,7 @@ async function expandFragranticaPerfumeDraft(draft) {
   if (!perfume.notes && !perfume.accords) {
     return updateFragranticaDraft(draft.id, { status: "attention", stage: null, error: "Фрагрантика не отдала страницу аромата (нет пирамиды). Откройте аромат и загрузите его закладкой «→ Склад», затем «Собрать заново»." });
   }
-  const { rows } = await fragranticaSearchPmRows(fragNameWithBrand(perfume), 80);
+  const { rows } = await fragranticaPerfumePmRows(perfume);
   const plan = planFragranticaVolumes(rows, perfume);
   const typeKey = FRAG_OZON_TYPES.some((t) => t.key === draft.type_key) ? draft.type_key : plan.typeKey;
   const targets = fragranticaDraftTargets(draft.targets);
@@ -161,7 +221,9 @@ async function buildFragranticaCardDraft(draft) {
   let selected = [];
   let preview = null;
   try {
-    const suggestions = await fragranticaLinkSuggestionsData({ perfumeId, typeKey, volume, tester });
+    const perfume = await fragranticaPerfumeForExport(perfumeId);
+    const pm = await fragranticaPerfumePmRows(perfume);
+    const suggestions = await fragranticaLinkSuggestionsData({ perfumeId, typeKey, volume, tester, rows: pm.rows, usdRate: pm.usdRate, settings: pm.settings });
     linkRows = suggestions.rows.slice(0, 12);
     selected = suggestions.suggested.filter((id) => linkRows.some((r) => r.id === id));
     const rows = linkRows.filter((r) => selected.includes(r.id));
@@ -290,18 +352,25 @@ async function runFragranticaDraftsTick() {
       if (!next) break;
       await processFragranticaDraft(next);
     }
+    // Ароматы → объёмы: по индексу это миллисекунды, раскладываем все ожидающие сразу
+    const perfumes = await prisma.$queryRawUnsafe(
+      `UPDATE fragrantica_drafts SET status = 'working', stage = 'volumes', updated_at = now()
+       WHERE id IN (SELECT id FROM fragrantica_drafts WHERE status = 'queued' AND kind = 'perfume' ORDER BY id LIMIT 100 FOR UPDATE SKIP LOCKED)
+       RETURNING *`,
+    );
+    for (let i = 0; i < perfumes.length; i += 4) await Promise.all(perfumes.slice(i, i + 4).map((draft) => processFragranticaDraft(draft)));
     const claimed = await prisma.$queryRawUnsafe(
       `UPDATE fragrantica_drafts SET status = 'working', stage = 'start', updated_at = now()
        WHERE id IN (
          SELECT DISTINCT ON (d.perfume_id) d.id FROM fragrantica_drafts d
-          WHERE d.status = 'queued'
+          WHERE d.status = 'queued' AND d.kind = 'card'
             AND NOT EXISTS (SELECT 1 FROM fragrantica_drafts w WHERE w.perfume_id = d.perfume_id AND w.status = 'working')
-          ORDER BY d.perfume_id, (d.kind = 'perfume') DESC, d.id
+          ORDER BY d.perfume_id, d.id
           LIMIT ${fragranticaDraftsParallel})
        RETURNING *`,
     );
     await Promise.all(claimed.map((draft) => processFragranticaDraft(draft)));
-    return { status: "ok", built: claimed.length };
+    return { status: "ok", built: claimed.length + perfumes.length };
   } finally {
     fragranticaDraftsRunning = false;
   }

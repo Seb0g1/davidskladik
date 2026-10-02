@@ -381,3 +381,23 @@ test("Ozon Rich-контент: pyramid, text halves, specs, close-up; video cov
   assert.equal(r.fragranticaMediaExtrasFailed([{ description: "Не удалось загрузить видеообложку" }]), true);
   assert.equal(r.fragranticaMediaExtrasFailed([{ attribute_id: 85, description: "Бренд" }]), false);
 });
+
+test("conveyor: PriceMaster memory index — every name word, accents ignored, concentration words dropped", () => {
+  vm.runInContext("this.idx = { buildFragranticaRowIndex, findFragranticaPmCandidates, planFragranticaVolumes, fragStripConcentration };", ctx);
+  const x = ctx.idx;
+  const rows = [
+    { name: "Dior Sauvage edp 100ml" }, { name: "DIOR SAUVAGE EDP 60 ML" }, { name: "Dior Sauvage edt 100ml" },
+    { name: "Dior Homme Intense 100ml" }, { name: "Lancome La Vie Est Belle Eau de Parfum 50ml" },
+    { name: "Hermes Terre d'Hermes 100ml" }, { name: "Guerlain Heritage edt 100ml" },
+  ];
+  const index = x.buildFragranticaRowIndex(rows);
+  const names = (perfume) => plain(x.findFragranticaPmCandidates(index, perfume)).map((r) => r.name);
+  assert.deepEqual(names({ brand: "Dior", name: "Sauvage Eau de Parfum" }), ["Dior Sauvage edp 100ml", "DIOR SAUVAGE EDP 60 ML", "Dior Sauvage edt 100ml"]);
+  assert.deepEqual(names({ brand: "Guerlain", name: "Héritage" }), ["Guerlain Heritage edt 100ml"]);
+  assert.deepEqual(names({ brand: "Chanel", name: "Bleu de Chanel" }), []);
+  assert.equal(x.fragStripConcentration("Sauvage Eau de Parfum"), "Sauvage");
+  // «Eau de Parfum» in the name no longer throws the EDP rows out
+  const plan = plain(x.planFragranticaVolumes(x.findFragranticaPmCandidates(index, { brand: "Dior", name: "Sauvage Eau de Parfum" }), { brand: "Dior", name: "Sauvage Eau de Parfum" }));
+  assert.equal(plan.typeKey, "edp");
+  assert.deepEqual(plan.volumes.map((v) => v.volume), [60, 100]);
+});
