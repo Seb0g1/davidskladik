@@ -1107,6 +1107,17 @@ async function refreshFragranticaExportMedia(row) {
   const extras = fragranticaExtraPhotos(perfumeId, target.style);
   const item = { ...(row.item || {}) };
   const type = fragOzonTypeById(item.type_id) || fragOzonTypeByKey(fragOzonGuessTypeKey(perfume));
+  // A short annotation (Market docks 20 points below ~1000 chars): the perfume's shared AI text, written now if missing
+  const annotation = (item.attributes || []).find((a) => Number(a.id) === FRAG_OZON_ATTR.annotation);
+  const currentText = String(annotation?.values?.[0]?.value || "").replace(/<[^>]+>/g, "");
+  if (currentText.length < 800) {
+    let text = await readFragranticaCardDescription(perfumeId).catch(() => "");
+    if (text.length < 800) text = (await generateFragranticaDescription({ perfumeId, typeKey: type.key, tester: Boolean(row.tester), marketplace: "yandex" }).catch(() => ({}))).description || text;
+    if (text.length > currentText.length) {
+      const value = row.marketplace === "ozon" ? formatDescriptionForMarketplace(text, "ozon") : text;
+      item.attributes = [...(item.attributes || []).filter((a) => Number(a.id) !== FRAG_OZON_ATTR.annotation), { id: FRAG_OZON_ATTR.annotation, complex_id: 0, values: [{ value }] }];
+    }
+  }
   if (row.marketplace === "ozon") {
     const account = fragranticaResolveOzonAccount(row.account_id);
     const categoryAttrs = await ozonGetCategoryAttributes(account, FRAG_OZON_CATEGORY_ID, type.typeId).catch(() => []);
