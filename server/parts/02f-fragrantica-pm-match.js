@@ -105,7 +105,7 @@ async function runFragranticaShopStockMatch(prisma) {
     const results = perfumes.map((perfume) => {
       const stock = {};
       for (const [shop, index] of indexes) {
-        const m = matchFragranticaPmIndex(index, perfume);
+        const m = matchFragranticaPmIndex(index, perfume, { russianExtrasOk: true });
         if (m.count) stock[shop] = { n: m.count, v: m.volumes };
       }
       if (Object.keys(stock).length) found += 1;

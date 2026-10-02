@@ -464,7 +464,9 @@ function buildFragranticaPmIndex(rows = []) {
   return { rows, postings, tokenSets };
 }
 
-function matchFragranticaPmIndex(index, perfume = {}) {
+// opts.russianExtrasOk — our own warehouse titles: Russian words («для мужчин», «парфюмерная вода»)
+// only describe the product; Latin extra words (Elixir, Intense…) still mean another perfume
+function matchFragranticaPmIndex(index, perfume = {}, opts = {}) {
   const nameTokens = [...new Set(fragRowTokens(perfume.name).filter((w) => !FRAG_ROW_STOP_WORDS.has(w)))];
   const brandTokens = fragRowTokens(perfume.brand).filter((w) => w.length >= 3);
   const required = [...new Set([...nameTokens, ...brandTokens])];
@@ -491,7 +493,8 @@ function matchFragranticaPmIndex(index, perfume = {}) {
     const rowVolumes = fragPmVolumes(row.name);
     if (rowVolumes.length && Math.max(...rowVolumes) <= 3) continue; // пробник / отливант
     const check = assessFragranticaSupplierRow(row.name, { brand: perfume.brand, name: perfume.name, typeKey: "edp" });
-    if (check.clone || check.notPerfume || check.missingNameWords.length || check.extraWords.length) continue;
+    const extra = opts.russianExtrasOk ? check.extraWords.filter((w) => !/[а-яё]/i.test(w)) : check.extraWords;
+    if (check.clone || check.notPerfume || check.missingNameWords.length || extra.length) continue;
     count += 1;
     if (Number(row.usd) > 0 && (minUsd === null || Number(row.usd) < minUsd)) minUsd = Number(row.usd);
     for (const v of fragPmVolumes(row.name)) volumes.add(v);
