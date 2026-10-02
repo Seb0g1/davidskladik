@@ -363,6 +363,12 @@ async function requestPdPerfumeCard(payload) {
   throw new Error("parfumdeclaration не успел обработать фото за 6 минут");
 }
 
+/** Absolute URLs of the extra card photos already made for a perfume: «Характеристики» (shop style), close-up. */
+function fragranticaExtraPhotos(perfumeId, style) {
+  const files = [`${Number(perfumeId)}-specs-${style}-v1.jpg`, `${Number(perfumeId)}-closeup-v1.jpg`];
+  return files.filter((file) => fragFs.existsSync(fragranticaMediaPath("cards", file))).map((file) => fragranticaAbsoluteUrl(fragranticaMediaUrl("cards", file)));
+}
+
 async function runFragranticaImageJob(job, { perfumeId, styles, refresh }) {
   const perfume = await fragranticaPerfumeForExport(perfumeId);
   await ensureFragranticaPerfumeImage(perfumeId);
@@ -371,24 +377,37 @@ async function runFragranticaImageJob(job, { perfumeId, styles, refresh }) {
   const mainFile = `${perfumeId}-main-v2.jpg`;
   const notesFile = (style) => `${perfumeId}-notes-${style}-v2.jpg`;
   const have = (file) => fragFs.existsSync(fragranticaMediaPath("cards", file));
-  const result = { main: null, notes: {}, source: hdSource || fragranticaMediaUrl("images", `${perfumeId}.jpg`), warnings: [] };
-  if (!refresh && have(mainFile) && styles.every((style) => have(notesFile(style)))) {
+  // Extra photos (up to 6 per card): close-up of the real photo + «Характеристики»; «.none» = no close-up possible
+  const closeupFile = `${perfumeId}-closeup-v1.jpg`;
+  const closeupNone = `${perfumeId}-closeup-v1.none`;
+  const specsFile = (style) => `${perfumeId}-specs-${style}-v1.jpg`;
+  const result = { main: null, notes: {}, specs: {}, closeup: null, source: hdSource || fragranticaMediaUrl("images", `${perfumeId}.jpg`), warnings: [] };
+  const cached = () => {
     result.main = fragranticaMediaUrl("cards", mainFile);
     for (const style of styles) result.notes[style] = fragranticaMediaUrl("cards", notesFile(style));
+    for (const style of styles) if (have(specsFile(style))) result.specs[style] = fragranticaMediaUrl("cards", specsFile(style));
+    if (have(closeupFile)) result.closeup = fragranticaMediaUrl("cards", closeupFile);
     return result;
+  };
+  if (!refresh && have(mainFile) && styles.every((style) => have(notesFile(style)) && have(specsFile(style))) && (have(closeupFile) || have(closeupNone))) {
+    return cached();
   }
   job.stage = "parfumdeclaration";
   try {
+    const brandInfo = await fragranticaBrandInfo(perfume.brandSlug).catch(() => ({ country: "" }));
     const pd = await requestPdPerfumeCard({
       imageUrl: fragranticaAbsoluteUrl(result.source),
       style: styles[0],
       styles,
+      extras: true,
       perfume: {
         brand: perfume.brand,
         name: perfume.name,
         year: perfume.year || null,
         gender: perfume.gender || "",
         family: perfume.family || "",
+        perfumers: Array.isArray(perfume.perfumers) ? perfume.perfumers.slice(0, 2) : [],
+        country: fragranticaCountryRu(brandInfo.country) || "",
         notes: {
           top: (perfume.notes?.top || []).map((n) => ({ name: n.name, icon: fragranticaNoteIconLarge(n.icon) })),
           middle: (perfume.notes?.middle || []).map((n) => ({ name: n.name, icon: fragranticaNoteIconLarge(n.icon) })),
@@ -408,6 +427,18 @@ async function runFragranticaImageJob(job, { perfumeId, styles, refresh }) {
       if (!byStyle[style]) continue;
       await fragFs.promises.writeFile(fragranticaMediaPath("cards", notesFile(style)), Buffer.from(byStyle[style], "base64"));
       result.notes[style] = fragranticaMediaUrl("cards", notesFile(style));
+    }
+    for (const style of styles) {
+      const specs = pd.specsByStyle?.[style];
+      if (!specs) continue;
+      await fragFs.promises.writeFile(fragranticaMediaPath("cards", specsFile(style)), Buffer.from(specs, "base64"));
+      result.specs[style] = fragranticaMediaUrl("cards", specsFile(style));
+    }
+    if (pd.closeup) {
+      await fragFs.promises.writeFile(fragranticaMediaPath("cards", closeupFile), Buffer.from(pd.closeup, "base64"));
+      result.closeup = fragranticaMediaUrl("cards", closeupFile);
+    } else {
+      await fragFs.promises.writeFile(fragranticaMediaPath("cards", closeupNone), "");
     }
     result.warnings.push(...(pd.warnings || []));
   } catch (error) {
@@ -832,13 +863,15 @@ app.post("/api/fragrantica/ozon/export", requireAdmin, async (request, response,
         ? { ...a, values: a.values.map((v) => ({ ...v, value: formatDescriptionForMarketplace(v.value, "ozon") })) }
         : a));
       const ozonAccount = target.kind === "ozon" ? getOzonAccounts().find((a) => cleanText(a.id) === target.id) : null;
+      // After the notes: «Характеристики» in this shop's style and the close-up (when they were made)
+      const extras = fragranticaExtraPhotos(perfumeId, target.style);
       const item = target.kind === "ozon"
-        ? { ...baseItem, vat: fragranticaVatForClientId(cleanText(ozonAccount?.clientId), vatOverrides), attributes: ozonAttributes, primary_image: bottle, images: notes ? [notes] : [] }
+        ? { ...baseItem, vat: fragranticaVatForClientId(cleanText(ozonAccount?.clientId), vatOverrides), attributes: ozonAttributes, primary_image: bottle, images: [notes, ...extras].filter(Boolean) }
         : {
           ...baseItem,
           // Маркет: «Парфюмерная вода <бренд> <аромат> <для кого> <мл> мл» — так карточка получает больше баллов
           yandexName: buildFragranticaMarketName({ perfume, typeKey: type.key, volume: (volumeAttr?.values || [])[0]?.value, tester: Boolean(body.tester) }),
-          price: String(yandexPrice), yandexPictures: [bottle, notes].filter(Boolean), yandexExtra,
+          price: String(yandexPrice), yandexPictures: [bottle, notes, ...extras].filter(Boolean), yandexExtra,
         };
       // the same perfume+volume already sent to this shop → update that row (and that card), no duplicate
       const inserted = await prisma.$queryRawUnsafe(
