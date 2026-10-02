@@ -265,6 +265,12 @@ function startBackgroundSchedulers() {
   if (fragranticaExportQueueEnabled) {
     scheduleFragranticaExportQueue(2 * 60_000);
   }
+  if (fragranticaDraftsEnabled) {
+    scheduleFragranticaDrafts(30_000);
+  }
+  if (ozonDocStatusEnabled) {
+    scheduleOzonDocStatus(3 * 60_000);
+  }
   if (fragranticaPmMatchEnabled) {
     scheduleFragranticaPmMatch(5 * 60_000);
   }

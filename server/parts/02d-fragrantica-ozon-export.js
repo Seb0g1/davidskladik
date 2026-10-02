@@ -182,82 +182,92 @@ function fragranticaAbsoluteUrl(url) {
   return value.startsWith("/") ? `${fragranticaPublicBaseUrl()}${value}` : value;
 }
 
+// Предзаполненная форма карточки: и для формы на странице, и для конвейера (02d-fragrantica-drafts.js).
+// Описание — общее для всех объёмов аромата (readFragranticaCardDescription), иначе текст Фрагрантики.
+async function buildFragranticaFormData(query = {}) {
+  const perfumeId = Number(query.perfumeId);
+  const perfume = await fragranticaPerfumeForExport(perfumeId);
+  const account = fragranticaResolveOzonAccount(query.accountId);
+  const typeKey = FRAG_OZON_TYPES.some((t) => t.key === query.typeKey) ? query.typeKey : fragOzonGuessTypeKey(perfume);
+  const type = fragOzonTypeByKey(typeKey);
+  const volume = fragFormatVolume(query.volume) || "";
+  const tester = query.tester === "1" || query.tester === "true" || query.tester === true;
+  const savedDescription = await readFragranticaCardDescription(perfumeId).catch(() => "");
+
+  const brandInfo = await fragranticaBrandInfo(perfume.brandSlug).catch(() => ({ country: "", owner: "" }));
+  const countryRu = fragranticaCountryRu(brandInfo.country);
+  const [categoryAttrs, brand, genderDict, classificationDict, tnved, countryValues] = await Promise.all([
+    ozonGetCategoryAttributes(account, FRAG_OZON_CATEGORY_ID, type.typeId),
+    fragranticaFindBrand(account, type.typeId, perfume.brand),
+    fragranticaDictValues(account, type.typeId, FRAG_OZON_ATTR.gender).catch(() => []),
+    fragranticaDictValues(account, type.typeId, FRAG_OZON_ATTR.classification).catch(() => []),
+    fragranticaFindTnved(account, type.typeId, volume),
+    countryRu ? fragranticaSearchDict(account, type.typeId, FRAG_OZON_ATTR.country, countryRu, 10).catch(() => []) : Promise.resolve([]),
+  ]);
+  const country = countryValues.find((v) => v.value.toLowerCase() === countryRu.toLowerCase()) || null;
+  const offerId = buildFragranticaOfferId({ perfumeId, volume, tester });
+  const dimsTemplates = (await readFragranticaState("settings").catch(() => ({}))).dimsTemplates || [];
+  const prefill = buildFragranticaOzonPrefill({
+    dimsTemplates,
+    perfume: savedDescription ? { ...perfume, description: savedDescription } : perfume,
+    typeKey,
+    volume,
+    tester,
+    offerId,
+    lookups: {
+      brand: brand.match,
+      type: { id: type.typeId, value: type.label },
+      gender: fragGenderValues(perfume.gender, genderDict),
+      classification: matchFragranticaClassification(perfume, classificationDict),
+      tnved,
+      country,
+      producer: perfume.brand,
+    },
+  });
+  const values = Object.fromEntries(prefill.attributes.map((a) => [a.id, a.values]));
+  const attributes = categoryAttrs
+    .map(fragranticaAttributeForForm)
+    .sort((a, b) => Number(b.required) - Number(a.required))
+    .map((attr) => ({ ...attr, values: values[attr.id] || [] }));
+  const prisma = await requireFragranticaTables();
+  const exports = await prisma.$queryRawUnsafe(
+    `SELECT id, marketplace, account_name AS "accountName", offer_id AS "offerId", volume_ml AS "volume", tester, status, product_id AS "productId", error, created_at AS "createdAt"
+     FROM fragrantica_exports WHERE perfume_id = $1 ORDER BY id DESC`,
+    perfumeId,
+  );
+  return {
+    ok: true,
+    perfume: { id: perfume.id, brand: perfume.brand, name: perfume.name, gender: perfume.gender, year: perfume.year, notes: perfume.notes, accords: perfume.accords },
+    accounts: fragranticaOzonAccounts(),
+    targets: fragranticaTargets(),
+    account: { id: cleanText(account.id), name: cleanText(account.name), style: fragranticaCardStyleForAccount(account) },
+    types: FRAG_OZON_TYPES,
+    typeKey,
+    typeId: type.typeId,
+    volume,
+    tester,
+    offerId,
+    name: prefill.name,
+    vat: FRAG_OZON_DEFAULTS.vat,
+    vatByTarget: Object.fromEntries(fragranticaTargets().map((t) => [t.key, t.kind === "ozon"
+      ? fragranticaVatForClientId(cleanText(getOzonAccounts().find((a) => cleanText(a.id) === t.id)?.clientId), fragranticaEnvMap("FRAGRANTICA_VAT_BY_ACCOUNT"))
+      : "0.05"])),
+    country: brandInfo.country ? { source: brandInfo.country, ozon: country?.value || null } : null,
+    dims: prefill.dims,
+    attributes,
+    brandMatched: Boolean(brand.match),
+    brandCandidates: brand.candidates,
+    sourceImage: fragranticaMediaUrl("images", `${perfumeId}.jpg`),
+    exports: exports.map((e) => ({ ...e, id: Number(e.id), productId: e.productId ? Number(e.productId) : null, volume: e.volume === null ? null : Number(e.volume) })),
+    descriptionShared: Boolean(savedDescription),
+    categoryAttrs,
+  };
+}
+
 app.get("/api/fragrantica/ozon/form", requireAdmin, async (request, response, next) => {
   try {
-    const perfumeId = Number(request.query.perfumeId);
-    const perfume = await fragranticaPerfumeForExport(perfumeId);
-    const account = fragranticaResolveOzonAccount(request.query.accountId);
-    const typeKey = FRAG_OZON_TYPES.some((t) => t.key === request.query.typeKey) ? request.query.typeKey : fragOzonGuessTypeKey(perfume);
-    const type = fragOzonTypeByKey(typeKey);
-    const volume = fragFormatVolume(request.query.volume) || "";
-    const tester = request.query.tester === "1" || request.query.tester === "true";
-
-    const brandInfo = await fragranticaBrandInfo(perfume.brandSlug).catch(() => ({ country: "", owner: "" }));
-    const countryRu = fragranticaCountryRu(brandInfo.country);
-    const [categoryAttrs, brand, genderDict, classificationDict, tnved, countryValues] = await Promise.all([
-      ozonGetCategoryAttributes(account, FRAG_OZON_CATEGORY_ID, type.typeId),
-      fragranticaFindBrand(account, type.typeId, perfume.brand),
-      fragranticaDictValues(account, type.typeId, FRAG_OZON_ATTR.gender).catch(() => []),
-      fragranticaDictValues(account, type.typeId, FRAG_OZON_ATTR.classification).catch(() => []),
-      fragranticaFindTnved(account, type.typeId, volume),
-      countryRu ? fragranticaSearchDict(account, type.typeId, FRAG_OZON_ATTR.country, countryRu, 10).catch(() => []) : Promise.resolve([]),
-    ]);
-    const country = countryValues.find((v) => v.value.toLowerCase() === countryRu.toLowerCase()) || null;
-    const offerId = buildFragranticaOfferId({ perfumeId, volume, tester });
-    const dimsTemplates = (await readFragranticaState("settings").catch(() => ({}))).dimsTemplates || [];
-    const prefill = buildFragranticaOzonPrefill({
-      dimsTemplates,
-      perfume,
-      typeKey,
-      volume,
-      tester,
-      offerId,
-      lookups: {
-        brand: brand.match,
-        type: { id: type.typeId, value: type.label },
-        gender: fragGenderValues(perfume.gender, genderDict),
-        classification: matchFragranticaClassification(perfume, classificationDict),
-        tnved,
-        country,
-        producer: perfume.brand,
-      },
-    });
-    const values = Object.fromEntries(prefill.attributes.map((a) => [a.id, a.values]));
-    const attributes = categoryAttrs
-      .map(fragranticaAttributeForForm)
-      .sort((a, b) => Number(b.required) - Number(a.required))
-      .map((attr) => ({ ...attr, values: values[attr.id] || [] }));
-    const prisma = await requireFragranticaTables();
-    const exports = await prisma.$queryRawUnsafe(
-      `SELECT id, marketplace, account_name AS "accountName", offer_id AS "offerId", volume_ml AS "volume", tester, status, product_id AS "productId", error, created_at AS "createdAt"
-       FROM fragrantica_exports WHERE perfume_id = $1 ORDER BY id DESC`,
-      perfumeId,
-    );
-    response.json({
-      ok: true,
-      perfume: { id: perfume.id, brand: perfume.brand, name: perfume.name, gender: perfume.gender, year: perfume.year, notes: perfume.notes, accords: perfume.accords },
-      accounts: fragranticaOzonAccounts(),
-      targets: fragranticaTargets(),
-      account: { id: cleanText(account.id), name: cleanText(account.name), style: fragranticaCardStyleForAccount(account) },
-      types: FRAG_OZON_TYPES,
-      typeKey,
-      typeId: type.typeId,
-      volume,
-      tester,
-      offerId,
-      name: prefill.name,
-      vat: FRAG_OZON_DEFAULTS.vat,
-      vatByTarget: Object.fromEntries(fragranticaTargets().map((t) => [t.key, t.kind === "ozon"
-        ? fragranticaVatForClientId(cleanText(getOzonAccounts().find((a) => cleanText(a.id) === t.id)?.clientId), fragranticaEnvMap("FRAGRANTICA_VAT_BY_ACCOUNT"))
-        : "0.05"])),
-      country: brandInfo.country ? { source: brandInfo.country, ozon: country?.value || null } : null,
-      dims: prefill.dims,
-      attributes,
-      brandMatched: Boolean(brand.match),
-      brandCandidates: brand.candidates,
-      sourceImage: fragranticaMediaUrl("images", `${perfumeId}.jpg`),
-      exports: exports.map((e) => ({ ...e, id: Number(e.id), productId: e.productId ? Number(e.productId) : null, volume: e.volume === null ? null : Number(e.volume) })),
-    });
+    const { categoryAttrs: _attrs, ...form } = await buildFragranticaFormData(request.query);
+    response.json(form);
   } catch (error) {
     next(error);
   }
@@ -265,38 +275,48 @@ app.get("/api/fragrantica/ozon/form", requireAdmin, async (request, response, ne
 
 // «Написать описание ИИ» в форме: тот же промпт, что у склада, по фактам Фрагрантики.
 // marketplace=yandex, если среди магазинов есть Маркет (у него правила строже — текст годится обоим).
+async function generateFragranticaDescription(body = {}) {
+  const perfume = await fragranticaPerfumeForExport(Number(body.perfumeId));
+  const type = fragOzonTypeByKey(body.typeKey);
+  const marketplace = body.marketplace === "ozon" ? "ozon" : "yandex";
+  const tester = Boolean(body.tester);
+  const genderLabel = { male: "мужской", female: "женский", unisex: "унисекс" }[perfume.gender] || undefined;
+  const source = Object.fromEntries(Object.entries({
+    marketplace,
+    // No volume in the text: the same description goes to every volume of the perfume
+    name: buildFragranticaOzonName({ perfume, typeKey: type.key, tester }),
+    brand: perfume.brand,
+    perfume: perfume.name,
+    type: type.nameLabel,
+    gender: genderLabel,
+    tester: tester || undefined,
+    ...fragranticaFactsFromDetail(perfume),
+  }).filter(([, v]) => v !== undefined));
+  const { data, completion } = await createTextAiJson(buildPerfumeCopyMessages(source, marketplace), { temperature: 0.7 });
+  const description = normalizeParagraphText(data.description, 5000);
+  if (!description) {
+    const error = new Error("AI не вернул описание. Попробуйте ещё раз.");
+    error.statusCode = 502;
+    error.code = "text_ai_empty";
+    throw error;
+  }
+  // every other volume of this perfume reuses this text
+  await saveFragranticaCardDescription(perfume.id, description);
+  return {
+    ok: true,
+    description,
+    name: cleanText(data.name).slice(0, 200),
+    bulletPoints: (Array.isArray(data.bulletPoints) ? data.bulletPoints : []).map((b) => cleanText(b)).filter(Boolean).slice(0, 8),
+    seoKeywords: (Array.isArray(data.seoKeywords) ? data.seoKeywords : []).map((b) => cleanText(b)).filter(Boolean).slice(0, 12),
+    model: cleanText(completion?.model),
+  };
+}
+
 app.post("/api/fragrantica/ozon/describe", requireAdmin, async (request, response, next) => {
   try {
-    const body = request.body || {};
-    const perfume = await fragranticaPerfumeForExport(Number(body.perfumeId));
-    const type = fragOzonTypeByKey(body.typeKey);
-    const marketplace = body.marketplace === "ozon" ? "ozon" : "yandex";
-    const volume = fragFormatVolume(body.volume);
-    const tester = Boolean(body.tester);
-    const genderLabel = { male: "мужской", female: "женский", unisex: "унисекс" }[perfume.gender] || undefined;
-    const source = Object.fromEntries(Object.entries({
-      marketplace,
-      name: cleanText(body.name) || buildFragranticaOzonName({ perfume, typeKey: type.key, volume, tester }),
-      brand: perfume.brand,
-      perfume: perfume.name,
-      type: type.nameLabel,
-      volumeMl: volume ? [Number(volume)] : undefined,
-      gender: genderLabel,
-      tester: tester || undefined,
-      ...fragranticaFactsFromDetail(perfume),
-    }).filter(([, v]) => v !== undefined));
-    const { data, completion } = await createTextAiJson(buildPerfumeCopyMessages(source, marketplace), { temperature: 0.7 });
-    const description = normalizeParagraphText(data.description, 5000);
-    if (!description) return response.status(502).json({ error: "AI не вернул описание. Попробуйте ещё раз.", code: "text_ai_empty" });
-    response.json({
-      ok: true,
-      description,
-      name: cleanText(data.name).slice(0, 200),
-      bulletPoints: (Array.isArray(data.bulletPoints) ? data.bulletPoints : []).map((b) => cleanText(b)).filter(Boolean).slice(0, 8),
-      seoKeywords: (Array.isArray(data.seoKeywords) ? data.seoKeywords : []).map((b) => cleanText(b)).filter(Boolean).slice(0, 12),
-      model: cleanText(completion?.model),
-    });
+    response.json(await generateFragranticaDescription(request.body || {}));
   } catch (error) {
+    if (error?.code === "text_ai_empty") return response.status(502).json({ error: error.message, code: error.code });
     next(error);
   }
 });
@@ -369,7 +389,21 @@ function fragranticaExtraPhotos(perfumeId, style) {
   return files.filter((file) => fragFs.existsSync(fragranticaMediaPath("cards", file))).map((file) => fragranticaAbsoluteUrl(fragranticaMediaUrl("cards", file)));
 }
 
-async function runFragranticaImageJob(job, { perfumeId, styles, refresh }) {
+async function runFragranticaImageJob(job, options) {
+  const result = await runFragranticaImageJobPhotos(job, options);
+  // Видеообложка Ozon по стилю магазина: флакон → пирамида → характеристики → крупный план
+  result.video = {};
+  const local = (url) => (url && url.startsWith("/uploads/fragrantica/cards/") ? fragranticaMediaPath("cards", url.split("/").pop()) : "");
+  for (const style of options.styles || []) {
+    job.stage = "video";
+    const slides = [local(result.main), local(result.notes?.[style]), local(result.specs?.[style]), local(result.closeup)].filter(Boolean);
+    const url = await ensureFragranticaVideoCover(options.perfumeId, style, slides, { refresh: Boolean(options.refresh) }).catch(() => null);
+    if (url) result.video[style] = url;
+  }
+  return result;
+}
+
+async function runFragranticaImageJobPhotos(job, { perfumeId, styles, refresh }) {
   const perfume = await fragranticaPerfumeForExport(perfumeId);
   await ensureFragranticaPerfumeImage(perfumeId);
   const hdSource = await ensureFragranticaHdImage(perfumeId);
@@ -763,6 +797,14 @@ async function refreshFragranticaExport(row) {
       });
       return refreshFragranticaExport(updated);
     }
+    if ((item.status === "failed" || errors.length) && !row.result?.mediaRetried && fragranticaMediaExtrasFailed(errors)) {
+      // Ozon refused the Rich-контент or the video cover: resend once without them, the card itself is fine
+      const plainItem = { ...row.item, attributes: (row.item?.attributes || []).filter((a) => Number(a.id) !== FRAG_RICH_ATTR) };
+      delete plainItem.complex_attributes;
+      logger.warn("fragrantica export: Ozon refused rich content / video cover, resending without them", { id: Number(row.id), errors: fragranticaOzonErrorsText(errors) });
+      const resent = await updateFragranticaExport(row.id, { item: plainItem, result: { ...(row.result || {}), mediaRetried: true, mediaError: fragranticaOzonErrorsText(errors) } });
+      return submitFragranticaExport(resent);
+    }
     if (item.status === "failed" || errors.length) {
       return updateFragranticaExport(row.id, {
         status: "failed",
@@ -798,109 +840,150 @@ async function refreshFragranticaExport(row) {
 // body.targets: [{ key: "ozon:<id>" | "yandex:<id>", notes: "<url of this shop's notes picture>" | null }]
 // (без targets — один кабинет Ozon из accountId, как раньше). Общие: фото флакона images[0], атрибуты,
 // цена Ozon (price/oldPrice) и цена Маркета (yandexPrice). Артикул один на все магазины.
+// Создать/обновить карточки в выбранных магазинах. request нужен для журнала (session.username).
+async function createFragranticaExports(body = {}, request = { session: {} }) {
+  const perfumeId = Number(body.perfumeId);
+  const perfume = await fragranticaPerfumeForExport(perfumeId);
+  const allTargets = fragranticaTargets();
+  const wanted = Array.isArray(body.targets) && body.targets.length
+    ? body.targets.map((t) => ({ ...allTargets.find((x) => x.key === cleanText(t.key)), notes: cleanText(t.notes) || null })).filter((t) => t.key)
+    : [{ ...(allTargets.find((x) => x.kind === "ozon" && x.id === cleanText(fragranticaResolveOzonAccount(body.accountId).id)) || {}), notes: null }].filter((t) => t.key);
+  if (!wanted.length) throw fragranticaHttpError(400, "Выберите хотя бы один магазин.", { code: "fragrantica_export_no_targets" });
+
+  const type = fragOzonTypeById(body.typeId) || fragOzonTypeByKey(body.typeKey);
+  const attrsAccount = fragranticaResolveOzonAccount(wanted.find((t) => t.kind === "ozon")?.id || body.accountId);
+  const categoryAttrs = await ozonGetCategoryAttributes(attrsAccount, FRAG_OZON_CATEGORY_ID, type.typeId);
+  const bottle = (Array.isArray(body.images) ? body.images : []).map(fragranticaAbsoluteUrl).filter(Boolean)[0] || "";
+  const { item: baseItem, missing } = buildFragranticaOzonItem({ ...body, typeId: type.typeId, images: bottle ? [bottle] : [] }, categoryAttrs);
+  if (missing.length) {
+    throw fragranticaHttpError(400, `Заполните: ${missing.join(", ")}`, { code: "fragrantica_export_missing", missing });
+  }
+
+  // Один артикул на все магазины (FR<id>-<мл>[T]). Повторная отправка того же аромата не плодит
+  // дубли: карточка с этим артикулом обновляется (Ozon /v3/product/import и Маркет обновляют по offer_id).
+  const prisma = await requireFragranticaTables();
+  const offerId = baseItem.offer_id;
+  for (const attr of baseItem.attributes) {
+    if (attr.id === FRAG_OZON_ATTR.sellerCode) attr.values = [{ value: offerId }];
+  }
+
+  // Маркет: характеристики категории, ТН ВЭД + ОКПД2, срок годности — по фактам Фрагрантики
+  let yandexExtra = null;
+  if (wanted.some((t) => t.kind === "yandex")) {
+    const shop = fragranticaYandexShops().find((x) => wanted.some((t) => t.kind === "yandex" && t.id === cleanText(x.id)));
+    const category = resolveYandexCategoryForOzonProduct({ typeId: type.typeId, name: baseItem.name });
+    const params = category.categoryId && shop ? await fragranticaYandexCategoryParams(shop, category.categoryId).catch(() => []) : [];
+    const facts = fragranticaFactsFromDetail(perfume);
+    const tester = Boolean(body.tester);
+    yandexExtra = {
+      commodityCodes: [{ code: fragranticaTnvedCode(type.typeId), type: "CUSTOMS_COMMODITY_CODE" }, { code: fragOkpd2ForType(type.key), type: "OKPD2_CODE" }],
+      shelfLife: { timePeriod: Number(FRAG_OZON_DEFAULTS.shelfLifeDays), timeUnit: "DAY" },
+      parameterValues: buildFragranticaYandexParameters(params, {
+        typeLabel: type.nameLabel.toLowerCase(),
+        gender: { male: "мужской", female: "женский", unisex: "унисекс" }[perfume.gender] || "",
+        family: facts.family,
+        accords: facts.accords,
+        year: facts.year,
+        topNotes: facts.topNotes,
+        middleNotes: facts.middleNotes,
+        baseNotes: facts.baseNotes,
+        netWeight: fragOzonNetWeight(fragFormatVolume((baseItem.attributes.find((a) => a.id === FRAG_OZON_ATTR.volume)?.values || [])[0]?.value)),
+        tester,
+      }),
+    };
+  }
+  const vatOverrides = fragranticaEnvMap("FRAGRANTICA_VAT_BY_ACCOUNT");
+
+  const volumeAttr = baseItem.attributes.find((a) => a.id === FRAG_OZON_ATTR.volume);
+  const links = JSON.stringify((Array.isArray(body.links) ? body.links : []).slice(0, 10).map(fragranticaLinkDraft));
+  const yandexPrice = Math.round(Number(body.yandexPrice) || Number(baseItem.price) || 0);
+  const results = [];
+  for (const target of wanted) {
+    const notes = target.notes ? fragranticaAbsoluteUrl(target.notes) : "";
+    const ozonAttributes = baseItem.attributes.map((a) => (a.id === FRAG_OZON_ATTR.annotation
+      ? { ...a, values: a.values.map((v) => ({ ...v, value: formatDescriptionForMarketplace(v.value, "ozon") })) }
+      : a));
+    const ozonAccount = target.kind === "ozon" ? getOzonAccounts().find((a) => cleanText(a.id) === target.id) : null;
+    // After the notes: «Характеристики» in this shop's style and the close-up (when they were made)
+    const extras = fragranticaExtraPhotos(perfumeId, target.style);
+    // Ozon: Rich-контент из описания и фото магазина + видеообложка (если категория знает атрибут 11254)
+    const ozonMedia = target.kind === "ozon" ? fragranticaOzonMediaExtras({ perfumeId, style: target.style, notes, baseItem, categoryAttrs, perfume }) : null;
+    const item = target.kind === "ozon"
+      ? {
+        ...baseItem,
+        vat: fragranticaVatForClientId(cleanText(ozonAccount?.clientId), vatOverrides),
+        attributes: [...ozonAttributes, ...ozonMedia.attributes],
+        ...(ozonMedia.complex.length ? { complex_attributes: ozonMedia.complex } : {}),
+        primary_image: bottle,
+        images: [notes, ...extras].filter(Boolean),
+      }
+      : {
+        ...baseItem,
+        // Маркет: «Парфюмерная вода <бренд> <аромат> <для кого> <мл> мл» — так карточка получает больше баллов
+        yandexName: buildFragranticaMarketName({ perfume, typeKey: type.key, volume: (volumeAttr?.values || [])[0]?.value, tester: Boolean(body.tester) }),
+        price: String(yandexPrice), yandexPictures: [bottle, notes, ...extras].filter(Boolean), yandexExtra,
+      };
+    // the same perfume+volume already sent to this shop → update that row (and that card), no duplicate
+    const inserted = await prisma.$queryRawUnsafe(
+      `INSERT INTO fragrantica_exports (perfume_id, marketplace, account_id, account_name, offer_id, volume_ml, tester, status, item, created_by, links)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'new', $8::jsonb, $9, $10::jsonb)
+       ON CONFLICT (account_id, offer_id) DO UPDATE SET perfume_id = EXCLUDED.perfume_id, account_name = EXCLUDED.account_name,
+         volume_ml = EXCLUDED.volume_ml, tester = EXCLUDED.tester, status = 'new', item = EXCLUDED.item, links = EXCLUDED.links,
+         error = NULL, attempts = 0, next_attempt_at = NULL, task_id = NULL, updated_at = now()
+       RETURNING *`,
+      perfumeId,
+      target.kind,
+      target.id,
+      target.label,
+      offerId,
+      Number(volumeAttr?.values?.[0]?.value) || null,
+      Boolean(body.tester),
+      JSON.stringify(item),
+      cleanText(request.session?.username) || null,
+      links,
+    );
+    results.push(await submitFragranticaTargetExport(inserted[0]));
+  }
+  await appendAudit(request, "fragrantica.export", {
+    entityType: "fragrantica_export",
+    entityId: results.map((r) => r.id).join(","),
+    newValue: { perfumeId, brand: perfume.brand, name: perfume.name, offerId, shops: wanted.map((t) => t.label), statuses: results.map((r) => r.status) },
+  });
+  // the text the operator sent becomes the shared description of the perfume (other volumes reuse it)
+  const sentDescription = String((baseItem.attributes.find((a) => a.id === FRAG_OZON_ATTR.annotation)?.values || [])[0]?.value || "");
+  if (sentDescription.trim()) await saveFragranticaCardDescription(perfumeId, sentDescription).catch(() => {});
+  return { ok: true, offerId, exports: results.map(fragranticaExportFromRow), export: fragranticaExportFromRow(results[0]) };
+}
+
+function fragranticaOzonMediaExtras({ perfumeId, style, notes, baseItem, categoryAttrs = [], perfume = {} }) {
+  const attributes = [];
+  const ownRich = baseItem.attributes.some((a) => Number(a.id) === FRAG_RICH_ATTR && (a.values || []).length);
+  if (!ownRich && process.env.FRAGRANTICA_OZON_RICH !== "false" && categoryAttrs.some((a) => Number(a.id) === FRAG_RICH_ATTR)) {
+    const description = (baseItem.attributes.find((a) => a.id === FRAG_OZON_ATTR.annotation)?.values || [])[0]?.value || "";
+    const file = (name) => (fragFs.existsSync(fragranticaMediaPath("cards", name)) ? fragranticaAbsoluteUrl(fragranticaMediaUrl("cards", name)) : "");
+    const rich = buildFragranticaRichContent({
+      title: fragNameWithBrand(perfume),
+      description,
+      images: { notes, specs: file(`${Number(perfumeId)}-specs-${style}-v1.jpg`), closeup: file(`${Number(perfumeId)}-closeup-v1.jpg`) },
+    });
+    if (rich) attributes.push({ id: FRAG_RICH_ATTR, complex_id: 0, values: [{ value: rich }] });
+  }
+  const complex = process.env.FRAGRANTICA_OZON_VIDEO_COVER === "false" ? [] : buildFragranticaVideoCoverComplex(fragranticaVideoCoverUrl(perfumeId, style));
+  return { attributes, complex };
+}
+
+function fragranticaHttpError(statusCode, message, detail = {}) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.detail = detail;
+  return error;
+}
+
 app.post("/api/fragrantica/ozon/export", requireAdmin, async (request, response, next) => {
   try {
-    const body = request.body || {};
-    const perfumeId = Number(body.perfumeId);
-    const perfume = await fragranticaPerfumeForExport(perfumeId);
-    const allTargets = fragranticaTargets();
-    const wanted = Array.isArray(body.targets) && body.targets.length
-      ? body.targets.map((t) => ({ ...allTargets.find((x) => x.key === cleanText(t.key)), notes: cleanText(t.notes) || null })).filter((t) => t.key)
-      : [{ ...(allTargets.find((x) => x.kind === "ozon" && x.id === cleanText(fragranticaResolveOzonAccount(body.accountId).id)) || {}), notes: null }].filter((t) => t.key);
-    if (!wanted.length) return response.status(400).json({ error: "Выберите хотя бы один магазин.", code: "fragrantica_export_no_targets" });
-
-    const type = fragOzonTypeById(body.typeId) || fragOzonTypeByKey(body.typeKey);
-    const attrsAccount = fragranticaResolveOzonAccount(wanted.find((t) => t.kind === "ozon")?.id || body.accountId);
-    const categoryAttrs = await ozonGetCategoryAttributes(attrsAccount, FRAG_OZON_CATEGORY_ID, type.typeId);
-    const bottle = (Array.isArray(body.images) ? body.images : []).map(fragranticaAbsoluteUrl).filter(Boolean)[0] || "";
-    const { item: baseItem, missing } = buildFragranticaOzonItem({ ...body, typeId: type.typeId, images: bottle ? [bottle] : [] }, categoryAttrs);
-    if (missing.length) {
-      return response.status(400).json({ error: `Заполните: ${missing.join(", ")}`, code: "fragrantica_export_missing", missing });
-    }
-
-    // Один артикул на все магазины (FR<id>-<мл>[T]). Повторная отправка того же аромата не плодит
-    // дубли: карточка с этим артикулом обновляется (Ozon /v3/product/import и Маркет обновляют по offer_id).
-    const prisma = await requireFragranticaTables();
-    const offerId = baseItem.offer_id;
-    for (const attr of baseItem.attributes) {
-      if (attr.id === FRAG_OZON_ATTR.sellerCode) attr.values = [{ value: offerId }];
-    }
-
-    // Маркет: характеристики категории, ТН ВЭД + ОКПД2, срок годности — по фактам Фрагрантики
-    let yandexExtra = null;
-    if (wanted.some((t) => t.kind === "yandex")) {
-      const shop = fragranticaYandexShops().find((x) => wanted.some((t) => t.kind === "yandex" && t.id === cleanText(x.id)));
-      const category = resolveYandexCategoryForOzonProduct({ typeId: type.typeId, name: baseItem.name });
-      const params = category.categoryId && shop ? await fragranticaYandexCategoryParams(shop, category.categoryId).catch(() => []) : [];
-      const facts = fragranticaFactsFromDetail(perfume);
-      const tester = Boolean(body.tester);
-      yandexExtra = {
-        commodityCodes: [{ code: fragranticaTnvedCode(type.typeId), type: "CUSTOMS_COMMODITY_CODE" }, { code: fragOkpd2ForType(type.key), type: "OKPD2_CODE" }],
-        shelfLife: { timePeriod: Number(FRAG_OZON_DEFAULTS.shelfLifeDays), timeUnit: "DAY" },
-        parameterValues: buildFragranticaYandexParameters(params, {
-          typeLabel: type.nameLabel.toLowerCase(),
-          gender: { male: "мужской", female: "женский", unisex: "унисекс" }[perfume.gender] || "",
-          family: facts.family,
-          accords: facts.accords,
-          year: facts.year,
-          topNotes: facts.topNotes,
-          middleNotes: facts.middleNotes,
-          baseNotes: facts.baseNotes,
-          netWeight: fragOzonNetWeight(fragFormatVolume((baseItem.attributes.find((a) => a.id === FRAG_OZON_ATTR.volume)?.values || [])[0]?.value)),
-          tester,
-        }),
-      };
-    }
-    const vatOverrides = fragranticaEnvMap("FRAGRANTICA_VAT_BY_ACCOUNT");
-
-    const volumeAttr = baseItem.attributes.find((a) => a.id === FRAG_OZON_ATTR.volume);
-    const links = JSON.stringify((Array.isArray(body.links) ? body.links : []).slice(0, 10).map(fragranticaLinkDraft));
-    const yandexPrice = Math.round(Number(body.yandexPrice) || Number(baseItem.price) || 0);
-    const results = [];
-    for (const target of wanted) {
-      const notes = target.notes ? fragranticaAbsoluteUrl(target.notes) : "";
-      const ozonAttributes = baseItem.attributes.map((a) => (a.id === FRAG_OZON_ATTR.annotation
-        ? { ...a, values: a.values.map((v) => ({ ...v, value: formatDescriptionForMarketplace(v.value, "ozon") })) }
-        : a));
-      const ozonAccount = target.kind === "ozon" ? getOzonAccounts().find((a) => cleanText(a.id) === target.id) : null;
-      // After the notes: «Характеристики» in this shop's style and the close-up (when they were made)
-      const extras = fragranticaExtraPhotos(perfumeId, target.style);
-      const item = target.kind === "ozon"
-        ? { ...baseItem, vat: fragranticaVatForClientId(cleanText(ozonAccount?.clientId), vatOverrides), attributes: ozonAttributes, primary_image: bottle, images: [notes, ...extras].filter(Boolean) }
-        : {
-          ...baseItem,
-          // Маркет: «Парфюмерная вода <бренд> <аромат> <для кого> <мл> мл» — так карточка получает больше баллов
-          yandexName: buildFragranticaMarketName({ perfume, typeKey: type.key, volume: (volumeAttr?.values || [])[0]?.value, tester: Boolean(body.tester) }),
-          price: String(yandexPrice), yandexPictures: [bottle, notes, ...extras].filter(Boolean), yandexExtra,
-        };
-      // the same perfume+volume already sent to this shop → update that row (and that card), no duplicate
-      const inserted = await prisma.$queryRawUnsafe(
-        `INSERT INTO fragrantica_exports (perfume_id, marketplace, account_id, account_name, offer_id, volume_ml, tester, status, item, created_by, links)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'new', $8::jsonb, $9, $10::jsonb)
-         ON CONFLICT (account_id, offer_id) DO UPDATE SET perfume_id = EXCLUDED.perfume_id, account_name = EXCLUDED.account_name,
-           volume_ml = EXCLUDED.volume_ml, tester = EXCLUDED.tester, status = 'new', item = EXCLUDED.item, links = EXCLUDED.links,
-           error = NULL, attempts = 0, next_attempt_at = NULL, task_id = NULL, updated_at = now()
-         RETURNING *`,
-        perfumeId,
-        target.kind,
-        target.id,
-        target.label,
-        offerId,
-        Number(volumeAttr?.values?.[0]?.value) || null,
-        Boolean(body.tester),
-        JSON.stringify(item),
-        cleanText(request.session?.username) || null,
-        links,
-      );
-      results.push(await submitFragranticaTargetExport(inserted[0]));
-    }
-    await appendAudit(request, "fragrantica.export", {
-      entityType: "fragrantica_export",
-      entityId: results.map((r) => r.id).join(","),
-      newValue: { perfumeId, brand: perfume.brand, name: perfume.name, offerId, shops: wanted.map((t) => t.label), statuses: results.map((r) => r.status) },
-    });
-    response.json({ ok: true, offerId, exports: results.map(fragranticaExportFromRow), export: fragranticaExportFromRow(results[0]) });
+    response.json(await createFragranticaExports(request.body || {}, request));
   } catch (error) {
+    if (error?.detail?.code) return response.status(error.statusCode || 400).json({ error: error.message, ...error.detail });
     next(error);
   }
 });

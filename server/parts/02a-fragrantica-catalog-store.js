@@ -63,6 +63,8 @@ async function ensureFragranticaTables() {
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS fragrantica_perfumes_pm_idx ON fragrantica_perfumes (pm_rows DESC NULLS LAST) WHERE pm_rows > 0`);
   // Cards that were in the shops before Fragrantica: { "<shop id>": { n: cards, v: [volumes] } } from the warehouse
   await prisma.$executeRawUnsafe(`ALTER TABLE fragrantica_perfumes ADD COLUMN IF NOT EXISTS shop_stock JSONB`);
+  // One card description per perfume: every volume reuses the text written (or edited) for the first one
+  await prisma.$executeRawUnsafe(`ALTER TABLE fragrantica_perfumes ADD COLUMN IF NOT EXISTS card_description TEXT, ADD COLUMN IF NOT EXISTS card_description_at TIMESTAMPTZ`);
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS fragrantica_perfumes_shop_stock_idx ON fragrantica_perfumes USING gin (shop_stock)`);
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS fragrantica_perfumes_brand_idx ON fragrantica_perfumes (brand_slug)`);
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS fragrantica_perfumes_year_idx ON fragrantica_perfumes (year DESC NULLS LAST)`);
@@ -586,6 +588,16 @@ async function listFragranticaPerfumes(query = {}) {
     params.push(shopOut[1]);
     where.push(`(NOT EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.perfume_id = p.id AND ${live} AND e.account_id = $${params.length}) AND NOT COALESCE(p.shop_stock, '{}'::jsonb) ? $${params.length})`);
   }
+  // «Нет хотя бы в одном из моих магазинов»: missing:<id>,<id>
+  const shopsMissing = /^missing:(.+)$/.exec(exported);
+  if (shopsMissing) {
+    const ids = shopsMissing[1].split(",").map(cleanText).filter(Boolean).slice(0, 10);
+    const parts = ids.map((id) => {
+      params.push(id);
+      return `(NOT EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.perfume_id = p.id AND ${live} AND e.account_id = $${params.length}) AND NOT COALESCE(p.shop_stock, '{}'::jsonb) ? $${params.length})`;
+    });
+    if (parts.length) where.push(`(${parts.join(" OR ")})`);
+  }
   if (query.pm === "yes") where.push("p.pm_rows > 0");
   if (query.pm === "no") where.push("COALESCE(p.pm_rows, 0) = 0");
   const order = {
@@ -620,6 +632,32 @@ async function readFragranticaPerfume(id) {
   const prisma = await requireFragranticaTables();
   const rows = await prisma.$queryRawUnsafe(`SELECT * FROM fragrantica_perfumes WHERE id = $1`, Number(id));
   return rows[0] || null;
+}
+
+/** The card description shared by all volumes of a perfume (AI text or the operator's edit). */
+async function saveFragranticaCardDescription(perfumeId, text) {
+  const value = String(text || "").trim();
+  if (!Number(perfumeId) || !value) return;
+  const prisma = await requireFragranticaTables();
+  await prisma.$executeRawUnsafe(
+    `UPDATE fragrantica_perfumes SET card_description = $2, card_description_at = now() WHERE id = $1`,
+    Number(perfumeId),
+    value.slice(0, 6000),
+  );
+}
+
+/** Saved description, else the annotation of the latest card sent for this perfume. */
+async function readFragranticaCardDescription(perfumeId) {
+  const prisma = await requireFragranticaTables();
+  const rows = await prisma.$queryRawUnsafe(
+    `SELECT COALESCE(NULLIF(p.card_description, ''),
+       (SELECT a->'values'->0->>'value' FROM fragrantica_exports e, jsonb_array_elements(e.item->'attributes') a
+         WHERE e.perfume_id = p.id AND e.marketplace = 'ozon' AND (a->>'id')::int = 4191 ORDER BY e.id DESC LIMIT 1)) AS text
+       FROM fragrantica_perfumes p WHERE p.id = $1`,
+    Number(perfumeId),
+  );
+  // Ozon annotations carry <br/> paragraphs — turn them back into blank lines for the editor
+  return String(rows[0]?.text || "").replace(/<br\s*\/?>\s*<br\s*\/?>/gi, "\n\n").replace(/<br\s*\/?>/gi, "\n").trim();
 }
 
 async function listFragranticaBrands({ q = "", limit = 30 } = {}) {

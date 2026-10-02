@@ -165,7 +165,7 @@ app.get("/uploads/fragrantica/cards/:file", (request, response) => {
   const file = fragranticaMediaPath("cards", request.params.file);
   if (!fragFs.existsSync(file)) return response.status(404).end();
   response.set("Cache-Control", "public, max-age=2592000");
-  response.type("jpg").sendFile(file);
+  response.type(/\.mp4$/i.test(request.params.file) ? "mp4" : "jpg").sendFile(file);
 });
 
 // Пересчитать «Есть в PriceMaster» сейчас (обычно — раз в 6 ч на worker).

@@ -74,85 +74,89 @@ function fragranticaRowPrice(row, { usdRate, settings, supplierCount = 1, market
   return { markup, price: calculateRubPrice(row.price, usdRate, markup, fragranticaRowRubContext(row)) };
 }
 
+async function fragranticaLinkSuggestionsData(query = {}) {
+  const perfume = await fragranticaPerfumeForExport(Number(query.perfumeId));
+  const typeKey = FRAG_OZON_TYPES.some((t) => t.key === query.typeKey) ? query.typeKey : fragOzonGuessTypeKey(perfume);
+  const volume = Number(fragFormatVolume(query.volume)) || 0;
+  const tester = query.tester === "1" || query.tester === "true" || query.tester === true;
+  const productName = buildFragranticaOzonName({ perfume, typeKey, volume, tester });
+  const anchor = `${fragNameWithBrand(perfume)}${volume ? ` ${volume}ml` : ""}${tester ? " tester" : ""}`;
+  const custom = cleanText(query.q);
+  const queries = custom
+    ? [custom]
+    : [...new Set([`${fragNameWithBrand(perfume)} ${volume || ""}`.trim(), fragNameWithBrand(perfume)])];
+
+  let found = [];
+  let usdRate = 95;
+  let settings = {};
+  for (const q of queries) {
+    const result = await fragranticaSearchPmRows(q, 60);
+    usdRate = result.usdRate;
+    settings = result.settings;
+    for (const row of result.rows) if (!found.some((r) => r.id === row.id)) found.push(row);
+    if (found.length >= 40) break;
+  }
+
+  const rows = found
+    .filter((row) => row.available)
+    .filter((row) => custom || !supplierRowVolumeMismatch(productName, row.name))
+    .filter((row) => custom || isTesterOrDecantSupplierRowName(row.name) === tester)
+    .filter((row) => custom || volume <= 3 || !isSingleSampleName(row.name))
+    .map((row) => ({ row, check: assessFragranticaSupplierRow(row.name, { brand: perfume.brand, name: perfume.name, typeKey, oilAllowed: typeKey === "oil" }) }))
+    // Клоны («… (Sauvage Dior)») и не-парфюм (лосьон, дезодорант, мист…) не предлагаем вовсе
+    .filter(({ check }) => custom || (!check.clone && !check.notPerfume))
+    .map(({ row, check }) => {
+      const volumes = priceMasterBottleVolumes(row.name);
+      const volumeOk = Boolean(volume) && volumes.some((v) => Math.abs(v - volume) < 0.01);
+      const nameOk = !check.clone && pmRowConfirmsPinnedName(row, anchor);
+      const recommended = volumeOk && nameOk && !check.notPerfume && check.concentrationOk && !check.extraWords.length && !check.missingNameWords.length;
+      const issues = [
+        check.clone ? "клон/аналог" : "",
+        check.notPerfume ? "не парфюм" : "",
+        check.concentration && !check.concentrationOk ? `другая концентрация (${check.concentration.toUpperCase()})` : "",
+        check.extraWords.length ? `лишние слова: ${check.extraWords.slice(0, 3).join(", ")}` : "",
+        check.missingNameWords.length ? `нет слов: ${check.missingNameWords.slice(0, 3).join(", ")}` : "",
+        volume && !volumeOk ? "объём не указан" : "",
+      ].filter(Boolean);
+      const { markup, price } = fragranticaRowPrice(row, { usdRate, settings });
+      const yandexPrice = fragranticaRowPrice(row, { usdRate, settings, marketplace: "yandex" }).price;
+      return {
+        id: row.id,
+        rowId: row.rowId,
+        article: row.article,
+        name: row.name,
+        supplierName: row.supplierName,
+        partnerId: row.partnerId,
+        price: row.price,
+        priceCurrency: row.priceCurrency || row.currency || "USD",
+        updatedAt: row.updatedAt,
+        volumeOk,
+        nameOk,
+        recommended,
+        issues,
+        markup,
+        ozonPrice: price,
+        yandexPrice,
+      };
+    })
+    .sort((a, b) => Number(b.recommended) - Number(a.recommended) || a.issues.length - b.issues.length || Number(b.nameOk) - Number(a.nameOk) || a.ozonPrice - b.ozonPrice)
+    .slice(0, 40);
+
+  // Предвыбор: рекомендованные строки — по одной (самой дешёвой) у каждого поставщика, до трёх.
+  const suggested = [];
+  const suppliers = new Set();
+  for (const row of rows) {
+    if (!row.recommended || suppliers.has(row.partnerId || row.supplierName)) continue;
+    suppliers.add(row.partnerId || row.supplierName);
+    suggested.push(row.id);
+    if (suggested.length >= 3) break;
+  }
+  return { ok: true, productName, usdRate, rows, suggested };
+}
+
 app.get("/api/fragrantica/ozon/link-suggestions", requireAdmin, async (request, response, next) => {
   try {
-    const perfume = await fragranticaPerfumeForExport(Number(request.query.perfumeId));
-    const typeKey = FRAG_OZON_TYPES.some((t) => t.key === request.query.typeKey) ? request.query.typeKey : fragOzonGuessTypeKey(perfume);
-    const volume = Number(fragFormatVolume(request.query.volume)) || 0;
-    const tester = request.query.tester === "1" || request.query.tester === "true";
-    const productName = buildFragranticaOzonName({ perfume, typeKey, volume, tester });
-    const anchor = `${fragNameWithBrand(perfume)}${volume ? ` ${volume}ml` : ""}${tester ? " tester" : ""}`;
-    const custom = cleanText(request.query.q);
-    const queries = custom
-      ? [custom]
-      : [...new Set([`${fragNameWithBrand(perfume)} ${volume || ""}`.trim(), fragNameWithBrand(perfume)])];
-
-    let found = [];
-    let usdRate = 95;
-    let settings = {};
-    for (const q of queries) {
-      const result = await fragranticaSearchPmRows(q, 60);
-      usdRate = result.usdRate;
-      settings = result.settings;
-      for (const row of result.rows) if (!found.some((r) => r.id === row.id)) found.push(row);
-      if (found.length >= 40) break;
-    }
-
-    const rows = found
-      .filter((row) => row.available)
-      .filter((row) => custom || !supplierRowVolumeMismatch(productName, row.name))
-      .filter((row) => custom || isTesterOrDecantSupplierRowName(row.name) === tester)
-      .filter((row) => custom || volume <= 3 || !isSingleSampleName(row.name))
-      .map((row) => ({ row, check: assessFragranticaSupplierRow(row.name, { brand: perfume.brand, name: perfume.name, typeKey, oilAllowed: typeKey === "oil" }) }))
-      // Клоны («… (Sauvage Dior)») и не-парфюм (лосьон, дезодорант, мист…) не предлагаем вовсе
-      .filter(({ check }) => custom || (!check.clone && !check.notPerfume))
-      .map(({ row, check }) => {
-        const volumes = priceMasterBottleVolumes(row.name);
-        const volumeOk = Boolean(volume) && volumes.some((v) => Math.abs(v - volume) < 0.01);
-        const nameOk = !check.clone && pmRowConfirmsPinnedName(row, anchor);
-        const recommended = volumeOk && nameOk && !check.notPerfume && check.concentrationOk && !check.extraWords.length && !check.missingNameWords.length;
-        const issues = [
-          check.clone ? "клон/аналог" : "",
-          check.notPerfume ? "не парфюм" : "",
-          check.concentration && !check.concentrationOk ? `другая концентрация (${check.concentration.toUpperCase()})` : "",
-          check.extraWords.length ? `лишние слова: ${check.extraWords.slice(0, 3).join(", ")}` : "",
-          check.missingNameWords.length ? `нет слов: ${check.missingNameWords.slice(0, 3).join(", ")}` : "",
-          volume && !volumeOk ? "объём не указан" : "",
-        ].filter(Boolean);
-        const { markup, price } = fragranticaRowPrice(row, { usdRate, settings });
-        const yandexPrice = fragranticaRowPrice(row, { usdRate, settings, marketplace: "yandex" }).price;
-        return {
-          id: row.id,
-          rowId: row.rowId,
-          article: row.article,
-          name: row.name,
-          supplierName: row.supplierName,
-          partnerId: row.partnerId,
-          price: row.price,
-          priceCurrency: row.priceCurrency || row.currency || "USD",
-          updatedAt: row.updatedAt,
-          volumeOk,
-          nameOk,
-          recommended,
-          issues,
-          markup,
-          ozonPrice: price,
-          yandexPrice,
-        };
-      })
-      .sort((a, b) => Number(b.recommended) - Number(a.recommended) || a.issues.length - b.issues.length || Number(b.nameOk) - Number(a.nameOk) || a.ozonPrice - b.ozonPrice)
-      .slice(0, 40);
-
-    // Предвыбор: рекомендованные строки — по одной (самой дешёвой) у каждого поставщика, до трёх.
-    const suggested = [];
-    const suppliers = new Set();
-    for (const row of rows) {
-      if (!row.recommended || suppliers.has(row.partnerId || row.supplierName)) continue;
-      suppliers.add(row.partnerId || row.supplierName);
-      suggested.push(row.id);
-      if (suggested.length >= 3) break;
-    }
-    response.json({ ok: true, productName, usdRate, rows, suggested });
+    response.json(await fragranticaLinkSuggestionsData(request.query));
   } catch (error) {
     next(error);
   }

@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, ExternalLink, Loader2, Pause, Play, Plus, RefreshCw, Ruler, Search, Send, Sparkles, Trash2, X } from "lucide-react";
+import { Check, CheckSquare, ExternalLink, Loader2, Pause, Play, Plus, RefreshCw, Ruler, Search, Send, Sparkles, Square, Store, Trash2, Workflow, X } from "lucide-react";
 import { z } from "zod";
 import { fetchJson, mutationBody } from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { errorMessage, useDebounced } from "../lib/common";
 import { toast } from "../lib/toast";
+import { ConveyorBar, ConveyorPanel, useAddToConveyor, WorkShopsPicker } from "./FragranticaConveyor";
 import "./fragrantica.css";
 
 // Ответы /api/fragrantica/* описаны типами ниже; fetchJson даёт ApiError с телом ответа (missing и т. п.)
@@ -76,7 +77,7 @@ type LinkSuggestions = { productName: string; rows: LinkRow[]; suggested: string
 type PricePreview = { price: number; oldPrice: number; supplierName: string; markup: number; yandexPrice?: number; yandexMarkup?: number };
 type ImageJob = {
   status: "running" | "done" | "failed"; error?: string | null;
-  result?: { main: string | null; notes: Record<string, string>; source: string; warnings: string[] } | null;
+  result?: { main: string | null; notes: Record<string, string>; video?: Record<string, string>; source: string; warnings: string[] } | null;
 };
 
 const GENDER_LABEL: Record<string, string> = { male: "мужской", female: "женский", unisex: "унисекс" };
@@ -209,6 +210,33 @@ function cardClass(exported: ExportedChip[], shops: Shop[], stock?: StockMap): s
   return "";
 }
 
+// ─── Магазины, в которые грузим (выбор при первом входе, меняется в любой момент) ─
+
+const WORK_SHOPS_KEY = "fragrantica.workShops";
+const shopKey = (s: { kind: string; id: string }) => `${s.kind}:${s.id}`;
+
+function readWorkShops(): string[] | null {
+  try {
+    const raw = window.localStorage.getItem(WORK_SHOPS_KEY);
+    const list = raw ? JSON.parse(raw) : null;
+    return Array.isArray(list) ? list.map(String) : null;
+  } catch {
+    return null;
+  }
+}
+
+function useWorkShops(shops: Shop[]) {
+  const [saved, setSaved] = useState<string[] | null>(() => readWorkShops());
+  const all = shops.map(shopKey);
+  // a shop that disappeared from settings drops out; nothing saved yet → every shop
+  const keys = saved ? saved.filter((k) => all.includes(k)) : all;
+  const save = (next: string[]) => {
+    setSaved(next);
+    try { window.localStorage.setItem(WORK_SHOPS_KEY, JSON.stringify(next)); } catch { /* private mode */ }
+  };
+  return { keys: keys.length ? keys : all, chosen: saved !== null, save };
+}
+
 // ─── Страница ───────────────────────────────────────────────────────────────
 
 export function FragranticaPage() {
@@ -222,6 +250,9 @@ export function FragranticaPage() {
   const [importUrl, setImportUrl] = useState("");
   const [openId, setOpenId] = useState<number | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [conveyorOpen, setConveyorOpen] = useState(false);
+  const [picked, setPicked] = useState<number[]>([]);
   const queryClient = useQueryClient();
   const debouncedQ = useDebounced(q, 350);
 
@@ -276,6 +307,21 @@ export function FragranticaPage() {
   const shops = crawler.data?.shops ?? [];
   const blocked = Boolean(crawler.data?.status?.blockedUntil && Date.parse(crawler.data.status.blockedUntil) > Date.now());
   const loadedShare = stats && stats.brands ? Math.round((stats.brandsCrawled / stats.brands) * 100) : 0;
+  const work = useWorkShops(shops);
+  const workShops = shops.filter((s) => work.keys.includes(shopKey(s)));
+  const addToConveyor = useAddToConveyor();
+  const pickerShops = shops.map((s) => ({ key: shopKey(s), kind: s.kind, label: s.label, marketplace: s.marketplace, count: (s.stock || 0) + s.added }));
+  const togglePick = (id: number) => setPicked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  // «Выбрать все»: ароматы по текущим фильтрам, которые есть у поставщиков и которых нет хотя бы в одном из моих магазинов
+  const selectAllQuery = () => {
+    const query: Record<string, string> = Object.fromEntries(new URLSearchParams(params));
+    delete query.limit;
+    query.pm = "yes";
+    if (!query.exported) query.exported = `missing:${workShops.map((s) => s.id).join(",")}`;
+    return query;
+  };
+  const sendToConveyor = (body: { perfumeIds?: number[]; query?: Record<string, string> }) =>
+    addToConveyor.mutate({ ...body, targets: work.keys }, { onSuccess: () => { setPicked([]); setConveyorOpen(true); } });
 
   return (
     <div className="page-shell fr-page">
@@ -284,6 +330,12 @@ export function FragranticaPage() {
         subtitle="Каталог ароматов fragrantica.ru: выберите аромат и создайте карточку в своих магазинах"
         action={
           <div className="fr-head-actions">
+          <button className="secondary-action compact fr-work-btn" type="button" onClick={() => setPickerOpen(true)} title="Магазины, в которые грузим">
+            <Store size={14} /> {workShops.length === shops.length ? "Все магазины" : workShops.map((s) => s.label).join(", ") || "Магазины"}
+          </button>
+          <button className="secondary-action compact" type="button" onClick={() => setConveyorOpen(true)}>
+            <Workflow size={14} /> Конвейер
+          </button>
           <button className="secondary-action compact" type="button" onClick={() => setSettingsOpen(true)}>
             <Ruler size={14} /> Шаблоны габаритов
           </button>
@@ -314,6 +366,15 @@ export function FragranticaPage() {
         }
       />
       {settingsOpen ? <DimsTemplatesPanel onClose={() => setSettingsOpen(false)} /> : null}
+      {shops.length && (pickerOpen || !work.chosen) ? (
+        <WorkShopsPicker
+          shops={pickerShops}
+          value={work.chosen ? work.keys : []}
+          onSave={(keys) => { work.save(keys); setPickerOpen(false); }}
+          onClose={work.chosen ? () => setPickerOpen(false) : undefined}
+        />
+      ) : null}
+      {conveyorOpen ? <ConveyorPanel onClose={() => setConveyorOpen(false)} /> : null}
 
       <ShopsBar shops={shops} value={exported} onPick={setExported} />
 
@@ -331,6 +392,7 @@ export function FragranticaPage() {
           <option value="">В магазинах и нет</option>
           <option value="no">Нигде не добавлены</option>
           <option value="yes">Есть хоть в одном магазине</option>
+          {workShops.length ? <option value={`missing:${workShops.map((s) => s.id).join(",")}`}>Нет хотя бы в одном из моих магазинов</option> : null}
           <option value="stock">Были в магазинах до Фрагрантики</option>
           <option value="ozon">Есть на Ozon</option>
           <option value="yandex">Есть на Яндекс Маркете</option>
@@ -370,17 +432,41 @@ export function FragranticaPage() {
         </button>
       </form>
 
-      <div className="fr-count">
-        {list.isLoading ? "Загрузка…" : `${total.toLocaleString("ru")} ${plural(total, "аромат", "аромата", "ароматов")}`}
+      <div className="fr-count fr-select-bar">
+        <span>{list.isLoading ? "Загрузка…" : `${total.toLocaleString("ru")} ${plural(total, "аромат", "аромата", "ароматов")}`}</span>
+        <span className="fr-select-actions">
+          {picked.length ? (
+            <>
+              <button className="primary-action compact" type="button" disabled={addToConveyor.isPending} onClick={() => sendToConveyor({ perfumeIds: picked })}>
+                {addToConveyor.isPending ? <Loader2 size={13} className="spin" /> : <Workflow size={13} />} В конвейер: {picked.length}
+              </button>
+              <button className="secondary-action compact" type="button" onClick={() => setPicked([])}>Снять выбор</button>
+            </>
+          ) : null}
+          <button
+            className="secondary-action compact"
+            type="button"
+            disabled={addToConveyor.isPending || !total || !workShops.length}
+            onClick={() => sendToConveyor({ query: selectAllQuery() })}
+            title="Все ароматы под текущими фильтрами, которые есть у поставщиков и которых нет хотя бы в одном из выбранных магазинов (до 300 за раз). Объёмы возьмутся из PriceMaster."
+          >
+            <CheckSquare size={13} /> Выбрать все в конвейер
+          </button>
+        </span>
       </div>
       {list.isError ? <div className="inline-error">{errorMessage(list.error)}</div> : null}
 
       <div className="fr-grid">
         {list.isLoading ? Array.from({ length: 12 }, (_, i) => <div key={`sk-${i}`} className="fr-card is-skeleton" aria-hidden="true"><div className="fr-card-img" /><div className="fr-card-body"><i /><i /><i /></div></div>) : null}
         {items.map((item, index) => (
-          <button key={item.id} type="button" className={`fr-card fr-appear${cardClass(item.exported, shops, item.stock)}`} style={{ ["--i" as string]: index % 60 }} onClick={() => setOpenId(item.id)}>
+          <div key={item.id} role="button" tabIndex={0} className={`fr-card fr-appear${cardClass(item.exported, shops, item.stock)}${picked.includes(item.id) ? " is-picked" : ""}`} style={{ ["--i" as string]: index % 60 }}
+            onClick={() => setOpenId(item.id)} onKeyDown={(e) => { if (e.key === "Enter") setOpenId(item.id); }}>
             <div className="fr-card-img">
               <img src={item.thumb} alt="" loading="lazy" />
+              <button type="button" className="fr-card-pick" aria-pressed={picked.includes(item.id)} title={picked.includes(item.id) ? "Убрать из выбора" : "Выбрать для конвейера"}
+                onClick={(e) => { e.stopPropagation(); togglePick(item.id); }}>
+                {picked.includes(item.id) ? <CheckSquare size={18} /> : <Square size={18} />}
+              </button>
             </div>
             <AccordSpectrum accords={item.accords} />
             <div className="fr-card-body">
@@ -394,7 +480,7 @@ export function FragranticaPage() {
                 <ShopChips exported={item.exported} shops={shops} stock={item.stock} />
               </div>
             </div>
-          </button>
+          </div>
         ))}
       </div>
       {!list.isLoading && !items.length ? (
@@ -410,7 +496,8 @@ export function FragranticaPage() {
         </div>
       ) : null}
 
-      {openId ? <PerfumeDrawer id={openId} onClose={() => setOpenId(null)} /> : null}
+      <ConveyorBar onOpen={() => setConveyorOpen(true)} />
+      {openId ? <PerfumeDrawer id={openId} workShops={work.keys} onClose={() => setOpenId(null)} onConveyor={() => sendToConveyor({ perfumeIds: [openId] })} /> : null}
     </div>
   );
 }
@@ -434,7 +521,7 @@ function NotesTier({ title, notes }: { title: string; notes: Note[] }) {
   );
 }
 
-function PerfumeDrawer({ id, onClose }: { id: number; onClose: () => void }) {
+function PerfumeDrawer({ id, workShops, onClose, onConveyor }: { id: number; workShops: string[]; onClose: () => void; onConveyor: () => void }) {
   const [adding, setAdding] = useState(false);
   const [showDescription, setShowDescription] = useState(false);
   const perfume = useQuery({
@@ -504,11 +591,12 @@ function PerfumeDrawer({ id, onClose }: { id: number; onClose: () => void }) {
             ) : null}
 
             {adding ? (
-              <AddToShopsForm perfume={p} onCancel={() => setAdding(false)} />
+              <AddToShopsForm perfume={p} workShops={workShops} onCancel={() => setAdding(false)} />
             ) : (
               <div className="fr-cta">
                 <button className="primary-action" type="button" onClick={() => setAdding(true)}><Send size={15} /> Добавить в магазины</button>
-                <span className="fr-hint">Magic Stick, AURA, Яндекс Маркет — выберете на следующем шаге</span>
+                <button className="secondary-action" type="button" onClick={onConveyor} title="Все объёмы из PriceMaster соберутся сами — останется проверить и одобрить"><Workflow size={15} /> Все объёмы в конвейер</button>
+                <span className="fr-hint">Магазины уже выбраны вверху страницы, в карточке их можно поменять</span>
               </div>
             )}
           </>
@@ -612,8 +700,10 @@ function useBrowserPageReceiver(onImported: (id: number) => void) {
 
 // ─── Добавление: шаг 1 — тип и объём ────────────────────────────────────────
 
-function AddToShopsForm({ perfume, onCancel }: { perfume: Perfume; onCancel: () => void }) {
+function AddToShopsForm({ perfume, workShops, onCancel }: { perfume: Perfume; workShops: string[]; onCancel: () => void }) {
   const [typeKey, setTypeKey] = useState("");
+  // Описание общее для всех объёмов: сменили объём — текст остаётся тем же
+  const [sharedDescription, setSharedDescription] = useState("");
   const [volume, setVolume] = useState("");
   const [tester, setTester] = useState(false);
   const [step, setStep] = useState<"params" | "card">("params");
@@ -634,6 +724,9 @@ function AddToShopsForm({ perfume, onCancel }: { perfume: Perfume; onCancel: () 
         typeKey={typeKey}
         volume={volume.replace(",", ".")}
         tester={tester}
+        workShops={workShops}
+        description={sharedDescription}
+        onDescription={setSharedDescription}
         onBack={() => setStep("params")}
       />
     );
@@ -771,9 +864,11 @@ function AttributeInput({ attr, value, onChange, accountId, typeId }: {
 
 // ─── Добавление: шаг 2 — магазины, привязка, карточка ───────────────────────
 
-function CardStep({ perfume, typeKey, volume, tester, onBack }: {
-  perfume: Perfume; typeKey: string; volume: string; tester: boolean; onBack: () => void;
+function CardStep({ perfume, typeKey, volume, tester, workShops, description, onDescription, onBack }: {
+  perfume: Perfume; typeKey: string; volume: string; tester: boolean; workShops: string[];
+  description: string; onDescription: (text: string) => void; onBack: () => void;
 }) {
+  const setDescription = onDescription;
   const queryClient = useQueryClient();
   const form = useQuery({
     queryKey: ["fragrantica", "ozon-form", perfume.id, typeKey, volume, tester],
@@ -783,13 +878,13 @@ function CardStep({ perfume, typeKey, volume, tester, onBack }: {
   const data = form.data;
   const targets = data?.targets || [];
 
-  // Магазины: по умолчанию отмечены все; у каждого своя «Пирамида аромата», её нужно одобрить
+  // Магазины: отмечены выбранные вверху страницы; «Пирамида аромата» каждого магазина идёт в карточку сама
   const [selected, setSelected] = useState<Record<string, boolean>>({});
-  const [approved, setApproved] = useState<Record<string, boolean>>({});
   useEffect(() => {
     if (!targets.length) return;
-    setSelected((prev) => (Object.keys(prev).length ? prev : Object.fromEntries(targets.map((t) => [t.key, true]))));
-  }, [targets]);
+    const work = targets.filter((t) => workShops.includes(t.key));
+    setSelected((prev) => (Object.keys(prev).length ? prev : Object.fromEntries(targets.map((t) => [t.key, work.length ? work.some((w) => w.key === t.key) : true]))));
+  }, [targets, workShops]);
   const chosen = targets.filter((t) => selected[t.key]);
   const hasOzon = chosen.some((t) => t.kind === "ozon");
   const hasYandex = chosen.some((t) => t.kind === "yandex");
@@ -800,7 +895,6 @@ function CardStep({ perfume, typeKey, volume, tester, onBack }: {
   const [price, setPrice] = useState("");
   const [oldPrice, setOldPrice] = useState("");
   const [yandexPrice, setYandexPrice] = useState("");
-  const [description, setDescription] = useState("");
   const [dims, setDims] = useState({ depth: "", width: "", height: "", weight: "" });
   const [values, setValues] = useState<Record<number, DictValue[]>>({});
   const [showOptional, setShowOptional] = useState(false);
@@ -813,7 +907,9 @@ function CardStep({ perfume, typeKey, volume, tester, onBack }: {
     setOfferId(data.offerId);
     setDims({ depth: String(data.dims.depth), width: String(data.dims.width), height: String(data.dims.height), weight: String(data.dims.weight) });
     setValues(Object.fromEntries(data.attributes.map((a) => [a.id, a.values])));
-    setDescription(data.attributes.find((a) => a.id === 4191)?.values?.[0]?.value || "");
+    // keep the text of the previous volume; otherwise the shared one from the server (or Fragrantica's)
+    if (!description.trim()) setDescription(data.attributes.find((a) => a.id === 4191)?.values?.[0]?.value || "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
 
   // Фото: флакон с премиум-фоном и пирамиды для всех магазинов разом (parfumdeclaration)
@@ -821,7 +917,7 @@ function CardStep({ perfume, typeKey, volume, tester, onBack }: {
   const [jobId, setJobId] = useState<string | null>(null);
   const startImages = useMutation({
     mutationFn: (refresh: boolean) => apiJson<{ jobId: string }>("/api/fragrantica/ozon/images", mutationBody({ perfumeId: perfume.id, styles, refresh })),
-    onSuccess: (res) => { setJobId(res.jobId); setApproved({}); },
+    onSuccess: (res) => setJobId(res.jobId),
     onError: (error) => toast.error(errorMessage(error)),
   });
   const startRef = useRef(startImages.mutate);
@@ -905,7 +1001,7 @@ function CardStep({ perfume, typeKey, volume, tester, onBack }: {
         perfumeId: perfume.id,
         typeId: d.typeId,
         typeKey: d.typeKey,
-        targets: chosen.map((t) => ({ key: t.key, notes: approved[t.key] ? imageResult?.notes?.[t.style] || null : null })),
+        targets: chosen.map((t) => ({ key: t.key, notes: imageResult?.notes?.[t.style] || null })),
         offerId, name, price, oldPrice, yandexPrice, barcode,
         depth: dims.depth, width: dims.width, height: dims.height, weight: dims.weight, tester,
         images: [mainImage],
@@ -931,7 +1027,6 @@ function CardStep({ perfume, typeKey, volume, tester, onBack }: {
   const required = data.attributes.filter((a) => a.required && !AUTO_ATTRS.has(a.id));
   const optional = data.attributes.filter((a) => !a.required && !AUTO_ATTRS.has(a.id));
   const isMissing = (label: string) => missing.includes(label);
-  const unapproved = chosen.filter((t) => imageResult?.notes?.[t.style] && !approved[t.key]);
   const sent = exportIds.length > 0;
 
   const renderAttr = (attr: FormAttribute) => (
@@ -968,10 +1063,13 @@ function CardStep({ perfume, typeKey, volume, tester, onBack }: {
               <div className="fr-photo-frame">
                 {notes ? <img src={notes} alt={`Пирамида аромата ${t.label}`} /> : imagesBusy ? <span><Loader2 size={16} className="spin" /> Рисуем пирамиду…</span> : <span>Пирамиды нет</span>}
               </div>
-              <label className={`fr-approve${approved[t.key] ? " is-ok" : ""}`}>
-                <input type="checkbox" disabled={!notes || !on} checked={Boolean(approved[t.key])} onChange={(e) => setApproved((prev) => ({ ...prev, [t.key]: e.target.checked }))} />
-                Пирамида одобрена
-              </label>
+              {notes && on ? <span className="fr-approve is-ok"><Check size={13} /> Пирамида пойдёт в карточку</span> : null}
+              {t.kind === "ozon" && imageResult?.video?.[t.style] ? (
+                <div className="fr-video-cover" title="Видеообложка Ozon — соберётся из фото карточки, крутится по кругу">
+                  <video src={imageResult.video[t.style]} muted autoPlay loop playsInline />
+                  <span>Видеообложка + Rich-контент</span>
+                </div>
+              ) : null}
             </div>
           );
         })}
@@ -1112,7 +1210,6 @@ function CardStep({ perfume, typeKey, volume, tester, onBack }: {
           {chosen.length ? (
             <>Создать <b>{offerId}</b> в {chosen.map((t) => t.label).join(", ")}</>
           ) : "Отметьте хотя бы один магазин"}
-          {unapproved.length ? <span className="fr-warn"> Пирамида не одобрена для {unapproved.map((t) => t.label).join(", ")}: карточка уйдёт без неё.</span> : null}
           {missing.length ? <span className="fr-warn"> Не заполнено: {missing.join(", ")}</span> : null}
         </div>
         <button className="primary-action" type="button" disabled={!chosen.length || submit.isPending || sent} onClick={() => submit.mutate()}>

@@ -293,3 +293,91 @@ test("OKPD2 by type and GTIN check digit", () => {
   assert.equal(ctx.g.buildFragranticaOzonItem({ typeId: 93403, barcode: "3348901250146" }, []).item.barcode, "3348901250146");
   assert.equal(ctx.g.buildFragranticaOzonItem({ typeId: 93403, barcode: "123" }, []).item.barcode, undefined);
 });
+
+vm.runInContext("this.conv = { planFragranticaVolumes, fragranticaVolumeInShop, buildFragranticaDraftExportBody, fragranticaDraftMissing };", ctx);
+
+test("conveyor: volumes from PriceMaster rows — type by rows, no testers/samples/sets/flankers/clones", () => {
+  const rows = [
+    { name: "C.Dior Sauvage men 60ml edt" },
+    { name: "DIOR SAUVAGE (M) EDT 100 ML" },
+    { name: "Dior Sauvage edt 200ml" },
+    { name: "Dior Sauvage edp 100ml" },
+    { name: "Dior Sauvage edt 100ml tester" },
+    { name: "Dior Sauvage edt 1ml пробник" },
+    { name: "Dior Sauvage set edt 100ml + gel 50ml" },
+    { name: "Dior Sauvage Elixir 60ml" },
+    { name: "AREEJ DIORIT 100 ml (Sauvage Dior)" },
+    { name: "Dior Sauvage after shave lotion 100ml" },
+    { name: "Dior Sauvage edt 30ml", available: false },
+  ];
+  const plan = plain(ctx.conv.planFragranticaVolumes(rows, { brand: "Dior", name: "Sauvage" }));
+  assert.equal(plan.typeKey, "edt");
+  assert.deepEqual(plan.volumes.map((v) => v.volume), [60, 100, 200]);
+  // the name says EDP → only EDP rows (and rows without a concentration)
+  const edp = plain(ctx.conv.planFragranticaVolumes([...rows, { name: "Dior Sauvage Eau de Parfum 60ml" }], { brand: "Dior", name: "Sauvage Eau de Parfum" }));
+  assert.equal(edp.typeKey, "edp");
+  assert.deepEqual(plain(ctx.conv.planFragranticaVolumes([], { brand: "Dior", name: "Sauvage" })), { typeKey: "edp", volumes: [] });
+});
+
+test("conveyor: volume already in a shop — live export or a warehouse card with that volume", () => {
+  const exports = [{ accountId: "a", volume: 100, tester: false, status: "imported" }, { accountId: "b", volume: 50, tester: false, status: "failed" }];
+  const stock = { c: { n: 2, v: [60, 100] } };
+  const inShop = (shopId, volume, tester = false) => ctx.conv.fragranticaVolumeInShop({ exports, stock, shopId, volume, tester });
+  assert.equal(inShop("a", 100), true);
+  assert.equal(inShop("a", 60), false);
+  assert.equal(inShop("b", 50), false); // failed export does not count
+  assert.equal(inShop("c", 60), true);
+  assert.equal(inShop("c", 60, true), false);
+});
+
+test("conveyor: export body from a draft — own fields, notes per shop without approval, selected links only", () => {
+  const draft = {
+    perfumeId: 31861,
+    data: {
+      name: "Dior Sauvage Туалетная вода 100 мл", offerId: "FR31861-100", typeKey: "edt", tester: false,
+      dims: { depth: 200, width: 130, height: 120, weight: 450 },
+      attributes: [{ id: 85, values: [{ dictionary_value_id: 1, value: "Dior" }] }, { id: 4191, values: [{ value: "old" }] }, { id: 8050, values: [] }],
+      requiredAttrs: [{ id: 85, name: "Бренд" }, { id: 9163, name: "Пол" }],
+      price: 12990, oldPrice: 25980, yandexPrice: 13500,
+      images: { main: "/uploads/fragrantica/cards/31861-main-v2.jpg", notes: { magicstick: "/n-ms.jpg", parfumerius: "/n-p.jpg" } },
+      description: "Текст", selectedLinks: ["r1"],
+      linkRows: [{ id: "r1", rowId: "11", article: "A1", name: "Dior Sauvage edt 100ml", supplierName: "S", partnerId: "7", priceCurrency: "USD" }, { id: "r2", rowId: "12", name: "x" }],
+    },
+  };
+  const targets = [{ key: "ozon:env", style: "magicstick" }, { key: "yandex:y1", style: "parfumerius" }];
+  const body = plain(ctx.conv.buildFragranticaDraftExportBody(draft, targets));
+  assert.equal(body.typeId, 93405);
+  assert.deepEqual(body.targets, [{ key: "ozon:env", notes: "/n-ms.jpg" }, { key: "yandex:y1", notes: "/n-p.jpg" }]);
+  assert.equal(body.attributes.filter((a) => a.id === 4191).length, 1);
+  assert.equal(body.attributes.find((a) => a.id === 4191).values[0].value, "Текст");
+  assert.equal(body.attributes.find((a) => a.id === 8229).values[0].dictionary_value_id, 93405);
+  assert.deepEqual(body.links.map((l) => l.rowId), ["11"]);
+  assert.equal(body.price, "12990");
+  assert.deepEqual(plain(ctx.conv.fragranticaDraftMissing(draft, targets)), ["Пол"]);
+  // Market only: the Market price is the card price
+  assert.equal(ctx.conv.buildFragranticaDraftExportBody({ ...draft, data: { ...draft.data, price: 0 } }, [targets[1]]).price, "13500");
+  assert.deepEqual(plain(ctx.conv.fragranticaDraftMissing(draft, [])).slice(0, 1), ["Магазины"]);
+});
+
+test("Ozon Rich-контент: pyramid, text halves, specs, close-up; video cover complex attribute; media error detection", () => {
+  vm.runInContext("this.rich = { buildFragranticaRichContent, buildFragranticaVideoCoverComplex, fragranticaMediaExtrasFailed };", ctx);
+  const r = ctx.rich;
+  const json = r.buildFragranticaRichContent({
+    title: "Dior Sauvage",
+    description: "Первый абзац.\n\nВторой абзац.\n\nТретий <b>абзац</b>.",
+    images: { notes: "https://x/n.jpg", specs: "https://x/s.jpg", closeup: "https://x/c.jpg" },
+  });
+  const rich = JSON.parse(json);
+  assert.equal(rich.version, 0.3);
+  assert.deepEqual(rich.content.map((w) => w.widgetName), ["raShowcase", "raTextBlock", "raShowcase", "raTextBlock", "raShowcase"]);
+  assert.equal(rich.content[0].blocks[0].img.src, "https://x/n.jpg");
+  assert.deepEqual(rich.content[1].text.content, ["Первый абзац.", "Второй абзац."]);
+  assert.deepEqual(rich.content[1].title.content, ["Dior Sauvage"]);
+  assert.deepEqual(rich.content[3].text.content, ["Третий абзац."]);
+  assert.equal(r.buildFragranticaRichContent({ title: "x", description: "", images: {} }), "");
+  assert.deepEqual(plain(r.buildFragranticaVideoCoverComplex("https://x/v.mp4")), [{ attributes: [{ id: 21845, complex_id: 100002, values: [{ dictionary_value_id: 0, value: "https://x/v.mp4" }] }] }]);
+  assert.deepEqual(plain(r.buildFragranticaVideoCoverComplex("")), []);
+  assert.equal(r.fragranticaMediaExtrasFailed([{ attribute_id: 11254, description: "invalid json" }]), true);
+  assert.equal(r.fragranticaMediaExtrasFailed([{ description: "Не удалось загрузить видеообложку" }]), true);
+  assert.equal(r.fragranticaMediaExtrasFailed([{ attribute_id: 85, description: "Бренд" }]), false);
+});

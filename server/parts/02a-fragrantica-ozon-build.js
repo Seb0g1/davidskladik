@@ -584,3 +584,179 @@ function fragranticaNextOzonLimitReset(now = new Date(), resetAt = null) {
 function isOzonLimitErrorText(text) {
   return /limit|лимит/i.test(String(text || "")) && /(exceed|превыш|исчерпа|reached|daily|суточн|дневн)/i.test(String(text || ""));
 }
+
+// ─── Конвейер: объёмы из PriceMaster, что уже есть в магазинах, тело отправки ──
+// (02d-fragrantica-drafts.js). Чистые функции — тесты в test/fragrantica-ozon-build.test.cjs.
+
+const FRAG_SET_RE = /\+|набор|(^|[^a-z])(set|kit|coffret|discovery)(?![a-z])|\d\s*[xх×*]\s*\d|\d+\s*шт/i;
+
+// Концентрация названа в самом названии аромата («Sauvage Eau de Parfum», «Bleu de Chanel Parfum»)?
+function fragExplicitTypeKey(perfume = {}) {
+  const guess = fragOzonGuessTypeKey(perfume);
+  if (guess !== "edp") return guess;
+  return /eau de parfum|\bedp\b|парфюмерн/i.test(`${perfume.name || ""}`) ? "edp" : "";
+}
+
+/**
+ * Which cards to make for a perfume from its PriceMaster rows: the type (named in the perfume name, else the
+ * concentration most rows have, else EDP) and every bottle volume that boxed, same-perfume rows of that type
+ * offer. Testers, samples (≤ 3 ml), sets, clones, flankers and lotions are left out.
+ * rows: [{ name, available? }]. Returns { typeKey, volumes: [{ volume, rows }] } sorted by volume.
+ */
+function planFragranticaVolumes(rows = [], perfume = {}) {
+  const good = [];
+  for (const row of rows) {
+    const name = String(row?.name || "");
+    if (!name || row.available === false) continue;
+    if (fragPmIsTesterOrSample(name) || FRAG_SET_RE.test(name)) continue;
+    const volumes = fragPmVolumes(name);
+    if (volumes.length !== 1 || volumes[0] <= 3) continue;
+    const check = assessFragranticaSupplierRow(name, { brand: perfume.brand, name: perfume.name, typeKey: "edp" });
+    if (check.clone || check.notPerfume || check.extraWords.length || check.missingNameWords.length) continue;
+    good.push({ volume: volumes[0], concentration: check.concentration });
+  }
+  let typeKey = fragExplicitTypeKey(perfume);
+  if (!typeKey) {
+    const counts = new Map();
+    for (const r of good) if (r.concentration) counts.set(r.concentration, (counts.get(r.concentration) || 0) + 1);
+    typeKey = [...counts.entries()].sort((a, b) => b[1] - a[1] || (a[0] === "edp" ? -1 : 1))[0]?.[0] || "edp";
+  }
+  const wanted = typeKey === "oil" ? "parfum" : typeKey;
+  const byVolume = new Map();
+  for (const r of good) {
+    if (r.concentration && r.concentration !== wanted) continue;
+    const key = Math.round(r.volume * 100) / 100;
+    byVolume.set(key, (byVolume.get(key) || 0) + 1);
+  }
+  return { typeKey, volumes: [...byVolume.entries()].sort((a, b) => a[0] - b[0]).map(([volume, n]) => ({ volume, rows: n })) };
+}
+
+/**
+ * Is this volume already sold in the shop? A live Fragrantica export of that volume (not failed, not a
+ * tester) or a warehouse card of that shop with that volume in its name (shop_stock { "<shop>": { v: [] } }).
+ */
+function fragranticaVolumeInShop({ exports = [], stock = {}, shopId, volume, tester = false }) {
+  const v = Number(volume);
+  const same = (x) => Math.abs(Number(x) - v) < 0.01;
+  if (exports.some((e) => String(e.accountId) === String(shopId) && e.status !== "failed" && Boolean(e.tester) === Boolean(tester) && same(e.volume))) return true;
+  if (tester) return false;
+  const had = stock?.[shopId];
+  return Boolean(had && Array.isArray(had.v) && had.v.some(same));
+}
+
+// Атрибуты, которые форма собирает из своих полей (название, артикул, тип, описание, вес)
+const FRAG_DRAFT_OWN_ATTRS = new Set([4180, 9024, 8229, 4497, 4191]);
+
+/**
+ * Body for createFragranticaExports from a ready draft. data — what the conveyor built (form + links + photos +
+ * description); targets — [{ key, style }] of the shops chosen for this card. The shop's «Пирамида аромата»
+ * goes in without a manual approval.
+ */
+function buildFragranticaDraftExportBody(draft = {}, targets = []) {
+  const d = draft.data || {};
+  const type = fragOzonTypeByKey(d.typeKey);
+  const attributes = (Array.isArray(d.attributes) ? d.attributes : [])
+    .filter((a) => !FRAG_DRAFT_OWN_ATTRS.has(Number(a.id)) && Array.isArray(a.values) && a.values.length)
+    .map((a) => ({ id: Number(a.id), values: a.values }));
+  attributes.push({ id: FRAG_OZON_ATTR.name, values: [{ value: d.name || "" }] });
+  attributes.push({ id: FRAG_OZON_ATTR.sellerCode, values: [{ value: d.offerId || "" }] });
+  attributes.push({ id: FRAG_OZON_ATTR.type, values: [{ dictionary_value_id: type.typeId, value: type.label }] });
+  if (String(d.description || "").trim()) attributes.push({ id: FRAG_OZON_ATTR.annotation, values: [{ value: d.description }] });
+  if (Number(d.dims?.weight)) attributes.push({ id: FRAG_OZON_ATTR.weightPack, values: [{ value: String(d.dims.weight) }] });
+  const hasOzon = targets.some((t) => String(t.key).startsWith("ozon:"));
+  const price = hasOzon ? d.price : d.price || d.yandexPrice;
+  return {
+    perfumeId: Number(draft.perfumeId),
+    typeId: type.typeId,
+    typeKey: type.key,
+    targets: targets.map((t) => ({ key: t.key, notes: d.images?.notes?.[t.style] || null })),
+    offerId: d.offerId,
+    name: d.name,
+    price: price ? String(price) : "",
+    oldPrice: d.oldPrice ? String(d.oldPrice) : "",
+    yandexPrice: d.yandexPrice ? String(d.yandexPrice) : "",
+    barcode: d.barcode || "",
+    depth: d.dims?.depth, width: d.dims?.width, height: d.dims?.height, weight: d.dims?.weight,
+    tester: Boolean(d.tester),
+    images: [d.images?.main || d.sourceImage || ""].filter(Boolean),
+    attributes,
+    links: (Array.isArray(d.linkRows) ? d.linkRows : [])
+      .filter((r) => (d.selectedLinks || []).includes(r.id))
+      .map((r) => ({ rowId: r.rowId, article: r.article, name: r.name, supplierName: r.supplierName, partnerId: r.partnerId, priceCurrency: r.priceCurrency })),
+  };
+}
+
+/** What a draft still lacks (same rules as the export: required Ozon attributes, price, photo, sizes). */
+function fragranticaDraftMissing(draft = {}, targets = []) {
+  const body = buildFragranticaDraftExportBody(draft, targets);
+  const required = (draft.data?.requiredAttrs || []).map((a) => ({ id: a.id, name: a.name, is_required: true }));
+  const { missing } = buildFragranticaOzonItem(body, required);
+  if (!targets.length) missing.unshift("Магазины");
+  return missing;
+}
+
+// ─── Rich-контент Ozon (атрибут 11254) ───────────────────────────────────────
+// Ozon прячет аннотацию, если есть Rich-контент, но её текст по-прежнему участвует в поиске — поэтому
+// описание остаётся в 4191, а Rich собирается из того же текста и фото карточки: пирамида аромата,
+// абзацы описания, «Характеристики», крупный план. Формат — JSON конструктора Ozon (version 0.3).
+
+const FRAG_RICH_ATTR = 11254;
+
+function fragRichImage(src, alt, width = 1500, height = 2000) {
+  return {
+    widgetName: "raShowcase",
+    type: "roll",
+    blocks: [{
+      imgLink: "",
+      img: { src, srcMobile: src, alt: String(alt || "").slice(0, 200), position: "width_full", positionMobile: "width_full", widthMobile: width, heightMobile: height, isParandjaMobile: false },
+    }],
+  };
+}
+
+function fragRichText(title, paragraphs = []) {
+  const block = {
+    widgetName: "raTextBlock",
+    theme: "default",
+    padding: "type2",
+    gapSize: "m",
+    text: { size: "size2", align: "left", color: "color1", content: paragraphs.map((p) => String(p).slice(0, 2000)) },
+  };
+  if (title) block.title = { content: [String(title).slice(0, 200)], size: "size5", align: "left", color: "color1" };
+  return block;
+}
+
+/**
+ * description — plain text with blank-line paragraphs; images — absolute URLs { notes, specs, closeup }.
+ * Returns the JSON string for attribute 11254, or "" when there is nothing to show.
+ */
+function buildFragranticaRichContent({ title = "", description = "", images = {} } = {}) {
+  const paragraphs = String(description || "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .split(/\n\s*\n|\n/)
+    .map((p) => p.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const content = [];
+  if (images.notes) content.push(fragRichImage(images.notes, `${title} — пирамида аромата`));
+  const half = Math.max(1, Math.ceil(paragraphs.length / 2));
+  if (paragraphs.length) content.push(fragRichText(title, paragraphs.slice(0, half)));
+  if (images.specs) content.push(fragRichImage(images.specs, `${title} — характеристики`));
+  if (paragraphs.length > half) content.push(fragRichText("", paragraphs.slice(half)));
+  if (images.closeup) content.push(fragRichImage(images.closeup, `${title} — флакон крупным планом`));
+  if (content.length < 2) return "";
+  return JSON.stringify({ content, version: 0.3 });
+}
+
+/** Ozon video cover (complex attribute 100002 / 21845) for /v3/product/import. */
+function buildFragranticaVideoCoverComplex(url) {
+  if (!url) return [];
+  return [{ attributes: [{ id: 21845, complex_id: 100002, values: [{ dictionary_value_id: 0, value: url }] }] }];
+}
+
+/** Import errors that belong to the Rich-контент or the video cover (the card is then resent without them). */
+function fragranticaMediaExtrasFailed(errors = []) {
+  return (Array.isArray(errors) ? errors : []).some((e) => {
+    const id = Number(e?.attribute_id || 0);
+    const text = `${e?.attribute_name || ""} ${e?.description || ""} ${e?.message || ""} ${e?.code || ""}`;
+    return id === FRAG_RICH_ATTR || id === 21845 || /rich|видеообложк|video|21845|11254/i.test(text);
+  });
+}
