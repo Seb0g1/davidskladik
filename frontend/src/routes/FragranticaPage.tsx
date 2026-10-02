@@ -33,7 +33,7 @@ type CrawlerResponse = {
 type Perfume = {
   id: number; url: string; brand: string; name: string; gender: Gender; year: number | null; votes: number | null; rating: number | null;
   family: string; perfumers: string[]; notes: { top: Note[]; middle: Note[]; base: Note[]; flat: Note[] }; accords: Accord[];
-  description: string; image: string; pm: PmInfo;
+  description: string; image: string; pm: PmInfo; detailMissing?: boolean; fetchError?: string | null;
 };
 type DictValue = { dictionary_value_id?: number; value: string };
 type FormAttribute = {
@@ -186,6 +186,11 @@ export function FragranticaPage() {
       queryClient.invalidateQueries({ queryKey: ["fragrantica", "catalog"] });
     },
     onError: (error) => toast.error(errorMessage(error)),
+  });
+
+  useBrowserPageReceiver((id) => {
+    setOpenId(id);
+    queryClient.invalidateQueries({ queryKey: ["fragrantica"] });
   });
 
   const items = list.data?.pages.flatMap((page) => page.items) ?? [];
@@ -386,6 +391,8 @@ function PerfumeDrawer({ id, onClose }: { id: number; onClose: () => void }) {
               </div>
             </div>
 
+            {p.detailMissing ? <BrowserFetchHelp perfume={p} onRetry={() => perfume.refetch()} retrying={perfume.isFetching} /> : null}
+
             <div className="fr-pyramid">
               <NotesTier title="Верхние ноты" notes={p.notes.top} />
               <NotesTier title="Ноты сердца" notes={p.notes.middle} />
@@ -415,6 +422,97 @@ function PerfumeDrawer({ id, onClose }: { id: number; onClose: () => void }) {
       </aside>
     </div>
   );
+}
+
+// ─── Страница аромата через браузер ─────────────────────────────────────────
+// Cloudflare время от времени не пускает наши серверы на fragrantica.ru, а браузер пускает.
+// Закладка «→ Склад» на странице аромата берёт её HTML (тот же запрос, что делает сервер),
+// открывает эту страницу с ?receive=1 и передаёт HTML через postMessage; дальше — обычный парсер.
+
+const RECEIVE_PARAM = "receive";
+
+function fragranticaBookmarklet(origin: string) {
+  const target = JSON.stringify(`${origin}/app/fragrantica?${RECEIVE_PARAM}=1`);
+  const from = JSON.stringify(origin);
+  const code = String.raw`(async()=>{if(!/fragrantica\.[a-z.]+\/(perfume|parfum)\/.+-\d+\.html/i.test(location.href)){alert("Откройте страницу аромата на Фрагрантике и нажмите закладку ещё раз.");return}`
+    + String.raw`var w=window.open(${target},"ds_fragrantica");var h="";`
+    + String.raw`try{var r=await fetch(location.href,{credentials:"include"});h=r.ok?await r.text():""}catch(e){}`
+    + String.raw`if(!h)h=document.documentElement.outerHTML;`
+    + String.raw`h=h.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,"").replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi,"").replace(/<svg\b[^>]*>[\s\S]*?<\/svg>/gi,"<svg></svg>").replace(/<!--[\s\S]*?-->/g,"").replace(/\s{2,}/g," ");`
+    + String.raw`var sent=false;addEventListener("message",function(e){if(e.origin===${from}&&e.data&&e.data.type==="ds-fragrantica-ready"&&!sent){sent=true;w.postMessage({type:"ds-fragrantica-page",url:location.href,html:h},${from})}})})()`;
+  return `javascript:${encodeURIComponent(code)}`;
+}
+
+function BookmarkletLink() {
+  // React не ставит javascript:-ссылки через props, поэтому href выставляем сами.
+  const href = useMemo(() => fragranticaBookmarklet(window.location.origin), []);
+  return (
+    <a className="fr-bookmarklet" ref={(el) => { el?.setAttribute("href", href); }} onClick={(e) => { e.preventDefault(); toast.info("Перетащите эту кнопку на панель закладок браузера"); }} title="Перетащите на панель закладок">
+      → Склад
+    </a>
+  );
+}
+
+function BrowserFetchHelp({ perfume, onRetry, retrying }: { perfume: Perfume; onRetry: () => void; retrying: boolean }) {
+  return (
+    <div className="fr-fetch-help">
+      <strong>Пирамиды и описания пока нет: Фрагрантика не пустила наш сервер</strong>
+      <p>
+        Её защита (Cloudflare) иногда блокирует серверы, а ваш браузер пускает. Загрузите страницу через браузер:
+        откройте аромат на Фрагрантике и нажмите там закладку <b>«→ Склад»</b>. Склад откроется в новой вкладке,
+        и аромат появится с пирамидой и описанием.
+      </p>
+      <ol>
+        <li>Один раз перетащите кнопку <BookmarkletLink /> на панель закладок (Ctrl+Shift+B — показать панель).</li>
+        <li><a href={perfume.url} target="_blank" rel="noreferrer">Откройте «{perfume.name}» на Фрагрантике <ExternalLink size={12} /></a> и нажмите закладку.</li>
+      </ol>
+      <div className="fr-actions">
+        <button className="secondary-action compact" type="button" disabled={retrying} onClick={onRetry}>
+          {retrying ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />} Попробовать с сервера ещё раз
+        </button>
+      </div>
+      {perfume.fetchError ? <span className="fr-hint">Ответ сервера: {perfume.fetchError}</span> : null}
+    </div>
+  );
+}
+
+const FRAGRANTICA_ORIGIN = /^https:\/\/(www\.)?fragrantica\.[a-z.]{2,8}$/;
+
+function useBrowserPageReceiver(onImported: (id: number) => void) {
+  const handler = useRef(onImported);
+  handler.current = onImported;
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get(RECEIVE_PARAM) !== "1" || !window.opener) return;
+    params.delete(RECEIVE_PARAM);
+    const rest = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${rest ? `?${rest}` : ""}`);
+    const opener = window.opener as Window;
+    let done = false;
+    toast("Получаем страницу аромата из вкладки Фрагрантики…", "info", 5000);
+    const onMessage = async (event: MessageEvent) => {
+      if (done || !FRAGRANTICA_ORIGIN.test(event.origin) || event.data?.type !== "ds-fragrantica-page") return;
+      done = true;
+      try {
+        const res = await apiJson<{ id: number; name: string; brand: string }>(
+          "/api/fragrantica/catalog/import-html",
+          mutationBody({ url: String(event.data.url || ""), html: String(event.data.html || "") }),
+        );
+        toast.success(`Загружено с Фрагрантики: ${res.brand} ${res.name}`);
+        handler.current(res.id);
+      } catch (error) {
+        toast.error(errorMessage(error));
+      }
+    };
+    window.addEventListener("message", onMessage);
+    // Вкладка Фрагрантики начинает слушать «готов» только после того, как скачает страницу, — повторяем.
+    const ping = window.setInterval(() => { if (!done) opener.postMessage({ type: "ds-fragrantica-ready" }, "*"); }, 500);
+    const stop = window.setTimeout(() => {
+      window.clearInterval(ping);
+      if (!done) toast.error("Вкладка Фрагрантики не ответила. Нажмите закладку ещё раз.");
+    }, 60_000);
+    return () => { window.removeEventListener("message", onMessage); window.clearInterval(ping); window.clearTimeout(stop); };
+  }, []);
 }
 
 // ─── Добавление: шаг 1 — тип и объём ────────────────────────────────────────

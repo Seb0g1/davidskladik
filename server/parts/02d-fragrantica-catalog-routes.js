@@ -23,6 +23,8 @@ function fragranticaDetailResponse(row) {
     image: fragranticaMediaUrl("images", `${Number(row.id)}.jpg`),
     detailAt: row.detail_at || null,
     detailError: row.detail_error || null,
+    // Страница ещё не скачана (Фрагрантика не пустила сервер): пирамиды и описания нет.
+    detailMissing: !row.detail_at,
     pm: fragranticaPmFromRow(row),
   };
 }
@@ -49,6 +51,7 @@ app.get("/api/fragrantica/catalog/:id", requireAdmin, async (request, response, 
     if (!/^\d+$/.test(request.params.id)) return next();
     const id = Number(request.params.id);
     let row = await readFragranticaPerfume(id);
+    let fetchError = null;
     if (!row) return response.status(404).json({ error: "Аромат не найден в каталоге." });
     const stale = !row.detail_at || Date.now() - new Date(row.detail_at).getTime() > fragranticaDetailMaxAgeMs;
     if (stale || request.query.refresh === "1") {
@@ -58,13 +61,11 @@ app.get("/api/fragrantica/catalog/:id", requireAdmin, async (request, response, 
       } catch (error) {
         // Фрагрантика не ответила — отдаём то, что есть, и просим worker докачать.
         await getPrisma().$executeRawUnsafe(`UPDATE fragrantica_perfumes SET detail_wanted_at = now() WHERE id = $1 AND detail_at IS NULL`, id);
-        if (!row.detail_at) {
-          return response.status(502).json({ error: `Не удалось загрузить страницу с Фрагрантики: ${error?.message || error}`, code: "fragrantica_unavailable" });
-        }
+        if (!row.detail_at) fetchError = error?.message || String(error);
       }
     }
     await ensureFragranticaPerfumeImage(id).catch((error) => logger.warn("fragrantica image download failed", { id, detail: error?.message }));
-    response.json({ ok: true, perfume: fragranticaDetailResponse(row) });
+    response.json({ ok: true, perfume: { ...fragranticaDetailResponse(row), fetchError } });
   } catch (error) {
     next(error);
   }
@@ -79,8 +80,29 @@ app.post("/api/fragrantica/catalog/import", requireAdmin, async (request, respon
     response.json({ ok: true, id: detail.id });
   } catch (error) {
     if (error instanceof FragranticaHttpError) {
-      return response.status(502).json({ error: error.message, code: "fragrantica_unavailable" });
+      const hint = error.status === 403 ? " Фрагрантика не пускает сервер — откройте аромат в браузере и нажмите закладку «→ Склад» (подсказка — в карточке любого аромата без пирамиды)." : "";
+      return response.status(502).json({ error: `${error.message}.${hint}`, code: "fragrantica_unavailable" });
     }
+    next(error);
+  }
+});
+
+// Страница аромата, скачанная браузером пользователя (закладка «→ Склад» на fragrantica.ru):
+// когда Cloudflare не пускает наши серверы, браузер пускает. HTML разбираем тем же парсером.
+app.post("/api/fragrantica/catalog/import-html", requireAdmin, async (request, response, next) => {
+  try {
+    const parsed = normalizeFragranticaPerfumeUrl(request.body?.url);
+    if (!parsed) return response.status(400).json({ error: "Это не страница аромата Фрагрантики.", code: "fragrantica_url_invalid" });
+    const html = String(request.body?.html || "");
+    if (html.length < 2000) return response.status(400).json({ error: "Страница пустая — откройте аромат на Фрагрантике и нажмите закладку ещё раз.", code: "fragrantica_html_empty" });
+    const detail = parseFragranticaPerfumePage(html, { url: parsed.url });
+    if (!detail.id || !detail.name || Number(detail.id) !== Number(parsed.id)) {
+      return response.status(422).json({ error: "Не удалось разобрать страницу аромата (возможно, открыта проверка Cloudflare).", code: "fragrantica_html_unparsed" });
+    }
+    await saveFragranticaPerfumeDetail(detail);
+    await appendAudit(request, "fragrantica.catalog.import_html", { entityType: "fragrantica_perfume", entityId: String(detail.id) });
+    response.json({ ok: true, id: Number(detail.id), name: detail.name, brand: detail.brand });
+  } catch (error) {
     next(error);
   }
 });

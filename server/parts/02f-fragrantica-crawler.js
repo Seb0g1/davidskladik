@@ -1,15 +1,15 @@
 // Фоновый обход fragrantica.ru для каталога «Фрагрантика» (только worker).
 //
-// Один запрос за шаг, FRAGRANTICA_CRAWL_RPS запросов в секунду (деф. 2). Порядок шагов:
+// Один запрос за шаг, FRAGRANTICA_CRAWL_RPS запросов в секунду (деф. 0.2 — чаще Cloudflare банит IP). Порядок шагов:
 //   1. ароматы, которые открыли в UI без деталей (detail_wanted_at) — сразу;
 //   2. индекс брендов /designers-1..N/ — раз в FRAGRANTICA_INDEX_DAYS (деф. 7);
 //   3. страницы брендов (сначала крупные), повторно — раз в FRAGRANTICA_BRAND_DAYS (деф. 14);
 //   4. страницы ароматов без деталей (сначала крупные бренды и новинки).
-// На 403/429/5xx обход замирает с растущей паузой (1 мин → 30 мин), состояние — в fragrantica_state.
+// На ошибки обход замирает с растущей паузой (1 мин → 30 мин; на 403/429 — 30 мин → 12 ч), состояние — в fragrantica_state.
 // Выключатель: FRAGRANTICA_CRAWL_ENABLED=false; пауза из UI — POST /api/fragrantica/crawler.
 
 const fragranticaCrawlEnabled = process.env.FRAGRANTICA_CRAWL_ENABLED !== "false";
-const fragranticaCrawlDelayMs = Math.max(150, Math.round(1000 / Math.max(0.1, Number(process.env.FRAGRANTICA_CRAWL_RPS || 2) || 2)));
+const fragranticaCrawlDelayMs = Math.max(150, Math.round(1000 / Math.max(0.1, Number(process.env.FRAGRANTICA_CRAWL_RPS || 0.2) || 0.2)));
 const fragranticaIndexDays = Math.max(1, Number(process.env.FRAGRANTICA_INDEX_DAYS || 7) || 7);
 const fragranticaBrandDays = Math.max(1, Number(process.env.FRAGRANTICA_BRAND_DAYS || 14) || 14);
 const fragranticaIdleDelayMs = 10 * 60_000;
@@ -142,7 +142,10 @@ function scheduleFragranticaCrawl(delayMs = fragranticaCrawlDelayMs) {
       fragranticaCrawlStatus.counters.errors += 1;
       fragranticaCrawlStatus.failures += 1;
       fragranticaCrawlStatus.lastError = error?.message || String(error);
-      next = Math.min(30 * 60_000, 60_000 * 2 ** Math.min(5, fragranticaCrawlStatus.failures - 1));
+      const banned = error instanceof FragranticaHttpError && (error.status === 403 || error.status === 429);
+      next = banned
+        ? Math.min(12 * 3_600_000, 30 * 60_000 * 2 ** Math.min(5, fragranticaCrawlStatus.failures - 1))
+        : Math.min(30 * 60_000, 60_000 * 2 ** Math.min(5, fragranticaCrawlStatus.failures - 1));
       fragranticaCrawlStatus.blockedUntil = new Date(Date.now() + next).toISOString();
       logger.warn("fragrantica crawl step failed", { detail: fragranticaCrawlStatus.lastError, retryInMs: next });
     } finally {
@@ -153,7 +156,8 @@ function scheduleFragranticaCrawl(delayMs = fragranticaCrawlDelayMs) {
         writeFragranticaState("crawler_status", { ...fragranticaCrawlStatus, at: new Date().toISOString() }).catch(() => {});
       }
     }
-    scheduleFragranticaCrawl(next);
+    // Небольшой разброс, чтобы запросы не шли строго по таймеру.
+    scheduleFragranticaCrawl(next === fragranticaCrawlDelayMs ? Math.round(next * (0.75 + Math.random() * 0.5)) : next);
   }, Math.max(100, Number(delayMs) || fragranticaCrawlDelayMs));
   fragranticaCrawlTimer.unref?.();
 }

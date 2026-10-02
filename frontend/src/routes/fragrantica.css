@@ -190,6 +190,14 @@
 .fr-dims-row input { height: 38px; border-radius: 10px; border: 1px solid var(--line); background: var(--field-bg); color: var(--text); padding: 0 10px; font-size: 14px; width: 100%; }
 .fr-dims-row input:focus { outline: none; border-color: rgba(var(--accent-rgb), .75); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .18); }
 
+.fr-fetch-help { display: grid; gap: 8px; margin: 14px 0 6px; padding: 14px 16px; border-radius: 14px; background: rgba(245, 158, 11, .08); border: 1px solid rgba(245, 158, 11, .35); font-size: 13px; line-height: 1.55; color: var(--text-soft); animation: frFadeUp .4s ease both; }
+.fr-fetch-help strong { color: var(--text); font-size: 14px; }
+.fr-fetch-help p, .fr-fetch-help ol { margin: 0; }
+.fr-fetch-help ol { padding-left: 20px; display: grid; gap: 6px; }
+.fr-fetch-help a:not(.fr-bookmarklet) { color: var(--accent-strong); display: inline-flex; align-items: center; gap: 4px; }
+.fr-bookmarklet { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px; background: var(--accent-strong); color: #fff !important; font-weight: 600; text-decoration: none; cursor: grab; box-shadow: 0 2px 8px rgba(var(--accent-rgb), .35); }
+.fr-bookmarklet:active { cursor: grabbing; }
+
 /* ── Движение ───────────────────────────────────────────────────────────── */
 @keyframes frFadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
 @keyframes frFade { from { opacity: 0; } to { opacity: 1; } }
