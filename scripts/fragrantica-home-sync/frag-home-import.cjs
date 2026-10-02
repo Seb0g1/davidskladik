@@ -1,5 +1,5 @@
 // Приёмник страниц Фрагрантики, скачанных с домашнего ПК (Cloudflare не пускает серверы).
-//   node frag-home-import.cjs queue <limit>   — id+url ароматов без деталей (сначала открытые в UI, потом из PriceMaster)
+//   node frag-home-import.cjs queue <limit>   — id+url ароматов без деталей (открытые в UI и найденные в PriceMaster; остальные — вручную)
 //   node frag-home-import.cjs save < batch.json — {details:[...], errors:[{id,message}]} → fragrantica_perfumes
 process.chdir("/var/www/davidsklad/davidskladik");
 require("/var/www/davidsklad/davidskladik/node_modules/dotenv").config({ quiet: true });
@@ -11,7 +11,7 @@ const searchText = (...parts) => parts.join(" ").normalize("NFD").replace(/[̀-�
 async function queue(limit) {
   const rows = await prisma.$queryRawUnsafe(
     `SELECT id, url FROM fragrantica_perfumes
-      WHERE detail_at IS NULL AND detail_error IS NULL
+      WHERE detail_at IS NULL AND detail_error IS NULL AND (COALESCE(pm_rows, 0) > 0 OR detail_wanted_at IS NOT NULL)
       ORDER BY (detail_wanted_at IS NOT NULL) DESC, detail_wanted_at DESC NULLS LAST,
                COALESCE(pm_rows, 0) DESC, year DESC NULLS LAST, id DESC
       LIMIT $1`,

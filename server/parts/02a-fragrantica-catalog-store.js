@@ -376,6 +376,79 @@ async function ensureFragranticaPerfumeImage(id) {
   return downloadFragranticaMedia(fragranticaImageSource(id), "images", `${Number(id)}.jpg`);
 }
 
+// ─── Чёткий исходник для карточки ───────────────────────────────────────────
+// Превью 750×1000 сильно пережато. У Фрагрантики есть оригинал o.<id>.jpg (часто 1400–3400 px), но в нём
+// бывает отражение под флаконом. Превью — тот же снимок, обрезанный по флакону, поэтому масштаб берём
+// по ширине флакона, высоту — из превью (отражение отрезается), а совпадение проверяем сравнением
+// уменьшенных копий. Не вышло (оригинал не больше, другой снимок) — null, работаем с превью.
+
+function fragranticaInkBox(data, w, h, ch, limit = 238) {
+  const rows = new Uint32Array(h);
+  const cols = new Uint32Array(w);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = (y * w + x) * ch;
+    if (Math.min(data[i], data[i + 1], data[i + 2]) < limit) { rows[y]++; cols[x]++; }
+  }
+  const minRow = Math.max(2, Math.round(w * 0.004));
+  const minCol = Math.max(2, Math.round(h * 0.004));
+  let top = 0; while (top < h && rows[top] < minRow) top++;
+  let bottom = h - 1; while (bottom > top && rows[bottom] < minRow) bottom--;
+  let left = 0; while (left < w && cols[left] < minCol) left++;
+  let right = w - 1; while (right > left && cols[right] < minCol) right--;
+  if (top >= bottom || left >= right) return null;
+  return { left, top, width: right - left + 1, height: bottom - top + 1 };
+}
+
+async function buildFragranticaHdSource(thumbBuffer, originalBuffer) {
+  const decode = async (input) => {
+    const { data, info } = await sharp(input, { failOn: "none" }).rotate().removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    return { data, w: info.width, h: info.height, ch: info.channels };
+  };
+  const thumb = await decode(thumbBuffer);
+  const original = await decode(originalBuffer);
+  if (original.w * original.h > 40_000_000) return { reason: "оригинал слишком большой" };
+  const tb = fragranticaInkBox(thumb.data, thumb.w, thumb.h, thumb.ch);
+  const ob = fragranticaInkBox(original.data, original.w, original.h, original.ch);
+  if (!tb || !ob) return { reason: "флакон не найден" };
+  if (ob.width < tb.width * 1.15) return { reason: "оригинал не крупнее превью" };
+  const height = Math.min(ob.height, Math.round(tb.height * (ob.width / tb.width)));
+  const box = { left: ob.left, top: ob.top, width: ob.width, height };
+  const small = (input, area) => sharp(input, { failOn: "none" }).rotate().extract(area).resize(32, 32, { fit: "fill" }).greyscale().raw().toBuffer();
+  const [a, b] = await Promise.all([small(thumbBuffer, tb), small(originalBuffer, box)]);
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff += Math.abs(a[i] - b[i]);
+  if (diff / a.length > 14) return { reason: "в оригинале другой снимок" };
+  const pad = Math.round(Math.max(box.width, box.height) * 0.08);
+  const buffer = await sharp(originalBuffer, { failOn: "none" }).rotate().removeAlpha().extract(box)
+    .extend({ top: pad, bottom: pad, left: pad, right: pad, background: { r: 255, g: 255, b: 255 } })
+    .jpeg({ quality: 97, chromaSubsampling: "4:4:4" })
+    .toBuffer();
+  return { buffer, scale: ob.width / tb.width };
+}
+
+// URL чёткого исходника images/<id>-hd.jpg или null (тогда — превью images/<id>.jpg).
+async function ensureFragranticaHdImage(id) {
+  const file = `${Number(id)}-hd.jpg`;
+  const target = fragranticaMediaPath("images", file);
+  const miss = fragranticaMediaPath("images", `${Number(id)}-hd.none`);
+  if (fragFs.existsSync(target)) return fragranticaMediaUrl("images", file);
+  if (fragFs.existsSync(miss)) return null;
+  try {
+    const thumbPath = await ensureFragranticaPerfumeImage(id);
+    const originalPath = await downloadFragranticaMedia(`https://fimgs.net/mdimg/perfume/o.${Number(id)}.jpg`, "images", `${Number(id)}-o.jpg`);
+    const result = await buildFragranticaHdSource(await fragFs.promises.readFile(thumbPath), await fragFs.promises.readFile(originalPath));
+    if (!result.buffer) {
+      await fragFs.promises.writeFile(miss, result.reason || "");
+      return null;
+    }
+    await fragFs.promises.writeFile(target, result.buffer);
+    return fragranticaMediaUrl("images", file);
+  } catch (error) {
+    logger.warn("fragrantica hd source failed", { id: Number(id), detail: error?.message });
+    return null;
+  }
+}
+
 // ─── Каталог: список и карточка ─────────────────────────────────────────────
 
 function fragranticaPmFromRow(row = {}) {

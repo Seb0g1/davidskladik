@@ -1,12 +1,12 @@
 // «Есть в PriceMaster» для каталога «Фрагрантика» (только worker).
 //
-// Раз в FRAGRANTICA_PM_MATCH_HOURS (деф. 6) все активные строки PriceMaster (последние прайсы
+// Раз в FRAGRANTICA_PM_MATCH_HOURS (деф. 2) все активные строки PriceMaster (последние прайсы
 // поставщиков) раскладываются в индекс слов, и каждый аромат каталога сверяется с ним
 // (matchFragranticaPmIndex: бренд вне скобок, все слова названия, без фланкеров, тестеров, лосьонов).
 // Результат — fragrantica_perfumes.pm_rows / pm_min_usd / pm_volumes / pm_checked_at.
 
 const fragranticaPmMatchEnabled = process.env.FRAGRANTICA_PM_MATCH_ENABLED !== "false";
-const fragranticaPmMatchIntervalMs = Math.max(1, Number(process.env.FRAGRANTICA_PM_MATCH_HOURS || 6) || 6) * 3_600_000;
+const fragranticaPmMatchIntervalMs = Math.max(1, Number(process.env.FRAGRANTICA_PM_MATCH_HOURS || 2) || 2) * 3_600_000;
 let fragranticaPmMatchRunning = false;
 
 async function loadFragranticaPmRows() {

@@ -8,8 +8,9 @@ const vm = require("vm");
 const REPO = "C:/Users/Seb0g1/Documents/davidsklad-fragrantica";
 const SSH = ["-i", `${process.env.HOME || process.env.USERPROFILE}/.ssh/davidsklad_deploy`, "-o", "ConnectTimeout=30", "-o", "ServerAliveInterval=15", "root@81.17.154.153"];
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36";
-const LIMIT = Number(process.argv[2]) || 11000; // сколько страниц за запуск
+const LIMIT = Number(process.argv[2]) || Infinity; // сколько страниц за запуск
 const BATCH = 40;
+const WATCH = process.argv.includes("--watch"); // не выходить, а раз в 30 мин проверять новые товары PriceMaster
 const STATUS = process.env.CLAUDE_JOB_DIR ? `${process.env.CLAUDE_JOB_DIR}/tmp/home/status.json` : "status.json";
 
 const ctx = vm.createContext({ console, URL });
@@ -47,9 +48,15 @@ function curl(url) {
     details = []; errors = [];
   };
   while (done < LIMIT) {
-    const { stats, items } = JSON.parse(ssh(`node /root/frag-home-import.cjs queue ${Math.min(400, LIMIT - done)}`));
+    const { stats, items } = JSON.parse(ssh(`node /root/frag-home-import.cjs queue ${Math.min(400, LIMIT - done, BATCH * 10)}`));
     log("queue", JSON.stringify(stats), "got", items.length);
-    if (!items.length) break;
+    if (!items.length) {
+      // Всё скачано — ждём новых совпадений с PriceMaster (сверка на сервере раз в 2 ч).
+      if (!WATCH) break;
+      fs.writeFileSync(STATUS, JSON.stringify({ at: new Date().toISOString(), done, saved, failed, idle: true }));
+      await sleep(30 * 60_000);
+      continue;
+    }
     for (const item of items) {
       const { status, html } = curl(item.url);
       const challenged = status === 403 || status === 429 || /cf-chl|Just a moment|challenge-platform/i.test(html.slice(0, 20000));

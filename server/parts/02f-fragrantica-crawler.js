@@ -4,7 +4,7 @@
 //   1. ароматы, которые открыли в UI без деталей (detail_wanted_at) — сразу;
 //   2. индекс брендов /designers-1..N/ — раз в FRAGRANTICA_INDEX_DAYS (деф. 7);
 //   3. страницы брендов (сначала крупные), повторно — раз в FRAGRANTICA_BRAND_DAYS (деф. 14);
-//   4. страницы ароматов без деталей (сначала крупные бренды и новинки).
+//   4. страницы ароматов без деталей — только тех, что нашлись в PriceMaster (pm_rows > 0; остальные — вручную).
 // На ошибки обход замирает с растущей паузой (1 мин → 30 мин; на 403/429 — 30 мин → 12 ч), состояние — в fragrantica_state.
 // Выключатель: FRAGRANTICA_CRAWL_ENABLED=false; пауза из UI — POST /api/fragrantica/crawler.
 
@@ -85,8 +85,8 @@ async function fragranticaCrawlNextDetail(prisma) {
   const rows = await prisma.$queryRawUnsafe(
     `SELECT p.id, p.url FROM fragrantica_perfumes p
      LEFT JOIN fragrantica_brands b ON b.slug = p.brand_slug
-     WHERE p.detail_at IS NULL AND p.detail_error IS NULL
-     ORDER BY b.perfume_count DESC NULLS LAST, p.year DESC NULLS LAST, p.id DESC LIMIT 1`,
+     WHERE p.detail_at IS NULL AND p.detail_error IS NULL AND COALESCE(p.pm_rows, 0) > 0
+     ORDER BY p.pm_rows DESC, b.perfume_count DESC NULLS LAST, p.year DESC NULLS LAST, p.id DESC LIMIT 1`,
   );
   return rows[0] || null;
 }

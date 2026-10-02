@@ -366,10 +366,12 @@ async function requestPdPerfumeCard(payload) {
 async function runFragranticaImageJob(job, { perfumeId, styles, refresh }) {
   const perfume = await fragranticaPerfumeForExport(perfumeId);
   await ensureFragranticaPerfumeImage(perfumeId);
-  const mainFile = `${perfumeId}-main.jpg`;
-  const notesFile = (style) => `${perfumeId}-notes-${style}.jpg`;
+  const hdSource = await ensureFragranticaHdImage(perfumeId);
+  // v2: 1500×2000, JPEG q95 без прореживания цвета, исходник — оригинал Фрагрантики (см. ensureFragranticaHdImage)
+  const mainFile = `${perfumeId}-main-v2.jpg`;
+  const notesFile = (style) => `${perfumeId}-notes-${style}-v2.jpg`;
   const have = (file) => fragFs.existsSync(fragranticaMediaPath("cards", file));
-  const result = { main: null, notes: {}, source: fragranticaMediaUrl("images", `${perfumeId}.jpg`), warnings: [] };
+  const result = { main: null, notes: {}, source: hdSource || fragranticaMediaUrl("images", `${perfumeId}.jpg`), warnings: [] };
   if (!refresh && have(mainFile) && styles.every((style) => have(notesFile(style)))) {
     result.main = fragranticaMediaUrl("cards", mainFile);
     for (const style of styles) result.notes[style] = fragranticaMediaUrl("cards", notesFile(style));
