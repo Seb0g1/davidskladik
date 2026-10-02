@@ -213,9 +213,26 @@ function hasBrokenWaterWord(name = "") {
   return !/[а-яё]+(ая|aя)\s+вода(?![а-яё])/i.test(text);
 }
 
+// Names Market must never get (2026-10-02 the owner deleted 78 such cards): «Дубль54», «Дуюль96»,
+// «удалённый!!!!», a bare category («Для волос», «Краска», «помада»), a code («MDO52»), or two words
+// without the brand («свеча ароматическая»). Without a usable name the card is not exported at all.
+function isBadYandexOfferName(name = "", vendor = "") {
+  const n = String(name || "").trim();
+  const words = n.split(/\s+/).filter(Boolean);
+  const v = String(vendor || "").trim().toLowerCase();
+  const vendorInName = Boolean(v) && v !== "без бренда" && n.toLowerCase().includes(v.split(/\s+/)[0]);
+  return !n
+    || /^(дубл|дуюль|дуль)/i.test(n)
+    || /удал[её]нн/i.test(n)
+    || n.length < 8
+    || words.length < 2
+    || (words.length < 3 && !vendorInName)
+    || n.toLowerCase() === v;
+}
+
 function resolveYandexOfferName({ candidates = [], offerId = "", vendor = "" } = {}) {
   const name = candidates.map((value) => String(value || "").trim())
-    .find((value) => value && !looksLikeArticle(value, offerId) && !hasBrokenWaterWord(value)) || "";
+    .find((value) => value && !looksLikeArticle(value, offerId) && !hasBrokenWaterWord(value) && !isBadYandexOfferName(value, vendor)) || "";
   return name ? softenAllCapsName(name, { vendor }) : "";
 }
 
