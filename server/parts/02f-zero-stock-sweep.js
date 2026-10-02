@@ -20,7 +20,8 @@ let zeroStockSweepNextRunAt = null;
 // Rotate through the catalog: skip ids we checked within this window so successive ticks
 // advance instead of rebuilding the same newest rows forever.
 const zeroStockSweepRecentlyChecked = new Map(); // id -> at
-const zeroStockSweepCheckedCooldownMs = Math.max(5 * 60_000, Number(process.env.ZERO_STOCK_SWEEP_CHECKED_COOLDOWN_MS || 30 * 60_000) || 30 * 60_000);
+// 3 h: at 500 per tick (every 3 min) the sweep walks through ~30k linked cards before it starts over
+const zeroStockSweepCheckedCooldownMs = Math.max(5 * 60_000, Number(process.env.ZERO_STOCK_SWEEP_CHECKED_COOLDOWN_MS || 3 * 3_600_000) || 3 * 3_600_000);
 
 async function runZeroStockSweep({ source = "schedule" } = {}) {
   if (zeroStockSweepRunning) return { status: "already_running" };
@@ -37,6 +38,14 @@ async function runZeroStockSweep({ source = "schedule" } = {}) {
     // the catalog shows as «Остаток» and what we push) is > 0. Keying only on marketplaceState
     // missed no-supplier products whose marketplace stock was already zeroed but whose
     // target_stock was never reset — they kept showing «Остаток N» in the catalog forever.
+    // Cards checked within the cooldown are left out IN the query: before, the LIMIT took the same
+    // 2000 most recently updated cards every time, the cooldown then skipped them all, and older cards
+    // (e.g. a supplier row that silently vanished) were never swept.
+    const nowMsForQuery = Date.now();
+    for (const [id, at] of zeroStockSweepRecentlyChecked.entries()) {
+      if (nowMsForQuery - at > zeroStockSweepCheckedCooldownMs) zeroStockSweepRecentlyChecked.delete(id);
+    }
+    const recentlyChecked = [...zeroStockSweepRecentlyChecked.keys()];
     const rows = await prisma.$queryRawUnsafe(`
       SELECT p.id
       FROM warehouse_products p
@@ -51,9 +60,10 @@ async function runZeroStockSweep({ source = "schedule" } = {}) {
           OR COALESCE(NULLIF(p.raw -> 'marketplaceState' ->> 'stock', '')::numeric, 0) > 0
           OR (p.raw -> 'noSupplierAutomation' ->> 'stockZeroAt') IS NULL
         )
+        AND NOT (p.id = ANY($2::text[]))
       ORDER BY p.updated_at DESC
       LIMIT $1
-    `, zeroStockSweepBatchLimit * 4);
+    `, zeroStockSweepBatchLimit * 4, recentlyChecked);
     if (!rows.length) return { status: "ok", candidates: 0, zeroed: 0 };
 
     const nowMs = Date.now();
