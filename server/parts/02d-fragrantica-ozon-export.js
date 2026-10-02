@@ -583,7 +583,7 @@ async function submitFragranticaYandexExport(row) {
         status: "imported",
         attempts,
         error: null,
-        result: { ...(row.result || {}), market: "sent", ...vat, links: Array.isArray(row.links) && row.links.length ? "pending" : "none" },
+        result: { ...(row.result || {}), market: "sent", ...vat, docs: "pending", links: Array.isArray(row.links) && row.links.length ? "pending" : "none" },
       });
     }
     const failure = (result.results || []).find((r) => !r.ok);
@@ -641,8 +641,56 @@ async function generateFragranticaBarcode(row, account) {
 }
 
 // pending → спросить Ozon статус импорта; imported → штрихкод.
+// ─── Декларация (+ GTIN Маркета) через parfumdeclaration ─────────────────────
+// Карточка создана → parfumdeclaration привязывает декларацию по бренду (на Маркете ещё GTIN бренда из
+// справочника, если у карточки нет своего). Бесплатно, только магазины владельца. Пока у карточки Ozon нет
+// SKU — повтор каждые 2 мин (до 60 попыток).
+async function attachFragranticaDocs(row) {
+  const tries = Number(row.result?.docsTries || 0) + 1;
+  if (!fragranticaPdToolsToken) return { docs: "none", docsInfo: "PD_TOOLS_TOKEN не задан" };
+  const prisma = await requireFragranticaTables();
+  const [perfume] = await prisma.$queryRawUnsafe(`SELECT brand, name FROM fragrantica_perfumes WHERE id = $1`, Number(row.perfume_id));
+  const body = {
+    marketplace: row.marketplace === "yandex" ? "yandex" : "ozon",
+    offerId: row.offer_id,
+    brand: cleanText(perfume?.brand),
+    name: cleanText(row.item?.name) || `${cleanText(perfume?.brand)} ${cleanText(perfume?.name)}`.trim(),
+    barcode: cleanText(row.item?.barcode || (Array.isArray(row.item?.barcodes) ? row.item.barcodes[0] : "")),
+  };
+  if (body.marketplace === "ozon") {
+    body.clientId = cleanText(fragranticaResolveOzonAccount(row.account_id)?.clientId);
+  } else {
+    body.businessId = cleanText(fragranticaYandexShops().find((s) => cleanText(s.id) === cleanText(row.account_id))?.businessId);
+  }
+  try {
+    const response = await fetch(`${fragranticaPdToolsUrl}/api/tools/attach-docs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-tools-token": fragranticaPdToolsToken },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(60_000),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || `parfumdeclaration ответил ${response.status}`);
+    if (data.status === "queued") {
+      return { docs: "done", docsTries: tries, docsInfo: `Декларация ${data.declaration}${data.gtin ? `, GTIN ${data.gtin}` : ""}` };
+    }
+    if (data.status === "already") return { docs: "done", docsTries: tries, docsInfo: data.message };
+    if (data.status === "not_ready" && tries < 60) return { docs: "pending", docsTries: tries, docsInfo: data.message };
+    return { docs: "none", docsTries: tries, docsInfo: data.message || data.status };
+  } catch (error) {
+    const message = error?.message || String(error);
+    return tries < 60 ? { docs: "pending", docsTries: tries, docsInfo: message } : { docs: "none", docsTries: tries, docsInfo: message };
+  }
+}
+
 async function refreshFragranticaExport(row) {
   if (!row) return row;
+  if (row.status === "imported" && row.result?.docs === "pending" && (row.marketplace === "yandex" || row.product_id)) {
+    const docs = await attachFragranticaDocs(row);
+    const updated = await updateFragranticaExport(row.id, { result: { ...(row.result || {}), ...docs } });
+    if (docs.docs === "pending") return updated;
+    return refreshFragranticaExport(updated);
+  }
   if (row.marketplace === "yandex") {
     if (row.status !== "imported" || row.result?.links !== "pending") return row;
     let linkResult;
@@ -678,6 +726,7 @@ async function refreshFragranticaExport(row) {
           ...(row.result || {}),
           warnings: fragranticaOzonErrorsText(item.errors || []) || null,
           barcode: "pending",
+          docs: "pending",
           links: Array.isArray(row.links) && row.links.length ? "pending" : "none",
         },
       });
@@ -869,6 +918,7 @@ async function runFragranticaExportQueueTick() {
         OR (status = 'pending' AND marketplace = 'ozon' AND updated_at < now() - interval '1 minute')
         OR (status = 'imported' AND result->>'links' = 'pending' AND updated_at < now() - interval '2 minutes')
         OR (status = 'imported' AND marketplace = 'ozon' AND result->>'barcode' = 'pending' AND updated_at < now() - interval '30 minutes')
+        OR (status = 'imported' AND result->>'docs' = 'pending' AND updated_at < now() - interval '2 minutes')
      ORDER BY id LIMIT 50`,
   );
   let sent = 0;

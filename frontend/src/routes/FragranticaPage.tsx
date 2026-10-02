@@ -49,7 +49,7 @@ type FormAttribute = {
 type ExportRow = {
   id: number; marketplace?: string; offerId: string; accountName: string; volume: number | null; tester: boolean; status: string;
   productId: number | null; error: string | null; nextAttemptAt?: string | null; createdAt?: string;
-  result?: { barcode?: string; warnings?: string | null; links?: string; linksAdded?: number; linksError?: string; market?: string } | null;
+  result?: { barcode?: string; warnings?: string | null; links?: string; linksAdded?: number; linksError?: string; market?: string; docs?: string; docsInfo?: string } | null;
 };
 type Target = { key: string; kind: "ozon" | "yandex"; id: string; marketplace: string; label: string; style: string };
 type OzonForm = {
@@ -1153,6 +1153,7 @@ function ExportStatus({ id }: { id: number }) {
         {row.result?.barcode === "generated" ? " Штрихкод сгенерирован." : ""}
         {row.result?.linksError ? <div className="fr-hint">Привязка: {row.result.linksError}. Повторим автоматически.</div> : null}
         {row.result?.warnings ? <div className="fr-hint">Замечания Ozon: {row.result.warnings}</div> : null}
+        {row.result?.docs ? <div className="fr-hint">Документы: {row.result.docs === "done" ? row.result.docsInfo || "привязаны" : row.result.docs === "pending" ? "привязываем декларацию…" : `не привязаны — ${row.result.docsInfo || "нет подходящей декларации"}`}</div> : null}
       </div>
     );
   }
