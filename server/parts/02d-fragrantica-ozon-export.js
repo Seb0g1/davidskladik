@@ -369,6 +369,67 @@ app.get("/api/fragrantica/ozon/attribute-values", requireAdmin, async (request, 
 
 // ─── Фото через parfumdeclaration ──────────────────────────────────────────
 
+// Фото рисуются здесь, на davidsklad (мощнее): тот же рендер parfumdeclaration, собранный в
+// lib/perfume-render (scripts/build-perfume-render.cjs). Нет onnxruntime-node / ошибка — как раньше,
+// через parfumdeclaration. FRAGRANTICA_RENDER=pd — всегда через parfumdeclaration.
+let fragranticaLocalRenderer;
+let fragranticaLocalRenderChain = Promise.resolve();
+
+function loadFragranticaLocalRenderer() {
+  if (process.env.FRAGRANTICA_RENDER === "pd") return null;
+  if (fragranticaLocalRenderer !== undefined) return fragranticaLocalRenderer;
+  try {
+    fragranticaLocalRenderer = require("./lib/perfume-render/index.cjs");
+  } catch (error) {
+    logger.warn("fragrantica local renderer unavailable, using parfumdeclaration", { detail: error?.message || String(error) });
+    fragranticaLocalRenderer = null;
+  }
+  return fragranticaLocalRenderer;
+}
+
+async function fragranticaSourceBuffer(imageUrl) {
+  const local = /\/uploads\/fragrantica\/(images|thumbs|cards)\/([^/?#]+)$/.exec(String(imageUrl || ""));
+  if (local && fragFs.existsSync(fragranticaMediaPath(local[1], local[2]))) return fragFs.promises.readFile(fragranticaMediaPath(local[1], local[2]));
+  const res = await fetch(imageUrl, { signal: AbortSignal.timeout(30_000) });
+  if (!res.ok) throw new Error(`Фото не скачалось: ${res.status}`);
+  return Buffer.from(await res.arrayBuffer());
+}
+
+/** Render on this server; one perfume at a time (the upscale uses the CPU hard). Same answer shape as parfumdeclaration. */
+async function renderFragranticaCardHere(payload) {
+  const renderer = loadFragranticaLocalRenderer();
+  if (!renderer) return null;
+  const run = fragranticaLocalRenderChain.then(async () => {
+    const source = await fragranticaSourceBuffer(payload.imageUrl);
+    const out = await renderer.renderPerfumeCard({ source, styles: payload.styles, perfume: payload.perfume, extras: payload.extras !== false });
+    const b64 = (buf) => (buf ? Buffer.from(buf).toString("base64") : null);
+    const map = (obj) => Object.fromEntries(Object.entries(obj || {}).map(([k, v]) => [k, b64(v)]));
+    return {
+      status: "done",
+      main: b64(out.main),
+      notesByStyle: map(out.notesByStyle),
+      specsByStyle: map(out.specsByStyle),
+      closeup: b64(out.closeup),
+      tiersByStyle: Object.fromEntries(Object.entries(out.tiersByStyle || {}).map(([k, list]) => [k, list.map((t) => ({ tier: t.tier, image: b64(t.image) }))])),
+      accordsByStyle: map(out.accordsByStyle),
+      warnings: out.warnings || [],
+      renderedBy: "davidsklad",
+    };
+  });
+  fragranticaLocalRenderChain = run.catch(() => {});
+  return run;
+}
+
+async function requestPerfumeCardPhotos(payload) {
+  try {
+    const here = await renderFragranticaCardHere(payload);
+    if (here) return here;
+  } catch (error) {
+    logger.warn("fragrantica local render failed, using parfumdeclaration", { detail: error?.message || String(error) });
+  }
+  return requestPdPerfumeCard(payload);
+}
+
 async function requestPdPerfumeCard(payload) {
   if (!fragranticaPdToolsToken) throw new Error("PD_TOOLS_TOKEN не задан — обработка фото в parfumdeclaration недоступна.");
   const headers = { "Content-Type": "application/json", "x-tools-token": fragranticaPdToolsToken };
@@ -449,7 +510,7 @@ async function runFragranticaImageJobPhotos(job, { perfumeId, styles, refresh })
   job.stage = "parfumdeclaration";
   try {
     const brandInfo = await fragranticaBrandInfo(perfume.brandSlug).catch(() => ({ country: "" }));
-    const pd = await requestPdPerfumeCard({
+    const pd = await requestPerfumeCardPhotos({
       imageUrl: fragranticaAbsoluteUrl(result.source),
       style: styles[0],
       styles,
