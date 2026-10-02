@@ -151,6 +151,22 @@ function buildFragranticaOzonName({ perfume = {}, typeKey = "edp", volume, teste
   return [fragNameWithBrand(perfume), type.nameLabel, tester ? "тестер" : "", vol ? `${vol} мл` : ""].filter(Boolean).join(" ");
 }
 
+// Маркет даёт больше баллов за название вида «Парфюмерная вода Creed Iris Debonair унисекс 50 мл»:
+// тип продукта, бренд, аромат, для кого (в роде типа), тестер, объём.
+const FRAG_MARKET_GENDER = {
+  edp: { male: "мужская", female: "женская", unisex: "унисекс" },
+  edt: { male: "мужская", female: "женская", unisex: "унисекс" },
+  parfum: { male: "мужские", female: "женские", unisex: "унисекс" },
+  cologne: { male: "мужской", female: "женский", unisex: "унисекс" },
+  oil: { male: "мужские", female: "женские", unisex: "унисекс" },
+};
+function buildFragranticaMarketName({ perfume = {}, typeKey = "edp", volume, tester = false } = {}) {
+  const type = fragOzonTypeByKey(typeKey);
+  const vol = fragFormatVolume(volume);
+  const gender = (FRAG_MARKET_GENDER[type.key] || FRAG_MARKET_GENDER.edp)[perfume.gender] || "";
+  return [type.nameLabel, fragNameWithBrand(perfume), gender, tester ? "тестер" : "", vol ? `${vol} мл` : ""].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+}
+
 // FR<id фрагрантики>-<объём>[T]; при занятости — суффикс -2, -3… (fragranticaUniqueOfferId)
 function buildFragranticaOfferId({ perfumeId, volume, tester = false } = {}) {
   const vol = fragFormatVolume(volume).replace(".", "_");

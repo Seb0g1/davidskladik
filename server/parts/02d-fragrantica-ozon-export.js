@@ -537,11 +537,11 @@ function fragranticaSyntheticOzonProduct(row) {
     // Not an Ozon cabinet on purpose: the Ozon→Market export would otherwise re-read the Ozon card with
     // the same offer id (enrichOzonProductsForYandexExport) and send its older dimensions/attributes.
     target: "fragrantica",
-    name: item.name,
+    name: item.yandexName || item.name,
     imageUrl: "",
     links: [],
     ozon: {
-      name: item.name,
+      name: item.yandexName || item.name,
       typeId: Number(item.type_id),
       attributes: item.attributes || [],
       description: attr(FRAG_OZON_ATTR.annotation),
@@ -834,7 +834,12 @@ app.post("/api/fragrantica/ozon/export", requireAdmin, async (request, response,
       const ozonAccount = target.kind === "ozon" ? getOzonAccounts().find((a) => cleanText(a.id) === target.id) : null;
       const item = target.kind === "ozon"
         ? { ...baseItem, vat: fragranticaVatForClientId(cleanText(ozonAccount?.clientId), vatOverrides), attributes: ozonAttributes, primary_image: bottle, images: notes ? [notes] : [] }
-        : { ...baseItem, price: String(yandexPrice), yandexPictures: [bottle, notes].filter(Boolean), yandexExtra };
+        : {
+          ...baseItem,
+          // Маркет: «Парфюмерная вода <бренд> <аромат> <для кого> <мл> мл» — так карточка получает больше баллов
+          yandexName: buildFragranticaMarketName({ perfume, typeKey: type.key, volume: (volumeAttr?.values || [])[0]?.value, tester: Boolean(body.tester) }),
+          price: String(yandexPrice), yandexPictures: [bottle, notes].filter(Boolean), yandexExtra,
+        };
       // the same perfume+volume already sent to this shop → update that row (and that card), no duplicate
       const inserted = await prisma.$queryRawUnsafe(
         `INSERT INTO fragrantica_exports (perfume_id, marketplace, account_id, account_name, offer_id, volume_ml, tester, status, item, created_by, links)
