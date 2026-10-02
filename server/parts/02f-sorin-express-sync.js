@@ -200,7 +200,8 @@ async function resolveExpressEligibility() {
   return {
     pmAvailable,
     products,
-    active: products.filter(isActive),
+    // PriceMaster unreachable → nobody is «active» (before: everyone got the express stock)
+    active: pmAvailable ? products.filter(isActive) : [],
     inactive: pmAvailable ? products.filter((p) => !isActive(p)) : [],
   };
 }
@@ -285,12 +286,16 @@ async function syncSorinExpressStocks() {
   const { active, inactive, products, pmAvailable } = eligibility;
   const results = { ozonSent: 0, ozonFailed: 0, ozonZeroed: 0, yandexSent: 0, yandexFailed: 0, yandexZeroed: 0 };
 
+  // Final check of the express stock against live PriceMaster rows (the same guard as every stock send)
+  const expressGuard = await guardPositiveStockItems(active, { getStock: () => config.stock, context: "express_stock" });
+  const guardedInactive = [...inactive, ...active.filter((p) => expressGuard.blocked.has(p))];
+  const guardedActive = active.filter((p) => expressGuard.allowed.has(p));
   if (config.ozonWarehouseId) {
     for (const account of expressOzonAccounts()) {
       const forAccount = (list) => list.filter((r) => r.marketplace === "ozon" && matchesOzonTarget(String(r.target || "ozon"), account.id));
       const rows = [
-        ...forAccount(active).map((r) => ({ offerId: r.offerId, stock: config.stock })),
-        ...forAccount(inactive).map((r) => ({ offerId: r.offerId, stock: 0 })),
+        ...forAccount(guardedActive).map((r) => ({ offerId: r.offerId, stock: config.stock })),
+        ...forAccount(guardedInactive).map((r) => ({ offerId: r.offerId, stock: 0 })),
       ];
       if (rows.length) await sendOzonExpressStocks(account, config.ozonWarehouseId, rows, results);
     }
@@ -298,8 +303,8 @@ async function syncSorinExpressStocks() {
 
   if (config.yandexCampaignId) {
     const rows = [
-      ...active.filter((r) => r.marketplace === "yandex").map((r) => ({ offerId: r.offerId, stock: config.stock })),
-      ...inactive.filter((r) => r.marketplace === "yandex").map((r) => ({ offerId: r.offerId, stock: 0 })),
+      ...guardedActive.filter((r) => r.marketplace === "yandex").map((r) => ({ offerId: r.offerId, stock: config.stock })),
+      ...guardedInactive.filter((r) => r.marketplace === "yandex").map((r) => ({ offerId: r.offerId, stock: 0 })),
     ];
     if (rows.length) await sendYandexExpressStocks(config.yandexCampaignId, rows, results);
   }

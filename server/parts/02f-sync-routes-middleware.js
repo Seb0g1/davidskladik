@@ -268,6 +268,9 @@ function startBackgroundSchedulers() {
   if (fragranticaDraftsEnabled) {
     scheduleFragranticaDrafts(30_000);
   }
+  if (liveStockGuardSweepEnabled) {
+    scheduleLiveStockGuardSweep(4 * 60_000);
+  }
   if (ozonDocStatusEnabled) {
     scheduleOzonDocStatus(3 * 60_000);
   }

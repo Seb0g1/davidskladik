@@ -18,13 +18,15 @@ async function sendYandexStocksFromOzonProducts(products = [], options = {}) {
   if (missingCampaignShops.length) {
     warnings.push(yandexMissingStockCampaignWarning(missingCampaignShops.length));
   }
-  const rows = (Array.isArray(products) ? products : [])
-    .filter((product) => !isYandexSmallVolumeBlocked(product))
+  const candidates = (Array.isArray(products) ? products : []).filter((product) => !isYandexSmallVolumeBlocked(product));
+  const mirrorGuard = await guardPositiveStockItems(candidates, { getStock: (product) => pickOzonProductStockForYandex(product), context: "yandex_mirror" });
+  const rows = candidates
+    .filter((product) => !mirrorGuard.skipped.has(product))
     .map((product) => ({
       id: product.id,
       offerId: cleanText(product.offerId || product.offer_id),
       productId: cleanText(product.productId || product.product_id),
-      stock: pickOzonProductStockForYandex(product),
+      stock: mirrorGuard.blocked.has(product) ? 0 : pickOzonProductStockForYandex(product),
     }))
     .filter((row) => row.offerId);
   if (!rows.length) {
@@ -120,10 +122,12 @@ async function sendYandexStocksForExportedOzonProducts(products = [], options = 
     warnings.push(yandexMissingStockCampaignWarning(missingCampaignShops.length));
   }
   const existingOfferIds = options.existingOfferIds instanceof Set ? options.existingOfferIds : new Set();
+  const exportedGuard = await guardPositiveStockItems(Array.isArray(products) ? products : [], { getStock: (product) => pickOzonProductStockForYandex(product), context: "yandex_mirror_exported" });
   const rows = (Array.isArray(products) ? products : [])
+    .filter((product) => !exportedGuard.skipped.has(product))
     .map((product) => ({
       offerId: cleanText(product.offerId || product.offer_id),
-      stock: pickOzonProductStockForYandex(product),
+      stock: exportedGuard.blocked.has(product) ? 0 : pickOzonProductStockForYandex(product),
     }))
     .filter((row) => row.offerId && existingOfferIds.has(row.offerId.toLowerCase()));
   const results = [];

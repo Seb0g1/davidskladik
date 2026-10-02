@@ -173,7 +173,15 @@ async function sendZeroStocksToMarketplace(products = []) {
 async function sendTargetStocksToMarketplace(products = []) {
   const actions = [];
   const byTarget = new Map();
-  for (const product of pickTargetStockSendProducts(products)) {
+  const picked = pickTargetStockSendProducts(products);
+  // «Нет активного поставщика — нет продажи»: last check against live PriceMaster before the send
+  const guard = await guardPositiveStockItems(picked, { getStock: (item) => item.targetStock, context: "target_stock" });
+  for (const product of picked) {
+    if (guard.skipped.has(product)) {
+      actions.push({ id: product.id, type: "target_stock", target: product.target, ok: false, error: "stock_guard_pm_unavailable" });
+      continue;
+    }
+    if (guard.blocked.has(product)) product.targetStock = 0;
     const key = `${product.marketplace}:${product.target}`;
     if (!byTarget.has(key)) byTarget.set(key, []);
     byTarget.get(key).push(product);
@@ -235,6 +243,15 @@ async function sendTargetStocksToMarketplace(products = []) {
 async function archiveProductsOnMarketplaces(products = []) {
   const actions = [];
   const byTarget = new Map();
+  // Restoring a card puts stock back on it: only with a live supplier row
+  const restoreGuard = await guardPositiveStockItems(Array.isArray(products) ? products : [], {
+    getStock: () => 1,
+    context: "restore_stock",
+  });
+  for (const product of [...restoreGuard.blocked, ...restoreGuard.skipped]) {
+    actions.push({ id: product?.id || "", type: "restore_stock", offerId: product?.offerId || "", target: product?.target || "", ok: false, error: restoreGuard.blocked.has(product) ? "stock_guard_no_supplier" : "stock_guard_pm_unavailable" });
+  }
+  products = (Array.isArray(products) ? products : []).filter((product) => restoreGuard.allowed.has(product));
   for (const product of products) {
     if (!product?.id || !product?.target || (product.marketplace === "yandex" && !cleanText(product.offerId))) {
       actions.push({
