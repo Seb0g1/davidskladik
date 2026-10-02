@@ -393,8 +393,17 @@ async function requestPdPerfumeCard(payload) {
 }
 
 /** Absolute URLs of the extra card photos already made for a perfume: «Характеристики» (shop style), close-up. */
+const FRAG_TIER_KEYS = ["top", "middle", "base", "flat"];
+
 function fragranticaExtraPhotos(perfumeId, style) {
-  const files = [`${Number(perfumeId)}-specs-${style}-v1.jpg`, `${Number(perfumeId)}-closeup-v1.jpg`];
+  const id = Number(perfumeId);
+  // After the shop's «Пирамида аромата»: tiers with big icons, accords, «Характеристики», close-up (Ozon: 8+ photos)
+  const files = [
+    ...FRAG_TIER_KEYS.map((tier) => `${id}-tier-${tier}-${style}-v1.jpg`),
+    `${id}-accords-${style}-v1.jpg`,
+    `${id}-specs-${style}-v1.jpg`,
+    `${id}-closeup-v1.jpg`,
+  ];
   return files.filter((file) => fragFs.existsSync(fragranticaMediaPath("cards", file))).map((file) => fragranticaAbsoluteUrl(fragranticaMediaUrl("cards", file)));
 }
 
@@ -424,6 +433,8 @@ async function runFragranticaImageJobPhotos(job, { perfumeId, styles, refresh })
   const closeupFile = `${perfumeId}-closeup-v1.jpg`;
   const closeupNone = `${perfumeId}-closeup-v1.none`;
   const specsFile = (style) => `${perfumeId}-specs-${style}-v1.jpg`;
+  // «Ноты крупно» + «Аккорды» per style; the marker says they were made (a perfume may have no tiers/accords)
+  const extras2Marker = (style) => `${perfumeId}-extras2-${style}.done`;
   const result = { main: null, notes: {}, specs: {}, closeup: null, source: hdSource || fragranticaMediaUrl("images", `${perfumeId}.jpg`), warnings: [] };
   const cached = () => {
     result.main = fragranticaMediaUrl("cards", mainFile);
@@ -432,7 +443,7 @@ async function runFragranticaImageJobPhotos(job, { perfumeId, styles, refresh })
     if (have(closeupFile)) result.closeup = fragranticaMediaUrl("cards", closeupFile);
     return result;
   };
-  if (!refresh && have(mainFile) && styles.every((style) => have(notesFile(style)) && have(specsFile(style))) && (have(closeupFile) || have(closeupNone))) {
+  if (!refresh && have(mainFile) && styles.every((style) => have(notesFile(style)) && have(specsFile(style)) && have(extras2Marker(style))) && (have(closeupFile) || have(closeupNone))) {
     return cached();
   }
   job.stage = "parfumdeclaration";
@@ -470,6 +481,13 @@ async function runFragranticaImageJobPhotos(job, { perfumeId, styles, refresh })
       if (!byStyle[style]) continue;
       await fragFs.promises.writeFile(fragranticaMediaPath("cards", notesFile(style)), Buffer.from(byStyle[style], "base64"));
       result.notes[style] = fragranticaMediaUrl("cards", notesFile(style));
+    }
+    for (const style of styles) {
+      for (const { tier, image } of pd.tiersByStyle?.[style] || []) {
+        if (FRAG_TIER_KEYS.includes(tier)) await fragFs.promises.writeFile(fragranticaMediaPath("cards", `${perfumeId}-tier-${tier}-${style}-v1.jpg`), Buffer.from(image, "base64"));
+      }
+      if (pd.accordsByStyle?.[style]) await fragFs.promises.writeFile(fragranticaMediaPath("cards", `${perfumeId}-accords-${style}-v1.jpg`), Buffer.from(pd.accordsByStyle[style], "base64"));
+      if (pd.tiersByStyle) await fragFs.promises.writeFile(fragranticaMediaPath("cards", extras2Marker(style)), "");
     }
     for (const style of styles) {
       const specs = pd.specsByStyle?.[style];
@@ -657,7 +675,9 @@ async function submitFragranticaYandexExport(row) {
         status: "imported",
         attempts,
         error: null,
-        result: { ...(row.result || {}), market: "sent", ...vat, docs: "pending", links: Array.isArray(row.links) && row.links.length ? "pending" : "none" },
+        result: row.result?.mediaRefresh
+          ? { ...(row.result || {}), market: "sent", ...vat, mediaRefresh: false, mediaRefreshedAt: new Date().toISOString() }
+          : { ...(row.result || {}), market: "sent", ...vat, docs: "pending", links: Array.isArray(row.links) && row.links.length ? "pending" : "none" },
       });
     }
     const failure = (result.results || []).find((r) => !r.ok);
@@ -796,13 +816,15 @@ async function refreshFragranticaExport(row) {
         status: "imported",
         product_id: item.product_id || null,
         error: null,
-        result: {
-          ...(row.result || {}),
-          warnings: fragranticaOzonErrorsText(item.errors || []) || null,
-          barcode: "pending",
-          docs: "pending",
-          links: Array.isArray(row.links) && row.links.length ? "pending" : "none",
-        },
+        result: row.result?.mediaRefresh
+          ? { ...(row.result || {}), warnings: fragranticaOzonErrorsText(item.errors || []) || null, mediaRefresh: false, mediaRefreshedAt: new Date().toISOString() }
+          : {
+            ...(row.result || {}),
+            warnings: fragranticaOzonErrorsText(item.errors || []) || null,
+            barcode: "pending",
+            docs: "pending",
+            links: Array.isArray(row.links) && row.links.length ? "pending" : "none",
+          },
       });
       return refreshFragranticaExport(updated);
     }
@@ -880,26 +902,8 @@ async function createFragranticaExports(body = {}, request = { session: {} }) {
   let yandexExtra = null;
   if (wanted.some((t) => t.kind === "yandex")) {
     const shop = fragranticaYandexShops().find((x) => wanted.some((t) => t.kind === "yandex" && t.id === cleanText(x.id)));
-    const category = resolveYandexCategoryForOzonProduct({ typeId: type.typeId, name: baseItem.name });
-    const params = category.categoryId && shop ? await fragranticaYandexCategoryParams(shop, category.categoryId).catch(() => []) : [];
-    const facts = fragranticaFactsFromDetail(perfume);
-    const tester = Boolean(body.tester);
-    yandexExtra = {
-      commodityCodes: [{ code: fragranticaTnvedCode(type.typeId), type: "CUSTOMS_COMMODITY_CODE" }, { code: fragOkpd2ForType(type.key), type: "OKPD2_CODE" }],
-      shelfLife: { timePeriod: Number(FRAG_OZON_DEFAULTS.shelfLifeDays), timeUnit: "DAY" },
-      parameterValues: buildFragranticaYandexParameters(params, {
-        typeLabel: type.nameLabel.toLowerCase(),
-        gender: { male: "мужской", female: "женский", unisex: "унисекс" }[perfume.gender] || "",
-        family: facts.family,
-        accords: facts.accords,
-        year: facts.year,
-        topNotes: facts.topNotes,
-        middleNotes: facts.middleNotes,
-        baseNotes: facts.baseNotes,
-        netWeight: fragOzonNetWeight(fragFormatVolume((baseItem.attributes.find((a) => a.id === FRAG_OZON_ATTR.volume)?.values || [])[0]?.value)),
-        tester,
-      }),
-    };
+    const volume = fragFormatVolume((baseItem.attributes.find((a) => a.id === FRAG_OZON_ATTR.volume)?.values || [])[0]?.value);
+    yandexExtra = await buildFragranticaYandexExtra({ perfume, type, name: baseItem.name, volume, tester: Boolean(body.tester), shop });
   }
   const vatOverrides = fragranticaEnvMap("FRAGRANTICA_VAT_BY_ACCOUNT");
 
@@ -964,6 +968,34 @@ async function createFragranticaExports(body = {}, request = { session: {} }) {
   return { ok: true, offerId, exports: results.map(fragranticaExportFromRow), export: fragranticaExportFromRow(results[0]) };
 }
 
+async function buildFragranticaYandexExtra({ perfume, type, name, volume, tester, shop, style = "parfumerius" }) {
+  const category = resolveYandexCategoryForOzonProduct({ typeId: type.typeId, name });
+  const params = category.categoryId && shop ? await fragranticaYandexCategoryParams(shop, category.categoryId).catch(() => []) : [];
+  const facts = fragranticaFactsFromDetail(perfume);
+  const video = fragranticaVideoCoverUrl(perfume.id, style);
+  return {
+    commodityCodes: [{ code: fragranticaTnvedCode(type.typeId), type: "CUSTOMS_COMMODITY_CODE" }, { code: fragOkpd2ForType(type.key), type: "OKPD2_CODE" }],
+    shelfLife: { timePeriod: Number(FRAG_OZON_DEFAULTS.shelfLifeDays), timeUnit: "DAY" },
+    // Market rating: a video (+8 points) — the same cover as on Ozon, 1080×1440 MP4
+    ...(video ? { videos: [video] } : {}),
+    parameterValues: buildFragranticaYandexParameters(params, {
+      typeLabel: type.nameLabel.toLowerCase(),
+      gender: { male: "мужской", female: "женский", unisex: "унисекс" }[perfume.gender] || "",
+      family: facts.family,
+      accords: facts.accords,
+      year: facts.year,
+      topNotes: facts.topNotes,
+      middleNotes: facts.middleNotes,
+      baseNotes: facts.baseNotes,
+      netWeight: fragOzonNetWeight(volume),
+      tester,
+      // filterable «Линейка» (the perfume itself) and «Особенности флакона» (spray bottle; oils have none)
+      line: fragStripConcentration(perfume.name),
+      bottleFeature: type.key === "oil" ? "" : "с распылителем",
+    }),
+  };
+}
+
 function fragranticaOzonMediaExtras({ perfumeId, style, notes, baseItem, categoryAttrs = [], perfume = {} }) {
   const attributes = [];
   const ownRich = baseItem.attributes.some((a) => Number(a.id) === FRAG_RICH_ATTR && (a.values || []).length);
@@ -995,6 +1027,88 @@ app.post("/api/fragrantica/ozon/export", requireAdmin, async (request, response,
     if (error?.detail?.code) return response.status(error.statusCode || 400).json({ error: error.message, ...error.detail });
     next(error);
   }
+});
+
+// ─── Дозаливка медиа в уже созданные карточки ────────────────────────────────
+// Ozon: фото «Ноты крупно» + «Аккорды», Rich-контент, видеообложка. Маркет: те же фото, видео, название
+// 60–120 знаков, «Линейка» и «Особенности флакона». Карточка обновляется по тому же offer_id.
+
+const fragranticaMediaRefreshState = { running: false, total: 0, done: 0, failed: 0, startedAt: null, finishedAt: null, last: null };
+
+async function refreshFragranticaExportMedia(row) {
+  const perfumeId = Number(row.perfume_id);
+  const perfume = await fragranticaPerfumeForExport(perfumeId);
+  const target = fragranticaTargets().find((t) => t.kind === row.marketplace && t.id === cleanText(row.account_id));
+  if (!target) return { skipped: "магазин не найден" };
+  await runFragranticaImageJob({}, { perfumeId, styles: [target.style], refresh: false });
+  const media = (file) => (fragFs.existsSync(fragranticaMediaPath("cards", file)) ? fragranticaAbsoluteUrl(fragranticaMediaUrl("cards", file)) : "");
+  const notes = media(`${perfumeId}-notes-${target.style}-v2.jpg`);
+  const extras = fragranticaExtraPhotos(perfumeId, target.style);
+  const item = { ...(row.item || {}) };
+  const type = fragOzonTypeById(item.type_id) || fragOzonTypeByKey(fragOzonGuessTypeKey(perfume));
+  if (row.marketplace === "ozon") {
+    const account = fragranticaResolveOzonAccount(row.account_id);
+    const categoryAttrs = await ozonGetCategoryAttributes(account, FRAG_OZON_CATEGORY_ID, type.typeId).catch(() => []);
+    const attributes = (item.attributes || []).filter((a) => Number(a.id) !== FRAG_RICH_ATTR);
+    const extra = fragranticaOzonMediaExtras({ perfumeId, style: target.style, notes, baseItem: { attributes }, categoryAttrs, perfume });
+    // parfumdeclaration appended its «фото в конце» after our photos (Ozon re-hosts them): keep that tail
+    const info = getOzonOfferMapValue(await getOzonProductInfoMap([row.offer_id], account, { continueOnError: true }), row.offer_id) || {};
+    const current = [...[].concat(info.primary_image || []), ...(Array.isArray(info.images) ? info.images : [])].filter(Boolean);
+    const tail = current.slice(1 + (Array.isArray(row.item?.images) ? row.item.images.length : 0));
+    item.images = [...new Set([notes, ...extras, ...tail].filter(Boolean))].slice(0, 29);
+    item.attributes = [...attributes, ...extra.attributes];
+    if (extra.complex.length) item.complex_attributes = extra.complex;
+  } else {
+    const shop = fragranticaYandexShops().find((x) => cleanText(x.id) === cleanText(row.account_id));
+    const volume = row.volume_ml === null || row.volume_ml === undefined ? "" : fragFormatVolume(row.volume_ml);
+    const bottle = (item.yandexPictures || [])[0] || "";
+    // keep what parfumdeclaration appended after our pictures («фото в конце»)
+    const mapping = shop ? (await getYandexOfferMappingsByOfferIds(shop, [row.offer_id]).catch(() => []))[0] : null;
+    const current = Array.isArray(mapping?.offer?.pictures) ? mapping.offer.pictures.map(String) : [];
+    const tail = current.slice((item.yandexPictures || []).length);
+    item.yandexPictures = [...new Set([bottle, notes, ...extras, ...tail].filter(Boolean))].slice(0, 20);
+    item.yandexExtra = { ...(item.yandexExtra || {}), ...(await buildFragranticaYandexExtra({ perfume, type, name: item.name, volume, tester: Boolean(row.tester), shop, style: target.style })) };
+    item.yandexName = buildFragranticaMarketName({ perfume, typeKey: type.key, volume, tester: Boolean(row.tester) });
+  }
+  const updated = await updateFragranticaExport(row.id, { item, status: "new", error: null, attempts: 0, next_attempt_at: null, task_id: null, result: { ...(row.result || {}), mediaRefresh: true } });
+  return submitFragranticaTargetExport(updated);
+}
+
+async function runFragranticaMediaRefresh(ids = []) {
+  const prisma = await requireFragranticaTables();
+  const rows = ids.length
+    ? await prisma.$queryRawUnsafe(`SELECT * FROM fragrantica_exports WHERE id = ANY($1::bigint[]) AND status = 'imported' ORDER BY id`, ids)
+    : await prisma.$queryRawUnsafe(`SELECT * FROM fragrantica_exports WHERE status = 'imported' ORDER BY id`);
+  Object.assign(fragranticaMediaRefreshState, { running: true, total: rows.length, done: 0, failed: 0, startedAt: new Date().toISOString(), finishedAt: null, last: null });
+  for (const row of rows) {
+    try {
+      const res = await refreshFragranticaExportMedia(row);
+      fragranticaMediaRefreshState.last = `${row.offer_id} ${row.account_name}: ${res?.status || res?.skipped || "ok"}`;
+      if (res?.status === "failed") fragranticaMediaRefreshState.failed += 1;
+    } catch (error) {
+      fragranticaMediaRefreshState.failed += 1;
+      fragranticaMediaRefreshState.last = `${row.offer_id} ${row.account_name}: ${error?.message || error}`;
+      logger.warn("fragrantica media refresh failed", { id: Number(row.id), detail: error?.message });
+    }
+    fragranticaMediaRefreshState.done += 1;
+  }
+  Object.assign(fragranticaMediaRefreshState, { running: false, finishedAt: new Date().toISOString() });
+  logger.info("fragrantica media refresh done", { ...fragranticaMediaRefreshState });
+}
+
+app.post("/api/fragrantica/ozon/exports/refresh-media", requireAdmin, async (request, response, next) => {
+  try {
+    if (fragranticaMediaRefreshState.running) return response.json({ ok: true, started: false, state: fragranticaMediaRefreshState });
+    const ids = (Array.isArray(request.body?.ids) ? request.body.ids : []).map(Number).filter((id) => id > 0);
+    void runFragranticaMediaRefresh(ids).catch((error) => logger.warn("fragrantica media refresh crashed", { detail: error?.message }));
+    response.json({ ok: true, started: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/fragrantica/ozon/exports/refresh-media", requireAdmin, (_request, response) => {
+  response.json({ ok: true, state: fragranticaMediaRefreshState });
 });
 
 app.get("/api/fragrantica/ozon/exports", requireAdmin, async (request, response, next) => {

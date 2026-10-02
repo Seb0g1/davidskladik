@@ -302,7 +302,8 @@ function sanitizeYandexShelfLife(value) {
 // arrays are replaced whole by offer-mappings/update, so they are only sent when Market has
 // nothing yet and we have a real value.
 const YANDEX_FOREIGN_OWNED_FIELDS = ["barcodes", "commodityCodes", "certificates", "shelfLife"];
-const YANDEX_MANAGED_FIELDS = ["name", "marketCategoryId", "pictures", "vendor", "description", "weightDimensions", "manufacturerCountries"];
+// videos: only cards that carry their own (Fragrantica video cover) send the field
+const YANDEX_MANAGED_FIELDS = ["name", "marketCategoryId", "pictures", "videos", "vendor", "description", "weightDimensions", "manufacturerCountries"];
 
 function yandexValuesEqual(a, b) {
   const norm = (value) => {

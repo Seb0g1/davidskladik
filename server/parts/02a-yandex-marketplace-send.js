@@ -143,6 +143,8 @@ function buildYandexOfferMapping(product, overrides = {}) {
     certificates: sanitizeYandexCertificates(extra.certificates),
     shelfLife: sanitizeYandexShelfLife(extra.shelfLife),
     vendorCode: cleanText(extra.vendorCode) || undefined,
+    // Market: up to 6 videos by URL (MP4, 1080–1920 px on the long side) — Fragrantica cards send their cover
+    videos: (Array.isArray(extra.videos) ? extra.videos : []).map(cleanText).filter((u) => /^https:\/\//i.test(u)).slice(0, 6),
     basicPrice: price > 0 ? { value: roundPrice(price), currencyId: "RUR" } : undefined,
   });
 

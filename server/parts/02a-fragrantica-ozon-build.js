@@ -169,7 +169,15 @@ function buildFragranticaMarketName({ perfume = {}, typeKey = "edp", volume, tes
   const aroma = fragNameWithBrand(perfume);
   const conc = FRAG_MARKET_CONCENTRATION[type.key] || "";
   const withConc = conc && !aroma.toLowerCase().includes(conc.toLowerCase()) ? `${aroma} ${conc}` : aroma;
-  return [type.nameLabel, withConc, gender, tester ? "тестер" : "", vol ? `${vol} мл` : ""].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+  const base = [type.nameLabel, withConc, gender, tester ? "тестер" : "", vol ? `${vol} мл` : ""].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+  // Market wants 60–120 characters («тип + бренд + модель + особенности»): a short name gets the aroma's
+  // real character from Fragrantica (family or the top accords)
+  if (base.length >= 60) return base;
+  // accords are masculine adjectives («цветочный, фруктовый») → «… аромат»; the family («фужерные») goes as is
+  const accords = (perfume.accords || []).slice(0, 2).map((a) => String(a?.name || a || "").trim().toLowerCase()).filter(Boolean);
+  const family = String(perfume.family || "").trim().toLowerCase();
+  const longer = accords.length ? `${base}, ${accords.join(" ")} аромат` : family ? `${base}, ${family}` : base;
+  return longer.length <= 120 ? longer : base;
 }
 
 // FR<id фрагрантики>-<объём>[T]; при занятости — суффикс -2, -3… (fragranticaUniqueOfferId)
@@ -568,6 +576,16 @@ function buildFragranticaYandexParameters(categoryParams = [], facts = {}) {
   pushText(byName(/^Вес$/i), facts.netWeight ? String(facts.netWeight) : "");
   pushText(byName(/^Количество упаковок в товаре/i), "1");
   pushText(byName(/^Единиц в одной упаковке/i), "1");
+  // Enum that accepts own values: the dictionary value when it matches, else the text itself
+  const pushEnumOrCustom = (param, wanted) => {
+    const text = String(wanted || "").trim();
+    if (!param || !text) return;
+    const hit = enumValue(param, text);
+    if (hit) out.push({ parameterId: Number(param.id), valueId: Number(hit.id), value: String(hit.value) });
+    else if (param.allowCustomValues !== false) out.push({ parameterId: Number(param.id), value: text.slice(0, 200) });
+  };
+  pushEnumOrCustom(byName(/^Линейка$/i), facts.line);
+  pushEnumOrCustom(byName(/^Особенности флакона$/i), facts.bottleFeature);
   const tester = byName(/^Тестер$/i);
   if (tester) out.push({ parameterId: Number(tester.id), value: facts.tester ? "true" : "false" });
   return out;

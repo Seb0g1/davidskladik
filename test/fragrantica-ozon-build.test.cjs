@@ -401,3 +401,21 @@ test("conveyor: PriceMaster memory index — every name word, accents ignored, c
   assert.equal(plan.typeKey, "edp");
   assert.deepEqual(plan.volumes.map((v) => v.volume), [60, 100]);
 });
+
+test("Market: «Линейка» and «Особенности флакона» (custom values), title 60–120 chars with real accords", () => {
+  vm.runInContext("this.ym = { buildFragranticaYandexParameters, buildFragranticaMarketName };", ctx);
+  const params = [
+    { id: 12782797, name: "Линейка", type: "ENUM", allowCustomValues: true, values: [{ id: 1, value: "Sauvage" }] },
+    { id: 27141015, name: "Особенности флакона", type: "ENUM", allowCustomValues: true, values: [{ id: 51090168, value: "рефилл" }] },
+  ];
+  assert.deepEqual(plain(ctx.ym.buildFragranticaYandexParameters(params, { line: "Sauvage", bottleFeature: "с распылителем" })), [
+    { parameterId: 12782797, valueId: 1, value: "Sauvage" },
+    { parameterId: 27141015, value: "с распылителем" },
+  ]);
+  assert.deepEqual(plain(ctx.ym.buildFragranticaYandexParameters(params, { line: "Taormina Orange" }))[0], { parameterId: 12782797, value: "Taormina Orange" });
+  const versace = ctx.ym.buildFragranticaMarketName({ perfume: { brand: "Versace", name: "Woman", gender: "female", accords: [{ name: "Цветочный" }, { name: "фруктовый" }] }, typeKey: "edp", volume: 50 });
+  assert.equal(versace, "Парфюмерная вода Versace Woman Eau de Parfum женская 50 мл, цветочный фруктовый аромат");
+  assert.ok(versace.length >= 60 && versace.length <= 120);
+  // already long enough — unchanged
+  assert.equal(ctx.ym.buildFragranticaMarketName({ perfume: { brand: "Tom Ford", name: "Taormina Orange", gender: "unisex", accords: [{ name: "цитрусовый" }] }, typeKey: "edp", volume: 100 }), "Парфюмерная вода Tom Ford Taormina Orange Eau de Parfum унисекс 100 мл");
+});
