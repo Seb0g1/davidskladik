@@ -480,6 +480,22 @@ function fragranticaRowToListItem(row = {}) {
   };
 }
 
+const FRAGRANTICA_PENDING_SQL = "('new', 'pending', 'running', 'queued_limit')";
+
+/** Per shop (account_id): how many perfumes are added / waiting / failed — for the control bar on the page. */
+async function fragranticaShopCounts() {
+  const prisma = await requireFragranticaTables();
+  const rows = await prisma.$queryRawUnsafe(
+    `SELECT account_id AS "accountId",
+            COUNT(DISTINCT perfume_id) FILTER (WHERE status NOT IN ('failed') AND status NOT IN ${FRAGRANTICA_PENDING_SQL})::int AS added,
+            COUNT(DISTINCT perfume_id) FILTER (WHERE status IN ${FRAGRANTICA_PENDING_SQL})::int AS pending,
+            COUNT(DISTINCT perfume_id) FILTER (WHERE status = 'failed')::int AS failed,
+            COUNT(*) FILTER (WHERE status NOT IN ('failed'))::int AS offers
+       FROM fragrantica_exports GROUP BY account_id`,
+  );
+  return new Map(rows.map((r) => [String(r.accountId), r]));
+}
+
 async function listFragranticaPerfumes(query = {}) {
   const prisma = await requireFragranticaTables();
   const where = [];
@@ -493,8 +509,18 @@ async function listFragranticaPerfumes(query = {}) {
   if (["male", "female", "unisex"].includes(query.gender)) add("p.gender = ?", query.gender);
   if (Number(query.yearFrom)) add("p.year >= ?", Number(query.yearFrom));
   if (Number(query.yearTo)) add("p.year <= ?", Number(query.yearTo));
-  if (query.exported === "yes") where.push("EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.perfume_id = p.id)");
-  if (query.exported === "no") where.push("NOT EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.perfume_id = p.id)");
+  // Shop filters: a failed export does not count as «added»
+  const exported = cleanText(query.exported);
+  const live = "e.status <> 'failed'";
+  if (exported === "yes") where.push(`EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.perfume_id = p.id AND ${live})`);
+  if (exported === "no") where.push(`NOT EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.perfume_id = p.id AND ${live})`);
+  if (exported === "ozon" || exported === "yandex") add(`EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.perfume_id = p.id AND ${live} AND e.marketplace = ?)`, exported);
+  if (exported === "failed") where.push("EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.perfume_id = p.id AND e.status = 'failed')");
+  if (exported === "pending") where.push(`EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.perfume_id = p.id AND e.status IN ${FRAGRANTICA_PENDING_SQL})`);
+  const shopIn = /^in:(.+)$/.exec(exported);
+  const shopOut = /^out:(.+)$/.exec(exported);
+  if (shopIn) add(`EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.perfume_id = p.id AND ${live} AND e.account_id = ?)`, shopIn[1]);
+  if (shopOut) add(`NOT EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.perfume_id = p.id AND ${live} AND e.account_id = ?)`, shopOut[1]);
   if (query.pm === "yes") where.push("p.pm_rows > 0");
   if (query.pm === "no") where.push("COALESCE(p.pm_rows, 0) = 0");
   const order = {
@@ -510,7 +536,7 @@ async function listFragranticaPerfumes(query = {}) {
     `SELECT p.id, p.url, p.brand, p.brand_slug, p.name, p.gender, p.year, p.votes, p.rating, p.detail_at,
             p.pm_rows, p.pm_min_usd, p.pm_volumes, p.pm_checked_at,
             jsonb_build_object('accords', p.detail->'accords') AS detail,
-            (SELECT COALESCE(jsonb_agg(jsonb_build_object('offerId', e.offer_id, 'status', e.status, 'account', e.account_name, 'marketplace', e.marketplace, 'volume', e.volume_ml) ORDER BY e.id), '[]'::jsonb)
+            (SELECT COALESCE(jsonb_agg(jsonb_build_object('offerId', e.offer_id, 'status', e.status, 'account', e.account_name, 'accountId', e.account_id, 'marketplace', e.marketplace, 'volume', e.volume_ml, 'tester', e.tester, 'error', left(e.error, 300)) ORDER BY e.id), '[]'::jsonb)
                FROM fragrantica_exports e WHERE e.perfume_id = p.id) AS exported
      FROM fragrantica_perfumes p ${whereSql}
      ORDER BY ${order} LIMIT ${limit + 1} OFFSET ${(page - 1) * limit}`,

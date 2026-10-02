@@ -109,14 +109,21 @@ app.post("/api/fragrantica/catalog/import-html", requireAdmin, async (request, r
 
 app.get("/api/fragrantica/crawler", requireAdmin, async (_request, response, next) => {
   try {
-    const [stats, state, status] = await Promise.all([
+    const [stats, state, status, counts] = await Promise.all([
       readFragranticaCatalogStats(),
       readFragranticaState("crawler"),
       readFragranticaState("crawler_status"),
+      fragranticaShopCounts(),
     ]);
+    // Every shop cards are sent to, with how many perfumes are already there (control bar + card chips)
+    const shops = fragranticaTargets().map((t) => {
+      const c = counts.get(t.id) || {};
+      return { id: t.id, kind: t.kind, label: t.label, marketplace: t.marketplace, added: c.added || 0, pending: c.pending || 0, failed: c.failed || 0, offers: c.offers || 0 };
+    });
     response.json({
       ok: true,
       stats,
+      shops,
       paused: Boolean(state.paused),
       indexPages: state.indexPages || null,
       indexDoneAt: state.indexDoneAt || null,

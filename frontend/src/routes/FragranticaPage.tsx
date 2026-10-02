@@ -20,13 +20,15 @@ type Gender = "male" | "female" | "unisex" | "";
 type Note = { name: string; icon?: string };
 type Accord = { name: string; share?: number; color?: string; background?: string };
 type PmInfo = { rows: number; minUsd: number | null; volumes: number[] } | null;
-type ExportedChip = { offerId: string; status: string; account: string; marketplace?: string; volume: number | null };
+type ExportedChip = { offerId: string; status: string; account: string; accountId?: string; marketplace?: string; volume: number | null; tester?: boolean; error?: string | null };
+type Shop = { id: string; kind: "ozon" | "yandex"; label: string; marketplace: string; added: number; pending: number; failed: number; offers: number };
 type ListItem = {
   id: number; url: string; brand: string; name: string; gender: Gender; year: number | null; votes: number | null;
   thumb: string; hasDetail: boolean; accords: Accord[]; exported: ExportedChip[]; pm: PmInfo;
 };
 type ListResponse = { items: ListItem[]; hasMore: boolean; total: number; page: number };
 type CrawlerResponse = {
+  shops?: Shop[];
   stats: { brands: number; brandsCrawled: number; perfumes: number; details: number; exports: number; inPm?: number };
   paused: boolean;
   status: { lastError?: string | null; blockedUntil?: string | null };
@@ -127,10 +129,74 @@ function PmBadge({ pm, compact = false }: { pm: PmInfo; compact?: boolean }) {
   );
 }
 
-function ShopChips({ exported }: { exported: ExportedChip[] }) {
-  const shops = [...new Set(exported.filter((e) => e.status !== "failed").map((e) => e.account))];
+const PENDING = new Set(["new", "pending", "running", "queued_limit"]);
+type ShopState = "ok" | "pending" | "failed" | "none";
+const STATE_TEXT: Record<ShopState, string> = { ok: "добавлен", pending: "в очереди", failed: "ошибка", none: "не добавлен" };
+
+/** One shop's state for a perfume: any live card wins over a failed one. */
+function shopState(exported: ExportedChip[], shop: Shop): { state: ShopState; rows: ExportedChip[] } {
+  const rows = exported.filter((e) => (e.accountId ? e.accountId === shop.id : e.account === shop.label));
+  if (rows.some((e) => e.status !== "failed" && !PENDING.has(e.status))) return { state: "ok", rows };
+  if (rows.some((e) => PENDING.has(e.status))) return { state: "pending", rows };
+  if (rows.length) return { state: "failed", rows };
+  return { state: "none", rows };
+}
+
+const shortShop = (label: string) => (label.length <= 9 ? label : label.split(/\s+/)[0].slice(0, 9));
+
+/** Every shop on the card: added (with volumes), waiting, failed or not added. */
+function ShopChips({ exported, shops }: { exported: ExportedChip[]; shops: Shop[] }) {
   if (!shops.length) return null;
-  return <span className="fr-badge is-shop">{shops.join(", ")}</span>;
+  return (
+    <span className="fr-shops-row">
+      {shops.map((shop) => {
+        const { state, rows } = shopState(exported, shop);
+        const vols = [...new Set(rows.filter((r) => r.status !== "failed").map((r) => `${r.volume ?? "?"}${r.tester ? "T" : ""}`))];
+        const title = `${shop.label} (${shop.marketplace}): ${STATE_TEXT[state]}`
+          + (rows.length ? `\n${rows.map((r) => `${r.offerId} — ${r.status}${r.error ? `: ${r.error}` : ""}`).join("\n")}` : "");
+        return (
+          <span key={shop.id} className={`fr-shop-chip is-${state} is-${shop.kind}`} title={title}>
+            <i aria-hidden="true" />{shortShop(shop.label)}{state === "ok" && vols.length ? <small>{vols.join("·")}</small> : null}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
+/** Control bar: per shop — added / waiting / failed; a click filters the list. */
+function ShopsBar({ shops, value, onPick }: { shops: Shop[]; value: string; onPick: (v: string) => void }) {
+  if (!shops.length) return null;
+  const pick = (v: string) => onPick(value === v ? "" : v);
+  return (
+    <div className="fr-shops-bar">
+      {shops.map((s) => (
+        <div key={s.id} className={`fr-shops-card is-${s.kind}`}>
+          <div className="fr-shops-name">{s.label}<span>{s.marketplace}</span></div>
+          <div className="fr-shops-nums">
+            <button type="button" className={value === `in:${s.id}` ? "is-on" : ""} onClick={() => pick(`in:${s.id}`)} title="Показать ароматы, которые уже есть в магазине">
+              <b>{s.added.toLocaleString("ru")}</b> добавлено
+            </button>
+            <button type="button" className={value === `out:${s.id}` ? "is-on" : ""} onClick={() => pick(`out:${s.id}`)} title="Показать ароматы, которых в этом магазине ещё нет">
+              ещё нет
+            </button>
+            {s.pending ? <span className="is-pending">{s.pending} в очереди</span> : null}
+            {s.failed ? <span className="is-failed">{s.failed} с ошибкой</span> : null}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Card frame: everywhere / partly / failed. */
+function cardClass(exported: ExportedChip[], shops: Shop[]): string {
+  if (!exported.length || !shops.length) return "";
+  const states = shops.map((s) => shopState(exported, s).state);
+  if (states.every((s) => s === "ok")) return " is-added is-everywhere";
+  if (states.some((s) => s === "ok")) return " is-added";
+  if (states.some((s) => s === "failed")) return " is-failed";
+  return "";
 }
 
 // ─── Страница ───────────────────────────────────────────────────────────────
@@ -197,6 +263,7 @@ export function FragranticaPage() {
   const items = list.data?.pages.flatMap((page) => page.items) ?? [];
   const total = list.data?.pages[0]?.total ?? 0;
   const stats = crawler.data?.stats;
+  const shops = crawler.data?.shops ?? [];
   const blocked = Boolean(crawler.data?.status?.blockedUntil && Date.parse(crawler.data.status.blockedUntil) > Date.now());
   const loadedShare = stats && stats.brands ? Math.round((stats.brandsCrawled / stats.brands) * 100) : 0;
 
@@ -238,6 +305,8 @@ export function FragranticaPage() {
       />
       {settingsOpen ? <DimsTemplatesPanel onClose={() => setSettingsOpen(false)} /> : null}
 
+      <ShopsBar shops={shops} value={exported} onPick={setExported} />
+
       <div className="fr-filters">
         <label className="fr-search">
           <Search size={16} />
@@ -250,8 +319,14 @@ export function FragranticaPage() {
         </select>
         <select value={exported} onChange={(e) => setExported(e.target.value)} aria-label="Магазины">
           <option value="">В магазинах и нет</option>
-          <option value="no">Ещё не добавлены</option>
-          <option value="yes">Уже в магазинах</option>
+          <option value="no">Нигде не добавлены</option>
+          <option value="yes">Добавлены хоть куда-то</option>
+          <option value="ozon">Есть на Ozon</option>
+          <option value="yandex">Есть на Яндекс Маркете</option>
+          {shops.map((s) => <option key={`in-${s.id}`} value={`in:${s.id}`}>Есть в {s.label}</option>)}
+          {shops.map((s) => <option key={`out-${s.id}`} value={`out:${s.id}`}>Нет в {s.label}</option>)}
+          <option value="pending">В очереди на отправку</option>
+          <option value="failed">С ошибкой отправки</option>
         </select>
         <select value={gender} onChange={(e) => setGender(e.target.value)} aria-label="Пол">
           <option value="">Любой пол</option>
@@ -292,7 +367,7 @@ export function FragranticaPage() {
       <div className="fr-grid">
         {list.isLoading ? Array.from({ length: 12 }, (_, i) => <div key={`sk-${i}`} className="fr-card is-skeleton" aria-hidden="true"><div className="fr-card-img" /><div className="fr-card-body"><i /><i /><i /></div></div>) : null}
         {items.map((item, index) => (
-          <button key={item.id} type="button" className={`fr-card fr-appear${item.exported.length ? " is-added" : ""}`} style={{ ["--i" as string]: index % 60 }} onClick={() => setOpenId(item.id)}>
+          <button key={item.id} type="button" className={`fr-card fr-appear${cardClass(item.exported, shops)}`} style={{ ["--i" as string]: index % 60 }} onClick={() => setOpenId(item.id)}>
             <div className="fr-card-img">
               <img src={item.thumb} alt="" loading="lazy" />
             </div>
@@ -305,7 +380,7 @@ export function FragranticaPage() {
               </div>
               <div className="fr-card-badges">
                 <PmBadge pm={item.pm} compact />
-                <ShopChips exported={item.exported} />
+                <ShopChips exported={item.exported} shops={shops} />
               </div>
             </div>
           </button>
