@@ -151,8 +151,8 @@ function buildFragranticaOzonName({ perfume = {}, typeKey = "edp", volume, teste
   return [fragNameWithBrand(perfume), type.nameLabel, tester ? "тестер" : "", vol ? `${vol} мл` : ""].filter(Boolean).join(" ");
 }
 
-// Маркет даёт больше баллов за название вида «Парфюмерная вода Creed Iris Debonair унисекс 50 мл»:
-// тип продукта, бренд, аромат, для кого (в роде типа), тестер, объём.
+// Маркет даёт 10 из 10 за название вида «Парфюмерная вода Creed Iris Debonair Eau de Parfum унисекс 50 мл»:
+// тип продукта, бренд, аромат, концентрация, для кого (в роде типа), тестер, объём.
 const FRAG_MARKET_GENDER = {
   edp: { male: "мужская", female: "женская", unisex: "унисекс" },
   edt: { male: "мужская", female: "женская", unisex: "унисекс" },
@@ -160,11 +160,16 @@ const FRAG_MARKET_GENDER = {
   cologne: { male: "мужской", female: "женский", unisex: "унисекс" },
   oil: { male: "мужские", female: "женские", unisex: "унисекс" },
 };
+// Концентрация на латинице после аромата — с ней Маркет даёт за название 10 из 10
+const FRAG_MARKET_CONCENTRATION = { edp: "Eau de Parfum", edt: "Eau de Toilette", parfum: "Parfum", cologne: "Eau de Cologne", oil: "Perfume Oil" };
 function buildFragranticaMarketName({ perfume = {}, typeKey = "edp", volume, tester = false } = {}) {
   const type = fragOzonTypeByKey(typeKey);
   const vol = fragFormatVolume(volume);
   const gender = (FRAG_MARKET_GENDER[type.key] || FRAG_MARKET_GENDER.edp)[perfume.gender] || "";
-  return [type.nameLabel, fragNameWithBrand(perfume), gender, tester ? "тестер" : "", vol ? `${vol} мл` : ""].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+  const aroma = fragNameWithBrand(perfume);
+  const conc = FRAG_MARKET_CONCENTRATION[type.key] || "";
+  const withConc = conc && !aroma.toLowerCase().includes(conc.toLowerCase()) ? `${aroma} ${conc}` : aroma;
+  return [type.nameLabel, withConc, gender, tester ? "тестер" : "", vol ? `${vol} мл` : ""].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
 }
 
 // FR<id фрагрантики>-<объём>[T]; при занятости — суффикс -2, -3… (fragranticaUniqueOfferId)
