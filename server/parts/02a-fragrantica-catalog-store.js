@@ -15,6 +15,13 @@ const fragranticaPdToolsToken = cleanText(process.env.PD_TOOLS_TOKEN || "");
 // auto — напрямую, при проверке Cloudflare через parfumdeclaration (6 ч); direct | pd — принудительно.
 const fragranticaFetchMode = cleanText(process.env.FRAGRANTICA_FETCH_VIA || "auto").toLowerCase();
 let fragranticaDirectBlockedUntil = 0;
+// Extra relays (other servers that Cloudflare lets through): FRAGRANTICA_RELAYS="http://host:port|token,…".
+// Order of tries: direct → parfumdeclaration → relays; a route that got the challenge rests 6 h.
+const fragranticaRelays = cleanText(process.env.FRAGRANTICA_RELAYS || "").split(",").map((entry) => {
+  const [url, token] = entry.split("|").map((x) => cleanText(x));
+  return url && token ? { url: url.replace(/\/+$/, ""), token } : null;
+}).filter(Boolean);
+const fragranticaRouteBlockedUntil = new Map();
 const fragranticaUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36";
 
 let fragranticaTablesReady = false;
@@ -281,19 +288,54 @@ async function fetchFragranticaHtmlViaPd(url) {
   return html;
 }
 
+async function fetchFragranticaHtmlViaRelay(relay, url) {
+  const response = await fetch(`${relay.url}/fetch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-relay-token": relay.token },
+    body: JSON.stringify({ url }),
+    signal: AbortSignal.timeout(60_000),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `ретранслятор ответил ${response.status}`);
+  if (Number(data.status) !== 200) throw new FragranticaHttpError(Number(data.status) || 502, url);
+  const html = String(data.html || "");
+  if (/<title>\s*Just a moment|cf-chl-|challenge-platform/i.test(html.slice(0, 5000))) throw new FragranticaHttpError(403, url);
+  return html;
+}
+
+/** Routes in order of preference; FRAGRANTICA_FETCH_VIA=direct|pd pins one. */
+function fragranticaRoutes() {
+  if (fragranticaFetchMode === "direct") return [{ name: "direct", run: fetchFragranticaHtmlDirect }];
+  const routes = [];
+  if (fragranticaFetchMode !== "pd") routes.push({ name: "direct", run: fetchFragranticaHtmlDirect });
+  if (fragranticaPdToolsToken) routes.push({ name: "parfumdeclaration", run: fetchFragranticaHtmlViaPd });
+  for (const relay of fragranticaRelays) routes.push({ name: relay.url, run: (u) => fetchFragranticaHtmlViaRelay(relay, u) });
+  return routes;
+}
+
 async function fetchFragranticaHtml(url) {
-  const viaPd = fragranticaPdToolsToken && (fragranticaFetchMode === "pd" || (fragranticaFetchMode === "auto" && Date.now() < fragranticaDirectBlockedUntil));
-  if (viaPd) return fetchFragranticaHtmlViaPd(url);
-  try {
-    return await fetchFragranticaHtmlDirect(url);
-  } catch (error) {
-    if (fragranticaFetchMode === "auto" && fragranticaPdToolsToken && error instanceof FragranticaHttpError && error.status === 403) {
-      fragranticaDirectBlockedUntil = Date.now() + 6 * 3_600_000;
-      logger.info("fragrantica direct fetch challenged, using parfumdeclaration proxy for 6 h");
-      return fetchFragranticaHtmlViaPd(url);
+  const routes = fragranticaRoutes();
+  const now = Date.now();
+  // Routes that are resting go last (still tried — the challenge may already be gone)
+  const ordered = [...routes.filter((r) => (fragranticaRouteBlockedUntil.get(r.name) || 0) <= now), ...routes.filter((r) => (fragranticaRouteBlockedUntil.get(r.name) || 0) > now)];
+  let lastError = null;
+  for (const route of ordered) {
+    try {
+      const html = await route.run(url);
+      fragranticaRouteBlockedUntil.delete(route.name);
+      return html;
+    } catch (error) {
+      lastError = error;
+      // a missing page is a real answer — no point asking the next server
+      if (error instanceof FragranticaHttpError && error.status === 404) throw error;
+      if (error instanceof FragranticaHttpError && (error.status === 403 || error.status === 429)) {
+        if (!fragranticaRouteBlockedUntil.has(route.name)) logger.info("fragrantica route challenged, resting 6 h", { route: route.name });
+        fragranticaRouteBlockedUntil.set(route.name, Date.now() + 6 * 3_600_000);
+        if (route.name === "direct") fragranticaDirectBlockedUntil = Date.now() + 6 * 3_600_000;
+      }
     }
-    throw error;
   }
+  throw lastError || new FragranticaHttpError(403, url);
 }
 
 async function fetchFragranticaHtmlDirect(url) {
