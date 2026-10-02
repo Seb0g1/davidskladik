@@ -221,6 +221,8 @@ async function sendTargetStocksToMarketplace(products = []) {
         logger.warn("yandex stock restore before target send failed", {
           target: shop.id,
           items: restoreFailed.length,
+          // Without the reason this warning was not actionable (pending unarchive vs API error).
+          sample: restoreFailed.slice(0, 5).map((item) => `${item.offerId || item.id}:${item.error || (item.pending ? "pending" : "failed")}`),
         });
       }
       for (const stockShop of yandexStockShops([shop])) {

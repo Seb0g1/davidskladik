@@ -35,6 +35,16 @@ let expressEnforceRunning = false;
 // before retrying — avoids spamming failed API calls per sync cycle.
 const sorinYandexForbiddenAt = new Map(); // campaignId -> ms
 const SORIN_YANDEX_FORBIDDEN_BACKOFF_MS = 60 * 60 * 1000; // 1 hour
+// Ozon refuses express stock for cards that are archived, failed moderation or do not exist
+// in that account, and keeps refusing on every sweep (hundreds of identical warnings a day).
+// Such an offer is skipped for a while instead of being resent each cycle.
+const OZON_EXPRESS_STICKY_REFUSALS = new Set(["PRODUCT_IS_ARCHIVED", "NOT_PASS_MODERATION", "PRODUCT_IS_NOT_CREATED"]);
+const OZON_EXPRESS_REFUSAL_BACKOFF_MS = 6 * 60 * 60 * 1000;
+const ozonExpressRefusedUntil = new Map(); // `${accountId}:${offerId}` -> ms
+
+function ozonExpressRefusalKey(accountId, offerId) {
+  return `${cleanText(accountId)}:${cleanText(offerId).toLowerCase()}`;
+}
 
 // Suppliers whose goods may be sold from the express warehouses.
 function expressSupplierKey(name = "") {
@@ -207,7 +217,16 @@ async function resolveExpressEligibility() {
 }
 
 async function sendOzonExpressStocks(account, warehouseId, rows, results, counterPrefix = "ozon") {
-  for (const chunk of chunkArray(rows, 100)) {
+  const now = Date.now();
+  const sendable = rows.filter((r) => {
+    const key = ozonExpressRefusalKey(account.id, r.offerId);
+    const until = ozonExpressRefusedUntil.get(key) || 0;
+    if (until > now) return false;
+    if (until) ozonExpressRefusedUntil.delete(key);
+    return true;
+  });
+  results[`${counterPrefix}Skipped`] = (results[`${counterPrefix}Skipped`] || 0) + (rows.length - sendable.length);
+  for (const chunk of chunkArray(sendable, 100)) {
     try {
       const response = await ozonRequest("/v2/products/stocks", {
         stocks: chunk.map((r) => ({ offer_id: r.offerId, warehouse_id: Number(warehouseId), stock: r.stock })),
@@ -220,6 +239,11 @@ async function sendOzonExpressStocks(account, warehouseId, rows, results, counte
       results[`${counterPrefix}Sent`] += accepted.length - zeroed;
       results[`${counterPrefix}Zeroed`] += zeroed;
       results[`${counterPrefix}Failed`] += refused.length;
+      for (const item of refused) {
+        if ((item.errors || []).some((e) => OZON_EXPRESS_STICKY_REFUSALS.has(cleanText(e.code)))) {
+          ozonExpressRefusedUntil.set(ozonExpressRefusalKey(account.id, item.offer_id), Date.now() + OZON_EXPRESS_REFUSAL_BACKOFF_MS);
+        }
+      }
       if (refused.length) {
         logger.warn("sorin_express_ozon_stock_refused", {
           account: account.id,
