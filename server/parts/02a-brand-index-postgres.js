@@ -19,7 +19,8 @@ async function rebuildWarehouseBrandIndexPostgres(prisma, { limit = 0 } = {}) {
         indexed += result.count || 0;
       }
     },
-    { timeout: 60000 },
+    // 60 s was not enough for the full warehouse (transaction expired twice on 2026-10-02)
+    { timeout: 300000, maxWait: 20000 },
   );
   warehouseBrandListCache = null;
   return { ok: true, scanned: rows.length, indexed };

@@ -141,6 +141,49 @@ function normalizePriceMasterSnapshotItemForPostgres(row = {}, updatedAt = new D
   };
 }
 
+// ~195k rows: one «delete all + insert» transaction never fit its 120 s timeout (the copy stood still from
+// 2026-09-24, and prices that fell back to it were 9 days old). Rows are upserted in chunks by their natural
+// key (article + partner + row — the id changes with every price document), stamped with the snapshot time,
+// and whatever this snapshot no longer has is deleted at the end. Readers never see an empty table.
+async function upsertPriceMasterSnapshotRows(prisma, normalizedRows, updatedAt) {
+  const byKey = new Map();
+  for (const row of normalizedRows) byKey.set(`${row.article}|${row.partnerId ?? ""}|${row.rowId ?? ""}`, row);
+  const unique = [...byKey.values()];
+  const startedAt = Date.now();
+  for (const chunk of chunkArray(unique, 2000)) {
+    const payload = chunk.map((row) => ({
+      id: row.id,
+      row_id: row.rowId,
+      article: row.article,
+      partner_id: row.partnerId,
+      partner_name: row.partnerName,
+      native_name: row.nativeName,
+      price: row.price,
+      currency: row.currency,
+      doc_date: row.docDate ? row.docDate.toISOString() : null,
+      active: row.active,
+      raw: row.raw ?? null,
+    }));
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO pm_snapshot_items (id, row_id, article, partner_id, partner_name, native_name, price, currency, doc_date, active, raw, updated_at)
+       SELECT x.id, x.row_id, x.article, x.partner_id, x.partner_name, x.native_name, x.price::numeric, x.currency::"PriceCurrency",
+              (x.doc_date::timestamptz AT TIME ZONE 'UTC'), x.active, x.raw, ($2::timestamptz AT TIME ZONE 'UTC')
+       FROM jsonb_to_recordset($1::jsonb) AS x(id text, row_id text, article text, partner_id text, partner_name text, native_name text,
+            price text, currency text, doc_date text, active boolean, raw jsonb)
+       ON CONFLICT (article, partner_id, row_id) DO UPDATE SET
+         id = EXCLUDED.id, partner_name = EXCLUDED.partner_name, native_name = EXCLUDED.native_name, price = EXCLUDED.price,
+         currency = EXCLUDED.currency, doc_date = EXCLUDED.doc_date, active = EXCLUDED.active, raw = EXCLUDED.raw, updated_at = EXCLUDED.updated_at`,
+      JSON.stringify(payload),
+      updatedAt.toISOString(),
+    );
+  }
+  const removed = await prisma.$executeRawUnsafe(
+    `DELETE FROM pm_snapshot_items WHERE updated_at < ($1::timestamptz AT TIME ZONE 'UTC')`,
+    updatedAt.toISOString(),
+  );
+  logger.info("PriceMaster postgres snapshot upserted", { rows: unique.length, removed: Number(removed) || 0, ms: Date.now() - startedAt });
+}
+
 async function writePriceMasterSnapshotToPostgres(snapshot = {}) {
   if (!shouldUsePostgresStorage()) return { skipped: true, reason: "postgres_disabled" };
   const prisma = getPrisma();
@@ -150,7 +193,10 @@ async function writePriceMasterSnapshotToPostgres(snapshot = {}) {
 
   const existingCount = await prisma.priceMasterSnapshotItem.count();
   const changes = Array.isArray(snapshot.changes) ? snapshot.changes.length : 0;
-  if (existingCount === rows.length && changes === 0) {
+  const snapshotAt = toDateOrNull(snapshot.createdAt) || new Date();
+  // «Unchanged» only when the table already holds THIS snapshot: the count alone hid a copy 9 days old
+  const newest = await prisma.priceMasterSnapshotItem.aggregate({ _max: { updatedAt: true } }).catch(() => null);
+  if (existingCount === rows.length && changes === 0 && newest?._max?.updatedAt && newest._max.updatedAt >= snapshotAt) {
     return { skipped: true, reason: "unchanged", items: rows.length };
   }
 
@@ -163,16 +209,11 @@ async function writePriceMasterSnapshotToPostgres(snapshot = {}) {
     GROUP BY partner_id
   `).catch(() => []);
 
-  const updatedAt = toDateOrNull(snapshot.createdAt) || new Date();
+  const updatedAt = snapshotAt;
   const normalizedRows = rows
     .map((row) => normalizePriceMasterSnapshotItemForPostgres(row, updatedAt))
     .filter(Boolean);
-  await prisma.$transaction(async (tx) => {
-    await tx.priceMasterSnapshotItem.deleteMany({});
-    for (const chunk of chunkArray(normalizedRows, 2000)) {
-      await tx.priceMasterSnapshotItem.createMany({ data: chunk, skipDuplicates: true });
-    }
-  }, { timeout: 120000 });
+  await upsertPriceMasterSnapshotRows(prisma, normalizedRows, updatedAt);
 
   // Detect partners that lost a significant number of active rows.
   if (partnerCountsBefore.length) {
