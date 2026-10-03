@@ -33,7 +33,7 @@ type DraftsResponse = { items: Draft[]; counts: Record<string, number>; targets:
 
 const TYPES: Array<[string, string]> = [["edp", "Парфюмерная вода"], ["edt", "Туалетная вода"], ["parfum", "Духи"], ["cologne", "Одеколон"], ["oil", "Духи-масло"]];
 const STAGE: Record<string, string> = {
-  start: "начинаем", form: "характеристики Ozon", links: "поставщики и цена", photos: "фото и пирамиды", description: "описание ИИ",
+  start: "начинаем", build: "характеристики, поставщики, фото и описание", volumes: "ищем объёмы в PriceMaster", form: "характеристики Ozon", links: "поставщики и цена", photos: "фото и пирамиды", description: "описание ИИ",
 };
 const STATUS: Record<string, string> = {
   queued: "в очереди", working: "собирается", ready: "готово", attention: "нужно внимание", skipped: "пропущено",
