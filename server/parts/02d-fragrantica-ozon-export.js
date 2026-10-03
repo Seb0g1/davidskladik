@@ -737,7 +737,8 @@ async function submitFragranticaYandexExport(row) {
         attempts,
         error: null,
         result: row.result?.mediaRefresh
-          ? { ...(row.result || {}), market: "sent", ...vat, mediaRefresh: false, mediaRefreshedAt: new Date().toISOString() }
+          // the Market send rewrites the warehouse card with an empty link list — links are always put back
+          ? { ...(row.result || {}), market: "sent", ...vat, mediaRefresh: false, mediaRefreshedAt: new Date().toISOString(), links: Array.isArray(row.links) && row.links.length ? "pending" : "none" }
           : { ...(row.result || {}), market: "sent", ...vat, docs: "pending", links: Array.isArray(row.links) && row.links.length ? "pending" : "none" },
       });
     }
