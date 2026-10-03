@@ -500,11 +500,25 @@ function fragExtraNameNumbers(rowName, perfume = {}, rowVolumes = []) {
   const text = String(rowName || "").toLowerCase().replace(/ё/g, "е").replace(/\([^)]*\)/g, " ");
   const known = new Set([...fragRowTokens(perfume.name), ...fragRowTokens(perfume.brand)]);
   const volumes = new Set((rowVolumes || []).map((v) => String(Number(v))));
+  // where the perfume's own name starts: a number before it is a line / series («03 Vanilla», «№6 Brume»).
+  // The first name word that is not a brand word; if the name is the brand word itself («Billie Eilish Eilish»),
+  // its last occurrence.
+  const brandWords = fragRowTokens(perfume.brand);
+  const nameWords = fragRowTokens(perfume.name).filter((w) => !/^\d+$/.test(w));
+  const firstWord = nameWords.find((w) => !brandWords.includes(w)) || nameWords[0];
+  let at = -1;
+  if (firstWord) {
+    // tokens are letters and digits only — nothing to escape
+    const wordRe = new RegExp(`(^|[^0-9a-zа-я])${firstWord}(?![0-9a-zа-я])`, "g");
+    for (const m of text.matchAll(wordRe)) at = m.index;
+  }
   const out = [];
-  // a bare 1–3 digit number: not glued to letters, not a decimal («3.4»), not followed by a unit or «x» (pack)
-  const re = /(^|[^0-9a-zа-я.,])(\d{1,3})(?![0-9a-zа-я]|[.,]\d|\s*(ml|мл|oz|fl|шт|x|х|×|\*|%|г|g)(?![a-zа-я]))/gi;
+  // a bare 1–3 digit number: not glued to letters, not a decimal («3.4»), not followed by a unit or «x» (pack),
+  // not part of «17/17» or «/43»
+  const re = /(^|[^0-9a-zа-я.,/])(\d{1,3})(?![0-9a-zа-я/]|[.,]\d|\s*(ml|мл|oz|fl|шт|x|х|×|\*|%|г|g)(?![a-zа-я]))/gi;
   for (const m of text.matchAll(re)) {
     const n = m[2];
+    if (at < 0 || m.index < at) continue;
     if (known.has(n) || volumes.has(String(Number(n)))) continue;
     out.push(n);
   }
