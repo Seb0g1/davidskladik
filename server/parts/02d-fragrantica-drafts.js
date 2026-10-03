@@ -317,9 +317,17 @@ const FRAG_PROMO_TTL_MS = 6 * 60 * 60_000;
 const fragranticaPromoCache = new Map();
 
 async function fragranticaPhotoBuffer(url) {
-  const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return Buffer.from(await response.arrayBuffer());
+  // marketplace CDNs drop a request now and then under load: three tries
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(20_000) });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return Buffer.from(await response.arrayBuffer());
+    } catch (error) {
+      if (attempt >= 3) throw error;
+      await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
+    }
+  }
 }
 
 async function fragranticaBufferHash(buffer) {
@@ -441,7 +449,12 @@ async function fragranticaKeepExistingPhotos(existing, urls = []) {
   const kept = [];
   for (const [i, url] of urls.entries()) {
     const c = checked[i];
-    if (!c?.hash) continue;
+    // could not be downloaded to check: kept (a good photo is never lost silently), the operator sees it
+    if (!c?.hash) {
+      out.keep.push(url);
+      out.unchecked = (out.unchecked || 0) + 1;
+      continue;
+    }
     if (promo.some((h) => fragranticaHashDistance(h, c.hash) <= 6)) continue;
     if (kept.some((h) => fragranticaHashDistance(h, c.hash) <= 3)) continue;
     if (c.sharpness < FRAG_SHARP_MIN) {
