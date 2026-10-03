@@ -374,7 +374,7 @@ app.get("/api/fragrantica/ozon/attribute-values", requireAdmin, async (request, 
 // через parfumdeclaration. FRAGRANTICA_RENDER=pd — всегда через parfumdeclaration.
 let fragranticaLocalRenderer;
 // Two perfumes render at once (8 cores; the upscale uses 2 threads each)
-const fragranticaLocalRenderLanes = Math.max(1, Number(process.env.FRAGRANTICA_RENDER_PARALLEL || 5) || 5);
+const fragranticaLocalRenderLanes = Math.max(1, Number(process.env.FRAGRANTICA_RENDER_PARALLEL || 4) || 4);
 const fragranticaLocalRenderChains = Array.from({ length: fragranticaLocalRenderLanes }, () => Promise.resolve());
 let fragranticaLocalRenderNext = 0;
 
@@ -398,14 +398,70 @@ async function fragranticaSourceBuffer(imageUrl) {
   return Buffer.from(await res.arrayBuffer());
 }
 
-/** Render on this server; one perfume at a time (the upscale uses the CPU hard). Same answer shape as parfumdeclaration. */
+// ─── Пул процессов рендера ─────────────────────────────────────────────────
+// JS-часть рендера занимает поток целиком: в одном процессе «полосы» шли друг за другом. Каждая полоса —
+// свой процесс (lib/perfume-render-worker.cjs), так ароматы рисуются на разных ядрах. Процесс упал или
+// завис (5 мин) — пересоздаётся; не запустился — рисуем в этом процессе, как раньше.
+const { fork: fragRenderFork } = require("child_process");
+const FRAG_RENDER_TIMEOUT_MS = 5 * 60_000;
+const fragranticaRenderProcs = [];
+let fragranticaRenderJobId = 0;
+
+function fragranticaRenderProc(lane) {
+  const current = fragranticaRenderProcs[lane];
+  if (current && current.child.connected) return current;
+  const workerPath = path.join(path.dirname(path.dirname(require.resolve("./lib/perfume-render/index.cjs"))), "perfume-render-worker.cjs");
+  const child = fragRenderFork(workerPath, [], { serialization: "advanced", stdio: ["ignore", "inherit", "inherit", "ipc"] });
+  const proc = { child, pending: new Map() };
+  child.on("message", (msg) => {
+    const job = proc.pending.get(msg?.id);
+    if (!job) return;
+    proc.pending.delete(msg.id);
+    clearTimeout(job.timer);
+    if (msg.ok) job.resolve(msg.out);
+    else job.reject(new Error(msg.error || "render failed"));
+  });
+  child.on("exit", (code) => {
+    for (const job of proc.pending.values()) {
+      clearTimeout(job.timer);
+      job.reject(new Error(`процесс рендера завершился (${code})`));
+    }
+    proc.pending.clear();
+    if (fragranticaRenderProcs[lane] === proc) fragranticaRenderProcs[lane] = null;
+  });
+  fragranticaRenderProcs[lane] = proc;
+  return proc;
+}
+
+function renderFragranticaInProcess(lane, args) {
+  const proc = fragranticaRenderProc(lane);
+  const id = ++fragranticaRenderJobId;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      proc.pending.delete(id);
+      reject(new Error("рендер завис — процесс перезапущен"));
+      proc.child.kill("SIGKILL");
+    }, FRAG_RENDER_TIMEOUT_MS);
+    proc.pending.set(id, { resolve, reject, timer });
+    proc.child.send({ id, source: args.source, styles: args.styles, perfume: args.perfume, extras: args.extras });
+  });
+}
+
+/** Render on this server (a pool of render processes). Same answer shape as parfumdeclaration. */
 async function renderFragranticaCardHere(payload) {
   const renderer = loadFragranticaLocalRenderer();
   if (!renderer) return null;
   const lane = fragranticaLocalRenderNext++ % fragranticaLocalRenderLanes;
   const run = fragranticaLocalRenderChains[lane].then(async () => {
     const source = await fragranticaSourceBuffer(payload.imageUrl);
-    const out = await renderer.renderPerfumeCard({ source, styles: payload.styles, perfume: payload.perfume, extras: payload.extras !== false });
+    const args = { source, styles: payload.styles, perfume: payload.perfume, extras: payload.extras !== false };
+    let out;
+    try {
+      out = await renderFragranticaInProcess(lane, args);
+    } catch (error) {
+      logger.warn("fragrantica render process failed, rendering in the worker", { lane, detail: error?.message || String(error) });
+      out = await renderer.renderPerfumeCard(args);
+    }
     const b64 = (buf) => (buf ? Buffer.from(buf).toString("base64") : null);
     const map = (obj) => Object.fromEntries(Object.entries(obj || {}).map(([k, v]) => [k, b64(v)]));
     return {
