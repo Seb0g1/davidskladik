@@ -614,6 +614,7 @@ app.get("/api/card-improve", requireAdmin, async (request, response, next) => {
           keptExistingPhotos: Number(d.keptExistingPhotos || 0),
           blurryExistingPhotos: Number(d.blurryExistingPhotos || 0),
           ownBottleOnly: Boolean(d.ownBottleOnly),
+          notes: (Array.isArray(d.warnings) ? d.warnings : []).filter((w) => /нет — /.test(w)),
           exports: (Array.isArray(r.export_ids) ? r.export_ids : []).map((id) => exportsById.get(Number(id))).filter(Boolean),
           updatedAt: r.updated_at,
         };

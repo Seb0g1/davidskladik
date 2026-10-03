@@ -77,6 +77,11 @@ async function runFragranticaPmMatch() {
   }
 }
 
+// Наборы и мультипаки — не флакон одного аромата: не сопоставляются для «Улучшения карточек».
+// Тот же шаблон используется в SQL (POSIX, ~*); «+» в скобках — без экранирования, одинаково для обоих.
+const FRAG_SET_NAME_PATTERN = "(набор|подарочн|коллекц|(^|[^a-z])(set|gift)([^a-z]|$)|[0-9] *[xх×*] *[0-9]|(ml|мл) *[+])";
+const FRAG_SET_NAME_RE = new RegExp(FRAG_SET_NAME_PATTERN, "i");
+
 /**
  * «Уже есть в магазине» — cards that were on the shops before Fragrantica: every active warehouse product
  * (warehouse_products, per shop = target) is indexed like a PriceMaster row and every catalog perfume is
@@ -112,6 +117,8 @@ async function runFragranticaShopStockMatch(prisma) {
         for (const i of m.matched || []) {
           const row = index.rows[i];
           if (!row.offerId || row.archived) continue;
+          // a set («набор», «5 x 5 ml», «200 ml + 25 ml») is not one bottle of this perfume
+          if (FRAG_SET_NAME_RE.test(row.name)) continue;
           const key = `${shop}\u0000${row.offerId}`;
           if (!cardMatches.has(key)) cardMatches.set(key, { shop, offerId: row.offerId, name: row.name, perfumeIds: [] });
           cardMatches.get(key).perfumeIds.push(perfume.id);

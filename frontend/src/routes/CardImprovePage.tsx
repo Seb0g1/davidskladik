@@ -26,7 +26,7 @@ type Item = {
   volume: number | null; tester: boolean; shop: string; marketplace: string; offerId: string; rating: number | null; price: number;
   yandexPrice: number; sold: number;
   before: Side | null; after: Side; missing: string[]; exports: Array<{ status: string; error: string | null; shop: string }>;
-  customPhotos?: string[]; onlyCustomPhotos?: boolean; keptExistingPhotos?: number; blurryExistingPhotos?: number; ownBottleOnly?: boolean;
+  customPhotos?: string[]; onlyCustomPhotos?: boolean; keptExistingPhotos?: number; blurryExistingPhotos?: number; ownBottleOnly?: boolean; notes?: string[];
 };
 type ImproveResponse = { tab: string; counts: Record<string, number>; items: Item[] };
 
@@ -178,6 +178,7 @@ function ImproveCard({ item, picked, onPick, onApprove, onSkip, onRestore, onReb
       {item.error || item.missing.length ? (
         <div className="ci-problem"><AlertTriangle size={13} /> {item.missing.length ? `Не хватает: ${item.missing.join(", ")}` : item.error}</div>
       ) : null}
+      {(item.notes || []).map((n) => <div key={n} className="ci-note">{n}</div>)}
       {item.exports.length ? (
         <div className="ci-exports">
           {item.exports.map((e, i) => (
