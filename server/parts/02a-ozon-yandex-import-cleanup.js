@@ -125,6 +125,8 @@ function ozonYandexImportBlockReasons(product = {}, { manual = false } = {}) {
   if (["inactive", "unknown"].includes(stateCode) || ["REMOVED_FROM_SALE", "DISABLED", "BANNED"].includes(stateVisibility) || ["REMOVED_FROM_SALE", "DISABLED", "BANNED"].includes(rawState)) {
     reasons.push("Товар неактивен или статус Ozon не подтвержден");
   }
+  const hiddenBrand = matchYandexHiddenBrand(product);
+  if (hiddenBrand) reasons.push(`Маркет скрыл бренд «${hiddenBrand}» (сомнения в подлинности)`);
   if (lower.includes("отливант")) reasons.push("Название содержит «Отливант»");
   // Testers are not imported to Yandex (import rule, together with < 20 ml and «Отливант»).
   if (/тестер|tester/iu.test(lower)) reasons.push("Тестер не импортируется на Яндекс");

@@ -228,7 +228,8 @@ async function expandFragranticaPerfumeDraft(draft) {
   const skipped = [];
   for (const { volume } of plan.volumes) {
     if (active.some((a) => !a.tester && Math.abs(Number(a.volume) - volume) < 0.01)) continue;
-    const missing = fragranticaTargetsMissingVolume(targets, presence, volume);
+    const marketBlocked = fragranticaMarketBlockReasons(perfume, { volume, typeKey, tester: false }).length > 0;
+    const missing = fragranticaTargetsMissingVolume(targets, presence, volume).filter((t) => !(marketBlocked && t.kind === "yandex"));
     if (!missing.length) {
       skipped.push(volume);
       continue;

@@ -91,6 +91,7 @@ const partFiles = [
   "02a-fragrantica-ozon-build.js",
   "02a-fragrantica-video.js",
   "02a-ozon-yandex-import-cleanup.js",
+  "02a-yandex-hidden-brands.js",
   "02a-yandex-cleanup-ops.js",
   "02a-yandex-stock-payload.js",
   "02a-yandex-stock-send-chunk.js",

@@ -119,7 +119,7 @@ async function exportOzonProductsToYandex(inputProducts = [], shops = null, { re
   const enriched = await enrichOzonProductsForYandexExport(inputProducts);
   // Re-check readiness with the real Ozon attributes (brand, category, name).
   const skipped = [];
-  const products = enriched.filter((product) => {
+  let products = enriched.filter((product) => {
     const built = buildYandexOfferMapping(product);
     if (built.ready) return true;
     skipped.push({ offerId: product.offerId, missing: built.missing, categoryReview: built.categoryReview });
@@ -128,6 +128,15 @@ async function exportOzonProductsToYandex(inputProducts = [], shops = null, { re
   if (skipped.length) {
     logger.info("ozon yandex export: products left for manual review", { count: skipped.length, sample: skipped.slice(0, 20) });
   }
+  // Hard Market rules (hidden brand, < 20 ml, tester, sample, отливант) — the last gate for every path
+  const hardBlocked = [];
+  products = products.filter((product) => {
+    const reasons = yandexHardBlockReasons(product);
+    if (!reasons.length) return true;
+    hardBlocked.push({ offerId: cleanText(product.offerId), reasons });
+    return false;
+  });
+  if (hardBlocked.length) logger.warn("yandex export hard-blocked", { reason, count: hardBlocked.length, sample: hardBlocked.slice(0, 10).map((b) => `${b.offerId}: ${b.reasons.join("; ")}`) });
   const offers = products
     .map((product) => buildYandexOfferMapping(product).offer)
     .filter((offer) => offer?.offerId);

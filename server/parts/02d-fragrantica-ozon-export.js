@@ -946,6 +946,14 @@ async function createFragranticaExports(body = {}, request = { session: {} }) {
     ? body.targets.map((t) => ({ ...allTargets.find((x) => x.key === cleanText(t.key)), notes: cleanText(t.notes) || null })).filter((t) => t.key)
     : [{ ...(allTargets.find((x) => x.kind === "ozon" && x.id === cleanText(fragranticaResolveOzonAccount(body.accountId).id)) || {}), notes: null }].filter((t) => t.key);
   if (!wanted.length) throw fragranticaHttpError(400, "Выберите хотя бы один магазин.", { code: "fragrantica_export_no_targets" });
+  // Market: no hidden brand, nothing under 20 ml, no testers — such a target is dropped with a note
+  const bodyVolume = body.volume || (Array.isArray(body.attributes) ? (body.attributes.find((a) => Number(a.id) === FRAG_OZON_ATTR.volume)?.values || [])[0]?.value : "");
+  const marketCheck = fragranticaMarketBlockReasons(perfume, { volume: bodyVolume, typeKey: body.typeKey || fragOzonTypeById(body.typeId)?.key, tester: body.tester });
+  const skippedTargets = marketCheck.length ? wanted.filter((t) => t.kind === "yandex").map((t) => ({ key: t.key, label: t.label, reasons: marketCheck })) : [];
+  if (skippedTargets.length) {
+    wanted.splice(0, wanted.length, ...wanted.filter((t) => t.kind !== "yandex"));
+    if (!wanted.length) throw fragranticaHttpError(400, `Маркет: ${marketCheck.join("; ")}`, { code: "fragrantica_export_market_blocked", skippedTargets });
+  }
 
   const type = fragOzonTypeById(body.typeId) || fragOzonTypeByKey(body.typeKey);
   const attrsAccount = fragranticaResolveOzonAccount(wanted.find((t) => t.kind === "ozon")?.id || body.accountId);
@@ -1031,7 +1039,7 @@ async function createFragranticaExports(body = {}, request = { session: {} }) {
   // the text the operator sent becomes the shared description of the perfume (other volumes reuse it)
   const sentDescription = String((baseItem.attributes.find((a) => a.id === FRAG_OZON_ATTR.annotation)?.values || [])[0]?.value || "");
   if (sentDescription.trim()) await saveFragranticaCardDescription(perfumeId, sentDescription).catch(() => {});
-  return { ok: true, offerId, exports: results.map(fragranticaExportFromRow), export: fragranticaExportFromRow(results[0]) };
+  return { ok: true, offerId, exports: results.map(fragranticaExportFromRow), export: fragranticaExportFromRow(results[0]), skippedTargets };
 }
 
 async function buildFragranticaYandexExtra({ perfume, type, name, volume, tester, shop, style = "parfumerius" }) {
@@ -1077,6 +1085,16 @@ function fragranticaOzonMediaExtras({ perfumeId, style, notes, baseItem, categor
   }
   const complex = process.env.FRAGRANTICA_OZON_VIDEO_COVER === "false" ? [] : buildFragranticaVideoCoverComplex(fragranticaVideoCoverUrl(perfumeId, style));
   return { attributes, complex };
+}
+
+/** Why this perfume/volume can't go to Market (the same hard rules as every Market send). */
+function fragranticaMarketBlockReasons(perfume = {}, { volume, typeKey, tester } = {}) {
+  const vol = fragFormatVolume(volume);
+  const type = fragOzonTypeByKey(typeKey || fragOzonGuessTypeKey(perfume));
+  return yandexHardBlockReasons({
+    name: buildFragranticaMarketName({ perfume, typeKey: type.key, volume: vol, tester: Boolean(tester) }),
+    brand: perfume.brand,
+  });
 }
 
 function fragranticaHttpError(statusCode, message, detail = {}) {
