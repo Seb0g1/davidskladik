@@ -113,7 +113,7 @@ export function useConveyor() {
 export function useAddToConveyor() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (body: { perfumeIds?: number[]; query?: Record<string, string>; targets: string[] }) =>
+    mutationFn: (body: { perfumeIds?: number[]; query?: Record<string, string>; targets: string[]; volumes?: Record<number, PickedVolume[]> }) =>
       apiJson<{ added: number; alreadyInQueue: number }>("/api/fragrantica/drafts", mutationBody(body)),
     onSuccess: (res) => {
       toast.success(res.added
@@ -614,5 +614,88 @@ function PmLinkSearch({ draft, onAdd, adding }: { draft: Draft; onAdd: (rows: Li
         })}
       </div>
     </div>
+  );
+}
+
+export type PickedVolume = { volume: number; tester: boolean };
+type VolumePlan = { brand: string; name: string; typeKey: string; volumes: Array<{ volume: number; rows: number; inShops: string[] }> };
+
+/**
+ * «Какие объёмы?» — при отметке аромата: объёмы из PriceMaster уже отмечены (кроме тех, что есть во всех
+ * выбранных магазинах); можно снять, добавить свой (парсер мог не найти) и отметить тестер.
+ */
+export function VolumePicker({ perfumeId, title, targets, initial, onSave, onClose }: {
+  perfumeId: number; title: string; targets: string[]; initial?: PickedVolume[];
+  onSave: (volumes: PickedVolume[]) => void; onClose: () => void;
+}) {
+  const plan = useQuery({
+    queryKey: ["fragrantica", "volume-plan", perfumeId, targets.join(",")],
+    queryFn: () => apiJson<VolumePlan>(`/api/fragrantica/drafts/volume-plan?perfumeId=${perfumeId}&targets=${encodeURIComponent(targets.join(","))}`),
+    staleTime: 5 * 60_000,
+  });
+  const [chosen, setChosen] = useState<PickedVolume[] | null>(initial?.length ? initial : null);
+  const [custom, setCustom] = useState("");
+  const [extra, setExtra] = useState<number[]>([]);
+  // first load: PriceMaster volumes that are missing in at least one shop are pre-checked
+  useEffect(() => {
+    if (chosen || !plan.data) return;
+    setChosen(plan.data.volumes.filter((v) => v.rows > 0 && v.inShops.length < targets.length).map((v) => ({ volume: v.volume, tester: false })));
+  }, [plan.data, chosen, targets.length]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const list = chosen || [];
+  const rows = [...(plan.data?.volumes || []), ...extra.filter((v) => !(plan.data?.volumes || []).some((x) => x.volume === v)).map((volume) => ({ volume, rows: 0, inShops: [] as string[] }))]
+    .sort((a, b) => a.volume - b.volume);
+  const has = (volume: number, tester: boolean) => list.some((v) => v.volume === volume && v.tester === tester);
+  const toggle = (volume: number, tester: boolean) => setChosen((prev) => {
+    const now = prev || [];
+    return has(volume, tester) ? now.filter((v) => !(v.volume === volume && v.tester === tester)) : [...now, { volume, tester }];
+  });
+  const addCustom = () => {
+    const volume = Number(custom.replace(",", "."));
+    if (!(volume > 0 && volume < 5000)) return;
+    setExtra((prev) => (prev.includes(volume) ? prev : [...prev, volume]));
+    if (!has(volume, false)) toggle(volume, false);
+    setCustom("");
+  };
+
+  return createPortal(
+    <div className="fr-drawer-overlay fr-picker-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="fr-picker fr-volpick" role="dialog" aria-modal="true" aria-label="Какие объёмы">
+        <h2>Какие объёмы?</h2>
+        <p className="fr-hint">{plan.data ? `${plan.data.brand} ${plan.data.name}` : title}. Отмечены объёмы из PriceMaster, которых нет хотя бы в одном магазине. Не нашлось нужного — допишите свой.</p>
+        {plan.isLoading ? <div className="fr-volpick-loading"><div className="fr-progress-bar is-indeterminate"><span /></div> Ищем объёмы в PriceMaster…</div> : null}
+        {plan.isError ? <div className="inline-error">{errorMessage(plan.error)}</div> : null}
+        {plan.data && !rows.length ? <div className="fr-hint">В PriceMaster объёмов не нашлось — добавьте объём вручную.</div> : null}
+        <div className="fr-volpick-list">
+          {rows.map((v) => (
+            <div key={v.volume} className={`fr-volpick-row${has(v.volume, false) || has(v.volume, true) ? " is-on" : ""}`}>
+              <label className="fr-volpick-main">
+                <input type="checkbox" checked={has(v.volume, false)} onChange={() => toggle(v.volume, false)} />
+                <b>{v.volume} мл</b>
+                <small>{v.rows ? `${v.rows} ${plural(v.rows, "строка", "строки", "строк")} в PriceMaster` : "своя / нет в PriceMaster"}</small>
+              </label>
+              <label className="fr-volpick-tester"><input type="checkbox" checked={has(v.volume, true)} onChange={() => toggle(v.volume, true)} /> тестер</label>
+              {v.inShops.length ? <span className="fr-volpick-shops">уже есть: {v.inShops.join(", ")}</span> : null}
+            </div>
+          ))}
+        </div>
+        <form className="fr-volpick-add" onSubmit={(e) => { e.preventDefault(); addCustom(); }}>
+          <input inputMode="decimal" value={custom} onChange={(e) => setCustom(e.target.value.replace(/[^\d.,]/g, ""))} placeholder="Свой объём, мл" />
+          <button className="secondary-action compact" type="submit" disabled={!custom}><Plus size={13} /> Добавить</button>
+        </form>
+        <div className="fr-actions">
+          <button className="primary-action" type="button" disabled={!list.length} onClick={() => onSave(list)}>
+            <Check size={15} /> {list.length ? `Выбрать: ${list.map((v) => `${v.volume}${v.tester ? " T" : ""}`).join(", ")} мл` : "Отметьте объём"}
+          </button>
+          <button className="secondary-action" type="button" onClick={onClose}>Отмена</button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }

@@ -7,7 +7,7 @@ import { fetchJson, mutationBody } from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { errorMessage, useDebounced } from "../lib/common";
 import { toast } from "../lib/toast";
-import { ConveyorBar, ConveyorPanel, useAddToConveyor, WorkShopsPicker } from "./FragranticaConveyor";
+import { ConveyorBar, ConveyorPanel, useAddToConveyor, VolumePicker, WorkShopsPicker, type PickedVolume } from "./FragranticaConveyor";
 import "./fragrantica.css";
 
 // Ответы /api/fragrantica/* описаны типами ниже; fetchJson даёт ApiError с телом ответа (missing и т. п.)
@@ -253,6 +253,9 @@ export function FragranticaPage() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [conveyorOpen, setConveyorOpen] = useState(false);
   const [picked, setPicked] = useState<number[]>([]);
+  // perfume → volumes chosen in «Какие объёмы?»; the window opens when a perfume is picked
+  const [pickedVolumes, setPickedVolumes] = useState<Record<number, PickedVolume[]>>({});
+  const [volumeFor, setVolumeFor] = useState<{ id: number; title: string } | null>(null);
   const queryClient = useQueryClient();
   const debouncedQ = useDebounced(q, 350);
 
@@ -311,7 +314,14 @@ export function FragranticaPage() {
   const workShops = shops.filter((s) => work.keys.includes(shopKey(s)));
   const addToConveyor = useAddToConveyor();
   const pickerShops = shops.map((s) => ({ key: shopKey(s), kind: s.kind, label: s.label, marketplace: s.marketplace, count: (s.stock || 0) + s.added }));
-  const togglePick = (id: number) => setPicked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  const togglePick = (id: number, title = "") => {
+    if (picked.includes(id)) {
+      setPicked((prev) => prev.filter((x) => x !== id));
+      setPickedVolumes((prev) => { const next = { ...prev }; delete next[id]; return next; });
+      return;
+    }
+    setVolumeFor({ id, title });
+  };
   // «Выбрать все»: ароматы по текущим фильтрам, которые есть у поставщиков и которых нет хотя бы в одном из моих магазинов
   const selectAllQuery = () => {
     const query: Record<string, string> = Object.fromEntries(new URLSearchParams(params));
@@ -321,7 +331,10 @@ export function FragranticaPage() {
     return query;
   };
   const sendToConveyor = (body: { perfumeIds?: number[]; query?: Record<string, string> }) =>
-    addToConveyor.mutate({ ...body, targets: work.keys }, { onSuccess: () => { setPicked([]); setConveyorOpen(true); } });
+    addToConveyor.mutate(
+      { ...body, targets: work.keys, volumes: body.perfumeIds ? Object.fromEntries(body.perfumeIds.filter((id) => pickedVolumes[id]).map((id) => [id, pickedVolumes[id]])) : undefined },
+      { onSuccess: () => { setPicked([]); setPickedVolumes({}); setConveyorOpen(true); } },
+    );
 
   return (
     <div className="page-shell fr-page">
@@ -375,6 +388,20 @@ export function FragranticaPage() {
         />
       ) : null}
       {conveyorOpen ? <ConveyorPanel onClose={() => setConveyorOpen(false)} /> : null}
+      {volumeFor ? (
+        <VolumePicker
+          perfumeId={volumeFor.id}
+          title={volumeFor.title}
+          targets={work.keys}
+          initial={pickedVolumes[volumeFor.id]}
+          onClose={() => setVolumeFor(null)}
+          onSave={(volumes) => {
+            setPickedVolumes((prev) => ({ ...prev, [volumeFor.id]: volumes }));
+            setPicked((prev) => (prev.includes(volumeFor.id) ? prev : [...prev, volumeFor.id]));
+            setVolumeFor(null);
+          }}
+        />
+      ) : null}
 
       <ShopsBar shops={shops} value={exported} onPick={setExported} />
 
@@ -464,7 +491,7 @@ export function FragranticaPage() {
             <div className="fr-card-img">
               <img src={item.thumb} alt="" loading="lazy" />
               <button type="button" className="fr-card-pick" aria-pressed={picked.includes(item.id)} title={picked.includes(item.id) ? "Убрать из выбора" : "Выбрать для конвейера"}
-                onClick={(e) => { e.stopPropagation(); togglePick(item.id); }}>
+                onClick={(e) => { e.stopPropagation(); togglePick(item.id, `${item.brand} ${item.name}`); }}>
                 {picked.includes(item.id) ? <CheckSquare size={18} /> : <Square size={18} />}
               </button>
             </div>

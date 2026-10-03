@@ -227,15 +227,19 @@ async function expandFragranticaPerfumeDraft(draft) {
   );
   let created = 0;
   const skipped = [];
-  for (const { volume } of plan.volumes) {
-    if (active.some((a) => !a.tester && Math.abs(Number(a.volume) - volume) < 0.01)) continue;
-    const marketBlocked = fragranticaMarketBlockReasons(perfume, { volume, typeKey, tester: false }).length > 0;
-    const missing = fragranticaTargetsMissingVolume(targets, presence, volume).filter((t) => !(marketBlocked && t.kind === "yandex"));
+  // Volumes chosen in the «Какие объёмы?» window win over the PriceMaster plan (the parser can miss one)
+  const chosen = Array.isArray(draft.data?.volumes) && draft.data.volumes.length
+    ? draft.data.volumes.map((v) => ({ volume: Number(fragFormatVolume(v.volume)), tester: Boolean(v.tester) })).filter((v) => v.volume > 0)
+    : null;
+  for (const { volume, tester = false } of chosen || plan.volumes) {
+    if (active.some((a) => Boolean(a.tester) === Boolean(tester) && Math.abs(Number(a.volume) - volume) < 0.01)) continue;
+    const marketBlocked = fragranticaMarketBlockReasons(perfume, { volume, typeKey, tester }).length > 0;
+    const missing = fragranticaTargetsMissingVolume(targets, presence, volume, tester).filter((t) => !(marketBlocked && t.kind === "yandex"));
     if (!missing.length) {
       skipped.push(volume);
       continue;
     }
-    await insertFragranticaDraft({ perfumeId: draft.perfume_id, volume, typeKey, targets: missing.map((t) => t.key), createdBy: draft.created_by });
+    await insertFragranticaDraft({ perfumeId: draft.perfume_id, volume, tester, typeKey, targets: missing.map((t) => t.key), createdBy: draft.created_by });
     created += 1;
   }
   if (created) {
@@ -246,9 +250,11 @@ async function expandFragranticaPerfumeDraft(draft) {
     fragranticaSharedDescription(Number(draft.perfume_id), { typeKey, tester: false, marketplace: targets.some((t) => t.kind === "yandex") ? "yandex" : "ozon" }).catch(() => {});
     return null;
   }
-  const reason = !plan.volumes.length
-    ? "В PriceMaster нет подходящих строк с объёмом — добавьте объём вручную."
-    : `Все объёмы из PriceMaster (${plan.volumes.map((v) => v.volume).join(", ")} мл) уже есть в выбранных магазинах.`;
+  const reason = chosen
+    ? `Выбранные объёмы (${chosen.map((v) => `${v.volume}${v.tester ? " тестер" : ""}`).join(", ")} мл) уже есть в выбранных магазинах.`
+    : !plan.volumes.length
+      ? "В PriceMaster нет подходящих строк с объёмом — добавьте объём вручную."
+      : `Все объёмы из PriceMaster (${plan.volumes.map((v) => v.volume).join(", ")} мл) уже есть в выбранных магазинах.`;
   return updateFragranticaDraft(draft.id, { status: "skipped", stage: null, type_key: typeKey, error: reason, data: { skippedVolumes: skipped } });
 }
 
@@ -549,14 +555,59 @@ app.post("/api/fragrantica/drafts", requireAdmin, async (request, response, next
     const busyIds = new Set(busy.map((r) => Number(r.id)));
     const username = cleanText(request.session?.username) || null;
     let added = 0;
+    const chosenVolumes = body.volumes && typeof body.volumes === "object" ? body.volumes : {};
     for (const perfumeId of perfumeIds) {
       if (busyIds.has(perfumeId)) continue;
       await prisma.$executeRawUnsafe(`DELETE FROM fragrantica_drafts WHERE perfume_id = $1 AND kind = 'perfume' AND status = 'skipped'`, perfumeId);
-      await insertFragranticaDraft({ perfumeId, kind: "perfume", typeKey: cleanText(body.typeKey) || null, targets: targets.map((t) => t.key), createdBy: username });
+      const volumes = (Array.isArray(chosenVolumes[perfumeId]) ? chosenVolumes[perfumeId] : [])
+        .map((v) => ({ volume: Number(fragFormatVolume(v?.volume)), tester: Boolean(v?.tester) }))
+        .filter((v) => v.volume > 0 && v.volume < 5000)
+        .slice(0, 20);
+      await insertFragranticaDraft({
+        perfumeId, kind: "perfume", typeKey: cleanText(body.typeKey) || null, targets: targets.map((t) => t.key), createdBy: username,
+        data: volumes.length ? { volumes } : null,
+      });
       added += 1;
     }
     await appendAudit(request, "fragrantica.drafts.add", { entityType: "fragrantica_draft", newValue: { added, alreadyInQueue: busyIds.size, shops: targets.map((t) => t.label) } });
     response.json({ ok: true, added, alreadyInQueue: busyIds.size });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// «Какие объёмы?» при отметке аромата: объёмы из PriceMaster (сколько строк, от какой цены) и в каких из
+// выбранных магазинов этот объём уже продаётся
+app.get("/api/fragrantica/drafts/volume-plan", requireAdmin, async (request, response, next) => {
+  try {
+    const perfumeId = Number(request.query.perfumeId);
+    if (!perfumeId) return response.status(400).json({ error: "perfumeId обязателен" });
+    const targets = fragranticaDraftTargets(cleanText(request.query.targets).split(",").filter(Boolean));
+    const perfume = await Promise.race([
+      fragranticaPerfumeForExport(perfumeId),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Фрагрантика не ответила за минуту")), FRAG_PAGE_FETCH_TIMEOUT_MS).unref?.()),
+    ]);
+    const { rows } = await fragranticaPerfumePmRows(perfume);
+    const plan = planFragranticaVolumes(rows, perfume);
+    const presence = await fragranticaPerfumePresence(perfumeId);
+    const volumes = plan.volumes.map((v) => ({
+      volume: v.volume,
+      rows: v.rows,
+      inShops: targets.filter((t) => fragranticaVolumeInShop({ ...presence, shopId: t.id, volume: v.volume })).map((t) => t.label),
+    }));
+    // volumes the shops already sell but PriceMaster does not list now — shown, unchecked
+    const known = new Set(volumes.map((v) => v.volume));
+    for (const t of targets) {
+      for (const v of presence.stock?.[t.id]?.v || []) {
+        const key = Number(v);
+        if (key > 3 && !known.has(key)) {
+          known.add(key);
+          volumes.push({ volume: key, rows: 0, inShops: targets.filter((x) => fragranticaVolumeInShop({ ...presence, shopId: x.id, volume: key })).map((x) => x.label) });
+        }
+      }
+    }
+    volumes.sort((a, b) => a.volume - b.volume);
+    response.json({ ok: true, perfumeId, brand: perfume.brand, name: perfume.name, typeKey: plan.typeKey, volumes });
   } catch (error) {
     next(error);
   }
