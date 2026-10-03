@@ -546,9 +546,11 @@ async function runFragranticaImageJob(job, options) {
 }
 
 async function runFragranticaImageJobPhotos(job, { perfumeId, styles, refresh }) {
+  const t0 = Date.now();
   const perfume = await fragranticaPerfumeForExport(perfumeId);
   await ensureFragranticaPerfumeImage(perfumeId);
   const hdSource = await ensureFragranticaHdImage(perfumeId);
+  const timing = { source: Date.now() - t0 };
   // v2: 1500×2000, JPEG q95 без прореживания цвета, исходник — оригинал Фрагрантики (см. ensureFragranticaHdImage)
   const mainFile = `${perfumeId}-main-v2.jpg`;
   const notesFile = (style) => `${perfumeId}-notes-${style}-v2.jpg`;
@@ -573,6 +575,7 @@ async function runFragranticaImageJobPhotos(job, { perfumeId, styles, refresh })
   job.stage = "parfumdeclaration";
   try {
     const brandInfo = await fragranticaBrandInfo(perfume.brandSlug).catch(() => ({ country: "" }));
+    timing.brand = Date.now() - t0;
     const pd = await requestPerfumeCardPhotos({
       imageUrl: fragranticaAbsoluteUrl(result.source),
       style: styles[0],
@@ -595,6 +598,8 @@ async function runFragranticaImageJobPhotos(job, { perfumeId, styles, refresh })
         accords: (perfume.accords || []).slice(0, 6),
       },
     });
+    timing.render = Date.now() - t0;
+    logger.info("fragrantica photo timing", { perfumeId, styles: styles.length, by: pd.renderedBy || "pd", ...timing });
     await fragFs.promises.mkdir(path.join(fragranticaMediaDir, "cards"), { recursive: true });
     if (pd.main) {
       await fragFs.promises.writeFile(fragranticaMediaPath("cards", mainFile), Buffer.from(pd.main, "base64"));
