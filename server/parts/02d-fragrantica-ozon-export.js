@@ -373,7 +373,10 @@ app.get("/api/fragrantica/ozon/attribute-values", requireAdmin, async (request, 
 // lib/perfume-render (scripts/build-perfume-render.cjs). Нет onnxruntime-node / ошибка — как раньше,
 // через parfumdeclaration. FRAGRANTICA_RENDER=pd — всегда через parfumdeclaration.
 let fragranticaLocalRenderer;
-let fragranticaLocalRenderChain = Promise.resolve();
+// Two perfumes render at once (8 cores; the upscale uses 2 threads each)
+const fragranticaLocalRenderLanes = Math.max(1, Number(process.env.FRAGRANTICA_RENDER_PARALLEL || 2) || 2);
+const fragranticaLocalRenderChains = Array.from({ length: fragranticaLocalRenderLanes }, () => Promise.resolve());
+let fragranticaLocalRenderNext = 0;
 
 function loadFragranticaLocalRenderer() {
   if (process.env.FRAGRANTICA_RENDER === "pd") return null;
@@ -399,7 +402,8 @@ async function fragranticaSourceBuffer(imageUrl) {
 async function renderFragranticaCardHere(payload) {
   const renderer = loadFragranticaLocalRenderer();
   if (!renderer) return null;
-  const run = fragranticaLocalRenderChain.then(async () => {
+  const lane = fragranticaLocalRenderNext++ % fragranticaLocalRenderLanes;
+  const run = fragranticaLocalRenderChains[lane].then(async () => {
     const source = await fragranticaSourceBuffer(payload.imageUrl);
     const out = await renderer.renderPerfumeCard({ source, styles: payload.styles, perfume: payload.perfume, extras: payload.extras !== false });
     const b64 = (buf) => (buf ? Buffer.from(buf).toString("base64") : null);
@@ -416,7 +420,7 @@ async function renderFragranticaCardHere(payload) {
       renderedBy: "davidsklad",
     };
   });
-  fragranticaLocalRenderChain = run.catch(() => {});
+  fragranticaLocalRenderChains[lane] = run.catch(() => {});
   return run;
 }
 

@@ -18,10 +18,16 @@
 
 const fragranticaDraftsEnabled = process.env.FRAGRANTICA_DRAFTS_ENABLED !== "false";
 const fragranticaDraftsTickMs = 10_000;
-const fragranticaDraftsParallel = Math.max(1, Number(process.env.FRAGRANTICA_DRAFTS_PARALLEL || 3) || 3);
+const fragranticaDraftsParallel = Math.max(1, Number(process.env.FRAGRANTICA_DRAFTS_PARALLEL || 6) || 6);
 const FRAG_DRAFT_ACTIVE = "('queued', 'working', 'ready', 'attention', 'approved', 'sending', 'failed')";
 let fragranticaDraftsTablesReady = false;
 let fragranticaDraftsRunning = false;
+// continuous pool: a free slot takes the next card at once (a slow card no longer holds the whole batch)
+let fragranticaDraftsInFlight = 0;
+let fragranticaExpandInFlight = 0;
+let fragranticaDraftsStarted = false;
+const FRAG_EXPAND_PARALLEL = 4;
+const FRAG_PAGE_FETCH_TIMEOUT_MS = 60_000;
 
 async function requireFragranticaDraftTables() {
   const prisma = await requireFragranticaTables();
@@ -158,13 +164,50 @@ async function fragranticaPerfumePmRows(perfume) {
   return { ...result, source: "search" };
 }
 
+// ─── Общая работа на аромат ────────────────────────────────────────────────
+// Фото и описание не зависят от объёма: первый объём (или раскладка аромата) запускает их, остальные объёмы
+// ждут тот же промис — поэтому объёмы одного аромата собираются параллельно, а не друг за другом.
+
+const fragranticaPhotoWork = new Map(); // perfumeId → { styles: Set, promise, at }
+const fragranticaDescriptionWork = new Map(); // perfumeId → { promise, at }
+const FRAG_SHARED_WORK_TTL_MS = 30 * 60_000;
+
+function fragranticaSharedPhotos(perfumeId, styles) {
+  const now = Date.now();
+  const entry = fragranticaPhotoWork.get(perfumeId);
+  if (entry && now - entry.at < FRAG_SHARED_WORK_TTL_MS && styles.every((s) => entry.styles.has(s))) return entry.promise;
+  const all = [...new Set([...(entry && now - entry.at < FRAG_SHARED_WORK_TTL_MS ? entry.styles : []), ...styles])];
+  const promise = runFragranticaImageJob({}, { perfumeId, styles: all, refresh: false });
+  fragranticaPhotoWork.set(perfumeId, { styles: new Set(all), promise, at: now });
+  promise.catch(() => fragranticaPhotoWork.delete(perfumeId));
+  return promise;
+}
+
+function fragranticaSharedDescription(perfumeId, { typeKey, tester, marketplace }) {
+  const now = Date.now();
+  const entry = fragranticaDescriptionWork.get(perfumeId);
+  if (entry && now - entry.at < FRAG_SHARED_WORK_TTL_MS) return entry.promise;
+  const promise = (async () => {
+    const saved = await readFragranticaCardDescription(perfumeId).catch(() => "");
+    if (saved) return { description: saved, source: "shared" };
+    const res = await generateFragranticaDescription({ perfumeId, typeKey, tester, marketplace });
+    return { description: res.description, source: "ai" };
+  })();
+  fragranticaDescriptionWork.set(perfumeId, { promise, at: now });
+  promise.catch(() => fragranticaDescriptionWork.delete(perfumeId));
+  return promise;
+}
+
 // ─── Сборка ────────────────────────────────────────────────────────────────
 
 // Аромат → черновики по объёмам из PriceMaster (только тех магазинов, где этого объёма ещё нет).
 async function expandFragranticaPerfumeDraft(draft) {
   let perfume;
   try {
-    perfume = await fragranticaPerfumeForExport(Number(draft.perfume_id));
+    perfume = await Promise.race([
+      fragranticaPerfumeForExport(Number(draft.perfume_id)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Фрагрантика не ответила за минуту")), FRAG_PAGE_FETCH_TIMEOUT_MS).unref?.()),
+    ]);
   } catch (error) {
     return updateFragranticaDraft(draft.id, { status: "attention", stage: null, error: `Страница аромата не скачана: ${error?.message || error}. Откройте аромат и загрузите его закладкой «→ Склад».` });
   }
@@ -195,6 +238,10 @@ async function expandFragranticaPerfumeDraft(draft) {
   }
   if (created) {
     await prisma.$executeRawUnsafe(`DELETE FROM fragrantica_drafts WHERE id = $1`, Number(draft.id));
+    // photos and the description start now, while the cards wait for a slot
+    const styles = [...new Set(targets.map((t) => t.style))];
+    if (styles.length) fragranticaSharedPhotos(Number(draft.perfume_id), styles).catch(() => {});
+    fragranticaSharedDescription(Number(draft.perfume_id), { typeKey, tester: false, marketplace: targets.some((t) => t.kind === "yandex") ? "yandex" : "ozon" }).catch(() => {});
     return null;
   }
   const reason = !plan.volumes.length
@@ -211,51 +258,46 @@ async function buildFragranticaCardDraft(draft) {
   const stage = (name) => updateFragranticaDraft(draft.id, { stage: name });
   const warnings = [];
 
-  await stage("form");
+  await stage("build");
   const ozonTarget = targets.find((t) => t.kind === "ozon");
-  const form = await buildFragranticaFormData({ perfumeId, typeKey: draft.type_key, volume, tester, accountId: ozonTarget?.id });
-  const typeKey = form.typeKey;
-
-  await stage("links");
-  let linkRows = [];
-  let selected = [];
-  let preview = null;
-  try {
-    const perfume = await fragranticaPerfumeForExport(perfumeId);
-    const pm = await fragranticaPerfumePmRows(perfume);
-    const suggestions = await fragranticaLinkSuggestionsData({ perfumeId, typeKey, volume, tester, rows: pm.rows, usdRate: pm.usdRate, settings: pm.settings });
-    linkRows = suggestions.rows.slice(0, 12);
-    selected = suggestions.suggested.filter((id) => linkRows.some((r) => r.id === id));
-    const rows = linkRows.filter((r) => selected.includes(r.id));
-    if (rows.length) preview = await fragranticaPricePreview(rows);
-    else warnings.push("Подходящих строк поставщика нет — цену поставьте вручную или отметьте строку.");
-  } catch (error) {
-    warnings.push(`Привязка: ${error?.message || error}`);
-  }
-
-  await stage("photos");
+  const perfume = await fragranticaPerfumeForExport(perfumeId);
+  // the type is known before the form: the draft's own, else the guess from the name (same rule as the form)
+  const typeKey = FRAG_OZON_TYPES.some((t) => t.key === draft.type_key) ? draft.type_key : fragOzonGuessTypeKey(perfume);
   const styles = [...new Set(targets.map((t) => t.style))];
-  let images = { main: form.sourceImage, notes: {} };
-  if (styles.length) {
-    const result = await runFragranticaImageJob({}, { perfumeId, styles, refresh: false });
-    images = { main: result.main || form.sourceImage, notes: result.notes || {}, specs: result.specs || {}, closeup: result.closeup || null };
-    warnings.push(...(result.warnings || []));
-  }
+  const marketplace = targets.some((t) => t.kind === "yandex") ? "yandex" : "ozon";
 
-  await stage("description");
-  // Одно описание на аромат: если другой объём уже написан/отправлен — берём его, ИИ не зовём
-  let description = await readFragranticaCardDescription(perfumeId).catch(() => "");
-  let descriptionSource = description ? "shared" : "";
+  // Ozon form, supplier links + price, photos and the description don't depend on each other — run together
+  const [form, linkPart, photoPart, descriptionPart] = await Promise.all([
+    buildFragranticaFormData({ perfumeId, typeKey, volume, tester, accountId: ozonTarget?.id }),
+    (async () => {
+      try {
+        const pm = await fragranticaPerfumePmRows(perfume);
+        const suggestions = await fragranticaLinkSuggestionsData({ perfumeId, typeKey, volume, tester, rows: pm.rows, usdRate: pm.usdRate, settings: pm.settings });
+        const linkRows = suggestions.rows.slice(0, 12);
+        const selected = suggestions.suggested.filter((id) => linkRows.some((r) => r.id === id));
+        const rows = linkRows.filter((r) => selected.includes(r.id));
+        const preview = rows.length ? await fragranticaPricePreview(rows) : null;
+        return { linkRows, selected, preview, warning: rows.length ? "" : "Подходящих строк поставщика нет — цену поставьте вручную или отметьте строку." };
+      } catch (error) {
+        return { linkRows: [], selected: [], preview: null, warning: `Привязка: ${error?.message || error}` };
+      }
+    })(),
+    styles.length ? fragranticaSharedPhotos(perfumeId, styles).catch((error) => ({ warnings: [`Фото: ${error?.message || error}`] })) : Promise.resolve(null),
+    fragranticaSharedDescription(perfumeId, { typeKey, tester, marketplace }).catch((error) => ({ description: "", source: "", error })),
+  ]);
+  const { linkRows, selected, preview } = linkPart;
+  if (linkPart.warning) warnings.push(linkPart.warning);
+  let images = { main: form.sourceImage, notes: {} };
+  if (photoPart) {
+    images = { main: photoPart.main || form.sourceImage, notes: photoPart.notes || {}, specs: photoPart.specs || {}, closeup: photoPart.closeup || null };
+    warnings.push(...(photoPart.warnings || []));
+  }
+  let description = descriptionPart.description || "";
+  let descriptionSource = descriptionPart.source || "";
   if (!description) {
-    try {
-      const res = await generateFragranticaDescription({ perfumeId, typeKey, tester, marketplace: targets.some((t) => t.kind === "yandex") ? "yandex" : "ozon" });
-      description = res.description;
-      descriptionSource = "ai";
-    } catch (error) {
-      description = cleanText((form.attributes.find((a) => a.id === FRAG_OZON_ATTR.annotation)?.values || [])[0]?.value);
-      descriptionSource = description ? "fragrantica" : "";
-      warnings.push(`Описание ИИ не получилось: ${error?.message || error}`);
-    }
+    description = cleanText((form.attributes.find((a) => a.id === FRAG_OZON_ATTR.annotation)?.values || [])[0]?.value);
+    descriptionSource = description ? "fragrantica" : "";
+    if (descriptionPart.error) warnings.push(`Описание ИИ не получилось: ${descriptionPart.error?.message || descriptionPart.error}`);
   }
 
   const data = {
@@ -341,8 +383,11 @@ async function runFragranticaDraftsTick() {
     const prisma = await requireFragranticaDraftTables();
     await prisma.$executeRawUnsafe(
       `UPDATE fragrantica_drafts SET status = CASE WHEN status = 'sending' THEN 'approved' ELSE 'queued' END, stage = NULL, updated_at = now()
-       WHERE status IN ('working', 'sending') AND updated_at < now() - interval '15 minutes'`,
+       WHERE status IN ('working', 'sending') AND (updated_at < now() - interval '10 minutes' OR $1::boolean)`,
+      // first tick after a (re)start: nothing can be in flight in this process yet
+      !fragranticaDraftsStarted,
     );
+    fragranticaDraftsStarted = true;
     for (let i = 0; i < 20; i += 1) {
       const [next] = await prisma.$queryRawUnsafe(
         `UPDATE fragrantica_drafts SET status = 'sending', updated_at = now()
@@ -352,25 +397,38 @@ async function runFragranticaDraftsTick() {
       if (!next) break;
       await processFragranticaDraft(next);
     }
-    // Ароматы → объёмы: по индексу это миллисекунды, раскладываем все ожидающие сразу
+    // Ароматы → объёмы: по индексу это миллисекунды, но аромат без скачанной страницы ждёт Фрагрантику —
+    // раскладка идёт в своём пуле и не держит сборку карточек
     const perfumes = await prisma.$queryRawUnsafe(
       `UPDATE fragrantica_drafts SET status = 'working', stage = 'volumes', updated_at = now()
-       WHERE id IN (SELECT id FROM fragrantica_drafts WHERE status = 'queued' AND kind = 'perfume' ORDER BY id LIMIT 100 FOR UPDATE SKIP LOCKED)
+       WHERE id IN (SELECT id FROM fragrantica_drafts WHERE status = 'queued' AND kind = 'perfume' ORDER BY id LIMIT $1 FOR UPDATE SKIP LOCKED)
        RETURNING *`,
+      Math.max(0, FRAG_EXPAND_PARALLEL - fragranticaExpandInFlight),
     );
-    for (let i = 0; i < perfumes.length; i += 4) await Promise.all(perfumes.slice(i, i + 4).map((draft) => processFragranticaDraft(draft)));
+    for (const draft of perfumes) {
+      fragranticaExpandInFlight += 1;
+      processFragranticaDraft(draft)
+        .catch(() => {})
+        .finally(() => { fragranticaExpandInFlight = Math.max(0, fragranticaExpandInFlight - 1); });
+    }
     const claimed = await prisma.$queryRawUnsafe(
       `UPDATE fragrantica_drafts SET status = 'working', stage = 'start', updated_at = now()
        WHERE id IN (
-         SELECT DISTINCT ON (d.perfume_id) d.id FROM fragrantica_drafts d
+         SELECT d.id FROM fragrantica_drafts d
           WHERE d.status = 'queued' AND d.kind = 'card'
-            AND NOT EXISTS (SELECT 1 FROM fragrantica_drafts w WHERE w.perfume_id = d.perfume_id AND w.status = 'working')
-          ORDER BY d.perfume_id, d.id
-          LIMIT ${fragranticaDraftsParallel})
+          ORDER BY d.id
+          LIMIT $1
+          FOR UPDATE SKIP LOCKED)
        RETURNING *`,
+      Math.max(0, fragranticaDraftsParallel - fragranticaDraftsInFlight),
     );
-    await Promise.all(claimed.map((draft) => processFragranticaDraft(draft)));
-    return { status: "ok", built: claimed.length + perfumes.length };
+    for (const draft of claimed) {
+      fragranticaDraftsInFlight += 1;
+      processFragranticaDraft(draft)
+        .catch(() => {})
+        .finally(() => { fragranticaDraftsInFlight = Math.max(0, fragranticaDraftsInFlight - 1); });
+    }
+    return { status: "ok", built: claimed.length + perfumes.length + fragranticaDraftsInFlight + fragranticaExpandInFlight };
   } finally {
     fragranticaDraftsRunning = false;
   }
