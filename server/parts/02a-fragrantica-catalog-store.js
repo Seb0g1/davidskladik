@@ -316,8 +316,8 @@ function fragranticaRoutes() {
 }
 
 // Фрагрантика отвечает 429, если спрашивать часто: не больше 2 страниц одновременно и не чаще раза в 1.5 с
-const FRAG_PAGE_PARALLEL = Math.max(1, Number(process.env.FRAGRANTICA_PAGE_PARALLEL || 2) || 2);
-const FRAG_PAGE_GAP_MS = Math.max(0, Number(process.env.FRAGRANTICA_PAGE_GAP_MS || 1500) || 0);
+const FRAG_PAGE_PARALLEL = Math.max(1, Number(process.env.FRAGRANTICA_PAGE_PARALLEL || 1) || 1);
+const FRAG_PAGE_GAP_MS = Math.max(0, Number(process.env.FRAGRANTICA_PAGE_GAP_MS || 4000) || 0);
 let fragranticaPageActive = 0;
 let fragranticaPageLastStart = 0;
 const fragranticaPageWaiters = [];
@@ -357,7 +357,7 @@ async function fetchFragranticaHtmlRoutes(url) {
       if (error instanceof FragranticaHttpError && error.status === 404) throw error;
       if (error instanceof FragranticaHttpError && (error.status === 403 || error.status === 429)) {
         // 403 = Cloudflare challenge (hours); 429 = «too many requests» (minutes)
-        const restMs = error.status === 429 ? 3 * 60_000 : 6 * 3_600_000;
+        const restMs = error.status === 429 ? 3 * 60_000 : 2 * 3_600_000;
         if (!fragranticaRouteBlockedUntil.has(route.name)) logger.info("fragrantica route challenged", { route: route.name, status: error.status, restMin: Math.round(restMs / 60_000) });
         fragranticaRouteBlockedUntil.set(route.name, Date.now() + restMs);
         if (route.name === "direct") fragranticaDirectBlockedUntil = Date.now() + restMs;

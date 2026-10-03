@@ -872,11 +872,13 @@ async function runFragranticaDraftsTick() {
       `UPDATE fragrantica_drafts SET status = 'working', stage = 'start', started_at = now(), updated_at = now()
        WHERE id IN (
          SELECT d.id FROM fragrantica_drafts d
+           LEFT JOIN fragrantica_perfumes p ON p.id = d.perfume_id
           WHERE d.status = 'queued' AND d.kind = 'card' AND coalesce(d.data ? 'existing', false) = $2
             AND coalesce((d.data->>'retryAt')::timestamptz, 'epoch'::timestamptz) <= now()
-          ORDER BY d.id
+          -- perfumes whose Fragrantica page is already here build first (no request to Fragrantica)
+          ORDER BY (p.detail_at IS NULL), d.id
           LIMIT $1
-          FOR UPDATE SKIP LOCKED)
+          FOR UPDATE OF d SKIP LOCKED)
        RETURNING *`,
       Math.max(0, limit), improve,
     );
