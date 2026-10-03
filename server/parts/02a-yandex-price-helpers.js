@@ -97,6 +97,7 @@ async function buildYandexPriceOverrideLookup(products = [], shops = [], warehou
           const markupCoefficient = resolveMarkupCoefficient({
             productMarkup: markupOverride,
             marketplace: "yandex",
+            target: shop.id,
             supplierUsdPrice: match.price,
             supplierPriceCurrency: match.priceCurrency || match.currency,
             usdRate: rate,
@@ -113,6 +114,7 @@ async function buildYandexPriceOverrideLookup(products = [], shops = [], warehou
       if (selectedSupplier) {
         const availabilityPolicy = resolveAvailabilityPolicy({
           marketplace: "yandex",
+          target: shop.id,
           availableSupplierCount,
           baseMarkup: Number(selectedSupplier.markupCoefficient || 0),
           appSettings,

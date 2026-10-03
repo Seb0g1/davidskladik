@@ -102,6 +102,7 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
         const markupCoefficient = resolveMarkupCoefficient({
           productMarkup: productMarkupOverride,
           marketplace: product.marketplace,
+          target: product.target,
           supplierUsdPrice: match.price,
           supplierPriceCurrency: match.priceCurrency || match.currency,
           usdRate: rate,
@@ -137,14 +138,16 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
         volumeMismatch: matched.find((item) => item.volumeMismatch)?.volumeMismatch || null,
       };
     });
+    const shopSettings = pricingSettingsForTarget(appSettings, product.marketplace, product.target);
     const fallbackMarkup = product.marketplace === "ozon"
-      ? Number(appSettings.defaultMarkups?.ozon || process.env.DEFAULT_OZON_MARKUP || 1.7)
-      : Number(appSettings.defaultMarkups?.yandex || process.env.DEFAULT_YANDEX_MARKUP || 1.6);
+      ? Number(shopSettings.defaultMarkups?.ozon || process.env.DEFAULT_OZON_MARKUP || 1.7)
+      : Number(shopSettings.defaultMarkups?.yandex || process.env.DEFAULT_YANDEX_MARKUP || 1.6);
     const availableSupplierCount = rawSuppliers.filter((supplier) => supplier.available && supplier.priceEligible !== false && supplier.stockOnly !== true).length;
     const stockOnlyAvailableSupplierCount = rawSuppliers.filter((supplier) => supplier.available && (supplier.stockOnly === true || supplier.priceEligible === false)).length;
     const suppliers = enrichSupplierPriceCandidates(rawSuppliers, {
       productMarkupOverride,
       marketplace: product.marketplace,
+      target: product.target,
       rate,
       appSettings,
       fallbackMarkup,
@@ -158,6 +161,7 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
     const baseMarkupCoefficient = Number(productMarkupOverride || selectedSupplier?.markupCoefficient || fallbackMarkup);
     const availabilityPolicy = resolveAvailabilityPolicy({
       marketplace: product.marketplace,
+      target: product.target,
       availableSupplierCount: availableSupplierCount || stockOnlyAvailableSupplierCount,
       baseMarkup: baseMarkupCoefficient,
       appSettings,

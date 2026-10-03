@@ -162,8 +162,9 @@ function pickWarehouseStockOnlySupplier(matches) {
     )[0] || null;
 }
 
-function resolveMarkupCoefficient({ productMarkup, marketplace, supplierUsdPrice, supplierPriceCurrency = "USD", usdRate = 0, appSettings }) {
+function resolveMarkupCoefficient({ productMarkup, marketplace, target = "", supplierUsdPrice, supplierPriceCurrency = "USD", usdRate = 0, appSettings }) {
   if (Number(productMarkup) > 0) return Number(productMarkup);
+  appSettings = pricingSettingsForTarget(appSettings, marketplace, target);
   const defaults = appSettings?.defaultMarkups || {};
   const fallback = marketplace === "ozon"
     ? Number(defaults.ozon || process.env.DEFAULT_OZON_MARKUP || 1.7)
@@ -187,7 +188,8 @@ function resolveMarkupCoefficient({ productMarkup, marketplace, supplierUsdPrice
   return Number(matched?.coefficient || fallback);
 }
 
-function resolveAvailabilityPolicy({ marketplace, availableSupplierCount = 0, baseMarkup = 0, appSettings } = {}) {
+function resolveAvailabilityPolicy({ marketplace, target = "", availableSupplierCount = 0, baseMarkup = 0, appSettings } = {}) {
+  appSettings = pricingSettingsForTarget(appSettings, marketplace, target);
   const count = Math.max(0, Number(availableSupplierCount || 0));
   let rules = Array.isArray(appSettings?.availabilityRules) ? appSettings.availabilityRules : [];
   if (!rules.length) rules = defaultAppSettings().availabilityRules;
@@ -223,6 +225,7 @@ function resolveWarehouseTargetStock(availabilityPolicy = {}, {
 function enrichSupplierPriceCandidates(suppliers = [], {
   productMarkupOverride = 0,
   marketplace = "",
+  target = "",
   rate = 0,
   appSettings = {},
   fallbackMarkup = 0,
@@ -234,6 +237,7 @@ function enrichSupplierPriceCandidates(suppliers = [], {
     const baseMarkupCoefficient = Number(productMarkupOverride || supplier.markupCoefficient || fallbackMarkup || 0);
     const availabilityPolicy = resolveAvailabilityPolicy({
       marketplace,
+      target,
       availableSupplierCount: policySupplierCount,
       baseMarkup: baseMarkupCoefficient,
       appSettings,

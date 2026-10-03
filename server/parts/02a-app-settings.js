@@ -98,6 +98,82 @@ function normalizeAvailabilityRule(input = {}) {
   };
 }
 
+// Профиль цен кабинета (Настройки → Цены → «Отдельные настройки магазина»): у кабинета свои базовая наценка,
+// ступени по цене закупки и правила наличия. Товары этого кабинета считаются по профилю, остальные — по общим.
+// Ключ — id кабинета (target): «ozon-3d10ec43» (AURA), id магазина Маркета и т. п.
+function normalizeTargetPricingProfile(input = {}) {
+  const raw = input && typeof input === "object" ? input : {};
+  const marketplace = ["ozon", "yandex"].includes(cleanText(raw.marketplace).toLowerCase()) ? cleanText(raw.marketplace).toLowerCase() : "ozon";
+  const defaultMarkup = Number(raw.defaultMarkup ?? raw.default_markup ?? 0);
+  const markupRules = (Array.isArray(raw.markupRules) ? raw.markupRules : [])
+    .map((rule) => normalizeMarkupRule({ ...rule, marketplace }))
+    .filter(Boolean)
+    .sort((a, b) => a.minUsd - b.minUsd);
+  const availabilityRules = (Array.isArray(raw.availabilityRules) ? raw.availabilityRules : [])
+    .map((rule) => normalizeAvailabilityRule({ ...rule, marketplace }))
+    .filter(Boolean)
+    .sort((a, b) => Number(b.minAvailableSuppliers || 0) - Number(a.minAvailableSuppliers || 0));
+  return {
+    enabled: parseBooleanSetting(raw.enabled, true),
+    marketplace,
+    label: cleanText(raw.label).slice(0, 80),
+    defaultMarkup: Number.isFinite(defaultMarkup) && defaultMarkup > 0 ? Number(defaultMarkup.toFixed(4)) : 0,
+    markupRules,
+    availabilityRules,
+    copiedFrom: cleanText(raw.copiedFrom).slice(0, 40),
+    updatedAt: cleanText(raw.updatedAt) || null,
+  };
+}
+
+function normalizeTargetPricing(input = {}) {
+  const raw = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  const out = {};
+  for (const [target, profile] of Object.entries(raw).slice(0, 20)) {
+    const key = cleanText(target).slice(0, 80);
+    if (key) out[key] = normalizeTargetPricingProfile(profile);
+  }
+  return out;
+}
+
+/**
+ * The settings a product of this shop is priced with: its shop's profile replaces the marketplace's default
+ * markup, markup steps and availability rules; everything else (rate, other marketplaces) stays.
+ */
+function pricingSettingsForTarget(appSettings = {}, marketplace = "", target = "") {
+  const profile = appSettings?.targetPricing?.[cleanText(target)];
+  const mp = cleanText(marketplace).toLowerCase();
+  if (!profile || profile.enabled === false || !mp || profile.marketplace !== mp) return appSettings;
+  const otherMarketplace = (rule) => rule.marketplace && rule.marketplace !== "all" && rule.marketplace !== mp;
+  return {
+    ...appSettings,
+    defaultMarkups: {
+      ...(appSettings.defaultMarkups || {}),
+      ...(profile.defaultMarkup > 0 ? { [mp]: profile.defaultMarkup } : {}),
+    },
+    markupRules: [...(appSettings.markupRules || []).filter(otherMarketplace), ...profile.markupRules],
+    availabilityRules: profile.availabilityRules.length
+      ? [...(appSettings.availabilityRules || []).filter(otherMarketplace), ...profile.availabilityRules]
+      : appSettings.availabilityRules,
+    pricingProfile: cleanText(target),
+  };
+}
+
+/** A shop profile that prices exactly like the marketplace's general settings today (the starting copy). */
+function copyMarketplacePricingProfile(appSettings = {}, marketplace = "ozon", label = "") {
+  const mp = cleanText(marketplace).toLowerCase() || "ozon";
+  const applies = (rule) => !rule.marketplace || rule.marketplace === "all" || rule.marketplace === mp;
+  return normalizeTargetPricingProfile({
+    enabled: true,
+    marketplace: mp,
+    label,
+    defaultMarkup: Number(appSettings.defaultMarkups?.[mp] || 0),
+    markupRules: (appSettings.markupRules || []).filter(applies),
+    availabilityRules: (appSettings.availabilityRules || []).filter(applies),
+    copiedFrom: mp,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
 function normalizeMarketplaceBranding(input = {}, fallback = {}) {
   const raw = input && typeof input === "object" ? input : {};
   const rawExtraCards = Array.isArray(raw.extraCards || raw.extra_cards) ? (raw.extraCards || raw.extra_cards) : [];
@@ -244,6 +320,7 @@ function normalizeAppSettings(input = {}) {
     ai: normalizeAiSettings(input.ai || {}, fallback.ai),
     markupRules: rules,
     availabilityRules,
+    targetPricing: normalizeTargetPricing(input.targetPricing || input.target_pricing || {}),
     branding: normalizeBrandingSettings(input.branding || {}, fallback.branding),
     supplierCart: normalizeSupplierCartSettings(input.supplierCart || input.supplier_cart || {}, fallback.supplierCart),
     sorinExpress: normalizeSorinExpressSettings(input.sorinExpress || input.sorin_express || {}, fallback.sorinExpress),
@@ -303,6 +380,7 @@ function priceAffectingSettingsChanged(previous = {}, next = {}) {
     defaultMarkups: settings.defaultMarkups || {},
     markupRules: settings.markupRules || [],
     availabilityRules: settings.availabilityRules || [],
+    targetPricing: settings.targetPricing || {},
   });
   return JSON.stringify(pick(prev)) !== JSON.stringify(pick(current));
 }

@@ -386,3 +386,136 @@ app.post("/api/price-guard/holds/decide", requireAdmin, async (request, response
     next(error);
   }
 });
+
+// ─── Отдельные настройки цен магазина (Настройки → Цены) ──────────────────────
+// Профиль кабинета: своя базовая наценка, ступени по закупке и правила наличия (targetPricing в настройках).
+// Товары этого кабинета считаются по профилю, остальные — по общим настройкам маркетплейса. После
+// изменения профиля пересчитываются цены только этого кабинета (через «Проверку цен», как обычно).
+
+function targetPricingShops() {
+  return fragranticaTargets().map((t) => ({ id: t.id, kind: t.kind, label: t.label }));
+}
+
+async function repriceTargetPricingShop(target, marketplace, reason) {
+  const prisma = getPrisma();
+  if (!prisma || typeof queueAuthoritativePriceReprice !== "function") return { queued: 0 };
+  const rows = await prisma.$queryRawUnsafe(
+    `SELECT id FROM warehouse_products WHERE target = $1 AND marketplace::text = $2 AND archived = false`,
+    cleanText(target), cleanText(marketplace),
+  );
+  const productIds = rows.map((r) => r.id);
+  if (!productIds.length) return { queued: 0 };
+  const queued = await queueAuthoritativePriceReprice({
+    productIds,
+    marketplace,
+    reason,
+    sourceEvent: `settings.target_pricing:${cleanText(target)}`,
+    force: true,
+    onlyChanged: false,
+    refreshMarketplacePrices: true,
+    livePriceMaster: true,
+    verify: true,
+  });
+  return { products: productIds.length, queued: queued?.queued || 0, priceIntentId: queued?.priceIntentId || null };
+}
+
+function targetPricingShopOr404(target, response) {
+  const shop = targetPricingShops().find((s) => s.id === cleanText(target));
+  if (!shop) {
+    response.status(404).json({ error: "Магазин не найден." });
+    return null;
+  }
+  return shop;
+}
+
+app.get("/api/settings/target-pricing", requireAdmin, async (_request, response, next) => {
+  try {
+    const settings = await readAppSettings();
+    response.json({ ok: true, shops: targetPricingShops(), profiles: settings.targetPricing || {} });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// «Скопировать с основного»: профиль = сегодняшние общие настройки маркетплейса (цены не меняются)
+app.post("/api/settings/target-pricing/:target/copy", requireAdmin, async (request, response, next) => {
+  try {
+    const shop = targetPricingShopOr404(request.params.target, response);
+    if (!shop) return;
+    const previous = await readAppSettings();
+    const profile = copyMarketplacePricingProfile(previous, shop.kind, shop.label);
+    const settings = await writeAppSettings({ ...previous, targetPricing: { ...(previous.targetPricing || {}), [shop.id]: profile } });
+    await appendAudit(request, "settings.target_pricing_copy", { entityType: "target_pricing", entityId: shop.id, oldValue: previous.targetPricing?.[shop.id] || null, newValue: profile });
+    response.json({ ok: true, profile: settings.targetPricing[shop.id], profiles: settings.targetPricing });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/settings/target-pricing/:target", requireAdmin, async (request, response, next) => {
+  try {
+    const shop = targetPricingShopOr404(request.params.target, response);
+    if (!shop) return;
+    const previous = await readAppSettings();
+    const before = previous.targetPricing?.[shop.id] || null;
+    const incoming = request.body?.profile && typeof request.body.profile === "object" ? request.body.profile : {};
+    const profile = normalizeTargetPricingProfile({ ...(before || {}), ...incoming, marketplace: shop.kind, label: shop.label, updatedAt: new Date().toISOString() });
+    if (!profile.markupRules.length && !(profile.defaultMarkup > 0)) {
+      return response.status(400).json({ error: "Укажите базовую наценку или хотя бы одно правило." });
+    }
+    const settings = await writeAppSettings({ ...previous, targetPricing: { ...(previous.targetPricing || {}), [shop.id]: profile } });
+    const saved = settings.targetPricing[shop.id];
+    const pick = (p) => JSON.stringify(p ? { e: p.enabled, d: p.defaultMarkup, m: p.markupRules, a: p.availabilityRules } : null);
+    const changed = pick(before) !== pick(saved);
+    await appendAudit(request, "settings.target_pricing_update", { entityType: "target_pricing", entityId: shop.id, oldValue: before, newValue: saved });
+    const reprice = changed ? await repriceTargetPricingShop(shop.id, shop.kind, "target_pricing_update").catch((error) => ({ error: error?.message || String(error) })) : null;
+    response.json({ ok: true, profile: saved, profiles: settings.targetPricing, changed, reprice });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// «Изменить на %»: базовая наценка и все ступени профиля × (1 ± процент)
+app.post("/api/settings/target-pricing/:target/adjust-percent", requireAdmin, async (request, response, next) => {
+  try {
+    const shop = targetPricingShopOr404(request.params.target, response);
+    if (!shop) return;
+    const percent = Number(request.body?.percent);
+    if (!Number.isFinite(percent) || percent <= 0 || percent > 90) return response.status(400).json({ error: "Укажите процент от 0.01 до 90." });
+    const k = cleanText(request.body?.direction).toLowerCase() === "increase" ? 1 + percent / 100 : 1 - percent / 100;
+    const previous = await readAppSettings();
+    const before = previous.targetPricing?.[shop.id];
+    if (!before) return response.status(400).json({ error: "Сначала создайте настройки магазина." });
+    const scale = (v) => (Number(v) > 0 ? Math.max(0.0001, Number((Number(v) * k).toFixed(4))) : v);
+    const profile = normalizeTargetPricingProfile({
+      ...before,
+      defaultMarkup: scale(before.defaultMarkup),
+      markupRules: before.markupRules.map((r) => ({ ...r, coefficient: scale(r.coefficient) })),
+      updatedAt: new Date().toISOString(),
+    });
+    const settings = await writeAppSettings({ ...previous, targetPricing: { ...(previous.targetPricing || {}), [shop.id]: profile } });
+    await appendAudit(request, "settings.target_pricing_adjust", { entityType: "target_pricing", entityId: shop.id, oldValue: before, newValue: profile, percent, direction: k > 1 ? "increase" : "decrease" });
+    const reprice = await repriceTargetPricingShop(shop.id, shop.kind, "target_pricing_adjust").catch((error) => ({ error: error?.message || String(error) }));
+    response.json({ ok: true, profile: settings.targetPricing[shop.id], profiles: settings.targetPricing, reprice });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Удалить профиль: магазин снова считается по общим настройкам маркетплейса
+app.delete("/api/settings/target-pricing/:target", requireAdmin, async (request, response, next) => {
+  try {
+    const shop = targetPricingShopOr404(request.params.target, response);
+    if (!shop) return;
+    const previous = await readAppSettings();
+    const before = previous.targetPricing?.[shop.id] || null;
+    const remaining = { ...(previous.targetPricing || {}) };
+    delete remaining[shop.id];
+    const settings = await writeAppSettings({ ...previous, targetPricing: remaining });
+    await appendAudit(request, "settings.target_pricing_delete", { entityType: "target_pricing", entityId: shop.id, oldValue: before });
+    const reprice = before ? await repriceTargetPricingShop(shop.id, shop.kind, "target_pricing_delete").catch((error) => ({ error: error?.message || String(error) })) : null;
+    response.json({ ok: true, profiles: settings.targetPricing, reprice });
+  } catch (error) {
+    next(error);
+  }
+});

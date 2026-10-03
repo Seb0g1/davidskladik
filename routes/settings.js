@@ -70,6 +70,10 @@ async function saveSettingsHandler(request, response, next) {
       rawSettings.defaultMarkups = previous.defaultMarkups;
     }
 
+    // Shop pricing profiles are edited on their own endpoints: a general save never drops them
+    if (!rawSettings.targetPricing || typeof rawSettings.targetPricing !== "object") {
+      rawSettings.targetPricing = previous.targetPricing || {};
+    }
     // Preserve shopStubs — upload happens via dedicated endpoint, not through general settings save.
     if (!rawSettings.shopStubs || typeof rawSettings.shopStubs !== "object") {
       rawSettings.shopStubs = previous.shopStubs || {};

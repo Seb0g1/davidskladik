@@ -98,6 +98,14 @@ app.patch("/api/suppliers/:id", requireAdmin, async (request, response, next) =>
       newValue: supplier,
     });
     response.json({ ok: true, warehouse: saved });
+    // «Сорин» / «Наш склад» switched off or on → the express warehouses follow right away (0 when off)
+    if (Boolean(before.stopped) !== Boolean(supplier.stopped) && expressSupplierKey(supplier.name) && typeof syncSorinExpressStocks === "function") {
+      setTimeout(() => {
+        syncSorinExpressStocks()
+          .then(() => enforceExpressWarehouseStocks())
+          .catch((error) => logger.warn("express sync after supplier toggle failed", { detail: error?.message || String(error) }));
+      }, 5_000);
+    }
     const affectedProductIds = supplierImpactProductIds(warehouse, before, supplier);
     if (affectedProductIds.length) {
       queueMarketplaceJob("no-supplier-automation", { productIds: affectedProductIds, skipLinkedGrace: Boolean(supplier.stopped) }, { priority: QUEUE_PRIORITY.RECOVERY });

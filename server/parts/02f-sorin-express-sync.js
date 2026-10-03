@@ -178,6 +178,15 @@ async function fetchActiveExpressArticlesFromPm(articles) {
   }
 }
 
+// Suppliers switched off on the «Поставщики» page (managed_suppliers.active = false): their goods are not at
+// hand, so they never hold express stock — «Сорин» off → 0 on both express warehouses.
+async function loadStoppedExpressSupplierKeys() {
+  const prisma = getPrisma();
+  if (!prisma) return new Set();
+  const rows = await prisma.$queryRawUnsafe(`SELECT name FROM managed_suppliers WHERE active = false`);
+  return new Set(rows.map((r) => expressSupplierKey(r.name)).filter(Boolean));
+}
+
 // Offers that must hold express stock, per marketplace, plus the linked ones that must not.
 async function resolveExpressEligibility() {
   const rawRows = await loadExpressLinkedProducts();
@@ -192,12 +201,21 @@ async function resolveExpressEligibility() {
         offerId: String(row.offerId),
         linkKeys: new Set(),
         hasBareLink: false,
+        bareKeys: new Set(),
       });
     }
     const article = cleanText(String(row.supplierArticle || ""));
     if (article) productMap.get(key).linkKeys.add(`${row.supplierKey}|${article}`);
-    else productMap.get(key).hasBareLink = true;
+    else {
+      productMap.get(key).hasBareLink = true;
+      productMap.get(key).bareKeys.add(row.supplierKey);
+    }
   }
+  const stopped = await loadStoppedExpressSupplierKeys().catch((error) => {
+    logger.warn("express_stopped_suppliers_read_failed", { detail: error?.message || String(error) });
+    return new Set();
+  });
+  const supplierOn = (linkKey) => !stopped.has(String(linkKey).split("|")[0]);
   const products = [...productMap.values()];
   const allArticles = [...new Set(products.flatMap((p) => [...p.linkKeys].map((k) => k.split("|").slice(1).join("|"))))];
   const activeKeys = await fetchActiveExpressArticlesFromPm(allArticles);
@@ -205,10 +223,12 @@ async function resolveExpressEligibility() {
   const isActive = (p) => {
     if (!pmAvailable) return true;
     const keys = p.marketplace === "yandex" ? activeKeys.nonTester : activeKeys.all;
-    return [...p.linkKeys].some((k) => keys.has(k)) || (p.hasBareLink && !p.linkKeys.size);
+    return [...p.linkKeys].some((k) => supplierOn(k) && keys.has(k))
+      || (p.hasBareLink && !p.linkKeys.size && [...p.bareKeys].some((k) => !stopped.has(k)));
   };
   return {
     pmAvailable,
+    stoppedSuppliers: [...stopped],
     products,
     // PriceMaster unreachable → nobody is «active» (before: everyone got the express stock)
     active: pmAvailable ? products.filter(isActive) : [],
@@ -338,6 +358,7 @@ async function syncSorinExpressStocks() {
     active: active.length,
     inactive: inactive.length,
     pmAvailable,
+    stoppedSuppliers: eligibility.stoppedSuppliers || [],
     expressStock: config.stock,
     ...results,
   });

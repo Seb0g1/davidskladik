@@ -101,14 +101,16 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
         markupCoefficient: resolveMarkupCoefficient({
           productMarkup: productMarkupOverride,
           marketplace: product.marketplace,
+          target: product.target,
           supplierUsdPrice: match.price,
           supplierPriceCurrency: match.priceCurrency || match.currency,
           usdRate: rate,
           appSettings: {
             ...appSettings,
             defaultMarkups: {
-              ozon: Number(targetMarkups.ozon || appSettings.defaultMarkups?.ozon || process.env.DEFAULT_OZON_MARKUP || 1.7),
-              yandex: Number(targetMarkups.yandex || appSettings.defaultMarkups?.yandex || process.env.DEFAULT_YANDEX_MARKUP || 1.6),
+              ...(appSettings.defaultMarkups || {}),
+              ...(targetMarkups.ozon ? { ozon: Number(targetMarkups.ozon) } : {}),
+              ...(targetMarkups.yandex ? { yandex: Number(targetMarkups.yandex) } : {}),
             },
           },
         }),
@@ -118,14 +120,16 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
           resolveMarkupCoefficient({
             productMarkup: productMarkupOverride,
             marketplace: product.marketplace,
+            target: product.target,
             supplierUsdPrice: match.price,
             supplierPriceCurrency: match.priceCurrency || match.currency,
             usdRate: rate,
             appSettings: {
               ...appSettings,
               defaultMarkups: {
-                ozon: Number(targetMarkups.ozon || appSettings.defaultMarkups?.ozon || process.env.DEFAULT_OZON_MARKUP || 1.7),
-                yandex: Number(targetMarkups.yandex || appSettings.defaultMarkups?.yandex || process.env.DEFAULT_YANDEX_MARKUP || 1.6),
+                ...(appSettings.defaultMarkups || {}),
+                ...(targetMarkups.ozon ? { ozon: Number(targetMarkups.ozon) } : {}),
+                ...(targetMarkups.yandex ? { yandex: Number(targetMarkups.yandex) } : {}),
               },
             },
           }),
@@ -152,12 +156,14 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
     });
     const availableSupplierCount = rawSuppliers.filter((supplier) => supplier.available && supplier.priceEligible !== false && supplier.stockOnly !== true).length;
     const stockOnlyAvailableSupplierCount = rawSuppliers.filter((supplier) => supplier.available && (supplier.stockOnly === true || supplier.priceEligible === false)).length;
+    const shopSettings = pricingSettingsForTarget(appSettings, product.marketplace, product.target);
     const fallbackMarkup = product.marketplace === "ozon"
-      ? Number(targetMarkups.ozon || appSettings.defaultMarkups?.ozon || process.env.DEFAULT_OZON_MARKUP || 1.7)
-      : Number(targetMarkups.yandex || appSettings.defaultMarkups?.yandex || process.env.DEFAULT_YANDEX_MARKUP || 1.6);
+      ? Number(targetMarkups.ozon || shopSettings.defaultMarkups?.ozon || process.env.DEFAULT_OZON_MARKUP || 1.7)
+      : Number(targetMarkups.yandex || shopSettings.defaultMarkups?.yandex || process.env.DEFAULT_YANDEX_MARKUP || 1.6);
     const suppliers = enrichSupplierPriceCandidates(rawSuppliers, {
       productMarkupOverride,
       marketplace: product.marketplace,
+      target: product.target,
       rate,
       appSettings,
       fallbackMarkup,
@@ -171,6 +177,7 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
     const baseMarkupCoefficient = Number(productMarkupOverride || selectedSupplier?.markupCoefficient || fallbackMarkup);
     const availabilityPolicy = resolveAvailabilityPolicy({
       marketplace: product.marketplace,
+      target: product.target,
       availableSupplierCount: availableSupplierCount || stockOnlyAvailableSupplierCount,
       baseMarkup: baseMarkupCoefficient,
       appSettings,
