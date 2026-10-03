@@ -1,5 +1,5 @@
 /* Просмотр фото поверх страницы */
-.plb { position: fixed; inset: 0; height: 100vh; height: 100dvh; z-index: 1000; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; background: rgba(6, 8, 14, .97); color: #fff; animation: plbIn .16s ease-out; }
+.plb { position: fixed; inset: 0; height: 100vh; height: 100dvh; z-index: 1000; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto auto; background: rgba(6, 8, 14, .97); color: #fff; animation: plbIn .16s ease-out; }
 @keyframes plbIn { from { opacity: 0; } to { opacity: 1; } }
 .plb-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 14px; }
 .plb-count { font-size: 13px; opacity: .8; font-variant-numeric: tabular-nums; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -29,6 +29,11 @@
 .plb-thumb { padding: 0; border: 0; background: transparent; cursor: zoom-in; display: block; }
 .plb-thumb img { display: block; }
 @media (max-width: 640px) {
+  .plb-top { padding: 8px 8px; gap: 6px; }
+  .plb-tools { gap: 2px; }
+  .plb-tools button, .plb-tools a { width: 32px; height: 32px; }
+  .plb-zoom { width: 40px; font-size: 11.5px; }
+  .plb-tools a { display: none; }
   .plb-nav { width: 40px; height: 52px; }
   .plb-hint { display: none; }
 }
