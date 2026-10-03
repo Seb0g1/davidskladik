@@ -245,15 +245,6 @@ async function sendTargetStocksToMarketplace(products = []) {
 async function archiveProductsOnMarketplaces(products = []) {
   const actions = [];
   const byTarget = new Map();
-  // Restoring a card puts stock back on it: only with a live supplier row
-  const restoreGuard = await guardPositiveStockItems(Array.isArray(products) ? products : [], {
-    getStock: () => 1,
-    context: "restore_stock",
-  });
-  for (const product of [...restoreGuard.blocked, ...restoreGuard.skipped]) {
-    actions.push({ id: product?.id || "", type: "restore_stock", offerId: product?.offerId || "", target: product?.target || "", ok: false, error: restoreGuard.blocked.has(product) ? "stock_guard_no_supplier" : "stock_guard_pm_unavailable" });
-  }
-  products = (Array.isArray(products) ? products : []).filter((product) => restoreGuard.allowed.has(product));
   for (const product of products) {
     if (!product?.id || !product?.target || (product.marketplace === "yandex" && !cleanText(product.offerId))) {
       actions.push({
@@ -333,6 +324,15 @@ async function archiveProductsOnMarketplaces(products = []) {
 async function restoreStocksOnMarketplaces(products = []) {
   const actions = [];
   const byTarget = new Map();
+  // Restoring a card puts stock back on it: only with a live supplier row
+  const restoreGuard = await guardPositiveStockItems(Array.isArray(products) ? products : [], {
+    getStock: () => 1,
+    context: "restore_stock",
+  });
+  for (const product of [...restoreGuard.blocked, ...restoreGuard.skipped]) {
+    actions.push({ id: product?.id || "", type: "restore_stock", offerId: product?.offerId || "", target: product?.target || "", ok: false, error: restoreGuard.blocked.has(product) ? "stock_guard_no_supplier" : "stock_guard_pm_unavailable" });
+  }
+  products = (Array.isArray(products) ? products : []).filter((product) => restoreGuard.allowed.has(product));
   for (const product of products) {
     if (!product?.id || !product?.offerId || !product?.target) {
       actions.push({
