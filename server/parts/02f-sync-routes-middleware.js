@@ -277,6 +277,9 @@ function startBackgroundSchedulers() {
   if (ozonDocStatusEnabled) {
     scheduleOzonDocStatus(3 * 60_000);
   }
+  if (cardHealthEnabled) {
+    scheduleCardHealthScan(10 * 60_000);
+  }
   if (fragranticaPmMatchEnabled) {
     scheduleFragranticaPmMatch(5 * 60_000);
   }

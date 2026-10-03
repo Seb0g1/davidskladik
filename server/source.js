@@ -192,6 +192,7 @@ const partFiles = [
   "02d-warehouse-ai-helpers.js",
   "02d-warehouse-ai-content-routes.js",
   "02d-ozon-card-fix-routes.js",
+  "02d-card-health.js",
   "02d-warehouse-ai-image-routes.js",
   "02d-fragrantica-routes.js",
   "02d-fragrantica-catalog-routes.js",
