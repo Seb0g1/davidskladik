@@ -51,3 +51,4 @@
 .ci-brand-list { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; flex: 1 1 300px; }
 .ci-brand-chip { height: 28px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--text); font: inherit; font-size: 12.5px; cursor: pointer; }
 .ci-brand-chip:hover:not(:disabled) { border-color: rgba(var(--accent-rgb), .7); background: rgba(var(--accent-rgb), .1); }
+.ci-confirm { display: inline-flex; gap: 8px; align-items: center; font-size: 13px; }

@@ -374,7 +374,10 @@ app.get("/api/fragrantica/ozon/attribute-values", requireAdmin, async (request, 
 // через parfumdeclaration. FRAGRANTICA_RENDER=pd — всегда через parfumdeclaration.
 let fragranticaLocalRenderer;
 // Two perfumes render at once (8 cores; the upscale uses 2 threads each)
-const fragranticaLocalRenderLanes = Math.max(1, Number(process.env.FRAGRANTICA_RENDER_PARALLEL || 4) || 4);
+const fragranticaRenderPinned = Number(process.env.FRAGRANTICA_RENDER_PARALLEL) || 0;
+const fragranticaLocalRenderLanes = Math.max(1, fragranticaRenderPinned || 6);
+// lanes in use now: 6 at night, 3 by day (FRAGRANTICA_RENDER_PARALLEL pins it)
+const fragranticaRenderLanesNow = () => Math.min(fragranticaLocalRenderLanes, fragranticaRenderPinned || (isNightWorkWindow() ? 6 : 3));
 const fragranticaLocalRenderChains = Array.from({ length: fragranticaLocalRenderLanes }, () => Promise.resolve());
 let fragranticaLocalRenderNext = 0;
 
@@ -412,6 +415,8 @@ function fragranticaRenderProc(lane) {
   if (current && current.child.connected) return current;
   const workerPath = path.join(path.dirname(path.dirname(require.resolve("./lib/perfume-render/index.cjs"))), "perfume-render-worker.cjs");
   const child = fragRenderFork(workerPath, [], { serialization: "advanced", stdio: ["ignore", "inherit", "inherit", "ipc"] });
+  // background work: the site and the shop get the CPU first
+  try { if (child.pid) require("os").setPriority(child.pid, 10); } catch { /* not allowed — fine */ }
   const proc = { child, pending: new Map() };
   child.on("message", (msg) => {
     const job = proc.pending.get(msg?.id);
@@ -451,7 +456,7 @@ function renderFragranticaInProcess(lane, args) {
 async function renderFragranticaCardHere(payload) {
   const renderer = loadFragranticaLocalRenderer();
   if (!renderer) return null;
-  const lane = fragranticaLocalRenderNext++ % fragranticaLocalRenderLanes;
+  const lane = fragranticaLocalRenderNext++ % fragranticaRenderLanesNow();
   const run = fragranticaLocalRenderChains[lane].then(async () => {
     const source = await fragranticaSourceBuffer(payload.imageUrl);
     const args = { source, styles: payload.styles, perfume: payload.perfume, extras: payload.extras !== false };

@@ -48,7 +48,7 @@ function buildFragranticaCoverFilter(count, { slide = FRAG_VIDEO_SLIDE_S, fade =
 
 function runFragranticaFfmpeg(args, timeoutMs = 180_000) {
   return new Promise((resolve, reject) => {
-    fragVideoExecFile(fragranticaFfmpegPath, args, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 }, (error, _stdout, stderr) => {
+    const child = fragVideoExecFile(fragranticaFfmpegPath, args, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 }, (error, _stdout, stderr) => {
       if (error) {
         error.message = `${error.message}\n${String(stderr || "").slice(-800)}`;
         reject(error);
@@ -56,6 +56,8 @@ function runFragranticaFfmpeg(args, timeoutMs = 180_000) {
         resolve();
       }
     });
+    // background work: the site and the shop get the CPU first
+    try { if (child?.pid) require("os").setPriority(child.pid, 10); } catch { /* not allowed — fine */ }
   });
 }
 
@@ -115,13 +117,14 @@ function fragranticaVideoCoverUrl(perfumeId, style) {
 // Сборка черновика не ждёт ролик: он рендерится в фоне (FRAGRANTICA_VIDEO_PARALLEL, деф. 2), отправка
 // карточки ждёт свой ролик (fragranticaVideoCoversReady).
 const FRAG_VIDEO_THREADS = Math.max(1, Number(process.env.FRAGRANTICA_VIDEO_THREADS || 2) || 2);
-const fragranticaVideoParallel = Math.max(1, Number(process.env.FRAGRANTICA_VIDEO_PARALLEL || 2) || 2);
+const fragranticaVideoParallelPinned = Number(process.env.FRAGRANTICA_VIDEO_PARALLEL) || 0;
+const fragranticaVideoParallelNow = () => fragranticaVideoParallelPinned || (isNightWorkWindow() ? 3 : 1);
 const fragranticaVideoJobs = new Map();
 const fragranticaVideoWaiting = [];
 let fragranticaVideoActive = 0;
 
 function fragranticaVideoPump() {
-  while (fragranticaVideoActive < fragranticaVideoParallel && fragranticaVideoWaiting.length) {
+  while (fragranticaVideoActive < fragranticaVideoParallelNow() && fragranticaVideoWaiting.length) {
     const job = fragranticaVideoWaiting.shift();
     fragranticaVideoActive += 1;
     ensureFragranticaVideoCover(job.perfumeId, job.style, job.slides, { refresh: job.refresh })
@@ -152,3 +155,5 @@ async function fragranticaVideoCoversReady(perfumeId, styles = [], timeoutMs = 2
   if (!pending.length) return;
   await Promise.race([Promise.all(pending), new Promise((r) => setTimeout(r, timeoutMs).unref?.())]);
 }
+
+setInterval(() => fragranticaVideoPump(), 60_000).unref?.();

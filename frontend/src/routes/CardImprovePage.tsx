@@ -64,6 +64,12 @@ export function CardImprovePage() {
     onSuccess: (r, body) => { toast.info(body.restore ? `Вернули в работу: ${r.count}` : `Не улучшаем: ${r.count}`); setPicked([]); refresh(); },
     onError: (error) => toast.error(errorMessage(error)),
   });
+  const approveAll = useMutation({
+    mutationFn: () => apiJson<{ approved: number }>("/api/card-improve/approve-all", mutationBody({})),
+    onSuccess: (r) => { toast.success(`Одобрено: ${r.approved} — отправляем`); setConfirmAll(false); refresh(); },
+    onError: (error) => toast.error(errorMessage(error)),
+  });
+  const [confirmAll, setConfirmAll] = useState(false);
   const rebuild = useMutation({
     mutationFn: (id: number) => apiJson(`/api/fragrantica/drafts/${id}/rebuild`, mutationBody({})),
     onSuccess: () => { toast.info("Пересобираем"); refresh(); },
@@ -114,6 +120,19 @@ export function CardImprovePage() {
             <button className="secondary-action" type="button" disabled={!picked.length || skip.isPending} onClick={() => skip.mutate({ ids: picked })}>
               <EyeOff size={14} /> Не улучшать
             </button>
+            {tab === "review" && (counts.review || 0) > approvable.length ? (
+              confirmAll ? (
+                <span className="ci-confirm">
+                  Отправить все {counts.review} готовых?
+                  <button className="primary-action compact" type="button" disabled={approveAll.isPending} onClick={() => approveAll.mutate()}>
+                    {approveAll.isPending ? <Loader2 size={13} className="spin" /> : <CheckCheck size={13} />} Да, одобрить все
+                  </button>
+                  <button className="secondary-action compact" type="button" onClick={() => setConfirmAll(false)}>Нет</button>
+                </span>
+              ) : (
+                <button className="secondary-action" type="button" onClick={() => setConfirmAll(true)}><CheckCheck size={14} /> Одобрить все готовые ({counts.review})</button>
+              )
+            ) : null}
           </>
         ) : null}
       </div>

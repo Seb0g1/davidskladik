@@ -25,7 +25,8 @@ let fragranticaDraftsRunning = false;
 // continuous pool: a free slot takes the next card at once (a slow card no longer holds the whole batch)
 let fragranticaDraftsInFlight = 0;
 // «Улучшение карточек» has its own pool: a backlog of hundreds never holds up new Fragrantica cards
-const fragranticaImproveParallel = Math.max(1, Number(process.env.FRAGRANTICA_IMPROVE_PARALLEL || 10) || 10);
+const fragranticaImprovePinned = Number(process.env.FRAGRANTICA_IMPROVE_PARALLEL) || 0;
+const fragranticaImproveParallelNow = () => fragranticaImprovePinned || (isNightWorkWindow() ? 16 : 6);
 let fragranticaImproveInFlight = 0;
 let fragranticaExpandInFlight = 0;
 let fragranticaDraftsStarted = false;
@@ -486,7 +487,7 @@ function fragranticaExistingTargets(existing = {}) {
  * Puts products into «Улучшение карточек»: one draft per product = one offer id in every shop it is matched in
  * (Ozon and Market together). Best sellers first (units in 90 days over all shops), then the weakest Market rating.
  */
-async function enqueueFragranticaImprovements({ limit = FRAG_IMPROVE_PER_SCAN, createdBy = "улучшение" } = {}) {
+async function enqueueFragranticaImprovements({ limit = FRAG_IMPROVE_PER_SCAN, createdBy = "улучшение", activeOnly = false } = {}) {
   const wanted = Math.min(1000, Math.max(0, Number(limit) || 0));
   if (!wanted) return { queued: 0 };
   const prisma = await requireFragranticaDraftTables();
@@ -495,14 +496,16 @@ async function enqueueFragranticaImprovements({ limit = FRAG_IMPROVE_PER_SCAN, c
   if (!exists[0]?.ok) return { queued: 0, reason: "сопоставление ещё не готово" };
   const rows = await prisma.$queryRawUnsafe(
     `WITH m AS (
-       SELECT m.target, m.offer_id, m.perfume_id, m.volume_ml, m.tester, w.marketplace::text AS marketplace
+       SELECT m.target, m.offer_id, m.perfume_id, m.volume_ml, m.tester, w.marketplace::text AS marketplace,
+              (w.status = 'active' AND coalesce(w.target_stock, 0) > 0) AS live
          FROM fragrantica_card_matches m
          JOIN warehouse_products w ON w.target = m.target AND w.offer_id = m.offer_id AND w.archived = false
         WHERE m.volume_ml IS NOT NULL AND m.offer_id !~* '^FR[0-9]' AND w.name !~* $2
      ), g AS (
        SELECT lower(offer_id) AS k, min(offer_id) AS offer_id,
               mode() WITHIN GROUP (ORDER BY perfume_id) AS perfume_id, max(volume_ml) AS volume_ml, bool_or(tester) AS tester,
-              jsonb_agg(jsonb_build_object('marketplace', marketplace, 'target', target, 'offerId', offer_id) ORDER BY marketplace, target) AS targets
+              jsonb_agg(jsonb_build_object('marketplace', marketplace, 'target', target, 'offerId', offer_id) ORDER BY marketplace, target) AS targets,
+              bool_or(live) AS live
          FROM m GROUP BY 1
      )
      SELECT g.*, coalesce(s.sold, 0)::int AS sold, q.rating
@@ -512,9 +515,10 @@ async function enqueueFragranticaImprovements({ limit = FRAG_IMPROVE_PER_SCAN, c
        LEFT JOIN (SELECT lower(offer_id) AS k, min(content_rating) AS rating FROM card_quality GROUP BY 1) q ON q.k = g.k
       WHERE NOT EXISTS (SELECT 1 FROM fragrantica_drafts d WHERE lower(d.data->'existing'->>'offerId') = g.k)
         AND NOT EXISTS (SELECT 1 FROM fragrantica_exports e WHERE lower(e.offer_id) = g.k AND coalesce(e.item->>'improve', '') <> 'true')
-      ORDER BY sold DESC, rating ASC NULLS LAST, g.k
+        AND (g.live OR NOT $3::boolean)
+      ORDER BY g.live DESC, sold DESC, rating ASC NULLS LAST, g.k
       LIMIT $1`,
-    wanted, FRAG_SET_NAME_PATTERN,
+    wanted, FRAG_SET_NAME_PATTERN, Boolean(activeOnly),
   );
   const all = fragranticaTargets();
   let queued = 0;
@@ -883,7 +887,7 @@ async function runFragranticaDraftsTick() {
         .catch(() => {})
         .finally(() => { fragranticaDraftsInFlight = Math.max(0, fragranticaDraftsInFlight - 1); });
     }
-    const improving = await claimPool(true, fragranticaImproveParallel - fragranticaImproveInFlight);
+    const improving = await claimPool(true, fragranticaImproveParallelNow() - fragranticaImproveInFlight);
     for (const draft of improving) {
       fragranticaImproveInFlight += 1;
       processFragranticaDraft(draft)

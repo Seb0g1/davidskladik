@@ -646,3 +646,53 @@ app.post("/api/card-improve/skip", requireAdmin, async (request, response, next)
     next(error);
   }
 });
+
+// ─── Автопостановка в «Улучшение карточек» ────────────────────────────────────
+// Раз в 30 минут: товары в активной продаже с остатком (сюда же попадает товар, вернувшийся из автоархива),
+// сопоставленные с ароматом и ещё не улучшенные, — в очередь (без повторов: товар с черновиком не берётся).
+// За раз — не больше CARD_IMPROVE_AUTO_BATCH (деф. 400 ночью, 100 днём); выключается тем же переключателем.
+const CARD_IMPROVE_AUTO_MS = 30 * 60_000;
+
+async function runCardImproveAutoQueue() {
+  const settings = await readCardHealthState("improve");
+  if (settings.enabled === false || settings.autoActive === false) return { skipped: "выключено" };
+  const prisma = await requireCardHealthTables();
+  // do not pile up: when a big backlog is still building, wait for it
+  const [{ n }] = await prisma.$queryRawUnsafe(`SELECT count(*)::int AS n FROM fragrantica_drafts WHERE data ? 'existing' AND status IN ('queued', 'working')`);
+  const night = isNightWorkWindow();
+  const cap = Number(process.env.CARD_IMPROVE_AUTO_BATCH) || (night ? 400 : 100);
+  const room = Math.max(0, (night ? 3000 : 800) - Number(n));
+  if (!room) return { skipped: "очередь полна", queued: 0 };
+  const result = await enqueueFragranticaImprovements({ limit: Math.min(cap, room), createdBy: "авто: в продаже", activeOnly: true });
+  if (result.queued) logger.info("card improve auto queue", result);
+  return result;
+}
+
+function scheduleCardImproveAutoQueue(delayMs = CARD_IMPROVE_AUTO_MS) {
+  if (!cardHealthEnabled) return;
+  setTimeout(async () => {
+    try {
+      await runCardImproveAutoQueue();
+    } catch (error) {
+      logger.warn("card improve auto queue failed", { detail: error?.message || String(error) });
+    } finally {
+      scheduleCardImproveAutoQueue(CARD_IMPROVE_AUTO_MS);
+    }
+  }, Math.max(30_000, Number(delayMs) || CARD_IMPROVE_AUTO_MS)).unref?.();
+}
+
+// «Одобрить все готовые» (вкладка «На проверке»): одна кнопка вместо постраничного выбора
+app.post("/api/card-improve/approve-all", requireAdmin, async (request, response, next) => {
+  try {
+    const prisma = await requireCardHealthTables();
+    const rows = await prisma.$queryRawUnsafe(
+      `UPDATE fragrantica_drafts SET status = 'approved', error = NULL, created_by = COALESCE($1, created_by), updated_at = now()
+        WHERE data ? 'existing' AND kind = 'card' AND status = 'ready' RETURNING id`,
+      cleanText(request.session?.username) || null,
+    );
+    await appendAudit(request, "card_improve.approve_all", { entityType: "fragrantica_draft", entityId: "all-ready", newValue: { approved: rows.length } });
+    response.json({ ok: true, approved: rows.length });
+  } catch (error) {
+    next(error);
+  }
+});

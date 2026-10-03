@@ -14,10 +14,24 @@
 // паузой на 429/5xx/сеть, 401 — понятная ошибка без повторов. Не настроен — как раньше (старый
 // провайдер). textFallback=true — при недоступности прокси уходим на старый провайдер.
 
+// Ночное окно (по Москве, деф. 00:00–09:00, NIGHT_WORK_HOURS="0-9"): тяжёлая фоновая работа (конвейер,
+// рендер, описания ИИ) идёт шире; днём — скромнее, сайт и магазин в приоритете.
+function isNightWorkWindow(now = new Date()) {
+  const [from, to] = String(process.env.NIGHT_WORK_HOURS || "0-9").split("-").map((v) => Number(v));
+  const hour = (now.getUTCHours() + 3) % 24;
+  return from <= to ? hour >= from && hour < to : hour >= from || hour < to;
+}
+
+/** Text AI parallel requests: AI_TEXT_CONCURRENCY pins it; else 4 at night, 2 by day. */
+function textAiConcurrencyNow() {
+  if (process.env.AI_TEXT_CONCURRENCY) return textAiDefaults.concurrency;
+  return isNightWorkWindow() ? 4 : 2;
+}
+
 const textAiDefaults = {
   timeoutMs: Math.max(10_000, Number(process.env.AI_TEXT_TIMEOUT_MS || 180_000) || 180_000),
   concurrency: Math.max(1, Math.min(4, Number(process.env.AI_TEXT_CONCURRENCY || 1) || 1)),
-  minGapMs: Math.max(0, Number(process.env.AI_TEXT_MIN_GAP_MS ?? 2000) || 0),
+  minGapMs: Math.max(0, Number(process.env.AI_TEXT_MIN_GAP_MS ?? 500) || 0),
   retries: 2,
 };
 
@@ -48,7 +62,7 @@ let textAiLastStartedAt = 0;
 const textAiWaiters = [];
 
 async function withTextAiSlot(fn) {
-  if (textAiActive >= textAiDefaults.concurrency) {
+  while (textAiActive >= textAiConcurrencyNow()) {
     await new Promise((resolve) => textAiWaiters.push(resolve));
   }
   textAiActive += 1;

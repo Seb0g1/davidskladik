@@ -279,6 +279,8 @@ function startBackgroundSchedulers() {
   }
   if (cardHealthEnabled) {
     scheduleCardHealthScan(10 * 60_000);
+    // active products with stock (incl. back from auto-archive) → «Улучшение карточек», every 30 min
+    scheduleCardImproveAutoQueue(2 * 60_000);
   }
   if (fragranticaPmMatchEnabled) {
     scheduleFragranticaPmMatch(5 * 60_000);
