@@ -37,7 +37,22 @@ function PhotoLightbox({ photos, start, title, onClose }: { photos: string[]; st
   const [index, setIndex] = useState(start);
   const [view, setView] = useState({ scale: 1, x: 0, y: 0 });
   const [loaded, setLoaded] = useState(false);
+  // the photo's size «fit to window» in px — computed, so the whole photo is always visible at 100%
+  const [fit, setFit] = useState<{ w: number; h: number } | null>(null);
+  const natural = useRef<{ w: number; h: number } | null>(null);
   const stage = useRef<HTMLDivElement>(null);
+  const measure = useCallback(() => {
+    const el = stage.current;
+    const n = natural.current;
+    if (!el || !n || !n.w || !n.h) return;
+    const side = window.innerWidth <= 640 ? 16 : 128;
+    const k = Math.min((el.clientWidth - side) / n.w, (el.clientHeight - 16) / n.h, 2);
+    setFit({ w: Math.max(1, Math.round(n.w * k)), h: Math.max(1, Math.round(n.h * k)) });
+  }, []);
+  useEffect(() => {
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [measure]);
   const pointers = useRef(new Map<number, { x: number; y: number }>());
   const drag = useRef<{ x: number; y: number; moved: number; pinch?: number; pinchScale?: number } | null>(null);
 
@@ -46,6 +61,7 @@ function PhotoLightbox({ photos, start, title, onClose }: { photos: string[]; st
     setIndex((i) => (i + dir + photos.length) % photos.length);
     setView({ scale: 1, x: 0, y: 0 });
     setLoaded(false);
+    setFit(null);
   }, [photos.length]);
 
   // zoom keeping the point under (px, py) — coordinates from the stage centre — in place
@@ -173,8 +189,16 @@ function PhotoLightbox({ photos, start, title, onClose }: { photos: string[]; st
           src={url}
           alt={`Фото ${index + 1}`}
           draggable={false}
-          onLoad={() => setLoaded(true)}
-          style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`, opacity: loaded ? 1 : 0 }}
+          onLoad={(e) => {
+            natural.current = { w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight };
+            measure();
+            setLoaded(true);
+          }}
+          style={{
+            transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
+            opacity: loaded && fit ? 1 : 0,
+            ...(fit ? { width: fit.w, height: fit.h } : {}),
+          }}
         />
         {photos.length > 1 ? (
           <>
@@ -187,7 +211,7 @@ function PhotoLightbox({ photos, start, title, onClose }: { photos: string[]; st
       {photos.length > 1 ? (
         <div className="plb-strip">
           {photos.map((p, i) => (
-            <button key={`${p}-${i}`} type="button" className={i === index ? "is-on" : ""} onClick={() => { setIndex(i); reset(); setLoaded(false); }} aria-label={`Фото ${i + 1}`}>
+            <button key={`${p}-${i}`} type="button" className={i === index ? "is-on" : ""} onClick={() => { if (i === index) return; setIndex(i); reset(); setLoaded(false); setFit(null); }} aria-label={`Фото ${i + 1}`}>
               <img src={p} alt="" loading="lazy" />
             </button>
           ))}
