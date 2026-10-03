@@ -316,14 +316,49 @@ async function fragranticaExistingCardState(existing = {}) {
 const FRAG_PROMO_TTL_MS = 6 * 60 * 60_000;
 const fragranticaPromoCache = new Map();
 
-async function fragranticaPhotoHash(url) {
+async function fragranticaPhotoBuffer(url) {
   const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  const buffer = Buffer.from(await response.arrayBuffer());
-  const raw = await sharp(buffer).flatten({ background: "#ffffff" }).grayscale().resize(9, 8, { fit: "fill" }).raw().toBuffer();
+  return Buffer.from(await response.arrayBuffer());
+}
+
+async function fragranticaBufferHash(buffer) {
+  const raw = await sharp(buffer).flatten({ background: "#ffffff" }).toColourspace("b-w").resize(9, 8, { fit: "fill" }).raw().toBuffer();
   let bits = "";
   for (let y = 0; y < 8; y += 1) for (let x = 0; x < 8; x += 1) bits += raw[y * 9 + x] > raw[y * 9 + x + 1] ? "1" : "0";
   return bits;
+}
+
+async function fragranticaPhotoHash(url) {
+  return fragranticaBufferHash(await fragranticaPhotoBuffer(url));
+}
+
+// Чёткость: доля мелких деталей (лапласиан на 1024 px по самому товару, без белого фона), которая пропадает
+// при уменьшении в 2 раза и обратном увеличении. Увеличенные нейросетью маленькие картинки («мыло»,
+// поплывшие надписи) дают 0.29–0.44, нормальные фото 0.50–0.62 (калибровка 2026-10-03 на карточках Ozon).
+const FRAG_SHARP_MIN = Number(process.env.FRAGRANTICA_KEEP_PHOTO_SHARPNESS || 0.45);
+
+async function fragranticaPhotoSharpness(buffer) {
+  const W = 1024;
+  const full = await sharp(buffer).flatten({ background: "#ffffff" }).toColourspace("b-w").resize(W, W, { fit: "inside" }).raw().toBuffer({ resolveWithObject: true });
+  const { width: w, height: h, channels } = full.info;
+  if (channels !== 1) return 1;
+  const px = full.data;
+  const half = await sharp(px, { raw: { width: w, height: h, channels: 1 } }).resize(Math.max(1, Math.round(w / 2)), Math.max(1, Math.round(h / 2))).toColourspace("b-w").raw().toBuffer({ resolveWithObject: true });
+  const blur = await sharp(half.data, { raw: { width: half.info.width, height: half.info.height, channels: half.info.channels } }).resize(w, h, { fit: "fill" }).toColourspace("b-w").raw().toBuffer();
+  if (blur.length !== px.length) return 1;
+  let e = 0;
+  let eb = 0;
+  for (let y = 1; y < h - 1; y += 1) {
+    for (let x = 1; x < w - 1; x += 1) {
+      const i = y * w + x;
+      const lap = 4 * px[i] - px[i - 1] - px[i + 1] - px[i - w] - px[i + w];
+      if (Math.abs(lap) < 3 && px[i] > 245) continue;
+      e += Math.abs(lap);
+      eb += Math.abs(4 * blur[i] - blur[i - 1] - blur[i + 1] - blur[i - w] - blur[i + w]);
+    }
+  }
+  return e > 0 ? 1 - eb / e : 0;
 }
 
 function fragranticaHashDistance(a, b) {
@@ -394,22 +429,30 @@ async function fragranticaShopPromoHashes(existing) {
   return promise;
 }
 
-/** The old card's own product photos (promo tail and duplicates removed), in their order. */
+/** The old card's own product photos: promo tail, duplicates and blurry upscales removed, in their order. */
 async function fragranticaKeepExistingPhotos(existing, urls = []) {
-  if (!urls.length) return [];
+  const out = { keep: [], blurry: 0 };
+  if (!urls.length) return out;
   const promo = await fragranticaShopPromoHashes(existing);
-  const hashes = await fragranticaMapLimit(urls, 6, (url) => fragranticaPhotoHash(url));
-  const keep = [];
+  const checked = await fragranticaMapLimit(urls, 4, async (url) => {
+    const buffer = await fragranticaPhotoBuffer(url);
+    return { hash: await fragranticaBufferHash(buffer), sharpness: await fragranticaPhotoSharpness(buffer) };
+  });
   const kept = [];
   for (const [i, url] of urls.entries()) {
-    const hash = hashes[i];
-    if (!hash) continue;
-    if (promo.some((h) => fragranticaHashDistance(h, hash) <= 6)) continue;
-    if (kept.some((h) => fragranticaHashDistance(h, hash) <= 3)) continue;
-    keep.push(url);
-    kept.push(hash);
+    const c = checked[i];
+    if (!c?.hash) continue;
+    if (promo.some((h) => fragranticaHashDistance(h, c.hash) <= 6)) continue;
+    if (kept.some((h) => fragranticaHashDistance(h, c.hash) <= 3)) continue;
+    if (c.sharpness < FRAG_SHARP_MIN) {
+      out.blurry += 1;
+      continue;
+    }
+    out.keep.push(url);
+    kept.push(c.hash);
   }
-  return keep.slice(0, 15);
+  out.keep = out.keep.slice(0, 14);
+  return out;
 }
 
 /** The shops of one improvement: data.existing.targets (new) or the single target of older drafts. */
@@ -573,8 +616,19 @@ async function buildFragranticaCardDraft(draft) {
     warnings,
     buildMs: Date.now() - buildStartedAt,
   };
+  // no pyramid for a shop (the photo download failed) → the draft is not «ready»: rebuilt up to 3 times, then «attention»
+  const noPyramid = styles.filter((style) => !images.notes?.[style]);
+  if (noPyramid.length) {
+    const retries = Number(draft.data?.photoRetries || 0);
+    const why = warnings.find((w) => /^Фото/.test(w)) || "пирамида не собралась";
+    if (retries < 3) {
+      logger.warn("fragrantica draft photos missing, retry", { id: Number(draft.id), retries, why });
+      return updateFragranticaDraft(draft.id, { status: "queued", stage: null, error: null, data: { ...(draft.data || {}), photoRetries: retries + 1 } });
+    }
+    warnings.push(`Пирамида аромата не собралась после 3 попыток (${why}) — нажмите «Пересобрать».`);
+  }
   // own photos survive a rebuild (the operator chose them)
-  if (Array.isArray(draft.data?.customPhotos)) {
+  if (Array.isArray(draft.data?.customPhotos) && !draft.data.customPhotosAuto) {
     data.customPhotos = draft.data.customPhotos;
     data.onlyCustomPhotos = Boolean(draft.data.onlyCustomPhotos);
   }
@@ -615,13 +669,17 @@ async function buildFragranticaCardDraft(draft) {
         marketName: buildFragranticaMarketName({ perfume, typeKey, volume: draft.volume_ml, tester: Boolean(draft.tester) }),
       });
       if (state.dims.depth && state.dims.width && state.dims.height && state.dims.weight) data.dims = state.dims;
-      // the old card's good photos go first (its main stays main), then the new pyramid and aroma cards
+      // the new bottle photo is the main one; then the old card's SHARP product photos; then the pyramid and cards
       if (!Array.isArray(data.customPhotos)) {
-        data.customPhotos = await fragranticaKeepExistingPhotos(shopStates[0], state.before?.photos || []).catch((error) => {
+        const kept = await fragranticaKeepExistingPhotos(shopStates[0], state.before?.photos || []).catch((error) => {
           warnings.push(`Фото старой карточки не разобрали: ${error?.message || error}`);
-          return [];
+          return { keep: [], blurry: 0 };
         });
-        data.keptExistingPhotos = data.customPhotos.length;
+        const main = images.main || form.sourceImage;
+        data.customPhotos = kept.keep.length && main ? [fragranticaAbsoluteUrl(main), ...kept.keep] : [];
+        data.customPhotosAuto = true;
+        data.keptExistingPhotos = kept.keep.length;
+        data.blurryExistingPhotos = kept.blurry;
       }
     } catch (error) {
       data.existing = existing;
@@ -631,6 +689,7 @@ async function buildFragranticaCardDraft(draft) {
   const built = { ...draft, perfumeId, data };
   const missing = fragranticaDraftMissing(built, targets);
   if (!form.brandMatched && !missing.includes("Бренд")) missing.unshift("Бренд");
+  if (noPyramid.length) missing.push("Пирамида аромата");
   return updateFragranticaDraft(draft.id, {
     status: missing.length ? "attention" : "ready",
     stage: null,
@@ -1001,6 +1060,7 @@ app.patch("/api/fragrantica/drafts/:id", requireAdmin, async (request, response,
     if (Array.isArray(body.customPhotos)) {
       const known = new Set(Array.isArray(data.customPhotos) ? data.customPhotos : []);
       data.customPhotos = body.customPhotos.map(cleanText).filter((u) => known.has(u)).slice(0, 15);
+      data.customPhotosAuto = false;
       if (!data.customPhotos.length) data.onlyCustomPhotos = false;
     }
     if (typeof body.onlyCustomPhotos === "boolean") data.onlyCustomPhotos = body.onlyCustomPhotos && (data.customPhotos || []).length > 0;
@@ -1094,6 +1154,7 @@ app.post("/api/fragrantica/drafts/:id/photos", requireAdmin, uploadImages.array(
     }
     const data = { ...(draft.data || {}) };
     data.customPhotos = [...(Array.isArray(data.customPhotos) ? data.customPhotos : []), ...urls].slice(0, 15);
+    data.customPhotosAuto = false;
     const updated = await updateFragranticaDraft(draft.id, { data });
     response.json({ ok: true, added: urls.length, draft: fragranticaDraftResponse(updated) });
   } catch (error) {

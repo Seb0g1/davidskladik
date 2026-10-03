@@ -25,7 +25,7 @@ type Item = {
   volume: number | null; tester: boolean; shop: string; marketplace: string; offerId: string; rating: number | null; price: number;
   yandexPrice: number; sold: number;
   before: Side | null; after: Side; missing: string[]; exports: Array<{ status: string; error: string | null; shop: string }>;
-  customPhotos?: string[]; onlyCustomPhotos?: boolean; keptExistingPhotos?: number;
+  customPhotos?: string[]; onlyCustomPhotos?: boolean; keptExistingPhotos?: number; blurryExistingPhotos?: number;
 };
 type ImproveResponse = { tab: string; counts: Record<string, number>; items: Item[] };
 
@@ -193,7 +193,13 @@ function ImproveCard({ item, picked, onPick, onApprove, onSkip, onRestore, onReb
         <button type="button" className="fr-link-button" onClick={() => setShowText((v) => !v)}>
           {showText ? <ChevronUp size={13} /> : <ChevronDown size={13} />} {showText ? "Скрыть описания" : "Сравнить описания"}
         </button>
-        {item.keptExistingPhotos ? <span className="ci-muted">Фото старой карточки сохранены: {item.keptExistingPhotos} (рекламные «фото в конце» parfumdeclaration добавит заново). Порядок и состав — в «Свои фото».</span> : null}
+        {item.keptExistingPhotos || item.blurryExistingPhotos ? (
+          <span className="ci-muted">
+            {item.keptExistingPhotos ? `Чёткие фото старой карточки сохранены: ${item.keptExistingPhotos} — после нового главного фото. ` : ""}
+            {item.blurryExistingPhotos ? `Размытых убрано: ${item.blurryExistingPhotos}. ` : ""}
+            Рекламные «фото в конце» parfumdeclaration добавит заново. Порядок и состав — в «Свои фото».
+          </span>
+        ) : null}
         {editable ? <OwnPhotos draftId={item.id} photos={item.customPhotos || []} only={Boolean(item.onlyCustomPhotos)} editable /> : null}
       </div>
     </article>

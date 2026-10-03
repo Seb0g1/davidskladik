@@ -610,6 +610,7 @@ app.get("/api/card-improve", requireAdmin, async (request, response, next) => {
           customPhotos: own,
           onlyCustomPhotos: Boolean(d.onlyCustomPhotos),
           keptExistingPhotos: Number(d.keptExistingPhotos || 0),
+          blurryExistingPhotos: Number(d.blurryExistingPhotos || 0),
           exports: (Array.isArray(r.export_ids) ? r.export_ids : []).map((id) => exportsById.get(Number(id))).filter(Boolean),
           updatedAt: r.updated_at,
         };

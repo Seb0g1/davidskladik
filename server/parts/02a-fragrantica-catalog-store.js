@@ -397,7 +397,17 @@ async function downloadFragranticaMedia(sourceUrl, kind, file) {
   if (fragFs.existsSync(target)) return target;
   if (fragranticaDownloads.has(target)) return fragranticaDownloads.get(target);
   const job = (async () => {
-    const response = await fetch(sourceUrl, { headers: { "User-Agent": fragranticaUserAgent, Referer: "https://www.fragrantica.ru/" }, signal: AbortSignal.timeout(30_000) });
+    // a network hiccup («fetch failed», timeout) is retried; an HTTP answer (404 …) is final
+    let response;
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        response = await fetch(sourceUrl, { headers: { "User-Agent": fragranticaUserAgent, Referer: "https://www.fragrantica.ru/" }, signal: AbortSignal.timeout(30_000) });
+        break;
+      } catch (error) {
+        if (attempt >= 4) throw error;
+        await new Promise((resolve) => setTimeout(resolve, attempt * 3000));
+      }
+    }
     if (!response.ok) throw new FragranticaHttpError(response.status, sourceUrl);
     const buffer = Buffer.from(await response.arrayBuffer());
     if (buffer.length < 200) throw new Error("Пустое изображение.");
