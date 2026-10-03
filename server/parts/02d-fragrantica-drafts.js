@@ -553,13 +553,17 @@ async function buildFragranticaCardDraft(draft) {
   const existing = draft.data?.existing || null;
   await stage("build");
   const done = new Set();
+  // when each part finished (ms from the start) — shows where a slow build spends its time
+  const parts = {};
   const mark = (part) => (value) => {
     done.add(part);
+    parts[part] = Date.now() - buildStartedAt;
     updateFragranticaDraft(draft.id, { stage: `build:${[...done].join(",")}` }).catch(() => {});
     return value;
   };
   const ozonTarget = targets.find((t) => t.kind === "ozon");
   const perfume = await fragranticaPerfumeForExport(perfumeId);
+  parts.perfume = Date.now() - buildStartedAt;
   // the type is known before the form: the draft's own, else the guess from the name (same rule as the form)
   const typeKey = FRAG_OZON_TYPES.some((t) => t.key === draft.type_key) ? draft.type_key : fragOzonGuessTypeKey(perfume);
   const styles = [...new Set(targets.map((t) => t.style))];
@@ -628,6 +632,7 @@ async function buildFragranticaCardDraft(draft) {
     barcode: "",
     warnings,
     buildMs: Date.now() - buildStartedAt,
+    buildParts: parts,
   };
   // no pyramid for a shop (the photo download failed) → the draft is not «ready»: rebuilt up to 3 times, then «attention»
   const noPyramid = styles.filter((style) => !images.notes?.[style]);
@@ -652,6 +657,7 @@ async function buildFragranticaCardDraft(draft) {
       for (const t of fragranticaExistingTargets(existing)) {
         shopStates.push({ ...t, state: await fragranticaExistingCardState({ ...t }) });
       }
+      parts.existing = Date.now() - buildStartedAt;
       const ozonState = shopStates.find((x) => x.marketplace === "ozon")?.state;
       const marketState = shopStates.find((x) => x.marketplace === "yandex")?.state;
       const primary = shopStates[0].state;
@@ -693,12 +699,14 @@ async function buildFragranticaCardDraft(draft) {
         data.customPhotosAuto = true;
         data.keptExistingPhotos = kept.keep.length;
         data.blurryExistingPhotos = kept.blurry;
+        parts.keptPhotos = Date.now() - buildStartedAt;
       }
     } catch (error) {
       data.existing = existing;
       return updateFragranticaDraft(draft.id, { status: "attention", stage: null, type_key: typeKey, error: `Улучшение: ${error?.message || error}`, data });
     }
   }
+  data.buildMs = Date.now() - buildStartedAt;
   const built = { ...draft, perfumeId, data };
   const missing = fragranticaDraftMissing(built, targets);
   if (!form.brandMatched && !missing.includes("Бренд")) missing.unshift("Бренд");
