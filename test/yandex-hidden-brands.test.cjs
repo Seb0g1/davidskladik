@@ -14,8 +14,8 @@ const ctx = vm.createContext({
   cleanText: (v) => String(v ?? "").trim(),
   normalizedBrandIndexKey: (v) => String(v || "").toLowerCase().replace(/[^0-9a-zа-яё]+/gi, " ").replace(/\s+/g, " ").trim(),
 });
-vm.runInContext(`${source}\nthis.h = { yandexHiddenForAuthenticity, matchYandexHiddenBrand, yandexHiddenBrandKeys };`, ctx);
-const { yandexHiddenForAuthenticity, matchYandexHiddenBrand } = ctx.h;
+vm.runInContext(`${source}\nthis.h = { yandexHiddenForAuthenticity, yandexCardHiddenForAuthenticity, matchYandexHiddenBrand, yandexHiddenBrandKeys };`, ctx);
+const { yandexHiddenForAuthenticity, yandexCardHiddenForAuthenticity, matchYandexHiddenBrand } = ctx.h;
 
 const kilianError = {
   message: "Скрыт сотрудником Маркета",
@@ -35,4 +35,16 @@ test("products of a hidden brand: by vendor or by the brand in the title («By K
   assert.equal(matchYandexHiddenBrand({ brand: "By Kilian", name: "Angels Share 50 мл" }, brands), "By Kilian");
   assert.equal(matchYandexHiddenBrand({ name: "Kilianova Rose 50 мл" }, brands), "");
   assert.equal(matchYandexHiddenBrand({ name: "Dior Sauvage 100 мл" }, brands), "");
+});
+
+test("a card with a product-level and a brand-level error → the brand wins; another staff reason is ignored", () => {
+  const productLevel = { message: "Скрыт сотрудником Маркета", comment: "Мы скрыли товар, потому что сомневаемся в его подлинности." };
+  assert.equal(yandexCardHiddenForAuthenticity([productLevel, kilianError]).brand, "By Kilian");
+  assert.equal(yandexCardHiddenForAuthenticity([productLevel]).brand, "");
+  assert.equal(yandexCardHiddenForAuthenticity([{ message: "Скрыт сотрудником Маркета", comment: "Фото не соответствует товару" }]), null);
+});
+
+test("a single hidden offer blocks only that offer", () => {
+  assert.equal(matchYandexHiddenBrand({ offerId: "552872", name: "Some perfume 50 мл" }, {}, { "552872": { name: "x" } }), "товар скрыт Маркетом");
+  assert.equal(matchYandexHiddenBrand({ offerId: "999", name: "Some perfume 50 мл" }, {}, { "552872": { name: "x" } }), "");
 });

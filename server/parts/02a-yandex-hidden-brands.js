@@ -7,7 +7,7 @@
 // пробник, отливант. Стоит в самой отправке exportOzonProductsToYandex — обойти его нельзя.
 
 const yandexHiddenBrandsPath = path.join(dataDir, "yandex-hidden-brands.json");
-let yandexHiddenBrandsCache = { at: 0, mtimeMs: 0, brands: {} };
+let yandexHiddenBrandsCache = { at: 0, mtimeMs: 0, brands: {}, offers: {} };
 const YANDEX_HIDDEN_RELOAD_MS = 60_000;
 
 function yandexHiddenBrandKey(value) {
@@ -25,9 +25,11 @@ function yandexHiddenBrandKeys(brand) {
 }
 
 /** Brand named in the Market comment: «Мы скрыли товары бренда By Kilian, потому что сомневаемся…». */
+const YANDEX_AUTHENTICITY_RE = /сомнева\S*\s+в\s+(?:их|его|её|ее)?\s*подлинност/i;
+
 function parseYandexHiddenBrandComment(text = "") {
   const value = String(text || "");
-  if (!/сомнева\S*\s+в\s+(их\s+)?подлинност/i.test(value)) return null;
+  if (!YANDEX_AUTHENTICITY_RE.test(value)) return null;
   const match = /товар\S*\s+бренда\s+(.+?)\s*(?:,|\s+потому\s+что|\.)/i.exec(value);
   return { brand: match ? cleanText(match[1]).replace(/^[«"']|[»"']$/g, "") : "" };
 }
@@ -35,8 +37,21 @@ function parseYandexHiddenBrandComment(text = "") {
 /** Pure: is this Market card error the «hidden for authenticity» one? Returns { brand } or null. */
 function yandexHiddenForAuthenticity(error = {}) {
   const text = [error.message, error.comment, error.description, error.type].map((v) => String(v || "")).join(" \n ");
-  if (!/скрыт\S*\s+сотрудник\S*\s+маркета/i.test(text) && !/сомнева\S*\s+в\s+(их\s+)?подлинност/i.test(text)) return null;
+  // only the authenticity case — a card hidden by staff for another reason is left alone
+  if (!YANDEX_AUTHENTICITY_RE.test(text)) return null;
   return parseYandexHiddenBrandComment(text) || { brand: "" };
+}
+
+/** Pure: all errors of a card → { brand } (a brand-level error wins over the product-level one) or null. */
+function yandexCardHiddenForAuthenticity(errors = []) {
+  let found = null;
+  for (const error of Array.isArray(errors) ? errors : []) {
+    const hit = yandexHiddenForAuthenticity(error);
+    if (!hit) continue;
+    if (hit.brand) return hit;
+    found = found || hit;
+  }
+  return found;
 }
 
 function readYandexHiddenBrandsSync() {
@@ -46,26 +61,33 @@ function readYandexHiddenBrandsSync() {
     const stat = require("fs").statSync(yandexHiddenBrandsPath);
     if (stat.mtimeMs !== yandexHiddenBrandsCache.mtimeMs) {
       const parsed = JSON.parse(require("fs").readFileSync(yandexHiddenBrandsPath, "utf8") || "{}");
-      yandexHiddenBrandsCache = { at: now, mtimeMs: stat.mtimeMs, brands: parsed.brands && typeof parsed.brands === "object" ? parsed.brands : {} };
+      yandexHiddenBrandsCache = {
+        at: now,
+        mtimeMs: stat.mtimeMs,
+        brands: parsed.brands && typeof parsed.brands === "object" ? parsed.brands : {},
+        offers: parsed.offers && typeof parsed.offers === "object" ? parsed.offers : {},
+      };
     } else {
       yandexHiddenBrandsCache.at = now;
     }
   } catch {
-    yandexHiddenBrandsCache = { at: now, mtimeMs: 0, brands: {} };
+    yandexHiddenBrandsCache = { at: now, mtimeMs: 0, brands: {}, offers: {} };
   }
   return yandexHiddenBrandsCache.brands;
 }
 
-async function writeYandexHiddenBrands(brands) {
+async function writeYandexHiddenBrands(brands, offers = yandexHiddenBrandsCache.offers || {}) {
   await fs.mkdir(dataDir, { recursive: true });
   const tmp = `${yandexHiddenBrandsPath}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify({ brands }, null, 2), "utf8");
+  await fs.writeFile(tmp, JSON.stringify({ brands, offers }, null, 2), "utf8");
   await fs.rename(tmp, yandexHiddenBrandsPath);
-  yandexHiddenBrandsCache = { at: 0, mtimeMs: 0, brands: {} };
+  yandexHiddenBrandsCache = { at: 0, mtimeMs: 0, brands: {}, offers: {} };
 }
 
 /** Pure: which hidden brand (display name) this product belongs to, or "". brands: { key: { brand } } */
-function matchYandexHiddenBrand(product = {}, brands = readYandexHiddenBrandsSync()) {
+function matchYandexHiddenBrand(product = {}, brands = readYandexHiddenBrandsSync(), offers = yandexHiddenBrandsCache.offers || {}) {
+  const offerKey = cleanText(product.offerId || product.offer_id).toLowerCase();
+  if (offerKey && offers[offerKey]) return offers[offerKey].brand || "товар скрыт Маркетом";
   const entries = Object.values(brands || {});
   if (!entries.length) return "";
   const vendor = yandexHiddenBrandKey(product.ozon?.vendor || product.yandex?.vendor || product.vendor || product.brand || "");
@@ -112,6 +134,7 @@ async function runYandexHiddenBrandScan({ dryRun = false } = {}) {
   const startedAt = Date.now();
   try {
     const brands = { ...readYandexHiddenBrandsSync() };
+    const offers = { ...(yandexHiddenBrandsCache.offers || {}) };
     const result = { status: "ok", dryRun, shops: [], newBrands: [], hidden: 0, deleted: 0, failed: 0 };
     for (const shop of uniqueYandexShopsByBusiness()) {
       const rows = await prisma.warehouseProduct.findMany({
@@ -125,20 +148,22 @@ async function runYandexHiddenBrandScan({ dryRun = false } = {}) {
       }) : [];
       const hidden = [];
       for (const card of cards) {
-        for (const error of card.errors || []) {
-          const found = yandexHiddenForAuthenticity(error);
-          if (!found) continue;
-          const row = rows.find((r) => cleanText(r.offerId) === card.offerId);
-          hidden.push({ offerId: card.offerId, brand: found.brand, id: row?.id, name: row?.name });
-          if (found.brand) {
-            const key = yandexHiddenBrandKey(found.brand);
-            if (!brands[key]) {
-              brands[key] = { brand: found.brand, firstSeenAt: new Date().toISOString(), shop: shop.id };
-              result.newBrands.push(found.brand);
-            }
-            brands[key].lastSeenAt = new Date().toISOString();
+        const found = yandexCardHiddenForAuthenticity(card.errors);
+        if (!found) continue;
+        const row = rows.find((r) => cleanText(r.offerId) === card.offerId);
+        hidden.push({ offerId: card.offerId, brand: found.brand, id: row?.id, name: row?.name });
+        if (found.brand) {
+          const key = yandexHiddenBrandKey(found.brand);
+          if (!brands[key]) {
+            brands[key] = { brand: found.brand, firstSeenAt: new Date().toISOString(), shop: shop.id };
+            result.newBrands.push(found.brand);
           }
-          break;
+          brands[key].lastSeenAt = new Date().toISOString();
+        } else {
+          // only this product is hidden — block just the offer, not the whole brand
+          const offerKey = card.offerId.toLowerCase();
+          if (!offers[offerKey]) result.newOffers = (result.newOffers || 0) + 1;
+          offers[offerKey] = { name: row?.name || "", at: new Date().toISOString(), shop: shop.id };
         }
       }
       result.hidden += hidden.length;
@@ -162,8 +187,9 @@ async function runYandexHiddenBrandScan({ dryRun = false } = {}) {
       }
       result.shops.push(shopResult);
     }
-    if (!dryRun && result.newBrands.length) await writeYandexHiddenBrands(brands);
+    if (!dryRun && (result.newBrands.length || result.newOffers)) await writeYandexHiddenBrands(brands, offers);
     result.brands = Object.values(brands).map((b) => b.brand);
+    result.hiddenOffers = Object.keys(offers).length;
     result.ms = Date.now() - startedAt;
     logger.info("yandex hidden brand scan", result);
     if (!dryRun && result.newBrands.length && typeof sendHealthAlertTelegram === "function") {
