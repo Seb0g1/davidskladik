@@ -374,7 +374,7 @@ app.get("/api/fragrantica/ozon/attribute-values", requireAdmin, async (request, 
 // через parfumdeclaration. FRAGRANTICA_RENDER=pd — всегда через parfumdeclaration.
 let fragranticaLocalRenderer;
 // Two perfumes render at once (8 cores; the upscale uses 2 threads each)
-const fragranticaLocalRenderLanes = Math.max(1, Number(process.env.FRAGRANTICA_RENDER_PARALLEL || 2) || 2);
+const fragranticaLocalRenderLanes = Math.max(1, Number(process.env.FRAGRANTICA_RENDER_PARALLEL || 3) || 3);
 const fragranticaLocalRenderChains = Array.from({ length: fragranticaLocalRenderLanes }, () => Promise.resolve());
 let fragranticaLocalRenderNext = 0;
 

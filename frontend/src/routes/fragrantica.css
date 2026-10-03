@@ -384,3 +384,37 @@
 .fr-video-cover video { width: 54px; height: 72px; object-fit: cover; border-radius: 6px; background: #fff; border: 1px solid var(--line); }
 .fr-conv-links .fr-link-button, .fr-conv-desc .fr-link-button { display: inline-flex; align-items: center; gap: 4px; justify-self: start; text-align: left; padding: 2px 0; }
 .fr-conv-desc { display: grid; gap: 6px; }
+
+/* Конвейер: прогресс карточки и общий */
+.fr-progress { display: grid; gap: 6px; padding: 8px 10px; border-radius: 10px; background: rgba(var(--accent-rgb), .06); border: 1px solid rgba(var(--accent-rgb), .18); }
+.fr-progress-bar { position: relative; height: 6px; border-radius: 99px; background: rgba(var(--accent-rgb), .14); overflow: hidden; }
+.fr-progress-bar.is-big { height: 10px; }
+.fr-progress-bar > span { position: absolute; inset: 0 auto 0 0; border-radius: inherit; background: linear-gradient(90deg, rgb(var(--accent-rgb)), color-mix(in srgb, rgb(var(--accent-rgb)) 55%, #7ee0b5)); transition: width .9s linear; }
+.fr-progress-bar > span::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .35), transparent); animation: frBarShine 1.4s linear infinite; }
+.fr-progress-bar.is-indeterminate { width: 160px; }
+.fr-progress-bar.is-indeterminate > span { width: 35%; animation: frIndeterminate 1.2s ease-in-out infinite; }
+.fr-progress.is-queued .fr-progress-bar > span::after { display: none; }
+.fr-progress-steps { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+.fr-progress-steps span { display: inline-flex; align-items: center; gap: 4px; }
+.fr-progress-steps span.is-done { color: var(--fr-ok); }
+.fr-progress-meta { font-size: 11.5px; color: var(--muted); }
+.fr-overall { display: grid; gap: 6px; margin: 14px 0 4px; }
+.fr-overall-head { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+.fr-overall-head b { color: var(--text); }
+@keyframes frBarShine { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+@keyframes frIndeterminate { 0% { transform: translateX(-110%); } 100% { transform: translateX(310%); } }
+@media (prefers-reduced-motion: reduce) { .fr-progress-bar > span, .fr-progress-bar > span::after { animation: none !important; transition: none !important; } }
+
+/* Конвейер: поиск строк PriceMaster вручную */
+.fr-pm-search { display: grid; gap: 8px; margin-top: 4px; padding: 10px; border-radius: 10px; border: 1px dashed rgba(var(--accent-rgb), .35); background: rgba(var(--accent-rgb), .04); }
+.fr-search.is-compact { min-height: 36px; }
+.fr-search.is-compact .icon-action { margin-left: auto; }
+.fr-pm-search > .fr-progress-bar.is-indeterminate { width: 100%; height: 3px; }
+.fr-pm-results { display: grid; gap: 4px; max-height: 320px; overflow-y: auto; }
+.fr-pm-result { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); font-size: 12.5px; }
+.fr-pm-result.is-recommended { border-color: color-mix(in srgb, var(--fr-ok) 45%, transparent); }
+.fr-pm-result > span { display: grid; min-width: 0; }
+.fr-pm-result > span small { color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fr-pm-result > b { display: grid; justify-items: end; font-weight: 600; white-space: nowrap; }
+.fr-pm-result > b small { font-weight: 400; color: var(--muted); font-size: 11px; }
+@media (max-width: 640px) { .fr-pm-result { grid-template-columns: 1fr auto; } .fr-pm-result > button { grid-column: 1 / -1; } }

@@ -18,7 +18,7 @@
 
 const fragranticaDraftsEnabled = process.env.FRAGRANTICA_DRAFTS_ENABLED !== "false";
 const fragranticaDraftsTickMs = 10_000;
-const fragranticaDraftsParallel = Math.max(1, Number(process.env.FRAGRANTICA_DRAFTS_PARALLEL || 6) || 6);
+const fragranticaDraftsParallel = Math.max(1, Number(process.env.FRAGRANTICA_DRAFTS_PARALLEL || 12) || 12);
 const FRAG_DRAFT_ACTIVE = "('queued', 'working', 'ready', 'attention', 'approved', 'sending', 'failed')";
 let fragranticaDraftsTablesReady = false;
 let fragranticaDraftsRunning = false;
@@ -26,7 +26,7 @@ let fragranticaDraftsRunning = false;
 let fragranticaDraftsInFlight = 0;
 let fragranticaExpandInFlight = 0;
 let fragranticaDraftsStarted = false;
-const FRAG_EXPAND_PARALLEL = 4;
+const FRAG_EXPAND_PARALLEL = 6;
 const FRAG_PAGE_FETCH_TIMEOUT_MS = 60_000;
 
 async function requireFragranticaDraftTables() {
@@ -52,6 +52,7 @@ async function requireFragranticaDraftTables() {
     )`);
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS fragrantica_drafts_status_idx ON fragrantica_drafts (status, id)`);
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS fragrantica_drafts_perfume_idx ON fragrantica_drafts (perfume_id)`);
+  await prisma.$executeRawUnsafe(`ALTER TABLE fragrantica_drafts ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ`);
   fragranticaDraftsTablesReady = true;
   return prisma;
 }
@@ -259,7 +260,14 @@ async function buildFragranticaCardDraft(draft) {
   const stage = (name) => updateFragranticaDraft(draft.id, { stage: name });
   const warnings = [];
 
+  const buildStartedAt = Date.now();
   await stage("build");
+  const done = new Set();
+  const mark = (part) => (value) => {
+    done.add(part);
+    updateFragranticaDraft(draft.id, { stage: `build:${[...done].join(",")}` }).catch(() => {});
+    return value;
+  };
   const ozonTarget = targets.find((t) => t.kind === "ozon");
   const perfume = await fragranticaPerfumeForExport(perfumeId);
   // the type is known before the form: the draft's own, else the guess from the name (same rule as the form)
@@ -269,7 +277,7 @@ async function buildFragranticaCardDraft(draft) {
 
   // Ozon form, supplier links + price, photos and the description don't depend on each other — run together
   const [form, linkPart, photoPart, descriptionPart] = await Promise.all([
-    buildFragranticaFormData({ perfumeId, typeKey, volume, tester, accountId: ozonTarget?.id }),
+    buildFragranticaFormData({ perfumeId, typeKey, volume, tester, accountId: ozonTarget?.id }).then(mark("form")),
     (async () => {
       try {
         const pm = await fragranticaPerfumePmRows(perfume);
@@ -282,9 +290,9 @@ async function buildFragranticaCardDraft(draft) {
       } catch (error) {
         return { linkRows: [], selected: [], preview: null, warning: `Привязка: ${error?.message || error}` };
       }
-    })(),
-    styles.length ? fragranticaSharedPhotos(perfumeId, styles).catch((error) => ({ warnings: [`Фото: ${error?.message || error}`] })) : Promise.resolve(null),
-    fragranticaSharedDescription(perfumeId, { typeKey, tester, marketplace }).catch((error) => ({ description: "", source: "", error })),
+    })().then(mark("links")),
+    (styles.length ? fragranticaSharedPhotos(perfumeId, styles).catch((error) => ({ warnings: [`Фото: ${error?.message || error}`] })) : Promise.resolve(null)).then(mark("photos")),
+    fragranticaSharedDescription(perfumeId, { typeKey, tester, marketplace }).catch((error) => ({ description: "", source: "", error })).then(mark("description")),
   ]);
   const { linkRows, selected, preview } = linkPart;
   if (linkPart.warning) warnings.push(linkPart.warning);
@@ -327,6 +335,7 @@ async function buildFragranticaCardDraft(draft) {
     descriptionSource,
     barcode: "",
     warnings,
+    buildMs: Date.now() - buildStartedAt,
   };
   const built = { ...draft, perfumeId, data };
   const missing = fragranticaDraftMissing(built, targets);
@@ -401,7 +410,7 @@ async function runFragranticaDraftsTick() {
     // Ароматы → объёмы: по индексу это миллисекунды, но аромат без скачанной страницы ждёт Фрагрантику —
     // раскладка идёт в своём пуле и не держит сборку карточек
     const perfumes = await prisma.$queryRawUnsafe(
-      `UPDATE fragrantica_drafts SET status = 'working', stage = 'volumes', updated_at = now()
+      `UPDATE fragrantica_drafts SET status = 'working', stage = 'volumes', started_at = now(), updated_at = now()
        WHERE id IN (SELECT id FROM fragrantica_drafts WHERE status = 'queued' AND kind = 'perfume' ORDER BY id LIMIT $1 FOR UPDATE SKIP LOCKED)
        RETURNING *`,
       Math.max(0, FRAG_EXPAND_PARALLEL - fragranticaExpandInFlight),
@@ -413,7 +422,7 @@ async function runFragranticaDraftsTick() {
         .finally(() => { fragranticaExpandInFlight = Math.max(0, fragranticaExpandInFlight - 1); });
     }
     const claimed = await prisma.$queryRawUnsafe(
-      `UPDATE fragrantica_drafts SET status = 'working', stage = 'start', updated_at = now()
+      `UPDATE fragrantica_drafts SET status = 'working', stage = 'start', started_at = now(), updated_at = now()
        WHERE id IN (
          SELECT d.id FROM fragrantica_drafts d
           WHERE d.status = 'queued' AND d.kind = 'card'
@@ -466,6 +475,7 @@ function fragranticaDraftResponse(row, exportsById = new Map()) {
     typeKey: row.type_key || data.typeKey || "",
     status: row.status,
     stage: row.stage || null,
+    startedAt: row.started_at || null,
     targets: Array.isArray(row.targets) ? row.targets : [],
     error: row.error || null,
     data,
@@ -495,7 +505,19 @@ app.get("/api/fragrantica/drafts", requireAdmin, async (_request, response, next
     const exportsById = new Map(exportRows.map((e) => [Number(e.id), fragranticaExportFromRow(e)]));
     const counts = {};
     for (const row of rows) counts[row.status] = (counts[row.status] || 0) + 1;
-    response.json({ ok: true, items: rows.map((r) => fragranticaDraftResponse(r, exportsById)), counts, targets: fragranticaTargets() });
+    // time bar: the median build time of the last finished cards (first volumes draw photos, the rest are quick)
+    const recent = await prisma.$queryRawUnsafe(
+      `SELECT (data->>'buildMs')::int AS ms FROM fragrantica_drafts WHERE kind = 'card' AND data ? 'buildMs' ORDER BY updated_at DESC LIMIT 40`,
+    ).catch(() => []);
+    const times = recent.map((r) => Number(r.ms)).filter((v) => v > 0).sort((a, b) => a - b);
+    const medianBuildMs = times.length ? times[Math.floor(times.length / 2)] : 30_000;
+    response.json({
+      ok: true,
+      items: rows.map((r) => fragranticaDraftResponse(r, exportsById)),
+      counts,
+      targets: fragranticaTargets(),
+      timing: { medianBuildMs, parallel: fragranticaDraftsParallel, serverNow: new Date().toISOString() },
+    });
   } catch (error) {
     next(error);
   }
@@ -561,6 +583,53 @@ app.post("/api/fragrantica/drafts/volume", requireAdmin, async (request, respons
 });
 
 // Правки черновика. Тип, объём или тестер меняют карточку целиком — она собирается заново (описание остаётся).
+/** A PriceMaster row picked by hand — only the fields the card and the price need. */
+function fragranticaManualLinkRow(raw = {}) {
+  const id = cleanText(raw.id);
+  const price = Number(raw.price);
+  if (!id || !cleanText(raw.name) || !(price > 0)) return null;
+  return {
+    id,
+    rowId: cleanText(raw.rowId) || null,
+    article: cleanText(raw.article),
+    name: cleanText(raw.name).slice(0, 300),
+    supplierName: cleanText(raw.supplierName).slice(0, 120),
+    partnerId: cleanText(raw.partnerId),
+    price,
+    priceCurrency: cleanText(raw.priceCurrency) || "USD",
+    updatedAt: raw.updatedAt || null,
+    recommended: Boolean(raw.recommended),
+    issues: Array.isArray(raw.issues) ? raw.issues.map(cleanText).slice(0, 5) : [],
+    markup: Number(raw.markup) || 0,
+    ozonPrice: Number(raw.ozonPrice) || 0,
+    yandexPrice: Number(raw.yandexPrice) || 0,
+    manual: true,
+  };
+}
+
+// «Найти в PriceMaster» у черновика: свой запрос вместо автоматического подбора (без фильтров объёма и
+// тестера — человек сам видит строку); цена посчитана по тем же правилам наценки
+app.get("/api/fragrantica/drafts/:id/pm-search", requireAdmin, async (request, response, next) => {
+  try {
+    if (!/^\d+$/.test(request.params.id)) return next();
+    const q = cleanText(request.query.q);
+    if (q.length < 2) return response.json({ ok: true, rows: [] });
+    const draft = await readFragranticaDraft(request.params.id);
+    if (!draft) return response.status(404).json({ error: "Черновик не найден." });
+    const result = await fragranticaLinkSuggestionsData({
+      perfumeId: draft.perfume_id,
+      typeKey: draft.type_key || draft.data?.typeKey,
+      volume: draft.volume_ml,
+      tester: Boolean(draft.tester),
+      q,
+    });
+    const have = new Set((draft.data?.linkRows || []).map((r) => r.id));
+    response.json({ ok: true, rows: result.rows.slice(0, 30).map((r) => ({ ...r, linked: have.has(r.id) })) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.patch("/api/fragrantica/drafts/:id", requireAdmin, async (request, response, next) => {
   try {
     if (!/^\d+$/.test(request.params.id)) return next();
@@ -594,6 +663,19 @@ app.patch("/api/fragrantica/drafts/:id", requireAdmin, async (request, response,
     if (body.dims && typeof body.dims === "object") {
       data.dims = { ...(data.dims || {}) };
       for (const key of ["depth", "width", "height", "weight"]) if (body.dims[key] !== undefined) data.dims[key] = Math.max(0, Math.round(Number(body.dims[key]) || 0));
+    }
+    // Rows found by hand («Найти в PriceMaster»): added to the card's rows and selected
+    if (Array.isArray(body.addLinks) && body.addLinks.length) {
+      const rows = [...(data.linkRows || [])];
+      const added = [];
+      for (const raw of body.addLinks.slice(0, 10)) {
+        const row = fragranticaManualLinkRow(raw);
+        if (!row) continue;
+        if (!rows.some((r) => r.id === row.id)) rows.push(row);
+        added.push(row.id);
+      }
+      data.linkRows = rows.slice(-60);
+      if (!Array.isArray(body.selectedLinks)) body.selectedLinks = [...new Set([...(data.selectedLinks || []), ...added])];
     }
     if (Array.isArray(body.selectedLinks)) {
       data.selectedLinks = body.selectedLinks.map(String).filter((id) => (data.linkRows || []).some((r) => r.id === id));

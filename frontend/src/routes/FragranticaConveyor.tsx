@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, CheckCheck, ChevronDown, ChevronUp, Loader2, Plus, RefreshCw, Sparkles, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, CheckCheck, ChevronDown, ChevronUp, Link2, Loader2, Plus, RefreshCw, Search, Sparkles, Trash2, X } from "lucide-react";
 import { z } from "zod";
 import { fetchJson, mutationBody } from "../api";
-import { errorMessage } from "../lib/common";
+import { errorMessage, useDebounced } from "../lib/common";
 import { toast } from "../lib/toast";
 
 // «Конвейер» страницы «Фрагрантика»: сервер раскладывает ароматы на объёмы из PriceMaster и сам собирает
@@ -16,11 +16,11 @@ function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
 
 export type WorkTarget = { key: string; kind: "ozon" | "yandex"; id: string; label: string; marketplace: string; style?: string };
 
-type LinkRow = { id: string; name: string; supplierName: string; price: number; priceCurrency: string; ozonPrice: number; recommended: boolean; issues?: string[] };
+type LinkRow = { id: string; name: string; supplierName: string; price: number; priceCurrency: string; ozonPrice: number; recommended: boolean; issues?: string[]; manual?: boolean; linked?: boolean };
 type DraftExport = { id: number; accountName: string; offerId: string; status: string; error: string | null; result?: { links?: string; docs?: string; docsInfo?: string } | null };
 type Draft = {
   id: number; perfumeId: number; brand: string; perfumeName: string; thumb: string; kind: "perfume" | "card";
-  volume: number | null; tester: boolean; typeKey: string; status: string; stage: string | null; targets: string[]; error: string | null;
+  volume: number | null; tester: boolean; typeKey: string; status: string; stage: string | null; startedAt?: string | null; targets: string[]; error: string | null;
   exports: DraftExport[];
   data: {
     name?: string; offerId?: string; price?: number; oldPrice?: number; yandexPrice?: number; supplierName?: string; markup?: number;
@@ -29,7 +29,62 @@ type Draft = {
     brandMatched?: boolean; brandCandidates?: Array<{ id: number; value: string }>; skippedVolumes?: number[];
   } | null;
 };
-type DraftsResponse = { items: Draft[]; counts: Record<string, number>; targets: WorkTarget[] };
+type DraftsResponse = { items: Draft[]; counts: Record<string, number>; targets: WorkTarget[]; timing?: { medianBuildMs: number; parallel: number; serverNow: string } };
+type Timing = { medianMs: number; parallel: number; freeSlots: number; now: number; queuePos: Map<number, number> };
+
+const BUILD_STEPS: Array<[string, string]> = [["form", "Характеристики"], ["links", "Поставщики"], ["photos", "Фото"], ["description", "Описание"]];
+
+/** Server clock + a tick every second, so the time bars move between polls. */
+function useConveyorClock(serverNow?: string) {
+  const [offset, setOffset] = useState(0);
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => { if (serverNow) setOffset(Date.parse(serverNow) - Date.now()); }, [serverNow]);
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, []);
+  return now + offset;
+}
+
+function formatSeconds(ms: number) {
+  const s = Math.max(1, Math.round(ms / 1000));
+  return s < 60 ? `${s} с` : `${Math.floor(s / 60)} мин ${s % 60 ? `${s % 60} с` : ""}`.trim();
+}
+
+/** Per card: 4 steps + a bar that grows with time (median build time), never claiming «done» before it is. */
+function BuildProgress({ draft, timing }: { draft: Draft; timing: Timing }) {
+  if (draft.status === "queued") {
+    const pos = timing.queuePos.get(draft.id) || 1;
+    // free slots take the first queued cards right away (the worker looks every second)
+    const ahead = pos - timing.freeSlots;
+    const wait = ahead <= 0 ? 0 : Math.ceil(ahead / Math.max(1, timing.parallel)) * timing.medianMs;
+    return (
+      <div className="fr-progress is-queued">
+        <div className="fr-progress-bar"><span style={{ width: "0%" }} /></div>
+        <div className="fr-progress-meta">в очереди · {pos}-я · {wait ? `старт примерно через ${formatSeconds(wait)}` : "стартует через пару секунд"}</div>
+      </div>
+    );
+  }
+  const done = new Set((draft.stage || "").startsWith("build:") ? (draft.stage || "").slice(6).split(",") : []);
+  const elapsed = draft.startedAt ? Math.max(0, timing.now - Date.parse(draft.startedAt)) : 0;
+  const byTime = Math.min(0.95, elapsed / Math.max(5000, timing.medianMs));
+  const bySteps = done.size / BUILD_STEPS.length;
+  const share = Math.max(byTime, bySteps * 0.97);
+  const left = Math.max(0, timing.medianMs - elapsed);
+  return (
+    <div className="fr-progress">
+      <div className="fr-progress-bar"><span style={{ width: `${Math.round(share * 100)}%` }} /></div>
+      <div className="fr-progress-steps">
+        {BUILD_STEPS.map(([key, label]) => (
+          <span key={key} className={done.has(key) ? "is-done" : ""}>{done.has(key) ? <Check size={11} /> : <Loader2 size={11} className="spin" />}{label}</span>
+        ))}
+      </div>
+      <div className="fr-progress-meta">
+        {formatSeconds(elapsed)} прошло{left > 0 ? ` · осталось ~${formatSeconds(left)}` : " · почти готово"}
+      </div>
+    </div>
+  );
+}
 
 const TYPES: Array<[string, string]> = [["edp", "Парфюмерная вода"], ["edt", "Туалетная вода"], ["parfum", "Духи"], ["cologne", "Одеколон"], ["oil", "Духи-масло"]];
 const STAGE: Record<string, string> = {
@@ -105,6 +160,25 @@ export function ConveyorPanel({ onClose }: { onClose: () => void }) {
   const items = drafts.data?.items || [];
   const targets = drafts.data?.targets || [];
   const counts = drafts.data?.counts || {};
+  const now = useConveyorClock(drafts.data?.timing?.serverNow);
+  const timing: Timing = useMemo(() => {
+    const queued = items.filter((d) => d.status === "queued" && d.kind === "card").sort((a, b) => a.id - b.id);
+    const parallel = drafts.data?.timing?.parallel || 12;
+    const working = items.filter((d) => d.status === "working" && d.kind === "card").length;
+    return {
+      medianMs: drafts.data?.timing?.medianBuildMs || 30_000,
+      parallel,
+      freeSlots: Math.max(0, parallel - working),
+      now,
+      queuePos: new Map(queued.map((d, i) => [d.id, i + 1])),
+    };
+  }, [items, drafts.data?.timing, now]);
+  const active = items.filter((d) => d.kind === "card" && d.status !== "sent");
+  const finished = active.filter((d) => !BUSY.has(d.status)).length;
+  const remaining = active.length - finished;
+  // the cards in work finish within about one build time; the queue behind them in rounds of «parallel»
+  const queuedCount = items.filter((d) => d.status === "queued" && d.kind === "card").length;
+  const overallEta = remaining ? timing.medianMs * (1 + Math.ceil(Math.max(0, queuedCount - timing.freeSlots) / Math.max(1, timing.parallel))) : 0;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
@@ -172,6 +246,15 @@ export function ConveyorPanel({ onClose }: { onClose: () => void }) {
             ) : null}
           </div>
         </div>
+        {active.length ? (
+          <div className="fr-overall">
+            <div className="fr-overall-head">
+              <b>{finished} из {active.length} собрано</b>
+              <span>{remaining ? `осталось ~${formatSeconds(overallEta)} · одновременно до ${timing.parallel}` : "все карточки собраны"}</span>
+            </div>
+            <div className="fr-progress-bar is-big"><span style={{ width: `${Math.round((finished / active.length) * 100)}%` }} /></div>
+          </div>
+        ) : null}
         <div className="fr-conv-tabs" role="tablist">
           {tabs.map(([key, label, n]) => (
             <button key={key} type="button" role="tab" aria-selected={tab === key} className={tab === key ? "is-on" : ""} onClick={() => setTab(key)}>
@@ -182,7 +265,7 @@ export function ConveyorPanel({ onClose }: { onClose: () => void }) {
         {drafts.isLoading ? <div className="empty-state"><Loader2 size={16} className="spin" /> Загружаем…</div> : null}
         {!drafts.isLoading && !groups.length ? <div className="fr-empty">Здесь пусто. Отметьте ароматы в каталоге или нажмите «Выбрать все» — они появятся тут.</div> : null}
         <div className="fr-conv-list">
-          {groups.map((list) => <PerfumeGroup key={list[0].perfumeId} drafts={list} targets={targets} />)}
+          {groups.map((list) => <PerfumeGroup key={list[0].perfumeId} drafts={list} targets={targets} timing={timing} />)}
         </div>
       </aside>
     </div>,
@@ -190,7 +273,7 @@ export function ConveyorPanel({ onClose }: { onClose: () => void }) {
   );
 }
 
-function PerfumeGroup({ drafts, targets }: { drafts: Draft[]; targets: WorkTarget[] }) {
+function PerfumeGroup({ drafts, targets, timing }: { drafts: Draft[]; targets: WorkTarget[]; timing: Timing }) {
   const first = drafts[0];
   const queryClient = useQueryClient();
   const [adding, setAdding] = useState(false);
@@ -221,7 +304,7 @@ function PerfumeGroup({ drafts, targets }: { drafts: Draft[]; targets: WorkTarge
           <button className="secondary-action compact" type="button" onClick={() => setAdding(true)}><Plus size={13} /> объём</button>
         )}
       </header>
-      {drafts.map((d) => (d.kind === "perfume" ? <PerfumeRow key={d.id} draft={d} /> : <DraftRow key={d.id} draft={d} targets={targets} />))}
+      {drafts.map((d) => (d.kind === "perfume" ? <PerfumeRow key={d.id} draft={d} /> : <DraftRow key={d.id} draft={d} targets={targets} timing={timing} />))}
     </section>
   );
 }
@@ -230,7 +313,12 @@ function PerfumeRow({ draft }: { draft: Draft }) {
   const remove = useRemoveDraft();
   const rebuild = useRebuild();
   if (BUSY.has(draft.status)) {
-    return <div className="fr-conv-row is-busy"><Loader2 size={14} className="spin" /> Ищем объёмы в PriceMaster…</div>;
+    return (
+      <div className="fr-conv-row is-busy">
+        <span className="fr-conv-note"><Loader2 size={14} className="spin" /> Ищем объёмы в PriceMaster…</span>
+        <div className="fr-progress-bar is-indeterminate"><span /></div>
+      </div>
+    );
   }
   return (
     <div className={`fr-conv-row is-${draft.status}`}>
@@ -262,7 +350,7 @@ function useRebuild() {
   });
 }
 
-function DraftRow({ draft, targets }: { draft: Draft; targets: WorkTarget[] }) {
+function DraftRow({ draft, targets, timing }: { draft: Draft; targets: WorkTarget[]; timing: Timing }) {
   const queryClient = useQueryClient();
   const d = draft.data || {};
   const [open, setOpen] = useState(false);
@@ -320,6 +408,7 @@ function DraftRow({ draft, targets }: { draft: Draft; targets: WorkTarget[] }) {
       </div>
 
       <div className="fr-conv-main">
+        {busy && (draft.status === "queued" || draft.status === "working") ? <BuildProgress draft={draft} timing={timing} /> : null}
         <div className="fr-conv-line">
           <span className={`fr-conv-status is-${draft.status}`}>
             {busy ? <Loader2 size={12} className="spin" /> : draft.status === "ready" ? <Check size={12} /> : draft.status === "attention" || draft.status === "failed" ? <AlertTriangle size={12} /> : null}
@@ -361,7 +450,8 @@ function DraftRow({ draft, targets }: { draft: Draft; targets: WorkTarget[] }) {
                 {open ? <><ChevronUp size={12} /> только выбранные</> : <><ChevronDown size={12} /> все строки поставщиков ({links.length})</>}
               </button>
             ) : null}
-            {!links.length && !busy ? <span className="fr-hint">Строк поставщиков нет — карточка уйдёт без привязки, цену поставьте сами.</span> : null}
+            {!links.length && !busy ? <span className="fr-hint">Автоматически строк поставщиков не нашлось — найдите их в PriceMaster ниже или поставьте цену сами.</span> : null}
+            {editable ? <PmLinkSearch draft={draft} onAdd={(rows) => patch.mutate({ addLinks: rows })} adding={patch.isPending} /> : null}
           </div>
         ) : null}
 
@@ -475,5 +565,54 @@ export function WorkShopsPicker({ shops, value, onSave, onClose }: {
       </div>
     </div>,
     document.body,
+  );
+}
+
+/** «Найти в PriceMaster»: свой запрос, когда автоподбор не нашёл строку или нашёл не ту. Найденная строка
+ *  добавляется к строкам карточки и сразу выбирается — цена пересчитывается по наценке. */
+function PmLinkSearch({ draft, onAdd, adding }: { draft: Draft; onAdd: (rows: LinkRow[]) => void; adding: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const query = useDebounced(q, 350).trim();
+  const search = useQuery({
+    queryKey: ["fragrantica", "draft-pm-search", draft.id, query],
+    queryFn: () => apiJson<{ rows: LinkRow[] }>(`/api/fragrantica/drafts/${draft.id}/pm-search?q=${encodeURIComponent(query)}`),
+    enabled: open && query.length >= 2,
+    staleTime: 60_000,
+  });
+  const linked = new Set((draft.data?.linkRows || []).map((r) => r.id));
+  if (!open) {
+    return (
+      <button className="fr-link-button" type="button" onClick={() => { setOpen(true); setQ(`${draft.brand} ${draft.perfumeName}`.trim()); }}>
+        <Search size={12} /> Найти в PriceMaster вручную
+      </button>
+    );
+  }
+  const rows = search.data?.rows || [];
+  return (
+    <div className="fr-pm-search">
+      <label className="fr-search is-compact">
+        <Search size={14} />
+        <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="бренд, название, объём, артикул или штрихкод" />
+        <button className="icon-action" type="button" aria-label="Закрыть поиск" onClick={() => setOpen(false)}><X size={14} /></button>
+      </label>
+      {search.isFetching ? <div className="fr-progress-bar is-indeterminate"><span /></div> : null}
+      {search.isError ? <span className="fr-hint">{errorMessage(search.error)}</span> : null}
+      {query.length >= 2 && !search.isFetching && !rows.length && !search.isError ? <span className="fr-hint">Ничего не нашлось — попробуйте короче: бренд и одно слово названия.</span> : null}
+      <div className="fr-pm-results">
+        {rows.map((r) => {
+          const has = linked.has(r.id);
+          return (
+            <div key={r.id} className={`fr-pm-result${r.recommended ? " is-recommended" : ""}`}>
+              <span>{r.name}<small>{r.supplierName}{(r.issues || []).length ? ` · ${(r.issues || []).join(", ")}` : ""}</small></span>
+              <b>{r.price.toLocaleString("ru")} {r.priceCurrency === "RUB" ? "₽" : "$"}{r.ozonPrice ? <small>→ {r.ozonPrice.toLocaleString("ru")} ₽</small> : null}</b>
+              <button className="secondary-action compact" type="button" disabled={has || adding} onClick={() => onAdd([r])}>
+                {has ? <><Check size={12} /> привязана</> : <><Link2 size={12} /> привязать</>}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
