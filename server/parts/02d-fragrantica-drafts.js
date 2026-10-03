@@ -690,11 +690,18 @@ async function buildFragranticaCardDraft(draft) {
       // not on Ozon → that shop is left out (a new Ozon card needs a price the improvement does not set)
       const allKeys = fragranticaTargets();
       const keyOf = (x) => allKeys.find((t) => t.kind === x.marketplace && t.id === x.target)?.key;
-      const createOn = existingResult.missing.filter((x) => x.marketplace === "yandex").map(keyOf).filter(Boolean);
-      const dropOzon = existingResult.missing.filter((x) => x.marketplace === "ozon").map(keyOf).filter(Boolean);
+      // Market refuses some goods outright (hidden brand, tester, < 20 ml): no upload there, the reason is shown
+      const marketRefuses = fragranticaMarketBlockReasons(perfume, { volume, typeKey, tester });
+      const missingMarket = existingResult.missing.filter((x) => x.marketplace === "yandex").map(keyOf).filter(Boolean);
+      const createOn = marketRefuses.length ? [] : missingMarket;
+      const dropOzon = [
+        ...existingResult.missing.filter((x) => x.marketplace === "ozon").map(keyOf).filter(Boolean),
+        ...(marketRefuses.length ? missingMarket : []),
+      ];
+      if (marketRefuses.length && missingMarket.length) warnings.push(`На Маркете карточки ${existing.offerId} нет — и не загружаем: ${marketRefuses.join("; ")}.`);
       if (dropOzon.length) {
         draft.targets = (draft.targets || []).filter((k) => !dropOzon.includes(k));
-        warnings.push(`На Ozon карточки ${existing.offerId} нет — улучшаем только Маркет.`);
+        if (existingResult.missing.some((x) => x.marketplace === "ozon")) warnings.push(`На Ozon карточки ${existing.offerId} нет — улучшаем только Маркет.`);
       }
       if (createOn.length) warnings.push(`На Маркете карточки ${existing.offerId} нет — загрузим её (цену и остаток отправит обычная синхронизация).`);
       const ozonState = shopStates.find((x) => x.marketplace === "ozon")?.state;
