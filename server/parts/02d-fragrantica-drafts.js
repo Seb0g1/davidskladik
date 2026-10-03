@@ -596,6 +596,8 @@ async function buildFragranticaCardDraft(draft) {
         dims: [ozonState, marketState].find((x) => x?.dims?.depth && x.dims.width && x.dims.height && x.dims.weight)?.dims || primary.dims,
         before: primary.before,
       };
+      // a card already sent with the old logic: its photos from before that send are restored
+      if (Array.isArray(existing.restoreBefore?.photos) && existing.restoreBefore.photos.length) state.before = existing.restoreBefore;
       // each Ozon cabinet keeps its own current price
       const allTargets = fragranticaTargets();
       const prices = {};
