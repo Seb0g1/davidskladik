@@ -375,9 +375,9 @@ app.get("/api/fragrantica/ozon/attribute-values", requireAdmin, async (request, 
 let fragranticaLocalRenderer;
 // Two perfumes render at once (8 cores; the upscale uses 2 threads each)
 const fragranticaRenderPinned = Number(process.env.FRAGRANTICA_RENDER_PARALLEL) || 0;
-const fragranticaLocalRenderLanes = Math.max(1, fragranticaRenderPinned || 6);
+const fragranticaLocalRenderLanes = Math.max(1, fragranticaRenderPinned || 5);
 // lanes in use now: 6 at night, 3 by day (FRAGRANTICA_RENDER_PARALLEL pins it)
-const fragranticaRenderLanesNow = () => Math.min(fragranticaLocalRenderLanes, fragranticaRenderPinned || (isNightWorkWindow() ? 6 : 3));
+const fragranticaRenderLanesNow = () => Math.min(fragranticaLocalRenderLanes, fragranticaRenderPinned || (isNightWorkWindow() ? 5 : 3));
 const fragranticaLocalRenderChains = Array.from({ length: fragranticaLocalRenderLanes }, () => Promise.resolve());
 let fragranticaLocalRenderNext = 0;
 
@@ -414,7 +414,12 @@ function fragranticaRenderProc(lane) {
   const current = fragranticaRenderProcs[lane];
   if (current && current.child.connected) return current;
   const workerPath = path.join(path.dirname(path.dirname(require.resolve("./lib/perfume-render/index.cjs"))), "perfume-render-worker.cjs");
-  const child = fragRenderFork(workerPath, [], { serialization: "advanced", stdio: ["ignore", "inherit", "inherit", "ipc"] });
+  // each render process stays on ~1–2 cores (libvips would take all 8): the site and the shop keep their CPU
+  const child = fragRenderFork(workerPath, [], {
+    serialization: "advanced",
+    stdio: ["ignore", "inherit", "inherit", "ipc"],
+    env: { ...process.env, VIPS_CONCURRENCY: process.env.FRAGRANTICA_RENDER_VIPS_THREADS || "1", UV_THREADPOOL_SIZE: "2" },
+  });
   // background work: the site and the shop get the CPU first
   try { if (child.pid) require("os").setPriority(child.pid, 10); } catch { /* not allowed — fine */ }
   const proc = { child, pending: new Map() };
