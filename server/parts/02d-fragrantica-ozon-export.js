@@ -374,7 +374,7 @@ app.get("/api/fragrantica/ozon/attribute-values", requireAdmin, async (request, 
 // через parfumdeclaration. FRAGRANTICA_RENDER=pd — всегда через parfumdeclaration.
 let fragranticaLocalRenderer;
 // Two perfumes render at once (8 cores; the upscale uses 2 threads each)
-const fragranticaLocalRenderLanes = Math.max(1, Number(process.env.FRAGRANTICA_RENDER_PARALLEL || 3) || 3);
+const fragranticaLocalRenderLanes = Math.max(1, Number(process.env.FRAGRANTICA_RENDER_PARALLEL || 5) || 5);
 const fragranticaLocalRenderChains = Array.from({ length: fragranticaLocalRenderLanes }, () => Promise.resolve());
 let fragranticaLocalRenderNext = 0;
 
@@ -477,11 +477,14 @@ async function runFragranticaImageJob(job, options) {
   // Видеообложка Ozon по стилю магазина: флакон → пирамида → характеристики → крупный план
   result.video = {};
   const local = (url) => (url && url.startsWith("/uploads/fragrantica/cards/") ? fragranticaMediaPath("cards", url.split("/").pop()) : "");
+  // the covers go to the background video queue — the photos are ready now, the send waits for its video
   for (const style of options.styles || []) {
-    job.stage = "video";
     const slides = [local(result.main), local(result.notes?.[style]), local(result.specs?.[style]), local(result.closeup)].filter(Boolean);
-    const url = await ensureFragranticaVideoCover(options.perfumeId, style, slides, { refresh: Boolean(options.refresh) }).catch(() => null);
-    if (url) result.video[style] = url;
+    const pending = queueFragranticaVideoCover(options.perfumeId, style, slides, { refresh: Boolean(options.refresh) });
+    if (options.waitVideo) {
+      const url = await pending.catch(() => null);
+      if (url) result.video[style] = url;
+    }
   }
   return result;
 }
@@ -585,7 +588,8 @@ app.post("/api/fragrantica/ozon/images", requireAdmin, async (request, response,
     const job = { id: jobId, status: "running", stage: "download", result: null, error: null, at: Date.now() };
     fragranticaImageJobs.set(jobId, job);
     for (const [id, old] of fragranticaImageJobs) if (Date.now() - old.at > 3_600_000) fragranticaImageJobs.delete(id);
-    runFragranticaImageJob(job, { perfumeId, styles, refresh: Boolean(request.body?.refresh) })
+    // the manual form shows the video preview: it waits for the cover
+    runFragranticaImageJob(job, { perfumeId, styles, refresh: Boolean(request.body?.refresh), waitVideo: true })
       .then((result) => Object.assign(job, { status: "done", result }))
       .catch((error) => Object.assign(job, { status: "failed", error: error?.message || String(error) }));
     response.json({ ok: true, jobId });
@@ -1138,7 +1142,7 @@ async function refreshFragranticaExportMedia(row) {
   const perfume = await fragranticaPerfumeForExport(perfumeId);
   const target = fragranticaTargets().find((t) => t.kind === row.marketplace && t.id === cleanText(row.account_id));
   if (!target) return { skipped: "магазин не найден" };
-  await runFragranticaImageJob({}, { perfumeId, styles: [target.style], refresh: false });
+  await runFragranticaImageJob({}, { perfumeId, styles: [target.style], refresh: false, waitVideo: true });
   const media = (file) => (fragFs.existsSync(fragranticaMediaPath("cards", file)) ? fragranticaAbsoluteUrl(fragranticaMediaUrl("cards", file)) : "");
   const notes = media(`${perfumeId}-notes-${target.style}-v2.jpg`);
   const extras = fragranticaExtraPhotos(perfumeId, target.style);

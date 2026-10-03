@@ -7,6 +7,7 @@ import { fetchJson, mutationBody } from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { errorMessage, useDebounced } from "../lib/common";
 import { toast } from "../lib/toast";
+import { openPhotoLightbox } from "../components/PhotoLightbox";
 import { ConveyorBar, ConveyorPanel, useAddToConveyor, VolumePicker, WorkShopsPicker, type PickedVolume } from "./FragranticaConveyor";
 import "./fragrantica.css";
 
@@ -580,7 +581,7 @@ function PerfumeDrawer({ id, workShops, onClose, onConveyor }: { id: number; wor
         {p ? (
           <>
             <div className="fr-hero">
-              <div className="fr-hero-img"><img src={p.image} alt={`${p.brand} ${p.name}`} /></div>
+              <div className="fr-hero-img"><img src={p.image} alt={`${p.brand} ${p.name}`} style={{ cursor: "zoom-in" }} onClick={() => openPhotoLightbox([p.image], 0, `${p.brand} ${p.name}`)} /></div>
               <div className="fr-hero-text">
                 <div className="fr-hero-brand">{p.brand}</div>
                 <h2>{p.name}</h2>
@@ -1074,7 +1075,7 @@ function CardStep({ perfume, typeKey, volume, tester, workShops, description, on
       <div className="fr-shops">
         <div className="fr-shop-bottle">
           <div className="fr-photo-frame">
-            {imageResult?.main ? <img src={imageResult.main} alt="Флакон" /> : imagesBusy ? <span><Loader2 size={16} className="spin" /> Премиум фон…</span> : <img src={data.sourceImage} alt="Флакон" />}
+            {imageResult?.main ? <img src={imageResult.main} alt="Флакон" style={{ cursor: "zoom-in" }} onClick={() => openPhotoLightbox([imageResult.main as string], 0)} /> : imagesBusy ? <span><Loader2 size={16} className="spin" /> Премиум фон…</span> : <img src={data.sourceImage} alt="Флакон" />}
           </div>
           <span className="fr-hint">Фото флакона: общее для всех магазинов</span>
         </div>
@@ -1088,7 +1089,7 @@ function CardStep({ perfume, typeKey, volume, tester, workShops, description, on
                 <span><b>{t.label}</b><small>{t.marketplace}</small></span>
               </label>
               <div className="fr-photo-frame">
-                {notes ? <img src={notes} alt={`Пирамида аромата ${t.label}`} /> : imagesBusy ? <span><Loader2 size={16} className="spin" /> Рисуем пирамиду…</span> : <span>Пирамиды нет</span>}
+                {notes ? <img src={notes} alt={`Пирамида аромата ${t.label}`} style={{ cursor: "zoom-in" }} onClick={() => openPhotoLightbox([notes], 0, `Пирамида аромата · ${t.label}`)} /> : imagesBusy ? <span><Loader2 size={16} className="spin" /> Рисуем пирамиду…</span> : <span>Пирамиды нет</span>}
               </div>
               {notes && on ? <span className="fr-approve is-ok"><Check size={13} /> Пирамида пойдёт в карточку</span> : null}
               {t.kind === "ozon" && imageResult?.video?.[t.style] ? (

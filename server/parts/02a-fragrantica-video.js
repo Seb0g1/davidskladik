@@ -89,7 +89,8 @@ async function ensureFragranticaVideoCover(perfumeId, style, images = [], { refr
   args.push(
     "-filter_complex", buildFragranticaCoverFilter(sequence.length),
     "-map", "[vout]", "-an",
-    "-c:v", "libx264", "-preset", "medium", "-crf", "21", "-profile:v", "high", "-pix_fmt", "yuv420p",
+    // veryfast + 2 threads: a few times quicker than «medium» on all cores, same look at this bitrate
+    "-c:v", "libx264", "-preset", "veryfast", "-threads", String(FRAG_VIDEO_THREADS), "-crf", "21", "-profile:v", "high", "-pix_fmt", "yuv420p",
     "-r", String(FRAG_VIDEO_FPS), "-movflags", "+faststart",
     tmp,
   );
@@ -108,4 +109,46 @@ async function ensureFragranticaVideoCover(perfumeId, style, images = [], { refr
 function fragranticaVideoCoverUrl(perfumeId, style) {
   const file = fragranticaVideoCoverFile(perfumeId, style);
   return fragVideoFs.existsSync(fragranticaMediaPath("cards", file)) ? fragranticaAbsoluteUrl(fragranticaMediaUrl("cards", file)) : "";
+}
+
+// ─── Очередь видеообложек ───────────────────────────────────────────────────
+// Сборка черновика не ждёт ролик: он рендерится в фоне (FRAGRANTICA_VIDEO_PARALLEL, деф. 2), отправка
+// карточки ждёт свой ролик (fragranticaVideoCoversReady).
+const FRAG_VIDEO_THREADS = Math.max(1, Number(process.env.FRAGRANTICA_VIDEO_THREADS || 2) || 2);
+const fragranticaVideoParallel = Math.max(1, Number(process.env.FRAGRANTICA_VIDEO_PARALLEL || 2) || 2);
+const fragranticaVideoJobs = new Map();
+const fragranticaVideoWaiting = [];
+let fragranticaVideoActive = 0;
+
+function fragranticaVideoPump() {
+  while (fragranticaVideoActive < fragranticaVideoParallel && fragranticaVideoWaiting.length) {
+    const job = fragranticaVideoWaiting.shift();
+    fragranticaVideoActive += 1;
+    ensureFragranticaVideoCover(job.perfumeId, job.style, job.slides, { refresh: job.refresh })
+      .then(job.resolve, () => job.resolve(null))
+      .finally(() => {
+        fragranticaVideoActive -= 1;
+        fragranticaVideoJobs.delete(job.key);
+        fragranticaVideoPump();
+      });
+  }
+}
+
+/** Queue the cover of one style (deduplicated); resolves to its URL or null. */
+function queueFragranticaVideoCover(perfumeId, style, slides, { refresh = false } = {}) {
+  const key = `${Number(perfumeId)}:${style}`;
+  if (fragranticaVideoJobs.has(key)) return fragranticaVideoJobs.get(key);
+  let resolve;
+  const promise = new Promise((r) => { resolve = r; });
+  fragranticaVideoJobs.set(key, promise);
+  fragranticaVideoWaiting.push({ key, perfumeId: Number(perfumeId), style, slides, refresh, resolve });
+  fragranticaVideoPump();
+  return promise;
+}
+
+/** Waits (up to timeoutMs) for the queued covers of a perfume. */
+async function fragranticaVideoCoversReady(perfumeId, styles = [], timeoutMs = 240_000) {
+  const pending = styles.map((style) => fragranticaVideoJobs.get(`${Number(perfumeId)}:${style}`)).filter(Boolean);
+  if (!pending.length) return;
+  await Promise.race([Promise.all(pending), new Promise((r) => setTimeout(r, timeoutMs).unref?.())]);
 }

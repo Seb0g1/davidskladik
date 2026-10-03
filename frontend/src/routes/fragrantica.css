@@ -346,7 +346,7 @@
 .fr-conv-card.is-sent { opacity: .85; }
 .fr-conv-photos { display: flex; gap: 6px; align-items: flex-start; }
 .fr-conv-photos img, .fr-conv-ph { width: 78px; height: 104px; object-fit: cover; border-radius: 8px; background: #fff; border: 1px solid var(--line); display: grid; place-items: center; color: var(--muted); font-size: 12px; }
-.fr-conv-photos a:hover img { border-color: rgba(var(--accent-rgb), .7); }
+.fr-conv-photos .plb-thumb:hover img { border-color: rgba(var(--accent-rgb), .7); }
 .fr-conv-main { display: grid; gap: 8px; min-width: 0; align-content: start; }
 .fr-conv-line { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .fr-conv-line select, .fr-conv-brand select { height: 30px; border-radius: 8px; border: 1px solid var(--line); background: var(--field-bg); color: var(--text); padding: 0 8px; font-size: 13px; }

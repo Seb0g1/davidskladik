@@ -7,6 +7,7 @@ import { PageHeader } from "../components/PageHeader";
 import { errorMessage, useDebounced } from "../lib/common";
 import { toast } from "../lib/toast";
 import { OwnPhotos } from "./FragranticaConveyor";
+import { PhotoThumb } from "../components/PhotoLightbox";
 import "./fragrantica.css";
 import "./card-health.css";
 import "./card-improve.css";
@@ -215,7 +216,7 @@ function SideView({ label, side, showText, fresh = false }: { label: string; sid
           <p className="ci-name">{side.name || <span className="ci-muted">без названия</span>}</p>
           <div className="ci-photos">
             {side.photos.length ? side.photos.slice(0, 12).map((url, i) => (
-              <a key={`${url}-${i}`} href={url} target="_blank" rel="noreferrer"><img src={url} alt={`${label}: фото ${i + 1}`} loading="lazy" /></a>
+              <PhotoThumb key={`${url}-${i}`} photos={side.photos} index={i} alt={`${label}: фото ${i + 1}`} title={label} />
             )) : <span className="ci-muted">нет фото</span>}
           </div>
           <span className="ci-count">{side.photos.length} фото{side.description ? ` · описание ${side.description.length} зн.` : " · без описания"}</span>

@@ -5,6 +5,7 @@ import { AlertTriangle, ArrowLeft, ArrowRight, Camera, Check, CheckCheck, Chevro
 import { z } from "zod";
 import { fetchJson, mutationBody } from "../api";
 import { errorMessage, useDebounced } from "../lib/common";
+import { PhotoThumb } from "../components/PhotoLightbox";
 import { toast } from "../lib/toast";
 
 // «Конвейер» страницы «Фрагрантика»: сервер раскладывает ароматы на объёмы из PriceMaster и сам собирает
@@ -402,15 +403,23 @@ function DraftRow({ draft, targets, timing }: { draft: Draft; targets: WorkTarge
   return (
     <div className={`fr-conv-card is-${draft.status}`}>
       <div className="fr-conv-photocol">
-        <div className="fr-conv-photos">
-          {d.customPhotos?.length
-            ? <a href={d.customPhotos[0]} target="_blank" rel="noreferrer" className="fr-conv-own" title="Своё фото — главное на карточке"><img src={d.customPhotos[0]} alt="Своё фото" loading="lazy" /></a>
-            : d.images?.main ? <a href={d.images.main} target="_blank" rel="noreferrer"><img src={d.images.main} alt="Флакон" loading="lazy" /></a> : <span className="fr-conv-ph">{busy ? <Loader2 size={16} className="spin" /> : "фото"}</span>}
-          {d.onlyCustomPhotos ? null : chosen.map((t) => {
-            const notes = t.style ? d.images?.notes?.[t.style] : undefined;
-            return notes ? <a key={t.key} href={notes} target="_blank" rel="noreferrer" title={`Пирамида аромата · ${t.label}`}><img src={notes} alt={`Пирамида ${t.label}`} loading="lazy" /></a> : null;
-          })}
-        </div>
+        {(() => {
+          // the card's photos in order — one viewer over all of them
+          const mainPhoto = d.customPhotos?.length ? d.customPhotos[0] : d.images?.main;
+          const notesPhotos = d.onlyCustomPhotos ? [] : chosen.map((t) => (t.style ? d.images?.notes?.[t.style] : undefined)).filter((u): u is string => Boolean(u));
+          const all = [mainPhoto, ...(d.customPhotos || []).slice(1), ...notesPhotos].filter((u): u is string => Boolean(u));
+          const title = `${draft.brand} ${draft.perfumeName}`.trim();
+          return (
+            <div className="fr-conv-photos">
+              {mainPhoto
+                ? <PhotoThumb photos={all} index={0} alt={d.customPhotos?.length ? "Своё фото" : "Флакон"} className={d.customPhotos?.length ? "fr-conv-own" : ""} title={title} />
+                : <span className="fr-conv-ph">{busy ? <Loader2 size={16} className="spin" /> : "фото"}</span>}
+              {notesPhotos.map((url) => (
+                <PhotoThumb key={url} photos={all} index={all.indexOf(url)} alt="Пирамида аромата" title={title} />
+              ))}
+            </div>
+          );
+        })()}
         <OwnPhotos draftId={draft.id} photos={d.customPhotos || []} only={Boolean(d.onlyCustomPhotos)} editable={editable} />
       </div>
 
@@ -780,7 +789,7 @@ export function OwnPhotos({ draftId, photos, only, editable, onChanged }: {
         <div className="fr-own-list">
           {photos.map((url, i) => (
             <div key={url} className="fr-own-item">
-              <a href={url} target="_blank" rel="noreferrer"><img src={url} alt={`Своё фото ${i + 1}`} loading="lazy" /></a>
+              <PhotoThumb photos={photos} index={i} alt={`Своё фото ${i + 1}`} title="Свои фото" />
               {i === 0 ? <span className="fr-own-main">главное</span> : null}
               {editable ? (
                 <div className="fr-own-tools">

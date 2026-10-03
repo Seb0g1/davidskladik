@@ -18,12 +18,15 @@
 
 const fragranticaDraftsEnabled = process.env.FRAGRANTICA_DRAFTS_ENABLED !== "false";
 const fragranticaDraftsTickMs = 10_000;
-const fragranticaDraftsParallel = Math.max(1, Number(process.env.FRAGRANTICA_DRAFTS_PARALLEL || 12) || 12);
+const fragranticaDraftsParallel = Math.max(1, Number(process.env.FRAGRANTICA_DRAFTS_PARALLEL || 6) || 6);
 const FRAG_DRAFT_ACTIVE = "('queued', 'working', 'ready', 'attention', 'approved', 'sending', 'failed')";
 let fragranticaDraftsTablesReady = false;
 let fragranticaDraftsRunning = false;
 // continuous pool: a free slot takes the next card at once (a slow card no longer holds the whole batch)
 let fragranticaDraftsInFlight = 0;
+// «Улучшение карточек» has its own pool: a backlog of hundreds never holds up new Fragrantica cards
+const fragranticaImproveParallel = Math.max(1, Number(process.env.FRAGRANTICA_IMPROVE_PARALLEL || 10) || 10);
+let fragranticaImproveInFlight = 0;
 let fragranticaExpandInFlight = 0;
 let fragranticaDraftsStarted = false;
 const FRAG_EXPAND_PARALLEL = 6;
@@ -569,8 +572,20 @@ async function buildFragranticaCardDraft(draft) {
   const styles = [...new Set(targets.map((t) => t.style))];
   const marketplace = targets.some((t) => t.kind === "yandex") ? "yandex" : "ozon";
 
+  // improvement: the old card in every shop + which of its photos are worth keeping — parallel with the render
+  const ownChosen = Array.isArray(draft.data?.customPhotos) && !draft.data.customPhotosAuto;
+  const existingPart = existing
+    ? (async () => {
+      const shopStates = await Promise.all(fragranticaExistingTargets(existing).map(async (t) => ({ ...t, state: await fragranticaExistingCardState({ ...t }) })));
+      const restore = Array.isArray(existing.restoreBefore?.photos) && existing.restoreBefore.photos.length ? existing.restoreBefore : null;
+      const beforePhotos = (restore || shopStates[0].state.before)?.photos || [];
+      const kept = ownChosen ? null : await fragranticaKeepExistingPhotos(shopStates[0], beforePhotos).catch((error) => ({ keep: [], blurry: 0, error }));
+      return { shopStates, kept };
+    })().then(mark("existing")).catch((error) => ({ error }))
+    : Promise.resolve(null);
+
   // Ozon form, supplier links + price, photos and the description don't depend on each other — run together
-  const [form, linkPart, photoPart, descriptionPart] = await Promise.all([
+  const [form, linkPart, photoPart, descriptionPart, existingResult] = await Promise.all([
     buildFragranticaFormData({ perfumeId, typeKey, volume, tester, accountId: ozonTarget?.id }).then(mark("form")),
     (async () => {
       // improvement: the card keeps its own suppliers and price — no new links
@@ -589,6 +604,7 @@ async function buildFragranticaCardDraft(draft) {
     })().then(mark("links")),
     (styles.length ? fragranticaSharedPhotos(perfumeId, styles).catch((error) => ({ warnings: [`Фото: ${error?.message || error}`] })) : Promise.resolve(null)).then(mark("photos")),
     fragranticaSharedDescription(perfumeId, { typeKey, tester, marketplace }).catch((error) => ({ description: "", source: "", error })).then(mark("description")),
+    existingPart,
   ]);
   const { linkRows, selected, preview } = linkPart;
   if (linkPart.warning) warnings.push(linkPart.warning);
@@ -653,11 +669,8 @@ async function buildFragranticaCardDraft(draft) {
   if (existing) {
     try {
       // every shop of the product: Ozon gives the price, old price, barcode and sizes; Market its own price
-      const shopStates = [];
-      for (const t of fragranticaExistingTargets(existing)) {
-        shopStates.push({ ...t, state: await fragranticaExistingCardState({ ...t }) });
-      }
-      parts.existing = Date.now() - buildStartedAt;
+      if (existingResult?.error) throw existingResult.error;
+      const { shopStates } = existingResult;
       const ozonState = shopStates.find((x) => x.marketplace === "ozon")?.state;
       const marketState = shopStates.find((x) => x.marketplace === "yandex")?.state;
       const primary = shopStates[0].state;
@@ -690,16 +703,13 @@ async function buildFragranticaCardDraft(draft) {
       if (state.dims.depth && state.dims.width && state.dims.height && state.dims.weight) data.dims = state.dims;
       // the new bottle photo is the main one; then the old card's SHARP product photos; then the pyramid and cards
       if (!Array.isArray(data.customPhotos)) {
-        const kept = await fragranticaKeepExistingPhotos(shopStates[0], state.before?.photos || []).catch((error) => {
-          warnings.push(`Фото старой карточки не разобрали: ${error?.message || error}`);
-          return { keep: [], blurry: 0 };
-        });
+        const kept = existingResult.kept || { keep: [], blurry: 0 };
+        if (kept.error) warnings.push(`Фото старой карточки не разобрали: ${kept.error?.message || kept.error}`);
         const main = images.main || form.sourceImage;
         data.customPhotos = kept.keep.length && main ? [fragranticaAbsoluteUrl(main), ...kept.keep] : [];
         data.customPhotosAuto = true;
         data.keptExistingPhotos = kept.keep.length;
         data.blurryExistingPhotos = kept.blurry;
-        parts.keptPhotos = Date.now() - buildStartedAt;
       }
     } catch (error) {
       data.existing = existing;
@@ -722,6 +732,8 @@ async function buildFragranticaCardDraft(draft) {
 
 async function sendFragranticaDraft(draft) {
   const targets = fragranticaDraftTargets(draft.targets);
+  // the video cover is rendered in the background; the send waits for it (max 4 min), else goes without it
+  await fragranticaVideoCoversReady(Number(draft.perfume_id), [...new Set(targets.map((t) => t.style))], 240_000).catch(() => {});
   const built = { ...draft, perfumeId: Number(draft.perfume_id) };
   const missing = fragranticaDraftMissing(built, targets);
   if (missing.length) {
@@ -792,24 +804,32 @@ async function runFragranticaDraftsTick() {
         .catch(() => {})
         .finally(() => { fragranticaExpandInFlight = Math.max(0, fragranticaExpandInFlight - 1); });
     }
-    const claimed = await prisma.$queryRawUnsafe(
+    const claimPool = (improve, limit) => prisma.$queryRawUnsafe(
       `UPDATE fragrantica_drafts SET status = 'working', stage = 'start', started_at = now(), updated_at = now()
        WHERE id IN (
          SELECT d.id FROM fragrantica_drafts d
-          WHERE d.status = 'queued' AND d.kind = 'card'
+          WHERE d.status = 'queued' AND d.kind = 'card' AND coalesce(d.data ? 'existing', false) = $2
           ORDER BY d.id
           LIMIT $1
           FOR UPDATE SKIP LOCKED)
        RETURNING *`,
-      Math.max(0, fragranticaDraftsParallel - fragranticaDraftsInFlight),
+      Math.max(0, limit), improve,
     );
+    const claimed = await claimPool(false, fragranticaDraftsParallel - fragranticaDraftsInFlight);
     for (const draft of claimed) {
       fragranticaDraftsInFlight += 1;
       processFragranticaDraft(draft)
         .catch(() => {})
         .finally(() => { fragranticaDraftsInFlight = Math.max(0, fragranticaDraftsInFlight - 1); });
     }
-    return { status: "ok", built: claimed.length + perfumes.length + fragranticaDraftsInFlight + fragranticaExpandInFlight };
+    const improving = await claimPool(true, fragranticaImproveParallel - fragranticaImproveInFlight);
+    for (const draft of improving) {
+      fragranticaImproveInFlight += 1;
+      processFragranticaDraft(draft)
+        .catch(() => {})
+        .finally(() => { fragranticaImproveInFlight = Math.max(0, fragranticaImproveInFlight - 1); });
+    }
+    return { status: "ok", built: claimed.length + improving.length + perfumes.length + fragranticaDraftsInFlight + fragranticaImproveInFlight + fragranticaExpandInFlight };
   } finally {
     fragranticaDraftsRunning = false;
   }
