@@ -495,6 +495,22 @@ function buildFragranticaPmIndex(rows = []) {
 
 // opts.russianExtrasOk — our own warehouse titles: Russian words («для мужчин», «парфюмерная вода»)
 // only describe the product; Latin extra words (Elixir, Intense…) still mean another perfume
+/** Bare numbers in a product name that are not its volume / a decimal / a pack count and not part of the perfume or brand name. */
+function fragExtraNameNumbers(rowName, perfume = {}, rowVolumes = []) {
+  const text = String(rowName || "").toLowerCase().replace(/ё/g, "е").replace(/\([^)]*\)/g, " ");
+  const known = new Set([...fragRowTokens(perfume.name), ...fragRowTokens(perfume.brand)]);
+  const volumes = new Set((rowVolumes || []).map((v) => String(Number(v))));
+  const out = [];
+  // a bare 1–3 digit number: not glued to letters, not a decimal («3.4»), not followed by a unit or «x» (pack)
+  const re = /(^|[^0-9a-zа-я.,])(\d{1,3})(?![0-9a-zа-я]|[.,]\d|\s*(ml|мл|oz|fl|шт|x|х|×|\*|%|г|g)(?![a-zа-я]))/gi;
+  for (const m of text.matchAll(re)) {
+    const n = m[2];
+    if (known.has(n) || volumes.has(String(Number(n)))) continue;
+    out.push(n);
+  }
+  return out;
+}
+
 function matchFragranticaPmIndex(index, perfume = {}, opts = {}) {
   const nameTokens = [...new Set(fragRowTokens(perfume.name).filter((w) => !FRAG_ROW_STOP_WORDS.has(w)))];
   const brandTokens = fragRowTokens(perfume.brand).filter((w) => w.length >= 3);
@@ -525,6 +541,8 @@ function matchFragranticaPmIndex(index, perfume = {}, opts = {}) {
     const check = assessFragranticaSupplierRow(row.name, { brand: perfume.brand, name: perfume.name, typeKey: "edp" });
     const extra = opts.russianExtrasOk ? check.extraWords.filter((w) => !/[а-яё]/i.test(w)) : check.extraWords;
     if (check.clone || check.notPerfume || check.missingNameWords.length || extra.length) continue;
+    // cards: a number that is not a volume means another perfume («Torino 21» ≠ «Torino», «Code 2» ≠ «Code»)
+    if (opts.strictNumbers && fragExtraNameNumbers(row.name, perfume, rowVolumes).length) continue;
     count += 1;
     matched.push(i);
     if (Number(row.usd) > 0 && (minUsd === null || Number(row.usd) < minUsd)) minUsd = Number(row.usd);

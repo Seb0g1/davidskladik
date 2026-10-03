@@ -112,7 +112,7 @@ async function runFragranticaShopStockMatch(prisma) {
     const results = perfumes.map((perfume) => {
       const stock = {};
       for (const [shop, index] of indexes) {
-        const m = matchFragranticaPmIndex(index, perfume, { russianExtrasOk: true });
+        const m = matchFragranticaPmIndex(index, perfume, { russianExtrasOk: true, strictNumbers: true });
         if (m.count) stock[shop] = { n: m.count, v: m.volumes };
         for (const i of m.matched || []) {
           const row = index.rows[i];
