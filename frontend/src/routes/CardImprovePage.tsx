@@ -26,7 +26,7 @@ type Item = {
   volume: number | null; tester: boolean; shop: string; marketplace: string; offerId: string; rating: number | null; price: number;
   yandexPrice: number; sold: number;
   before: Side | null; after: Side; missing: string[]; exports: Array<{ status: string; error: string | null; shop: string }>;
-  customPhotos?: string[]; onlyCustomPhotos?: boolean; keptExistingPhotos?: number; blurryExistingPhotos?: number;
+  customPhotos?: string[]; onlyCustomPhotos?: boolean; keptExistingPhotos?: number; blurryExistingPhotos?: number; ownBottleOnly?: boolean;
 };
 type ImproveResponse = { tab: string; counts: Record<string, number>; items: Item[] };
 
@@ -194,7 +194,8 @@ function ImproveCard({ item, picked, onPick, onApprove, onSkip, onRestore, onReb
         <button type="button" className="fr-link-button" onClick={() => setShowText((v) => !v)}>
           {showText ? <ChevronUp size={13} /> : <ChevronDown size={13} />} {showText ? "Скрыть описания" : "Сравнить описания"}
         </button>
-        {item.keptExistingPhotos || item.blurryExistingPhotos ? (
+        {item.ownBottleOnly ? <span className="ci-muted">Тестер или объём до 20 мл: фото только с карточки (флакон с Фрагрантики не используется), плюс пирамида и ноты.</span> : null}
+        {!item.ownBottleOnly && (item.keptExistingPhotos || item.blurryExistingPhotos) ? (
           <span className="ci-muted">
             {item.keptExistingPhotos ? `Чёткие фото старой карточки сохранены: ${item.keptExistingPhotos} — после нового главного фото. ` : ""}
             {item.blurryExistingPhotos ? `Размытых убрано: ${item.blurryExistingPhotos}. ` : ""}

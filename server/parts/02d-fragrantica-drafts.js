@@ -444,7 +444,7 @@ async function fragranticaShopPromoHashes(existing) {
 }
 
 /** The old card's own product photos: promo tail, duplicates and blurry upscales removed, in their order. */
-async function fragranticaKeepExistingPhotos(existing, urls = []) {
+async function fragranticaKeepExistingPhotos(existing, urls = [], { anySharpness = false } = {}) {
   const out = { keep: [], blurry: 0 };
   if (!urls.length) return out;
   const promo = await fragranticaShopPromoHashes(existing);
@@ -463,7 +463,7 @@ async function fragranticaKeepExistingPhotos(existing, urls = []) {
     }
     if (promo.some((h) => fragranticaHashDistance(h, c.hash) <= 6)) continue;
     if (kept.some((h) => fragranticaHashDistance(h, c.hash) <= 3)) continue;
-    if (c.sharpness < FRAG_SHARP_MIN) {
+    if (!anySharpness && c.sharpness < FRAG_SHARP_MIN) {
       out.blurry += 1;
       continue;
     }
@@ -577,12 +577,14 @@ async function buildFragranticaCardDraft(draft) {
 
   // improvement: the old card in every shop + which of its photos are worth keeping — parallel with the render
   const ownChosen = Array.isArray(draft.data?.customPhotos) && !draft.data.customPhotosAuto;
+  // a tester or a miniature (< 20 ml) looks different from Fragrantica's bottle: its card keeps only its own photos
+  const ownBottleOnly = Boolean(existing) && (tester || Number(volume) < 20);
   const existingPart = existing
     ? (async () => {
       const shopStates = await Promise.all(fragranticaExistingTargets(existing).map(async (t) => ({ ...t, state: await fragranticaExistingCardState({ ...t }) })));
       const restore = Array.isArray(existing.restoreBefore?.photos) && existing.restoreBefore.photos.length ? existing.restoreBefore : null;
       const beforePhotos = (restore || shopStates[0].state.before)?.photos || [];
-      const kept = ownChosen ? null : await fragranticaKeepExistingPhotos(shopStates[0], beforePhotos).catch((error) => ({ keep: [], blurry: 0, error }));
+      const kept = ownChosen ? null : await fragranticaKeepExistingPhotos(shopStates[0], beforePhotos, { anySharpness: ownBottleOnly }).catch((error) => ({ keep: [], blurry: 0, error }));
       return { shopStates, kept };
     })().then(mark("existing")).catch((error) => ({ error }))
     : Promise.resolve(null);
@@ -704,6 +706,7 @@ async function buildFragranticaCardDraft(draft) {
         marketName: buildFragranticaMarketName({ perfume, typeKey, volume: draft.volume_ml, tester: Boolean(draft.tester) }),
       });
       if (state.dims.depth && state.dims.width && state.dims.height && state.dims.weight) data.dims = state.dims;
+      data.ownBottleOnly = ownBottleOnly;
       // brand not found in Ozon's list by name → the brand the live Ozon card already has
       if (!data.brandMatched && ozonState?.brand) {
         data.attributes = [...(data.attributes || []).filter((x) => Number(x.id) !== FRAG_OZON_ATTR.brand), { id: FRAG_OZON_ATTR.brand, values: [{ dictionary_value_id: ozonState.brand.id, value: ozonState.brand.value }] }];
@@ -714,7 +717,7 @@ async function buildFragranticaCardDraft(draft) {
         const kept = existingResult.kept || { keep: [], blurry: 0 };
         if (kept.error) warnings.push(`Фото старой карточки не разобрали: ${kept.error?.message || kept.error}`);
         const main = images.main || form.sourceImage;
-        data.customPhotos = kept.keep.length && main ? [fragranticaAbsoluteUrl(main), ...kept.keep] : [];
+        data.customPhotos = ownBottleOnly ? kept.keep : kept.keep.length && main ? [fragranticaAbsoluteUrl(main), ...kept.keep] : [];
         data.customPhotosAuto = true;
         data.keptExistingPhotos = kept.keep.length;
         data.blurryExistingPhotos = kept.blurry;
@@ -728,6 +731,7 @@ async function buildFragranticaCardDraft(draft) {
   const built = { ...draft, perfumeId, data };
   const missing = fragranticaDraftMissing(built, targets);
   if (!data.brandMatched && !missing.includes("Бренд")) missing.unshift("Бренд");
+  if (data.ownBottleOnly && !(data.customPhotos || []).length) missing.push("Фото товара (тестер / до 20 мл — загрузите в «Свои фото»)");
   if (noPyramid.length) missing.push("Пирамида аромата");
   return updateFragranticaDraft(draft.id, {
     status: missing.length ? "attention" : "ready",

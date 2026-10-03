@@ -581,7 +581,9 @@ app.get("/api/card-improve", requireAdmin, async (request, response, next) => {
         const own = Array.isArray(d.customPhotos) ? d.customPhotos : [];
         const photos = (d.onlyCustomPhotos && own.length
           ? own
-          : [own[0] || d.images?.main || d.sourceImage, ...own.slice(1), d.images?.notes?.[style], ...fragranticaExtraPhotos(Number(r.perfume_id), style)])
+          : d.ownBottleOnly
+            ? [...own, d.images?.notes?.[style], ...fragranticaExtraPhotos(Number(r.perfume_id), style).filter((u) => !/-(specs|closeup)-/.test(u))]
+            : [own[0] || d.images?.main || d.sourceImage, ...own.slice(1), d.images?.notes?.[style], ...fragranticaExtraPhotos(Number(r.perfume_id), style)])
           .filter(Boolean).map((u) => fragranticaAbsoluteUrl(u));
         return {
           id: Number(r.id),
@@ -611,6 +613,7 @@ app.get("/api/card-improve", requireAdmin, async (request, response, next) => {
           onlyCustomPhotos: Boolean(d.onlyCustomPhotos),
           keptExistingPhotos: Number(d.keptExistingPhotos || 0),
           blurryExistingPhotos: Number(d.blurryExistingPhotos || 0),
+          ownBottleOnly: Boolean(d.ownBottleOnly),
           exports: (Array.isArray(r.export_ids) ? r.export_ids : []).map((id) => exportsById.get(Number(id))).filter(Boolean),
           updatedAt: r.updated_at,
         };

@@ -1046,6 +1046,7 @@ async function createFragranticaExports(body = {}, request = { session: {} }) {
     const shop = fragranticaYandexShops().find((x) => wanted.some((t) => t.kind === "yandex" && t.id === cleanText(x.id)));
     const volume = fragFormatVolume((baseItem.attributes.find((a) => a.id === FRAG_OZON_ATTR.volume)?.values || [])[0]?.value);
     yandexExtra = await buildFragranticaYandexExtra({ perfume, type, name: baseItem.name, volume, tester: Boolean(body.tester), shop });
+    if (body.ownBottleOnly && yandexExtra) delete yandexExtra.videos;
   }
   const vatOverrides = fragranticaEnvMap("FRAGRANTICA_VAT_BY_ACCOUNT");
 
@@ -1061,10 +1062,11 @@ async function createFragranticaExports(body = {}, request = { session: {} }) {
     const ozonAccount = target.kind === "ozon" ? getOzonAccounts().find((a) => cleanText(a.id) === target.id) : null;
     // After the notes: «Характеристики» in this shop's style and the close-up (when they were made)
     const ownPhotos = (Array.isArray(body.customPhotos) ? body.customPhotos : []).map(fragranticaAbsoluteUrl).filter(Boolean);
-    const extras = body.onlyCustomPhotos ? [] : fragranticaExtraPhotos(perfumeId, target.style);
+    // tester / < 20 ml: «О аромате» and the close-up show Fragrantica's bottle — left out, as is the video cover
+    const extras = body.onlyCustomPhotos ? [] : fragranticaExtraPhotos(perfumeId, target.style).filter((u) => !body.ownBottleOnly || !/-(specs|closeup)-/.test(u));
     const notesPhoto = body.onlyCustomPhotos ? "" : notes;
     // Ozon: Rich-контент из описания и фото магазина + видеообложка (если категория знает атрибут 11254)
-    const ozonMedia = target.kind === "ozon" ? fragranticaOzonMediaExtras({ perfumeId, style: target.style, notes, baseItem, categoryAttrs, perfume }) : null;
+    const ozonMedia = target.kind === "ozon" ? fragranticaOzonMediaExtras({ perfumeId, style: target.style, notes, baseItem, categoryAttrs, perfume, noBottle: body.ownBottleOnly === true }) : null;
     const improveFlag = body.improve === true ? { improve: true } : {};
     // improvement: every Ozon cabinet gets back its own current price (two cabinets may differ)
     const ownPrice = body.improve === true && target.kind === "ozon" ? body.pricesByTarget?.[target.key] : null;
@@ -1149,7 +1151,7 @@ async function buildFragranticaYandexExtra({ perfume, type, name, volume, tester
   };
 }
 
-function fragranticaOzonMediaExtras({ perfumeId, style, notes, baseItem, categoryAttrs = [], perfume = {} }) {
+function fragranticaOzonMediaExtras({ perfumeId, style, notes, baseItem, categoryAttrs = [], perfume = {}, noBottle = false }) {
   const attributes = [];
   const ownRich = baseItem.attributes.some((a) => Number(a.id) === FRAG_RICH_ATTR && (a.values || []).length);
   if (!ownRich && process.env.FRAGRANTICA_OZON_RICH !== "false" && categoryAttrs.some((a) => Number(a.id) === FRAG_RICH_ATTR)) {
@@ -1158,11 +1160,11 @@ function fragranticaOzonMediaExtras({ perfumeId, style, notes, baseItem, categor
     const rich = buildFragranticaRichContent({
       title: fragNameWithBrand(perfume),
       description,
-      images: { notes, specs: file(`${Number(perfumeId)}-specs-${style}-v1.jpg`), closeup: file(`${Number(perfumeId)}-closeup-v1.jpg`) },
+      images: noBottle ? { notes } : { notes, specs: file(`${Number(perfumeId)}-specs-${style}-v1.jpg`), closeup: file(`${Number(perfumeId)}-closeup-v1.jpg`) },
     });
     if (rich) attributes.push({ id: FRAG_RICH_ATTR, complex_id: 0, values: [{ value: rich }] });
   }
-  const complex = process.env.FRAGRANTICA_OZON_VIDEO_COVER === "false" ? [] : buildFragranticaVideoCoverComplex(fragranticaVideoCoverUrl(perfumeId, style));
+  const complex = process.env.FRAGRANTICA_OZON_VIDEO_COVER === "false" || noBottle ? [] : buildFragranticaVideoCoverComplex(fragranticaVideoCoverUrl(perfumeId, style));
   return { attributes, complex };
 }
 
