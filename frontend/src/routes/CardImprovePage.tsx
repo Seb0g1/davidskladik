@@ -27,6 +27,7 @@ type Item = {
   yandexPrice: number; sold: number;
   before: Side | null; after: Side; missing: string[]; exports: Array<{ status: string; error: string | null; shop: string }>;
   customPhotos?: string[]; onlyCustomPhotos?: boolean; keptExistingPhotos?: number; blurryExistingPhotos?: number; ownBottleOnly?: boolean; notes?: string[];
+  brandMatched?: boolean; brandCandidates?: Array<{ id: number; value: string }>; retryAt?: string | null;
 };
 type ImproveResponse = { tab: string; counts: Record<string, number>; items: Item[] };
 
@@ -179,6 +180,10 @@ function ImproveCard({ item, picked, onPick, onApprove, onSkip, onRestore, onReb
         <div className="ci-problem"><AlertTriangle size={13} /> {item.missing.length ? `Не хватает: ${item.missing.join(", ")}` : item.error}</div>
       ) : null}
       {(item.notes || []).map((n) => <div key={n} className="ci-note">{n}</div>)}
+      {item.retryAt && (item.status === "queued" || item.status === "working") ? (
+        <div className="ci-note">Фрагрантика просит подождать — соберём сами в {new Date(item.retryAt).toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" })}</div>
+      ) : null}
+      {item.brandMatched === false && editable ? <BrandPicker item={item} /> : null}
       {item.exports.length ? (
         <div className="ci-exports">
           {item.exports.map((e, i) => (
@@ -259,5 +264,43 @@ export function ImproveAdd({ compact = false }: { compact?: boolean }) {
       </button>
       {compact ? null : <small>Один товар — это его карточки сразу в Ozon и на Маркете. Сначала самые продаваемые за 90 дней. До одобрения ничего не отправляется.</small>}
     </form>
+  );
+}
+
+/** «Подобрать похожий бренд»: подсказки сборки + поиск по справочнику брендов Ozon. */
+function BrandPicker({ item }: { item: Item }) {
+  const queryClient = useQueryClient();
+  const [q, setQ] = useState("");
+  const query = useDebounced(q, 350).trim();
+  const found = useQuery({
+    queryKey: ["card-improve", "brand", item.id, query],
+    queryFn: () => apiJson<{ items: Array<{ id: number; value: string }> }>(`/api/fragrantica/drafts/${item.id}/brand-search?q=${encodeURIComponent(query)}`),
+    enabled: query.length >= 2,
+    staleTime: 5 * 60_000,
+  });
+  const pick = useMutation({
+    mutationFn: (brand: { id: number; value: string }) => apiJson(`/api/fragrantica/drafts/${item.id}`, { method: "PATCH", body: JSON.stringify({ brand }) }),
+    onSuccess: (_r, brand) => { toast.success(`Бренд: ${brand.value}`); queryClient.invalidateQueries({ queryKey: ["card-improve"] }); },
+    onError: (error) => toast.error(errorMessage(error)),
+  });
+  const list = query.length >= 2 ? found.data?.items || [] : item.brandCandidates || [];
+  return (
+    <div className="ci-brand">
+      <span className="ci-brand-title"><AlertTriangle size={13} /> Бренда «{item.brand}» нет в справочнике Ozon — выберите похожий:</span>
+      <div className="ci-brand-row">
+        <label className="ci-search ci-brand-search">
+          <Search size={13} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Найти бренд в справочнике Ozon" />
+          {found.isFetching ? <Loader2 size={13} className="spin" /> : null}
+        </label>
+        <div className="ci-brand-list">
+          {list.map((b) => (
+            <button key={b.id} type="button" className="ci-brand-chip" disabled={pick.isPending} onClick={() => pick.mutate(b)}>{b.value}</button>
+          ))}
+          {query.length >= 2 && found.data && !list.length ? <span className="ci-muted">Не нашлось — попробуйте другое написание.</span> : null}
+          {query.length < 2 && !list.length ? <span className="ci-muted">Подсказок нет — начните вводить название.</span> : null}
+        </div>
+      </div>
+    </div>
   );
 }

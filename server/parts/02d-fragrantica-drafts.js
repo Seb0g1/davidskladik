@@ -752,7 +752,12 @@ async function buildFragranticaCardDraft(draft) {
   const built = { ...draft, perfumeId, data };
   const targetsNow = fragranticaDraftTargets(draft.targets);
   const missing = fragranticaDraftMissing(built, targetsNow);
-  if (!data.brandMatched && !missing.includes("Бренд")) missing.unshift("Бренд");
+  // the Ozon brand dictionary matters only when the card goes to Ozon (Market takes the brand as text)
+  if (!data.brandMatched && targetsNow.some((t) => t.kind === "ozon") && !missing.includes("Бренд")) missing.unshift("Бренд");
+  if (!targetsNow.some((t) => t.kind === "ozon")) {
+    const i = missing.indexOf("Бренд");
+    if (i >= 0) missing.splice(i, 1);
+  }
   if (data.ownBottleOnly && !(data.customPhotos || []).length) missing.push("Фото товара (тестер / до 20 мл — загрузите в «Свои фото»)");
   if (noPyramid.length) missing.push("Пирамида аромата");
   return updateFragranticaDraft(draft.id, {
@@ -793,6 +798,19 @@ async function processFragranticaDraft(draft) {
     if (draft.kind === "perfume") return await expandFragranticaPerfumeDraft(draft);
     return await buildFragranticaCardDraft(draft);
   } catch (error) {
+    // Фрагрантика занята (429 / проверка Cloudflare): черновик ждёт и пересобирается сам — 1, 2, 4 … 30 мин, до 8 раз
+    const busy = /ответила (429|403)|too many|challenge/i.test(String(error?.message || ""));
+    const tries = Number(draft.data?.fetchRetries || 0);
+    if (busy && draft.status !== "sending" && tries < 8) {
+      const waitMin = Math.min(30, 2 ** tries);
+      logger.info("fragrantica draft waits for Fragrantica", { id: Number(draft.id), tries: tries + 1, waitMin });
+      return updateFragranticaDraft(draft.id, {
+        status: "queued",
+        stage: null,
+        error: null,
+        data: { ...(draft.data || {}), fetchRetries: tries + 1, retryAt: new Date(Date.now() + waitMin * 60_000).toISOString() },
+      });
+    }
     logger.warn("fragrantica draft failed", { id: Number(draft.id), detail: error?.message || String(error) });
     return updateFragranticaDraft(draft.id, {
       status: draft.status === "sending" ? "failed" : "attention",
@@ -844,6 +862,7 @@ async function runFragranticaDraftsTick() {
        WHERE id IN (
          SELECT d.id FROM fragrantica_drafts d
           WHERE d.status = 'queued' AND d.kind = 'card' AND coalesce(d.data ? 'existing', false) = $2
+            AND coalesce((d.data->>'retryAt')::timestamptz, 'epoch'::timestamptz) <= now()
           ORDER BY d.id
           LIMIT $1
           FOR UPDATE SKIP LOCKED)
@@ -1238,6 +1257,24 @@ app.post("/api/fragrantica/drafts/:id/photos", requireAdmin, uploadImages.array(
   }
 });
 
+// «Подобрать похожий бренд»: поиск по справочнику брендов Ozon (для карточки, чей бренд не нашёлся по имени)
+app.get("/api/fragrantica/drafts/:id/brand-search", requireAdmin, async (request, response, next) => {
+  try {
+    if (!/^\d+$/.test(request.params.id)) return next();
+    const draft = await readFragranticaDraft(request.params.id);
+    if (!draft) return response.status(404).json({ error: "Черновик не найден." });
+    const q = cleanText(request.query.q);
+    if (q.length < 2) return response.json({ ok: true, items: draft.data?.brandCandidates || [] });
+    const ozon = fragranticaDraftTargets(draft.targets).find((t) => t.kind === "ozon");
+    const account = fragranticaResolveOzonAccount(ozon?.id);
+    const type = fragOzonTypeByKey(draft.type_key || draft.data?.typeKey || "edp");
+    const items = await fragranticaSearchDict(account, type.typeId, FRAG_OZON_ATTR.brand, q, 20);
+    response.json({ ok: true, items: items.map((v) => ({ id: v.id, value: v.value })) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/fragrantica/drafts/:id/rebuild", requireAdmin, async (request, response, next) => {
   try {
     if (!/^\d+$/.test(request.params.id)) return next();
@@ -1256,7 +1293,10 @@ app.post("/api/fragrantica/drafts/:id/rebuild", requireAdmin, async (request, re
       const updated = await readFragranticaDraft(draft.id);
       return response.json({ ok: true, draft: fragranticaDraftResponse(updated) });
     }
-    const updated = await updateFragranticaDraft(draft.id, { status: "queued", stage: null, error: null });
+    const data = { ...(draft.data || {}) };
+    delete data.retryAt;
+    delete data.fetchRetries;
+    const updated = await updateFragranticaDraft(draft.id, { status: "queued", stage: null, error: null, data });
     response.json({ ok: true, draft: fragranticaDraftResponse(updated) });
   } catch (error) {
     next(error);

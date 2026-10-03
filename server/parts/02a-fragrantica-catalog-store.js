@@ -315,7 +315,32 @@ function fragranticaRoutes() {
   return routes;
 }
 
+// Фрагрантика отвечает 429, если спрашивать часто: не больше 2 страниц одновременно и не чаще раза в 1.5 с
+const FRAG_PAGE_PARALLEL = Math.max(1, Number(process.env.FRAGRANTICA_PAGE_PARALLEL || 2) || 2);
+const FRAG_PAGE_GAP_MS = Math.max(0, Number(process.env.FRAGRANTICA_PAGE_GAP_MS || 1500) || 0);
+let fragranticaPageActive = 0;
+let fragranticaPageLastStart = 0;
+const fragranticaPageWaiters = [];
+
+async function withFragranticaPageSlot(fn) {
+  while (fragranticaPageActive >= FRAG_PAGE_PARALLEL) await new Promise((resolve) => fragranticaPageWaiters.push(resolve));
+  fragranticaPageActive += 1;
+  try {
+    const wait = fragranticaPageLastStart + FRAG_PAGE_GAP_MS - Date.now();
+    fragranticaPageLastStart = Date.now() + Math.max(0, wait);
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    return await fn();
+  } finally {
+    fragranticaPageActive -= 1;
+    fragranticaPageWaiters.shift()?.();
+  }
+}
+
 async function fetchFragranticaHtml(url) {
+  return withFragranticaPageSlot(() => fetchFragranticaHtmlRoutes(url));
+}
+
+async function fetchFragranticaHtmlRoutes(url) {
   const routes = fragranticaRoutes();
   const now = Date.now();
   // Routes that are resting go last (still tried — the challenge may already be gone)
@@ -331,9 +356,11 @@ async function fetchFragranticaHtml(url) {
       // a missing page is a real answer — no point asking the next server
       if (error instanceof FragranticaHttpError && error.status === 404) throw error;
       if (error instanceof FragranticaHttpError && (error.status === 403 || error.status === 429)) {
-        if (!fragranticaRouteBlockedUntil.has(route.name)) logger.info("fragrantica route challenged, resting 6 h", { route: route.name });
-        fragranticaRouteBlockedUntil.set(route.name, Date.now() + 6 * 3_600_000);
-        if (route.name === "direct") fragranticaDirectBlockedUntil = Date.now() + 6 * 3_600_000;
+        // 403 = Cloudflare challenge (hours); 429 = «too many requests» (minutes)
+        const restMs = error.status === 429 ? 3 * 60_000 : 6 * 3_600_000;
+        if (!fragranticaRouteBlockedUntil.has(route.name)) logger.info("fragrantica route challenged", { route: route.name, status: error.status, restMin: Math.round(restMs / 60_000) });
+        fragranticaRouteBlockedUntil.set(route.name, Date.now() + restMs);
+        if (route.name === "direct") fragranticaDirectBlockedUntil = Date.now() + restMs;
       }
     }
   }
