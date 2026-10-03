@@ -995,7 +995,9 @@ async function createFragranticaExports(body = {}, request = { session: {} }) {
       : a));
     const ozonAccount = target.kind === "ozon" ? getOzonAccounts().find((a) => cleanText(a.id) === target.id) : null;
     // After the notes: «Характеристики» in this shop's style and the close-up (when they were made)
-    const extras = fragranticaExtraPhotos(perfumeId, target.style);
+    const ownPhotos = (Array.isArray(body.customPhotos) ? body.customPhotos : []).map(fragranticaAbsoluteUrl).filter(Boolean);
+    const extras = body.onlyCustomPhotos ? [] : fragranticaExtraPhotos(perfumeId, target.style);
+    const notesPhoto = body.onlyCustomPhotos ? "" : notes;
     // Ozon: Rich-контент из описания и фото магазина + видеообложка (если категория знает атрибут 11254)
     const ozonMedia = target.kind === "ozon" ? fragranticaOzonMediaExtras({ perfumeId, style: target.style, notes, baseItem, categoryAttrs, perfume }) : null;
     const improveFlag = body.improve === true ? { improve: true } : {};
@@ -1007,14 +1009,14 @@ async function createFragranticaExports(body = {}, request = { session: {} }) {
         attributes: [...ozonAttributes, ...ozonMedia.attributes],
         ...(ozonMedia.complex.length ? { complex_attributes: ozonMedia.complex } : {}),
         primary_image: bottle,
-        images: [notes, ...extras].filter(Boolean),
+        images: [...ownPhotos, notesPhoto, ...extras].filter(Boolean).slice(0, 29),
       }
       : {
         ...baseItem,
         ...improveFlag,
         // Маркет: «Парфюмерная вода <бренд> <аромат> <для кого> <мл> мл» — так карточка получает больше баллов
         yandexName: buildFragranticaMarketName({ perfume, typeKey: type.key, volume: (volumeAttr?.values || [])[0]?.value, tester: Boolean(body.tester) }),
-        price: String(yandexPrice), yandexPictures: [bottle, notes, ...extras].filter(Boolean), yandexExtra,
+        price: String(yandexPrice), yandexPictures: [bottle, ...ownPhotos, notesPhoto, ...extras].filter(Boolean).slice(0, 30), yandexExtra,
       };
     // the same perfume+volume already sent to this shop → update that row (and that card), no duplicate
     const inserted = await prisma.$queryRawUnsafe(

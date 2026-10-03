@@ -126,7 +126,7 @@ export function CardHealthPage() {
             <button className="secondary-action compact" type="button" disabled={improve.isPending || !data.improve.matched} onClick={() => improve.mutate({ queueNow: 20 })}>
               {improve.isPending ? <Loader2 size={13} className="spin" /> : <Wrench size={13} />} Добавить 20 сейчас
             </button>
-            <a className="secondary-action compact" href="/app/fragrantica">Открыть конвейер</a>
+            <a className="primary-action compact" href="/app/card-improve">Открыть «Улучшение карточек»</a>
           </div>
         </section>
       ) : null}

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, CheckCheck, ChevronDown, ChevronUp, Link2, Loader2, Plus, RefreshCw, Search, Sparkles, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, Camera, Check, CheckCheck, ChevronDown, ChevronUp, Link2, Loader2, Plus, RefreshCw, Search, Sparkles, Trash2, X } from "lucide-react";
 import { z } from "zod";
 import { fetchJson, mutationBody } from "../api";
 import { errorMessage, useDebounced } from "../lib/common";
@@ -28,6 +28,7 @@ type Draft = {
     description?: string; descriptionSource?: string; barcode?: string; missing?: string[]; warnings?: string[];
     brandMatched?: boolean; brandCandidates?: Array<{ id: number; value: string }>; skippedVolumes?: number[];
     existing?: { marketplace: string; target: string; offerId: string; rating?: number | null };
+    customPhotos?: string[]; onlyCustomPhotos?: boolean;
   } | null;
 };
 type DraftsResponse = { items: Draft[]; counts: Record<string, number>; targets: WorkTarget[]; timing?: { medianBuildMs: number; parallel: number; serverNow: string } };
@@ -400,12 +401,17 @@ function DraftRow({ draft, targets, timing }: { draft: Draft; targets: WorkTarge
 
   return (
     <div className={`fr-conv-card is-${draft.status}`}>
-      <div className="fr-conv-photos">
-        {d.images?.main ? <a href={d.images.main} target="_blank" rel="noreferrer"><img src={d.images.main} alt="Флакон" loading="lazy" /></a> : <span className="fr-conv-ph">{busy ? <Loader2 size={16} className="spin" /> : "фото"}</span>}
-        {chosen.map((t) => {
-          const notes = t.style ? d.images?.notes?.[t.style] : undefined;
-          return notes ? <a key={t.key} href={notes} target="_blank" rel="noreferrer" title={`Пирамида аромата · ${t.label}`}><img src={notes} alt={`Пирамида ${t.label}`} loading="lazy" /></a> : null;
-        })}
+      <div className="fr-conv-photocol">
+        <div className="fr-conv-photos">
+          {d.customPhotos?.length
+            ? <a href={d.customPhotos[0]} target="_blank" rel="noreferrer" className="fr-conv-own" title="Своё фото — главное на карточке"><img src={d.customPhotos[0]} alt="Своё фото" loading="lazy" /></a>
+            : d.images?.main ? <a href={d.images.main} target="_blank" rel="noreferrer"><img src={d.images.main} alt="Флакон" loading="lazy" /></a> : <span className="fr-conv-ph">{busy ? <Loader2 size={16} className="spin" /> : "фото"}</span>}
+          {d.onlyCustomPhotos ? null : chosen.map((t) => {
+            const notes = t.style ? d.images?.notes?.[t.style] : undefined;
+            return notes ? <a key={t.key} href={notes} target="_blank" rel="noreferrer" title={`Пирамида аромата · ${t.label}`}><img src={notes} alt={`Пирамида ${t.label}`} loading="lazy" /></a> : null;
+          })}
+        </div>
+        <OwnPhotos draftId={draft.id} photos={d.customPhotos || []} only={Boolean(d.onlyCustomPhotos)} editable={editable} />
       </div>
 
       <div className="fr-conv-main">
@@ -703,5 +709,104 @@ export function VolumePicker({ perfumeId, title, targets, initial, onSave, onClo
       </div>
     </div>,
     document.body,
+  );
+}
+
+/**
+ * «Свои фото» — для тестеров, пробников, наборов (они выглядят не как флакон с Фрагрантики). Первое фото
+ * становится главным на карточке, остальные идут сразу за ним; «только мои» убирает пирамиду и карточки.
+ */
+export function OwnPhotos({ draftId, photos, only, editable, onChanged }: {
+  draftId: number; photos: string[]; only: boolean; editable: boolean; onChanged?: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [drag, setDrag] = useState(false);
+  const done = () => {
+    queryClient.invalidateQueries({ queryKey: ["fragrantica", "drafts"] });
+    queryClient.invalidateQueries({ queryKey: ["card-improve"] });
+    onChanged?.();
+  };
+  const upload = useMutation({
+    mutationFn: async (files: File[]) => {
+      const form = new FormData();
+      files.slice(0, 10).forEach((file) => form.append("photos", file));
+      const res = await fetch(`/api/fragrantica/drafts/${draftId}/photos`, { method: "POST", credentials: "same-origin", body: form });
+      const data = await res.json().catch(() => ({})) as { error?: string; added?: number };
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      return data;
+    },
+    onSuccess: (r) => { toast.success(`Фото добавлено: ${r.added || 0}`); done(); },
+    onError: (error) => toast.error(errorMessage(error)),
+  });
+  const patch = useMutation({
+    mutationFn: (body: { customPhotos?: string[]; onlyCustomPhotos?: boolean }) => apiJson(`/api/fragrantica/drafts/${draftId}`, { method: "PATCH", body: JSON.stringify(body) }),
+    onSuccess: done,
+    onError: (error) => toast.error(errorMessage(error)),
+  });
+  const move = (i: number, dir: -1 | 1) => {
+    const next = [...photos];
+    const j = i + dir;
+    if (j < 0 || j >= next.length) return;
+    [next[i], next[j]] = [next[j], next[i]];
+    patch.mutate({ customPhotos: next });
+  };
+  const pick = (list: FileList | null) => {
+    const files = Array.from(list || []).filter((f) => /^image\//.test(f.type));
+    if (files.length) upload.mutate(files);
+  };
+
+  if (!editable && !photos.length) return null;
+  if (!open) {
+    return (
+      <button type="button" className="fr-own-toggle" onClick={() => setOpen(true)} title="Тестер, пробник, набор — загрузить своё фото">
+        <Camera size={13} /> {photos.length ? `Свои фото: ${photos.length}` : "Свои фото"}
+      </button>
+    );
+  }
+  return (
+    <div
+      className={`fr-own${drag ? " is-drag" : ""}`}
+      onDragOver={(e) => { if (editable) { e.preventDefault(); setDrag(true); } }}
+      onDragLeave={() => setDrag(false)}
+      onDrop={(e) => { e.preventDefault(); setDrag(false); if (editable) pick(e.dataTransfer.files); }}
+    >
+      <div className="fr-own-head">
+        <b>Свои фото</b>
+        <button type="button" className="fr-link-button" onClick={() => setOpen(false)} aria-label="Свернуть"><X size={13} /></button>
+      </div>
+      <p className="fr-hint">Первое — главное на карточке вместо флакона с Фрагрантики. Можно перетащить файлы сюда.</p>
+      {photos.length ? (
+        <div className="fr-own-list">
+          {photos.map((url, i) => (
+            <div key={url} className="fr-own-item">
+              <a href={url} target="_blank" rel="noreferrer"><img src={url} alt={`Своё фото ${i + 1}`} loading="lazy" /></a>
+              {i === 0 ? <span className="fr-own-main">главное</span> : null}
+              {editable ? (
+                <div className="fr-own-tools">
+                  <button type="button" disabled={i === 0 || patch.isPending} onClick={() => move(i, -1)} aria-label="Левее"><ArrowLeft size={12} /></button>
+                  <button type="button" disabled={i === photos.length - 1 || patch.isPending} onClick={() => move(i, 1)} aria-label="Правее"><ArrowRight size={12} /></button>
+                  <button type="button" disabled={patch.isPending} onClick={() => patch.mutate({ customPhotos: photos.filter((u) => u !== url) })} aria-label="Убрать"><Trash2 size={12} /></button>
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {editable ? (
+        <div className="fr-own-actions">
+          <label className="secondary-action compact fr-own-upload">
+            {upload.isPending ? <Loader2 size={13} className="spin" /> : <Plus size={13} />} Загрузить фото
+            <input type="file" accept="image/png,image/jpeg,image/webp" multiple hidden disabled={upload.isPending} onChange={(e) => { pick(e.target.files); e.target.value = ""; }} />
+          </label>
+          {photos.length ? (
+            <label className="fr-own-only">
+              <input type="checkbox" checked={only} disabled={patch.isPending} onChange={(e) => patch.mutate({ onlyCustomPhotos: e.target.checked })} />
+              только мои (без пирамиды и карточек аромата)
+            </label>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
   );
 }

@@ -699,7 +699,10 @@ function buildFragranticaDraftExportBody(draft = {}, targets = []) {
     depth: d.dims?.depth, width: d.dims?.width, height: d.dims?.height, weight: d.dims?.weight,
     tester: Boolean(d.tester),
     improve: Boolean(d.existing),
-    images: [d.images?.main || d.sourceImage || ""].filter(Boolean),
+    // own photos: the first replaces the bottle photo, the rest follow it (onlyCustomPhotos drops the generated ones)
+    images: [(d.customPhotos || [])[0] || d.images?.main || d.sourceImage || ""].filter(Boolean),
+    customPhotos: (d.customPhotos || []).slice(1),
+    onlyCustomPhotos: Boolean(d.onlyCustomPhotos && (d.customPhotos || []).length),
     attributes,
     links: (Array.isArray(d.linkRows) ? d.linkRows : [])
       .filter((r) => (d.selectedLinks || []).includes(r.id))

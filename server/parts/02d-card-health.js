@@ -527,3 +527,110 @@ app.post("/api/card-health/scan", requireAdmin, async (_request, response, next)
     next(error);
   }
 });
+
+// ─── Страница «Улучшение карточек» ───────────────────────────────────────────
+// Черновики улучшения (data.existing) с «было → станет»: название, фото, описание. Одобрение — общий
+// /api/fragrantica/drafts/approve; «Не улучшать» оставляет черновик со статусом skipped, чтобы эта карточка
+// больше не попадала в очередь.
+
+const CARD_IMPROVE_TABS = {
+  review: ["ready"],
+  attention: ["attention", "failed"],
+  queue: ["queued", "working"],
+  sending: ["approved", "sending"],
+  sent: ["sent"],
+  skipped: ["skipped"],
+};
+
+app.get("/api/card-improve", requireAdmin, async (request, response, next) => {
+  try {
+    const prisma = await requireCardHealthTables();
+    const tab = CARD_IMPROVE_TABS[request.query.tab] ? request.query.tab : "review";
+    const q = cleanText(request.query.q).toLowerCase();
+    const params = [CARD_IMPROVE_TABS[tab]];
+    let where = `d.data ? 'existing' AND d.status = ANY($1::text[])`;
+    if (q) {
+      params.push(`%${q}%`);
+      where += ` AND (lower(coalesce(p.brand, '') || ' ' || coalesce(p.name, '')) LIKE $2 OR lower(d.data->'existing'->>'offerId') LIKE $2)`;
+    }
+    const [rows, counts] = await Promise.all([
+      prisma.$queryRawUnsafe(
+        `SELECT d.*, p.brand, p.name AS perfume_name FROM fragrantica_drafts d LEFT JOIN fragrantica_perfumes p ON p.id = d.perfume_id
+          WHERE ${where} ORDER BY (d.data->'existing'->>'rating')::int ASC NULLS LAST, d.id LIMIT 200`,
+        ...params,
+      ),
+      prisma.$queryRawUnsafe(`SELECT status, count(*)::int AS n FROM fragrantica_drafts WHERE data ? 'existing' GROUP BY status`),
+    ]);
+    const exportIds = [...new Set(rows.flatMap((r) => (Array.isArray(r.export_ids) ? r.export_ids : []).map(Number)))];
+    const exportRows = exportIds.length ? await prisma.$queryRawUnsafe(`SELECT id, status, error, account_name FROM fragrantica_exports WHERE id = ANY($1::bigint[])`, exportIds) : [];
+    const exportsById = new Map(exportRows.map((e) => [Number(e.id), { status: e.status, error: e.error || null, shop: e.account_name }]));
+    const targets = fragranticaTargets();
+    const byStatus = Object.fromEntries(counts.map((c) => [c.status, c.n]));
+    const tabCounts = Object.fromEntries(Object.entries(CARD_IMPROVE_TABS).map(([key, list]) => [key, list.reduce((s, st) => s + (byStatus[st] || 0), 0)]));
+    response.json({
+      ok: true,
+      tab,
+      counts: tabCounts,
+      items: rows.map((r) => {
+        const d = r.data || {};
+        const ex = d.existing || {};
+        const target = targets.find((t) => t.kind === ex.marketplace && t.id === cleanText(ex.target)) || {};
+        const style = target.style || "parfumerius";
+        // the same order the export uses: own photos first (the first replaces the bottle), then the pyramid and cards
+        const own = Array.isArray(d.customPhotos) ? d.customPhotos : [];
+        const photos = (d.onlyCustomPhotos && own.length
+          ? own
+          : [own[0] || d.images?.main || d.sourceImage, ...own.slice(1), d.images?.notes?.[style], ...fragranticaExtraPhotos(Number(r.perfume_id), style)])
+          .filter(Boolean).map((u) => fragranticaAbsoluteUrl(u));
+        return {
+          id: Number(r.id),
+          status: r.status,
+          stage: r.stage || null,
+          error: r.error || null,
+          perfumeId: Number(r.perfume_id),
+          brand: r.brand || "",
+          perfumeName: r.perfume_name || "",
+          volume: r.volume_ml === null ? null : Number(r.volume_ml),
+          tester: Boolean(r.tester),
+          shop: target.label || ex.target || "",
+          marketplace: ex.marketplace || "",
+          offerId: ex.offerId || "",
+          rating: ex.rating ?? null,
+          price: ex.marketplace === "yandex" ? Number(d.yandexPrice || 0) : Number(d.price || 0),
+          before: ex.state?.before || null,
+          after: {
+            name: ex.marketplace === "yandex" ? d.marketName || d.name || "" : d.name || "",
+            photos,
+            description: String(d.description || ""),
+          },
+          missing: Array.isArray(d.missing) ? d.missing : [],
+          customPhotos: own,
+          onlyCustomPhotos: Boolean(d.onlyCustomPhotos),
+          exports: (Array.isArray(r.export_ids) ? r.export_ids : []).map((id) => exportsById.get(Number(id))).filter(Boolean),
+          updatedAt: r.updated_at,
+        };
+      }),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/card-improve/skip", requireAdmin, async (request, response, next) => {
+  try {
+    const prisma = await requireCardHealthTables();
+    const ids = (Array.isArray(request.body?.ids) ? request.body.ids : []).map(Number).filter((id) => id > 0).slice(0, 600);
+    const restore = request.body?.restore === true;
+    if (!ids.length) return response.status(400).json({ error: "Ничего не выбрано." });
+    const rows = await prisma.$queryRawUnsafe(
+      restore
+        ? `UPDATE fragrantica_drafts SET status = 'queued', stage = NULL, error = NULL, updated_at = now() WHERE id = ANY($1::bigint[]) AND data ? 'existing' AND status = 'skipped' RETURNING id`
+        : `UPDATE fragrantica_drafts SET status = 'skipped', updated_at = now() WHERE id = ANY($1::bigint[]) AND data ? 'existing' AND status IN ('ready', 'attention', 'failed', 'queued') RETURNING id`,
+      ids,
+    );
+    await appendAudit(request, restore ? "card_improve.restore" : "card_improve.skip", { entityType: "fragrantica_draft", entityId: rows.map((r) => r.id).join(","), newValue: { count: rows.length } });
+    response.json({ ok: true, count: rows.length });
+  } catch (error) {
+    next(error);
+  }
+});

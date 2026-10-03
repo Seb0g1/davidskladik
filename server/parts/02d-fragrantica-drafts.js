@@ -279,12 +279,19 @@ async function fragranticaExistingCardState(existing = {}) {
     const a = (attrs?.result || attrs?.items || [])[0];
     const p = (prices?.items || [])[0]?.price || {};
     if (!a) throw new Error(`Карточка ${offerId} не найдена на Ozon`);
+    const descAttr = (a.attributes || []).find((x) => Number(x.id) === 4191);
+    const before = {
+      name: cleanText(a.name),
+      photos: [a.primary_image, ...(Array.isArray(a.images) ? a.images : [])].map((u) => cleanText(typeof u === "string" ? u : u?.url || u?.file_name)).filter(Boolean).slice(0, 15),
+      description: cleanText((descAttr?.values || [])[0]?.value).slice(0, 3000),
+    };
     const mm = (v) => Math.round(Number(v || 0) * (cleanText(a.dimension_unit) === "cm" ? 10 : 1));
     const g = (v) => Math.round(Number(v || 0) * (cleanText(a.weight_unit) === "kg" ? 1000 : 1));
     return {
       price: Math.round(Number(p.price || 0)), oldPrice: Math.round(Number(p.old_price || 0)), yandexPrice: 0,
       barcode: cleanText(a.barcode || (Array.isArray(a.barcodes) ? a.barcodes[0] : "")),
       dims: { depth: mm(a.depth), width: mm(a.width), height: mm(a.height), weight: g(a.weight) },
+      before,
     };
   }
   const shop = fragranticaYandexShops().find((s) => cleanText(s.id) === cleanText(existing.target));
@@ -294,6 +301,7 @@ async function fragranticaExistingCardState(existing = {}) {
   if (!offer.offerId && !offer.name) throw new Error(`Карточка ${offerId} не найдена на Маркете`);
   const wd = offer.weightDimensions || {};
   return {
+    before: { name: cleanText(offer.name), photos: (offer.pictures || []).map(cleanText).filter(Boolean).slice(0, 15), description: cleanText(offer.description).slice(0, 3000) },
     price: 0, oldPrice: 0, yandexPrice: Math.round(Number(offer.basicPrice?.value || 0)),
     barcode: cleanText((offer.barcodes || [])[0]),
     dims: { depth: Math.round(Number(wd.length || 0) * 10), width: Math.round(Number(wd.width || 0) * 10), height: Math.round(Number(wd.height || 0) * 10), weight: Math.round(Number(wd.weight || 0) * 1000) },
@@ -442,6 +450,8 @@ async function buildFragranticaCardDraft(draft) {
         barcode: state.barcode,
         supplierName: "", markup: 0,
         existing: { ...existing, state },
+        // the Market title the export will use (Ozon keeps data.name)
+        marketName: buildFragranticaMarketName({ perfume, typeKey, volume: draft.volume_ml, tester: Boolean(draft.tester) }),
       });
       if (state.dims.depth && state.dims.width && state.dims.height && state.dims.weight) data.dims = state.dims;
     } catch (error) {
@@ -602,7 +612,9 @@ app.get("/api/fragrantica/drafts", requireAdmin, async (_request, response, next
     const rows = await prisma.$queryRawUnsafe(
       `SELECT d.*, p.brand, p.name AS perfume_name FROM fragrantica_drafts d
          LEFT JOIN fragrantica_perfumes p ON p.id = d.perfume_id
-        WHERE d.status <> 'sent' OR d.updated_at > now() - interval '3 days'
+        WHERE (d.status <> 'sent' OR d.updated_at > now() - interval '3 days')
+          -- improvement drafts live on their own page «Улучшение карточек»
+          AND NOT coalesce(d.data ? 'existing', false)
         ORDER BY d.id LIMIT 600`,
     );
     const ids = [...new Set(rows.flatMap((r) => (Array.isArray(r.export_ids) ? r.export_ids : []).map(Number)))];
@@ -816,6 +828,13 @@ app.patch("/api/fragrantica/drafts/:id", requireAdmin, async (request, response,
       rebuild = true;
     }
     for (const key of ["name", "barcode"]) if (body[key] !== undefined) data[key] = cleanText(body[key]);
+    // own photos (тестер, пробник, набор look different): reorder / remove — only ones uploaded to this draft
+    if (Array.isArray(body.customPhotos)) {
+      const known = new Set(Array.isArray(data.customPhotos) ? data.customPhotos : []);
+      data.customPhotos = body.customPhotos.map(cleanText).filter((u) => known.has(u)).slice(0, 15);
+      if (!data.customPhotos.length) data.onlyCustomPhotos = false;
+    }
+    if (typeof body.onlyCustomPhotos === "boolean") data.onlyCustomPhotos = body.onlyCustomPhotos && (data.customPhotos || []).length > 0;
     for (const key of ["price", "oldPrice", "yandexPrice"]) if (body[key] !== undefined) data[key] = Math.max(0, Math.round(Number(body[key]) || 0));
     if (body.dims && typeof body.dims === "object") {
       data.dims = { ...(data.dims || {}) };
@@ -881,6 +900,38 @@ app.patch("/api/fragrantica/drafts/:id", requireAdmin, async (request, response,
   }
 });
 
+// «Свои фото»: the first one replaces the bottle photo (main), the rest go right after it. Kept with the
+// Fragrantica media (uploads/images is pruned after 14 days, marketplaces may fetch a picture again later).
+app.post("/api/fragrantica/drafts/:id/photos", requireAdmin, uploadImages.array("photos", 10), async (request, response, next) => {
+  try {
+    if (!/^\d+$/.test(request.params.id)) return next();
+    const draft = await readFragranticaDraft(request.params.id);
+    if (!draft) return response.status(404).json({ error: "Черновик не найден." });
+    if (["working", "sending", "sent"].includes(draft.status)) return response.status(409).json({ error: "Черновик сейчас собирается или уже отправлен." });
+    const files = Array.isArray(request.files) ? request.files : [];
+    if (!files.length) return response.status(400).json({ error: "Выберите фото." });
+    await fs.mkdir(path.dirname(fragranticaMediaPath("cards", "x.jpg")), { recursive: true });
+    const urls = [];
+    for (const [i, file] of files.entries()) {
+      const name = `custom-${Number(draft.id)}-${Date.now().toString(36)}${i}.jpg`;
+      // white background (PNG with transparency), upright, ≤ 2000 px, JPEG — what Ozon and Market accept best
+      const meta = await sharp(file.buffer).metadata().catch(() => null);
+      if (!meta || !meta.width || !meta.height) return response.status(400).json({ error: `«${file.originalname}» — не картинка.` });
+      if (Math.min(meta.width, meta.height) < 400) return response.status(400).json({ error: `«${file.originalname}» слишком маленькое (${meta.width}×${meta.height}) — нужно от 400 px.` });
+      const jpg = await sharp(file.buffer).rotate().flatten({ background: "#ffffff" })
+        .resize({ width: 2000, height: 2000, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 92 }).toBuffer();
+      await fs.writeFile(fragranticaMediaPath("cards", name), jpg);
+      urls.push(fragranticaAbsoluteUrl(fragranticaMediaUrl("cards", name)));
+    }
+    const data = { ...(draft.data || {}) };
+    data.customPhotos = [...(Array.isArray(data.customPhotos) ? data.customPhotos : []), ...urls].slice(0, 15);
+    const updated = await updateFragranticaDraft(draft.id, { data });
+    response.json({ ok: true, added: urls.length, draft: fragranticaDraftResponse(updated) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/fragrantica/drafts/:id/rebuild", requireAdmin, async (request, response, next) => {
   try {
     if (!/^\d+$/.test(request.params.id)) return next();
@@ -940,7 +991,8 @@ app.post("/api/fragrantica/drafts/clear", requireAdmin, async (request, response
     const statuses = (Array.isArray(request.body?.statuses) ? request.body.statuses : ["sent", "skipped"]).filter((s) => allowed.includes(s));
     if (!statuses.length) return response.status(400).json({ error: "statuses required" });
     const prisma = await requireFragranticaDraftTables();
-    const removed = await prisma.$executeRawUnsafe(`DELETE FROM fragrantica_drafts WHERE status = ANY($1::text[])`, statuses);
+    // improvement drafts are kept: a skipped one marks «не улучшать», a sent one is the history of that card
+    const removed = await prisma.$executeRawUnsafe(`DELETE FROM fragrantica_drafts WHERE status = ANY($1::text[]) AND NOT coalesce(data ? 'existing', false)`, statuses);
     response.json({ ok: true, removed: Number(removed) || 0 });
   } catch (error) {
     next(error);
