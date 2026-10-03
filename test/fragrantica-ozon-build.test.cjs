@@ -204,11 +204,11 @@ test("PriceMaster availability: real rows match the model, clones/flankers/teste
     { name: "Dior Sauvage edp 1ml", usd: 1.7 },
   ];
   const index = ctx.pm.buildFragranticaPmIndex(rows);
-  const sauvage = plain(ctx.pm.matchFragranticaPmIndex(index, { brand: "Dior", name: "Sauvage" }));
+  const { matched: _m1, ...sauvage } = plain(ctx.pm.matchFragranticaPmIndex(index, { brand: "Dior", name: "Sauvage" }));
   assert.deepEqual(sauvage, { count: 2, minUsd: 79, volumes: [60, 100] });
-  const eau = plain(ctx.pm.matchFragranticaPmIndex(index, { brand: "Dior", name: "Eau Sauvage" }));
+  const { matched: _m2, ...eau } = plain(ctx.pm.matchFragranticaPmIndex(index, { brand: "Dior", name: "Eau Sauvage" }));
   assert.equal(eau.count, 1);
-  const coco = plain(ctx.pm.matchFragranticaPmIndex(index, { brand: "Chanel", name: "Coco Mademoiselle" }));
+  const { matched: _m3, ...coco } = plain(ctx.pm.matchFragranticaPmIndex(index, { brand: "Chanel", name: "Coco Mademoiselle" }));
   assert.deepEqual(coco, { count: 1, minUsd: 167, volumes: [100] });
   assert.equal(ctx.pm.matchFragranticaPmIndex(index, { brand: "Creed", name: "Aventus" }).count, 0);
 });

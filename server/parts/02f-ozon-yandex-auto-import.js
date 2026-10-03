@@ -113,7 +113,9 @@ async function fillOzonDescriptionsForYandexExport(products = [], { delayMs = 60
 // Shared export pipeline: create Yandex cards for the given Ozon products, then send
 // prices + stocks and persist local yandex rows. Used by both the scheduled auto-import
 // and the manual import page. `products` are normalized warehouse products.
-async function exportOzonProductsToYandex(inputProducts = [], shops = null, { reason = "ozon_yandex_import" } = {}) {
+// contentOnly: an existing Market card gets its content again (name, photos, parameters, group, sizes, codes) —
+// no price, no stock, no warehouse rewrite (its price goes through the warehouse price send and the price guard)
+async function exportOzonProductsToYandex(inputProducts = [], shops = null, { reason = "ozon_yandex_import", contentOnly = false } = {}) {
   const targetShops = Array.isArray(shops) && shops.length ? shops : uniqueYandexShopsByBusiness();
   await loadYandexVendorCanonicalMap();
   const enriched = await enrichOzonProductsForYandexExport(inputProducts);
@@ -139,7 +141,13 @@ async function exportOzonProductsToYandex(inputProducts = [], shops = null, { re
   if (hardBlocked.length) logger.warn("yandex export hard-blocked", { reason, count: hardBlocked.length, sample: hardBlocked.slice(0, 10).map((b) => `${b.offerId}: ${b.reasons.join("; ")}`) });
   const offers = products
     .map((product) => buildYandexOfferMapping(product).offer)
-    .filter((offer) => offer?.offerId);
+    .filter((offer) => offer?.offerId)
+    // content only: Market would also take basicPrice from the card update — the price stays where it is
+    .map((offer) => {
+      if (!contentOnly) return offer;
+      const { basicPrice, purchasePrice, additionalExpenses, cofinancePrice, ...rest } = offer;
+      return rest;
+    });
   if (!offers.length || !targetShops.length) {
     return { sentOfferIds: new Set(), exportedProducts: [], failed: 0, results: [], priceStage: { sent: 0 }, stockStage: { sent: 0 } };
   }
@@ -154,6 +162,9 @@ async function exportOzonProductsToYandex(inputProducts = [], shops = null, { re
     .map((item) => cleanText(item.offerId).toLowerCase())
     .filter(Boolean));
   const exportedProducts = products.filter((product) => sentOfferIds.has(cleanText(product.offerId).toLowerCase()));
+  if (contentOnly) {
+    return { sentOfferIds, exportedProducts, failed: cardResults.filter((item) => !item.ok).length, results: cardResults, priceStage: { sent: 0 }, stockStage: { sent: 0 } };
+  }
 
   const priceStage = exportedProducts.length
     ? await sendYandexPricesFromOzonProducts(exportedProducts, { shops: targetShops, existingOfferIds: sentOfferIds })

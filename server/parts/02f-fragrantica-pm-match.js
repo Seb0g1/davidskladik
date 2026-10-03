@@ -85,7 +85,7 @@ async function runFragranticaPmMatch() {
  */
 async function runFragranticaShopStockMatch(prisma) {
   const products = await prisma.$queryRawUnsafe(
-    `SELECT target, name, brand FROM warehouse_products WHERE target IS NOT NULL AND name <> ''`,
+    `SELECT target, name, brand, offer_id AS "offerId", archived FROM warehouse_products WHERE target IS NOT NULL AND name <> ''`,
   );
   const byShop = new Map();
   for (const p of products) {
@@ -93,8 +93,10 @@ async function runFragranticaShopStockMatch(prisma) {
     const brand = cleanText(p.brand);
     const text = brand && !name.toLowerCase().includes(brand.toLowerCase()) ? `${brand} ${name}` : name;
     if (!byShop.has(p.target)) byShop.set(p.target, []);
-    byShop.get(p.target).push({ name: text, usd: 0 });
+    byShop.get(p.target).push({ name: text, usd: 0, offerId: cleanText(p.offerId), archived: Boolean(p.archived) });
   }
+  // card → perfume (for «Улучшение карточек»): offer key → perfume ids that matched it
+  const cardMatches = new Map();
   const indexes = [...byShop.entries()].map(([shop, rows]) => [shop, buildFragranticaPmIndex(rows)]);
   let lastId = 0;
   let found = 0;
@@ -107,6 +109,13 @@ async function runFragranticaShopStockMatch(prisma) {
       for (const [shop, index] of indexes) {
         const m = matchFragranticaPmIndex(index, perfume, { russianExtrasOk: true });
         if (m.count) stock[shop] = { n: m.count, v: m.volumes };
+        for (const i of m.matched || []) {
+          const row = index.rows[i];
+          if (!row.offerId || row.archived) continue;
+          const key = `${shop}\u0000${row.offerId}`;
+          if (!cardMatches.has(key)) cardMatches.set(key, { shop, offerId: row.offerId, name: row.name, perfumeIds: [] });
+          cardMatches.get(key).perfumeIds.push(perfume.id);
+        }
       }
       if (Object.keys(stock).length) found += 1;
       return { id: perfume.id, stock };
@@ -118,7 +127,33 @@ async function runFragranticaShopStockMatch(prisma) {
     );
     await new Promise((resolve) => setImmediate(resolve));
   }
-  return { status: "ok", products: products.length, shops: byShop.size, found };
+  // only unambiguous cards (one perfume) are kept; the volume and tester come from the card's own name
+  const matches = [];
+  for (const m of cardMatches.values()) {
+    if (m.perfumeIds.length !== 1) continue;
+    const volumes = fragPmVolumes(m.name);
+    matches.push({ target: m.shop, offerId: m.offerId, perfumeId: m.perfumeIds[0], volume: volumes.length === 1 ? volumes[0] : null, tester: /тестер|tester/i.test(m.name) });
+  }
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS fragrantica_card_matches (
+      target TEXT NOT NULL,
+      offer_id TEXT NOT NULL,
+      perfume_id INTEGER NOT NULL,
+      volume_ml NUMERIC,
+      tester BOOLEAN NOT NULL DEFAULT false,
+      matched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (target, offer_id)
+    )`);
+  await prisma.$transaction([
+    prisma.$executeRawUnsafe(`DELETE FROM fragrantica_card_matches`),
+    prisma.$executeRawUnsafe(
+      `INSERT INTO fragrantica_card_matches (target, offer_id, perfume_id, volume_ml, tester)
+       SELECT x->>'target', x->>'offerId', (x->>'perfumeId')::int, NULLIF(x->>'volume', '')::numeric, (x->>'tester')::boolean
+         FROM jsonb_array_elements($1::jsonb) x ON CONFLICT DO NOTHING`,
+      JSON.stringify(matches),
+    ),
+  ]);
+  return { status: "ok", products: products.length, shops: byShop.size, found, cards: matches.length };
 }
 
 function scheduleFragranticaPmMatch(delayMs = fragranticaPmMatchIntervalMs) {

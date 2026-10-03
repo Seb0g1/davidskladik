@@ -222,7 +222,7 @@ async function expandFragranticaPerfumeDraft(draft) {
   const presence = await fragranticaPerfumePresence(draft.perfume_id);
   const prisma = await requireFragranticaDraftTables();
   const active = await prisma.$queryRawUnsafe(
-    `SELECT volume_ml AS volume, tester FROM fragrantica_drafts WHERE perfume_id = $1 AND kind = 'card' AND status IN ${FRAG_DRAFT_ACTIVE}`,
+    `SELECT volume_ml AS volume, tester FROM fragrantica_drafts WHERE perfume_id = $1 AND kind = 'card' AND NOT coalesce(data ? 'existing', false) AND status IN ${FRAG_DRAFT_ACTIVE}`,
     Number(draft.perfume_id),
   );
   let created = 0;
@@ -258,6 +258,93 @@ async function expandFragranticaPerfumeDraft(draft) {
   return updateFragranticaDraft(draft.id, { status: "skipped", stage: null, type_key: typeKey, error: reason, data: { skippedVolumes: skipped } });
 }
 
+// ─── Улучшение существующих карточек ──────────────────────────────────────────
+// Карточка, сделанная не через «Фрагрантику» и сопоставленная с ароматом (fragrantica_card_matches), получает
+// тот же набор, что новые карточки: фото, пирамиды, «О аромате», крупный план, видеообложку, Rich, описание ИИ,
+// название по формуле Маркета, характеристики. Артикул, цена, цена до скидки, штрихкод и габариты — как сейчас
+// на маркетплейсе; привязки поставщиков и остаток не трогаются (Маркет — только контент). Отправка — после
+// «Одобрить», как у любого черновика конвейера.
+
+const FRAG_IMPROVE_PER_SCAN = Math.max(0, Number(process.env.FRAGRANTICA_IMPROVE_PER_SCAN || 40) || 0);
+
+/** Live price / old price / barcode / sizes (mm, g) of an existing card. */
+async function fragranticaExistingCardState(existing = {}) {
+  const offerId = cleanText(existing.offerId);
+  if (existing.marketplace === "ozon") {
+    const account = fragranticaResolveOzonAccount(existing.target);
+    const [attrs, prices] = await Promise.all([
+      ozonRequest("/v4/product/info/attributes", { filter: { offer_id: [offerId], visibility: "ALL" }, limit: 1 }, account),
+      ozonRequest("/v5/product/info/prices", { filter: { offer_id: [offerId], visibility: "ALL" }, limit: 1 }, account),
+    ]);
+    const a = (attrs?.result || attrs?.items || [])[0];
+    const p = (prices?.items || [])[0]?.price || {};
+    if (!a) throw new Error(`Карточка ${offerId} не найдена на Ozon`);
+    const mm = (v) => Math.round(Number(v || 0) * (cleanText(a.dimension_unit) === "cm" ? 10 : 1));
+    const g = (v) => Math.round(Number(v || 0) * (cleanText(a.weight_unit) === "kg" ? 1000 : 1));
+    return {
+      price: Math.round(Number(p.price || 0)), oldPrice: Math.round(Number(p.old_price || 0)), yandexPrice: 0,
+      barcode: cleanText(a.barcode || (Array.isArray(a.barcodes) ? a.barcodes[0] : "")),
+      dims: { depth: mm(a.depth), width: mm(a.width), height: mm(a.height), weight: g(a.weight) },
+    };
+  }
+  const shop = fragranticaYandexShops().find((s) => cleanText(s.id) === cleanText(existing.target));
+  if (!shop) throw new Error("Магазин Маркета не найден");
+  const mapping = (await getYandexOfferMappingsByOfferIds(shop, [offerId]))[0];
+  const offer = mapping?.offer || mapping || {};
+  if (!offer.offerId && !offer.name) throw new Error(`Карточка ${offerId} не найдена на Маркете`);
+  const wd = offer.weightDimensions || {};
+  return {
+    price: 0, oldPrice: 0, yandexPrice: Math.round(Number(offer.basicPrice?.value || 0)),
+    barcode: cleanText((offer.barcodes || [])[0]),
+    dims: { depth: Math.round(Number(wd.length || 0) * 10), width: Math.round(Number(wd.width || 0) * 10), height: Math.round(Number(wd.height || 0) * 10), weight: Math.round(Number(wd.weight || 0) * 1000) },
+  };
+}
+
+/** Puts the weakest matched cards (not from Fragrantica, not improved yet) into the conveyor. */
+async function enqueueFragranticaImprovements({ limit = FRAG_IMPROVE_PER_SCAN, createdBy = "улучшение" } = {}) {
+  if (!(limit > 0)) return { queued: 0 };
+  const prisma = await requireFragranticaDraftTables();
+  const exists = await prisma.$queryRawUnsafe(`SELECT to_regclass('fragrantica_card_matches') IS NOT NULL AS ok`);
+  if (!exists[0]?.ok) return { queued: 0, reason: "сопоставление ещё не готово" };
+  const targets = fragranticaTargets();
+  const rows = await prisma.$queryRawUnsafe(
+    `SELECT m.target, m.offer_id, m.perfume_id, m.volume_ml, m.tester, w.marketplace::text AS marketplace,
+            (SELECT min(q.content_rating) FROM card_quality q WHERE q.offer_id = m.offer_id) AS rating
+       FROM fragrantica_card_matches m
+       JOIN warehouse_products w ON w.target = m.target AND w.offer_id = m.offer_id AND w.archived = false
+      WHERE m.volume_ml IS NOT NULL AND m.offer_id !~* '^FR[0-9]'
+        AND NOT EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.account_id = m.target AND e.offer_id = m.offer_id)
+        AND NOT EXISTS (SELECT 1 FROM fragrantica_drafts d WHERE d.data->'existing'->>'offerId' = m.offer_id AND d.data->'existing'->>'target' = m.target)
+      ORDER BY rating ASC NULLS LAST, m.offer_id
+      LIMIT $1`,
+    Math.min(500, Number(limit) || 0),
+  ).catch(async (error) => {
+    // card_quality appears with the first card check — order by offer id until then
+    if (!/card_quality/.test(String(error?.message))) throw error;
+    return prisma.$queryRawUnsafe(
+      `SELECT m.target, m.offer_id, m.perfume_id, m.volume_ml, m.tester, w.marketplace::text AS marketplace, NULL AS rating
+         FROM fragrantica_card_matches m JOIN warehouse_products w ON w.target = m.target AND w.offer_id = m.offer_id AND w.archived = false
+        WHERE m.volume_ml IS NOT NULL AND m.offer_id !~* '^FR[0-9]'
+          AND NOT EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.account_id = m.target AND e.offer_id = m.offer_id)
+          AND NOT EXISTS (SELECT 1 FROM fragrantica_drafts d WHERE d.data->'existing'->>'offerId' = m.offer_id AND d.data->'existing'->>'target' = m.target)
+        ORDER BY m.offer_id LIMIT $1`,
+      Math.min(500, Number(limit) || 0),
+    );
+  });
+  let queued = 0;
+  for (const r of rows) {
+    const target = targets.find((t) => t.id === cleanText(r.target) && t.kind === cleanText(r.marketplace));
+    if (!target) continue;
+    await insertFragranticaDraft({
+      perfumeId: Number(r.perfume_id), kind: "card", volume: Number(r.volume_ml), tester: Boolean(r.tester), targets: [target.key], createdBy,
+      data: { existing: { marketplace: target.kind, target: target.id, offerId: cleanText(r.offer_id), rating: r.rating === null ? null : Number(r.rating) } },
+    });
+    queued += 1;
+  }
+  if (queued) logger.info("fragrantica improvements queued", { queued });
+  return { queued };
+}
+
 async function buildFragranticaCardDraft(draft) {
   const perfumeId = Number(draft.perfume_id);
   const targets = fragranticaDraftTargets(draft.targets);
@@ -267,6 +354,7 @@ async function buildFragranticaCardDraft(draft) {
   const warnings = [];
 
   const buildStartedAt = Date.now();
+  const existing = draft.data?.existing || null;
   await stage("build");
   const done = new Set();
   const mark = (part) => (value) => {
@@ -285,6 +373,8 @@ async function buildFragranticaCardDraft(draft) {
   const [form, linkPart, photoPart, descriptionPart] = await Promise.all([
     buildFragranticaFormData({ perfumeId, typeKey, volume, tester, accountId: ozonTarget?.id }).then(mark("form")),
     (async () => {
+      // improvement: the card keeps its own suppliers and price — no new links
+      if (existing) return { linkRows: [], selected: [], preview: null, warning: "" };
       try {
         const pm = await fragranticaPerfumePmRows(perfume);
         const suggestions = await fragranticaLinkSuggestionsData({ perfumeId, typeKey, volume, tester, rows: pm.rows, usdRate: pm.usdRate, settings: pm.settings });
@@ -343,6 +433,22 @@ async function buildFragranticaCardDraft(draft) {
     warnings,
     buildMs: Date.now() - buildStartedAt,
   };
+  if (existing) {
+    try {
+      const state = await fragranticaExistingCardState(existing);
+      Object.assign(data, {
+        offerId: existing.offerId,
+        price: state.price, oldPrice: state.oldPrice, yandexPrice: state.yandexPrice,
+        barcode: state.barcode,
+        supplierName: "", markup: 0,
+        existing: { ...existing, state },
+      });
+      if (state.dims.depth && state.dims.width && state.dims.height && state.dims.weight) data.dims = state.dims;
+    } catch (error) {
+      data.existing = existing;
+      return updateFragranticaDraft(draft.id, { status: "attention", stage: null, type_key: typeKey, error: `Улучшение: ${error?.message || error}`, data });
+    }
+  }
   const built = { ...draft, perfumeId, data };
   const missing = fragranticaDraftMissing(built, targets);
   if (!form.brandMatched && !missing.includes("Бренд")) missing.unshift("Бренд");

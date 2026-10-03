@@ -514,6 +514,7 @@ function matchFragranticaPmIndex(index, perfume = {}, opts = {}) {
   let count = 0;
   let minUsd = null;
   const volumes = new Set();
+  const matched = [];
   for (const i of best) {
     const tokens = index.tokenSets[i];
     if (!nameTokens.every((w) => tokens.has(w))) continue;
@@ -525,10 +526,11 @@ function matchFragranticaPmIndex(index, perfume = {}, opts = {}) {
     const extra = opts.russianExtrasOk ? check.extraWords.filter((w) => !/[а-яё]/i.test(w)) : check.extraWords;
     if (check.clone || check.notPerfume || check.missingNameWords.length || extra.length) continue;
     count += 1;
+    matched.push(i);
     if (Number(row.usd) > 0 && (minUsd === null || Number(row.usd) < minUsd)) minUsd = Number(row.usd);
     for (const v of fragPmVolumes(row.name)) volumes.add(v);
   }
-  return { count, minUsd, volumes: [...volumes].sort((a, b) => a - b) };
+  return { count, minUsd, volumes: [...volumes].sort((a, b) => a - b), matched };
 }
 
 // ─── Маркет: характеристики категории «Парфюмерия» ───────────────────────────
@@ -696,6 +698,7 @@ function buildFragranticaDraftExportBody(draft = {}, targets = []) {
     barcode: d.barcode || "",
     depth: d.dims?.depth, width: d.dims?.width, height: d.dims?.height, weight: d.dims?.weight,
     tester: Boolean(d.tester),
+    improve: Boolean(d.existing),
     images: [d.images?.main || d.sourceImage || ""].filter(Boolean),
     attributes,
     links: (Array.isArray(d.linkRows) ? d.linkRows : [])

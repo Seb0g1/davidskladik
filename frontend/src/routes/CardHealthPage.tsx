@@ -27,6 +27,11 @@ type HealthResponse = {
   items: Issue[]; groups: Array<{ code: string; n: number; errors: number }>; statuses: Record<string, number>;
   rules: Record<string, Rule>; auto: Record<string, boolean>;
   scan: { at?: string; running?: boolean; issues?: number; fixed?: number; autoApplied?: number; elapsedMs?: number; quarantine?: { confirmed?: number; checked?: number } };
+  improve?: Improve;
+};
+type Improve = {
+  enabled: boolean; perScan: number; cards: number; matched: number; building: number; review: number; improved: number;
+  rating: { avg: number | null; weak: number; checked: number }; error?: string;
 };
 
 const STATUSES: Array<[string, string]> = [["open", "Нужно решить"], ["failed", "Не починилось"], ["applied", "Починка отправлена"], ["fixed", "Исправлено"], ["dismissed", "Скрыто"]];
@@ -68,6 +73,12 @@ export function CardHealthPage() {
     onError: (error) => toast.error(errorMessage(error)),
   });
 
+  const improve = useMutation({
+    mutationFn: (body: { enabled?: boolean; perScan?: number; queueNow?: number }) => apiJson<{ queued: { queued: number } | null }>("/api/card-health/improve", mutationBody(body)),
+    onSuccess: (r) => { if (r.queued) toast.success(r.queued.queued ? `В конвейер добавлено: ${r.queued.queued}` : "Новых карточек для улучшения нет"); refresh(); },
+    onError: (error) => toast.error(errorMessage(error)),
+  });
+
   const data = health.data;
   const rules = data?.rules || {};
   const items = data?.items || [];
@@ -89,6 +100,36 @@ export function CardHealthPage() {
         {data?.scan.at ? <>Последняя проверка {new Date(data.scan.at).toLocaleString("ru")}: ошибок {data.scan.issues ?? 0}, исправилось {data.scan.fixed ?? 0}{data.scan.autoApplied ? `, починено само ${data.scan.autoApplied}` : ""}{data.scan.quarantine?.confirmed ? `, из карантина цен выпущено ${data.scan.quarantine.confirmed}` : ""}.</> : "Первая проверка запустится в течение 10 минут после запуска сервера."}
         {running ? <div className="fr-progress-bar is-indeterminate ch-bar"><span /></div> : null}
       </div>
+
+      {data?.improve && !data.improve.error ? (
+        <section className="ch-improve" aria-label="Улучшение карточек">
+          <div className="ch-improve-text">
+            <h2>Улучшение карточек</h2>
+            <p>
+              Старые карточки (сделанные не через «Фрагрантику») сопоставляются с ароматом и попадают в конвейер «Фрагрантики» как черновики:
+              фото, пирамиды, «О аромате», Rich, видео, описание и название по формуле Маркета. Артикул, цена и штрихкод остаются прежними,
+              на Маркет уходит только контент. <b>Отправка — только после «Одобрить» в конвейере.</b>
+            </p>
+          </div>
+          <div className="ch-improve-stats">
+            <div><b>{data.improve.cards.toLocaleString("ru")}</b><span>карточек на складе</span></div>
+            <div><b>{data.improve.matched.toLocaleString("ru")}</b><span>сопоставлено с ароматом</span></div>
+            <div><b>{data.improve.building + data.improve.review}</b><span>в конвейере{data.improve.review ? `, ждут проверки ${data.improve.review}` : ""}</span></div>
+            <div><b>{data.improve.improved}</b><span>улучшено</span></div>
+            <div><b>{data.improve.rating.avg ?? "—"}</b><span>средний рейтинг Маркета{data.improve.rating.weak ? `, ниже 70: ${data.improve.rating.weak}` : ""}</span></div>
+          </div>
+          <div className="ch-improve-actions">
+            <label className="ch-switch">
+              <input type="checkbox" checked={data.improve.enabled} disabled={improve.isPending} onChange={(e) => improve.mutate({ enabled: e.target.checked })} />
+              <span>Добавлять самые слабые карточки после каждой проверки ({data.improve.perScan} шт.)</span>
+            </label>
+            <button className="secondary-action compact" type="button" disabled={improve.isPending || !data.improve.matched} onClick={() => improve.mutate({ queueNow: 20 })}>
+              {improve.isPending ? <Loader2 size={13} className="spin" /> : <Wrench size={13} />} Добавить 20 сейчас
+            </button>
+            <a className="secondary-action compact" href="/app/fragrantica">Открыть конвейер</a>
+          </div>
+        </section>
+      ) : null}
 
       <div className="ch-tabs" role="tablist">
         {STATUSES.map(([key, label]) => (

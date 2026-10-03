@@ -733,9 +733,11 @@ async function submitFragranticaYandexExport(row) {
       const reason = built.categoryReview ? `категория: ${built.categoryReview}` : `не хватает: ${built.missing.join(", ")}`;
       return updateFragranticaExport(row.id, { status: "failed", attempts, error: `Маркет: ${reason}` });
     }
-    const result = await exportOzonProductsToYandex([product], [shop], { reason: "fragrantica_export" });
+    const improve = row.item?.improve === true;
+    // improving an existing Market card: content only — its price, stock and warehouse record stay as they are
+    const result = await exportOzonProductsToYandex([product], [shop], { reason: improve ? "fragrantica_improve" : "fragrantica_export", contentOnly: improve });
     if (result.sentOfferIds.has(cleanText(row.offer_id).toLowerCase())) {
-      const vat = await sendFragranticaYandexVatPrice(shop, row.offer_id, row.item?.price);
+      const vat = improve ? {} : await sendFragranticaYandexVatPrice(shop, row.offer_id, row.item?.price);
       return updateFragranticaExport(row.id, {
         status: "imported",
         attempts,
@@ -887,7 +889,8 @@ async function refreshFragranticaExport(row) {
           : {
             ...(row.result || {}),
             warnings: fragranticaOzonErrorsText(item.errors || []) || null,
-            barcode: "pending",
+            // an improved existing card keeps its barcode (no new one generated)
+            barcode: row.item?.improve ? "kept" : "pending",
             docs: "pending",
             links: Array.isArray(row.links) && row.links.length ? "pending" : "none",
           },
@@ -995,9 +998,11 @@ async function createFragranticaExports(body = {}, request = { session: {} }) {
     const extras = fragranticaExtraPhotos(perfumeId, target.style);
     // Ozon: Rich-контент из описания и фото магазина + видеообложка (если категория знает атрибут 11254)
     const ozonMedia = target.kind === "ozon" ? fragranticaOzonMediaExtras({ perfumeId, style: target.style, notes, baseItem, categoryAttrs, perfume }) : null;
+    const improveFlag = body.improve === true ? { improve: true } : {};
     const item = target.kind === "ozon"
       ? {
         ...baseItem,
+        ...improveFlag,
         vat: fragranticaVatForClientId(cleanText(ozonAccount?.clientId), vatOverrides),
         attributes: [...ozonAttributes, ...ozonMedia.attributes],
         ...(ozonMedia.complex.length ? { complex_attributes: ozonMedia.complex } : {}),
@@ -1006,6 +1011,7 @@ async function createFragranticaExports(body = {}, request = { session: {} }) {
       }
       : {
         ...baseItem,
+        ...improveFlag,
         // Маркет: «Парфюмерная вода <бренд> <аромат> <для кого> <мл> мл» — так карточка получает больше баллов
         yandexName: buildFragranticaMarketName({ perfume, typeKey: type.key, volume: (volumeAttr?.values || [])[0]?.value, tester: Boolean(body.tester) }),
         price: String(yandexPrice), yandexPictures: [bottle, notes, ...extras].filter(Boolean), yandexExtra,

@@ -68,9 +68,42 @@ async function requireCardHealthTables() {
       UNIQUE (marketplace, shop_id, offer_id, code)
     )`);
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS card_issues_status_idx ON card_issues (status, code)`);
+  // Market content rating of every card (the improvement queue starts from the weakest)
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS card_quality (
+      shop_id TEXT NOT NULL,
+      offer_id TEXT NOT NULL,
+      content_rating INTEGER,
+      errors INTEGER NOT NULL DEFAULT 0,
+      warnings INTEGER NOT NULL DEFAULT 0,
+      checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (shop_id, offer_id)
+    )`);
   await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS card_health_state (key TEXT PRIMARY KEY, value JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
   cardHealthTablesReady = true;
   return prisma;
+}
+
+/** Numbers for the «Улучшение карточек» block. */
+async function cardHealthImproveStats() {
+  const prisma = await requireCardHealthTables();
+  const settings = await readCardHealthState("improve");
+  const [ready] = await prisma.$queryRawUnsafe(`SELECT to_regclass('fragrantica_card_matches') IS NOT NULL AS m, to_regclass('fragrantica_drafts') IS NOT NULL AS d, to_regclass('fragrantica_exports') IS NOT NULL AS e`);
+  const one = async (sql) => (ready.m && ready.d && ready.e ? Number((await prisma.$queryRawUnsafe(sql))[0]?.n || 0) : 0);
+  const [cards, matched, drafts, review, improved, rating] = await Promise.all([
+    prisma.$queryRawUnsafe(`SELECT count(*)::int AS n FROM warehouse_products WHERE archived = false`).then((r) => Number(r[0]?.n || 0)),
+    one(`SELECT count(*)::int AS n FROM fragrantica_card_matches WHERE volume_ml IS NOT NULL AND offer_id !~* '^FR[0-9]'`),
+    one(`SELECT count(*)::int AS n FROM fragrantica_drafts WHERE data ? 'existing' AND status IN ('queued', 'working')`),
+    one(`SELECT count(*)::int AS n FROM fragrantica_drafts WHERE data ? 'existing' AND status IN ('ready', 'attention')`),
+    one(`SELECT count(*)::int AS n FROM fragrantica_exports WHERE item->>'improve' = 'true' AND status = 'imported'`),
+    prisma.$queryRawUnsafe(`SELECT round(avg(content_rating))::int AS avg, count(*) FILTER (WHERE content_rating < 70)::int AS weak, count(*)::int AS n FROM card_quality`).then((r) => r[0] || {}),
+  ]);
+  return {
+    enabled: settings.enabled !== false,
+    perScan: Number(settings.perScan) || FRAG_IMPROVE_PER_SCAN,
+    cards, matched, building: drafts, review, improved,
+    rating: { avg: rating.avg === null ? null : Number(rating.avg), weak: Number(rating.weak || 0), checked: Number(rating.n || 0) },
+  };
 }
 
 async function readCardHealthState(key) {
@@ -115,6 +148,14 @@ async function runCardHealthScan({ autoFix = true } = {}) {
           return [];
         });
         const rows = [];
+        if (cards.length) {
+          await prisma.$executeRawUnsafe(
+            `INSERT INTO card_quality (shop_id, offer_id, content_rating, errors, warnings, checked_at)
+             SELECT $1, x->>'o', NULLIF(x->>'r', '')::int, (x->>'e')::int, (x->>'w')::int, now() FROM jsonb_array_elements($2::jsonb) x
+             ON CONFLICT (shop_id, offer_id) DO UPDATE SET content_rating = EXCLUDED.content_rating, errors = EXCLUDED.errors, warnings = EXCLUDED.warnings, checked_at = now()`,
+            shop.id, JSON.stringify(cards.filter((c) => c.offerId).map((c) => ({ o: c.offerId, r: Number.isFinite(Number(c.contentRating)) ? Number(c.contentRating) : "", e: (c.errors || []).length, w: (c.warnings || []).length }))),
+          ).catch((error) => logger.warn("card quality save failed", { detail: error?.message }));
+        }
         for (const card of cards) {
           const all = [
             ...(card.errors || []).map((e) => ({ severity: "error", text: [e.message, e.comment].filter(Boolean).join(": ") })),
@@ -162,6 +203,11 @@ async function runCardHealthScan({ autoFix = true } = {}) {
       return 0;
     });
     summary.quarantine = await runGuardedQuarantineConfirm().catch((error) => ({ error: error?.message || String(error) }));
+    // «Улучшение карточек»: the weakest old cards go to the conveyor as drafts — nothing is sent until approved
+    const improve = await readCardHealthState("improve");
+    if (improve?.enabled !== false && typeof enqueueFragranticaImprovements === "function") {
+      summary.improve = await enqueueFragranticaImprovements({ limit: Number(improve?.perScan) || undefined }).catch((error) => ({ error: error?.message || String(error) }));
+    }
     summary.elapsedMs = Date.now() - startedAt;
     await writeCardHealthState("scan", { ...summary, at: new Date().toISOString() });
     logger.info("card health scan complete", summary);
@@ -188,13 +234,16 @@ function scheduleCardHealthScan(delayMs = cardHealthScanMs) {
 
 /** Ozon card(s) behind Market offers (same offer id); Fragrantica cards are rebuilt by their own flow. */
 async function cardHealthOzonProducts(offerIds = []) {
-  const wanted = new Set(offerIds.map((id) => cleanText(id).toLowerCase()));
-  const warehouse = await readWarehouse();
+  // straight from Postgres: the API process keeps only a light warehouse cache
+  const prisma = await requireCardHealthTables();
+  const rows = await prisma.$queryRawUnsafe(
+    `SELECT id FROM warehouse_products WHERE marketplace = 'ozon' AND archived = false AND offer_id = ANY($1::text[])`,
+    [...new Set(offerIds.map(cleanText).filter(Boolean))],
+  );
+  const products = await readWarehouseProductsFromPostgresByIds(rows.map((r) => r.id));
   const byOffer = new Map();
-  for (const product of warehouse.products || []) {
-    if (product.marketplace !== "ozon" || product.archived) continue;
+  for (const product of products) {
     const key = cleanText(product.offerId).toLowerCase();
-    if (!wanted.has(key)) continue;
     // the main Ozon cabinet wins when two cabinets share the offer id
     if (!byOffer.has(key) || cleanText(product.target) === "ozon") byOffer.set(key, product);
   }
@@ -238,7 +287,7 @@ async function applyCardIssues(issueIds = [], { source = "manual" } = {}) {
     }
     const products = [...new Map(rest.filter((i) => ozon.has(cleanText(i.offer_id).toLowerCase())).map((i) => [cleanText(i.offer_id).toLowerCase(), ozon.get(cleanText(i.offer_id).toLowerCase())])).values()];
     if (!products.length) continue;
-    const exported = await exportOzonProductsToYandex(products, [shop], { reason: `card_health_${source}` })
+    const exported = await exportOzonProductsToYandex(products, [shop], { reason: `card_health_${source}`, contentOnly: true })
       .catch((error) => ({ error: error?.message || String(error), sentOfferIds: new Set() }));
     const ok = rest.filter((i) => exported.sentOfferIds?.has(cleanText(i.offer_id).toLowerCase()));
     const bad = rest.filter((i) => ozon.has(cleanText(i.offer_id).toLowerCase()) && !ok.includes(i));
@@ -258,11 +307,18 @@ async function applyCardIssues(issueIds = [], { source = "manual" } = {}) {
     const sent = ids.length
       ? await sendWarehousePrices({ productIds: ids, livePriceMaster: true, force: true, reason: `card-health-${source}`, sourceEvent: "card-health" }).catch((error) => ({ error: error?.message || String(error) }))
       : { error: "Товар не найден на складе" };
-    const held = new Set((sent.skipped || []).filter((s) => s.reason === "price_guard_hold" || s.reason === "no_supplier" || s.reason === "no_pricemaster_link").map((s) => String(s.offerId)));
-    const ok = reprice.filter((i) => !sent.error && !held.has(String(i.offer_id)));
-    const bad = reprice.filter((i) => !ok.includes(i));
+    const SKIP_TEXT = {
+      price_guard_hold: "цена ждёт решения на «Проверке цен»",
+      no_supplier: "нет живого поставщика — цену не из чего посчитать",
+      no_pricemaster_link: "товар не привязан к поставщику — привяжите на складе",
+      pm_live_timeout: "PriceMaster не ответил — повторим при следующей проверке",
+      not_ready: "цена ещё не готова",
+    };
+    const why = new Map((sent.skipped || []).filter((s) => SKIP_TEXT[s.reason]).map((s) => [String(s.offerId), SKIP_TEXT[s.reason]]));
+    const ok = reprice.filter((i) => !sent.error && !why.has(String(i.offer_id)));
     await mark(ok.map((i) => i.id), "applied");
-    await mark(bad.map((i) => i.id), "failed", sent.error || "Цена не ушла: нет поставщика или она ждёт решения на «Проверке цен»");
+    for (const i of reprice.filter((x) => !ok.includes(x))) await mark([i.id], "failed", sent.error || `Цена не ушла: ${why.get(String(i.offer_id)) || "причина в журнале цен"}`);
+    const bad = reprice.filter((i) => !ok.includes(i));
     result.applied += ok.length;
     result.failed += bad.length;
   }
@@ -271,7 +327,8 @@ async function applyCardIssues(issueIds = [], { source = "manual" } = {}) {
   const quarantine = issues.filter((i) => i.fix === "confirm_quarantine");
   if (quarantine.length) {
     const r = await runGuardedQuarantineConfirm({ onlyOfferIds: quarantine.map((i) => i.offer_id) });
-    const confirmed = new Set((r.confirmedOfferIds || []).map(String));
+    // already out of quarantine (released by the scan a minute ago) counts as done
+    const confirmed = new Set([...(r.confirmedOfferIds || []), ...quarantine.map((i) => i.offer_id).filter((id) => !(r.inQuarantine || []).includes(String(id)))].map(String));
     const ok = quarantine.filter((i) => confirmed.has(String(i.offer_id)));
     const bad = quarantine.filter((i) => !confirmed.has(String(i.offer_id)));
     await mark(ok.map((i) => i.id), "applied");
@@ -317,7 +374,7 @@ async function runGuardedQuarantineConfirm({ onlyOfferIds = null } = {}) {
   const auto = await cardHealthAutoSettings();
   if (!onlyOfferIds && !auto.price_drop) return { skipped: "auto_off" };
   const only = onlyOfferIds ? new Set(onlyOfferIds.map(String)) : null;
-  const out = { checked: 0, confirmed: 0, confirmedOfferIds: [], refused: {} };
+  const out = { checked: 0, confirmed: 0, confirmedOfferIds: [], refused: {}, inQuarantine: [] };
   for (const shop of uniqueYandexShopsByBusiness()) {
     const levels = [{ path: `/v2/businesses/${shop.businessId}/price-quarantine` }];
     for (const s of getYandexShops().filter((x) => cleanText(x.businessId) === cleanText(shop.businessId) && x.campaignId)) {
@@ -334,6 +391,7 @@ async function runGuardedQuarantineConfirm({ onlyOfferIds = null } = {}) {
         if (!pageToken) break;
       }
       const candidates = offers.filter((o) => !only || only.has(String(o.offerId)));
+      out.inQuarantine.push(...candidates.map((o) => String(o.offerId)));
       if (!candidates.length) continue;
       const ids = candidates.map((o) => yandexWarehouseProductId(shop, o.offerId));
       const settings = await readAppSettings();
@@ -381,6 +439,7 @@ app.get("/api/card-health", requireAdmin, async (request, response, next) => {
       cardHealthAutoSettings(),
       readCardHealthState("scan"),
     ]);
+    const improve = await cardHealthImproveStats().catch((error) => ({ error: error?.message || String(error) }));
     const rules = Object.fromEntries([...CARD_HEALTH_RULES, { code: "other", title: "Другое", fix: "", howTo: "Посмотрите текст ошибки в кабинете Маркета." }]
       .map((r) => [r.code, { title: r.title, fix: r.fix || "", howTo: r.howTo }]));
     response.json({
@@ -391,6 +450,7 @@ app.get("/api/card-health", requireAdmin, async (request, response, next) => {
       rules,
       auto,
       scan: { ...scan, running: cardHealthRunning },
+      improve,
     });
   } catch (error) {
     next(error);
@@ -435,6 +495,23 @@ app.post("/api/card-health/auto", requireAdmin, async (request, response, next) 
     await writeCardHealthState("auto", saved);
     await appendAudit(request, "card_health.auto", { entityType: "card_issue_code", entityId: code, newValue: { enabled: saved[code] } });
     response.json({ ok: true, auto: await cardHealthAutoSettings() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// «Улучшение карточек»: on/off, how many per scan, «добавить сейчас»
+app.post("/api/card-health/improve", requireAdmin, async (request, response, next) => {
+  try {
+    const saved = await readCardHealthState("improve");
+    if (typeof request.body?.enabled === "boolean") saved.enabled = request.body.enabled;
+    if (request.body?.perScan !== undefined) saved.perScan = Math.max(0, Math.min(500, Number(request.body.perScan) || 0));
+    await writeCardHealthState("improve", saved);
+    let queued = null;
+    const now = Math.max(0, Math.min(500, Number(request.body?.queueNow) || 0));
+    if (now) queued = await enqueueFragranticaImprovements({ limit: now, createdBy: cleanText(request.session?.username) || "улучшение" });
+    await appendAudit(request, "card_health.improve", { entityType: "card_improve", entityId: "settings", newValue: { ...saved, queueNow: now || undefined, queued: queued?.queued } });
+    response.json({ ok: true, queued, improve: await cardHealthImproveStats() });
   } catch (error) {
     next(error);
   }

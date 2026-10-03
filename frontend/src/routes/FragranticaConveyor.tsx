@@ -27,6 +27,7 @@ type Draft = {
     linkRows?: LinkRow[]; selectedLinks?: string[]; images?: { main?: string; notes?: Record<string, string> };
     description?: string; descriptionSource?: string; barcode?: string; missing?: string[]; warnings?: string[];
     brandMatched?: boolean; brandCandidates?: Array<{ id: number; value: string }>; skippedVolumes?: number[];
+    existing?: { marketplace: string; target: string; offerId: string; rating?: number | null };
   } | null;
 };
 type DraftsResponse = { items: Draft[]; counts: Record<string, number>; targets: WorkTarget[]; timing?: { medianBuildMs: number; parallel: number; serverNow: string } };
@@ -418,6 +419,11 @@ function DraftRow({ draft, targets, timing }: { draft: Draft; targets: WorkTarge
             {TYPES.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
           </select>
           <b className="fr-conv-vol">{draft.volume} мл{draft.tester ? " · тестер" : ""}</b>
+          {draft.data?.existing ? (
+            <span className="fr-conv-improve" title="Улучшение существующей карточки: артикул, цена и штрихкод остаются как есть, на Маркет уходит только контент">
+              улучшение {String(draft.data.existing.offerId || "")}{draft.data.existing.rating != null ? ` · рейтинг ${draft.data.existing.rating}` : ""}
+            </span>
+          ) : null}
           {d.offerId ? <span className="fr-hint">{d.offerId}</span> : null}
         </div>
 
