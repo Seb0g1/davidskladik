@@ -283,6 +283,8 @@ async function fragranticaExistingCardState(existing = {}) {
     const p = (prices?.items || [])[0]?.price || {};
     if (!a) throw new Error(`Карточка ${offerId} не найдена на Ozon`);
     const descAttr = (a.attributes || []).find((x) => Number(x.id) === 4191);
+    // the card's own Ozon brand (dictionary value) — used when Fragrantica's brand is not in Ozon's list
+    const brandValue = ((a.attributes || []).find((x) => Number(x.id) === FRAG_OZON_ATTR.brand)?.values || [])[0];
     const before = {
       name: cleanText(a.name),
       photos: [a.primary_image, ...(Array.isArray(a.images) ? a.images : [])].map((u) => cleanText(typeof u === "string" ? u : u?.url || u?.file_name)).filter(Boolean).slice(0, 15),
@@ -295,6 +297,7 @@ async function fragranticaExistingCardState(existing = {}) {
       barcode: cleanText(a.barcode || (Array.isArray(a.barcodes) ? a.barcodes[0] : "")),
       dims: { depth: mm(a.depth), width: mm(a.width), height: mm(a.height), weight: g(a.weight) },
       before,
+      brand: Number(brandValue?.dictionary_value_id) ? { id: Number(brandValue.dictionary_value_id), value: cleanText(brandValue.value) } : null,
     };
   }
   const shop = fragranticaYandexShops().find((s) => cleanText(s.id) === cleanText(existing.target));
@@ -701,6 +704,11 @@ async function buildFragranticaCardDraft(draft) {
         marketName: buildFragranticaMarketName({ perfume, typeKey, volume: draft.volume_ml, tester: Boolean(draft.tester) }),
       });
       if (state.dims.depth && state.dims.width && state.dims.height && state.dims.weight) data.dims = state.dims;
+      // brand not found in Ozon's list by name → the brand the live Ozon card already has
+      if (!data.brandMatched && ozonState?.brand) {
+        data.attributes = [...(data.attributes || []).filter((x) => Number(x.id) !== FRAG_OZON_ATTR.brand), { id: FRAG_OZON_ATTR.brand, values: [{ dictionary_value_id: ozonState.brand.id, value: ozonState.brand.value }] }];
+        data.brandMatched = true;
+      }
       // the new bottle photo is the main one; then the old card's SHARP product photos; then the pyramid and cards
       if (!Array.isArray(data.customPhotos)) {
         const kept = existingResult.kept || { keep: [], blurry: 0 };
@@ -719,7 +727,7 @@ async function buildFragranticaCardDraft(draft) {
   data.buildMs = Date.now() - buildStartedAt;
   const built = { ...draft, perfumeId, data };
   const missing = fragranticaDraftMissing(built, targets);
-  if (!form.brandMatched && !missing.includes("Бренд")) missing.unshift("Бренд");
+  if (!data.brandMatched && !missing.includes("Бренд")) missing.unshift("Бренд");
   if (noPyramid.length) missing.push("Пирамида аромата");
   return updateFragranticaDraft(draft.id, {
     status: missing.length ? "attention" : "ready",
