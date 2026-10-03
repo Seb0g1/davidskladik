@@ -35,3 +35,11 @@
 .ci-muted { color: var(--text-soft); font-size: 12.5px; }
 .ci-foot { display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
 @media (max-width: 760px) { .ci-compare { grid-template-columns: 1fr; } }
+
+.ci-add { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin: 0 0 16px; padding: 14px 16px; border-radius: 14px; border: 1px solid rgba(var(--accent-rgb), .35); background: rgba(var(--accent-rgb), .05); }
+.ci-add label { display: grid; gap: 4px; font-size: 12.5px; color: var(--text-soft); }
+.ci-add input { width: 120px; height: 38px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--field-bg); color: var(--text); font: inherit; font-size: 16px; font-variant-numeric: tabular-nums; }
+.ci-add small { flex: 1 1 260px; font-size: 12.5px; color: var(--text-soft); line-height: 1.45; align-self: center; }
+.ci-add.is-compact { margin: 0; padding: 0; border: 0; background: transparent; }
+.ci-sold { padding: 2px 9px; border-radius: 999px; font-size: 12px; border: 1px solid rgba(34, 197, 94, .5); color: var(--fr-ok, #22c55e); font-variant-numeric: tabular-nums; }
+.ci-sold.is-none { border-color: var(--line); color: var(--text-soft); }

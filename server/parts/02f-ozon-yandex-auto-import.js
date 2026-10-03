@@ -145,7 +145,7 @@ async function exportOzonProductsToYandex(inputProducts = [], shops = null, { re
     // content only: Market would also take basicPrice from the card update — the price stays where it is
     .map((offer) => {
       if (!contentOnly) return offer;
-      const { basicPrice, purchasePrice, additionalExpenses, cofinancePrice, ...rest } = offer;
+      const { basicPrice, purchasePrice, additionalExpenses, cofinancePrice, barcodes, ...rest } = offer;
       return rest;
     });
   if (!offers.length || !targetShops.length) {

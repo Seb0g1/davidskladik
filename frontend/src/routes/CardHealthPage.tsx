@@ -7,6 +7,7 @@ import { PageHeader } from "../components/PageHeader";
 import { errorMessage, useDebounced } from "../lib/common";
 import { toast } from "../lib/toast";
 import "./card-health.css";
+import { ImproveAdd } from "./CardImprovePage";
 
 // «Ошибки карточек»: сервер раз в 2 часа сам проверяет все карточки Маркета, раскладывает ошибки по типам и
 // предлагает починку. Чинится по кнопке; тип можно перевести в «чинить само» — тогда новые карточки с такой
@@ -108,12 +109,13 @@ export function CardHealthPage() {
             <p>
               Старые карточки (сделанные не через «Фрагрантику») сопоставляются с ароматом и попадают в конвейер «Фрагрантики» как черновики:
               фото, пирамиды, «О аромате», Rich, видео, описание и название по формуле Маркета. Артикул, цена и штрихкод остаются прежними,
-              на Маркет уходит только контент. <b>Отправка — только после «Одобрить» в конвейере.</b>
+              на Маркет уходит только контент. Один товар — сразу его карточки в Ozon и на Маркете, первыми идут самые продаваемые.
+              <b> Отправка — только после «Одобрить» на странице «Улучшение карточек».</b>
             </p>
           </div>
           <div className="ch-improve-stats">
             <div><b>{data.improve.cards.toLocaleString("ru")}</b><span>карточек на складе</span></div>
-            <div><b>{data.improve.matched.toLocaleString("ru")}</b><span>сопоставлено с ароматом</span></div>
+            <div><b>{data.improve.matched.toLocaleString("ru")}</b><span>товаров сопоставлено с ароматом</span></div>
             <div><b>{data.improve.building + data.improve.review}</b><span>в конвейере{data.improve.review ? `, ждут проверки ${data.improve.review}` : ""}</span></div>
             <div><b>{data.improve.improved}</b><span>улучшено</span></div>
             <div><b>{data.improve.rating.avg ?? "—"}</b><span>средний рейтинг Маркета{data.improve.rating.weak ? `, ниже 70: ${data.improve.rating.weak}` : ""}</span></div>
@@ -121,11 +123,9 @@ export function CardHealthPage() {
           <div className="ch-improve-actions">
             <label className="ch-switch">
               <input type="checkbox" checked={data.improve.enabled} disabled={improve.isPending} onChange={(e) => improve.mutate({ enabled: e.target.checked })} />
-              <span>Добавлять самые слабые карточки после каждой проверки ({data.improve.perScan} шт.)</span>
+              <span>Добавлять самые продаваемые товары после каждой проверки ({data.improve.perScan} шт.)</span>
             </label>
-            <button className="secondary-action compact" type="button" disabled={improve.isPending || !data.improve.matched} onClick={() => improve.mutate({ queueNow: 20 })}>
-              {improve.isPending ? <Loader2 size={13} className="spin" /> : <Wrench size={13} />} Добавить 20 сейчас
-            </button>
+            <ImproveAdd compact />
             <a className="primary-action compact" href="/app/card-improve">Открыть «Улучшение карточек»</a>
           </div>
         </section>

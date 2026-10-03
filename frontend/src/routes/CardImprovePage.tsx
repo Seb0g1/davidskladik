@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, CheckCheck, ChevronDown, ChevronUp, EyeOff, Loader2, RefreshCw, Search, Undo2 } from "lucide-react";
+import { AlertTriangle, Check, CheckCheck, ChevronDown, ChevronUp, EyeOff, Loader2, Plus, RefreshCw, Search, Undo2 } from "lucide-react";
 import { z } from "zod";
 import { fetchJson, mutationBody } from "../api";
 import { PageHeader } from "../components/PageHeader";
@@ -23,8 +23,9 @@ type Side = { name: string; photos: string[]; description: string };
 type Item = {
   id: number; status: string; stage: string | null; error: string | null; perfumeId: number; brand: string; perfumeName: string;
   volume: number | null; tester: boolean; shop: string; marketplace: string; offerId: string; rating: number | null; price: number;
+  yandexPrice: number; sold: number;
   before: Side | null; after: Side; missing: string[]; exports: Array<{ status: string; error: string | null; shop: string }>;
-  customPhotos?: string[]; onlyCustomPhotos?: boolean;
+  customPhotos?: string[]; onlyCustomPhotos?: boolean; keptExistingPhotos?: number;
 };
 type ImproveResponse = { tab: string; counts: Record<string, number>; items: Item[] };
 
@@ -93,6 +94,8 @@ export function CardImprovePage() {
         ))}
       </div>
 
+      <ImproveAdd />
+
       <div className="ci-toolbar">
         <label className="ci-search">
           <Search size={14} />
@@ -118,7 +121,7 @@ export function CardImprovePage() {
       {list.data && !items.length ? (
         <div className="ci-empty">
           {tab === "review"
-            ? "Пока нечего проверять. Карточки для улучшения добавляются после каждой проверки на странице «Ошибки карточек» (или кнопкой «Добавить 20 сейчас» там же) и собираются несколько минут."
+            ? "Пока нечего проверять. Впишите выше, сколько товаров улучшить, — сначала берутся самые продаваемые; сборка займёт несколько минут."
             : "Здесь пусто."}
         </div>
       ) : null}
@@ -155,8 +158,12 @@ function ImproveCard({ item, picked, onPick, onApprove, onSkip, onRestore, onReb
         {canApprove ? <input type="checkbox" checked={picked} onChange={onPick} aria-label="Выбрать" /> : null}
         <div className="ci-title">
           <b>{item.brand} {item.perfumeName}</b>
-          <span>{item.volume ? `${item.volume} мл` : ""}{item.tester ? " · тестер" : ""} · {item.shop} · {item.offerId}{item.price ? ` · ${item.price.toLocaleString("ru")} ₽` : ""}</span>
+          <span>
+            {item.volume ? `${item.volume} мл` : ""}{item.tester ? " · тестер" : ""} · {item.offerId} · {item.shop}
+            {item.price ? ` · Ozon ${item.price.toLocaleString("ru")} ₽` : ""}{item.yandexPrice ? ` · Маркет ${item.yandexPrice.toLocaleString("ru")} ₽` : ""}
+          </span>
         </div>
+        <span className={`ci-sold${item.sold ? "" : " is-none"}`} title="Продано штук за 90 дней во всех магазинах">{item.sold ? `продано ${item.sold}` : "без продаж"}</span>
         {item.rating != null ? <span className={`ci-rating${item.rating < 70 ? " is-low" : ""}`} title="Рейтинг карточки на Маркете сейчас">рейтинг {item.rating}</span> : null}
         <div className="ci-actions">
           {busy ? <span className="ci-busy"><Loader2 size={13} className="spin" /> {item.status === "approved" || item.status === "sending" ? "отправляем" : "собираем"}</span> : null}
@@ -186,6 +193,7 @@ function ImproveCard({ item, picked, onPick, onApprove, onSkip, onRestore, onReb
         <button type="button" className="fr-link-button" onClick={() => setShowText((v) => !v)}>
           {showText ? <ChevronUp size={13} /> : <ChevronDown size={13} />} {showText ? "Скрыть описания" : "Сравнить описания"}
         </button>
+        {item.keptExistingPhotos ? <span className="ci-muted">Фото старой карточки сохранены: {item.keptExistingPhotos} (рекламные «фото в конце» parfumdeclaration добавит заново). Порядок и состав — в «Свои фото».</span> : null}
         {editable ? <OwnPhotos draftId={item.id} photos={item.customPhotos || []} only={Boolean(item.onlyCustomPhotos)} editable /> : null}
       </div>
     </article>
@@ -209,5 +217,38 @@ function SideView({ label, side, showText, fresh = false }: { label: string; sid
         </>
       )}
     </section>
+  );
+}
+
+/**
+ * «Сколько товаров улучшить»: один товар = один артикул сразу во всех магазинах (Ozon и Маркет вместе).
+ * Берутся самые продаваемые за 90 дней, потом — с худшим рейтингом Маркета.
+ */
+export function ImproveAdd({ compact = false }: { compact?: boolean }) {
+  const queryClient = useQueryClient();
+  const [count, setCount] = useState("100");
+  const add = useMutation({
+    mutationFn: (queueNow: number) => apiJson<{ queued: { queued: number; withSales?: number } | null }>("/api/card-health/improve", mutationBody({ queueNow })),
+    onSuccess: (r) => {
+      const n = r.queued?.queued || 0;
+      if (n) toast.success(`Добавлено товаров: ${n}${r.queued?.withSales ? ` (с продажами: ${r.queued.withSales})` : ""} — собираем`);
+      else toast.info("Новых товаров для улучшения нет");
+      queryClient.invalidateQueries({ queryKey: ["card-improve"] });
+      queryClient.invalidateQueries({ queryKey: ["card-health"] });
+    },
+    onError: (error) => toast.error(errorMessage(error)),
+  });
+  const n = Math.min(1000, Math.max(0, Math.round(Number(count) || 0)));
+  return (
+    <form className={`ci-add${compact ? " is-compact" : ""}`} onSubmit={(e) => { e.preventDefault(); if (n) add.mutate(n); }}>
+      <label>
+        <span>Сколько товаров улучшить</span>
+        <input inputMode="numeric" value={count} onChange={(e) => setCount(e.target.value.replace(/\D/g, "").slice(0, 4))} aria-label="Сколько товаров улучшить" />
+      </label>
+      <button className="primary-action" type="submit" disabled={!n || add.isPending}>
+        {add.isPending ? <Loader2 size={14} className="spin" /> : <Plus size={14} />} Добавить {n || ""}
+      </button>
+      {compact ? null : <small>Один товар — это его карточки сразу в Ozon и на Маркете. Сначала самые продаваемые за 90 дней. До одобрения ничего не отправляется.</small>}
+    </form>
   );
 }

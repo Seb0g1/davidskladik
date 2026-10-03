@@ -308,49 +308,181 @@ async function fragranticaExistingCardState(existing = {}) {
   };
 }
 
-/** Puts the weakest matched cards (not from Fragrantica, not improved yet) into the conveyor. */
+// ─── Фото старой карточки ────────────────────────────────────────────────────
+// Хорошие фото старой карточки (коробка, флакон с разных сторон, фактура) остаются при улучшении. Не берём
+// только «фото в конце» магазина (parfumdeclaration добавит актуальные сам): это одни и те же картинки на
+// многих карточках магазина — находим их по совпадению dHash на выборке карточек этого магазина.
+
+const FRAG_PROMO_TTL_MS = 6 * 60 * 60_000;
+const fragranticaPromoCache = new Map();
+
+async function fragranticaPhotoHash(url) {
+  const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const buffer = Buffer.from(await response.arrayBuffer());
+  const raw = await sharp(buffer).flatten({ background: "#ffffff" }).grayscale().resize(9, 8, { fit: "fill" }).raw().toBuffer();
+  let bits = "";
+  for (let y = 0; y < 8; y += 1) for (let x = 0; x < 8; x += 1) bits += raw[y * 9 + x] > raw[y * 9 + x + 1] ? "1" : "0";
+  return bits;
+}
+
+function fragranticaHashDistance(a, b) {
+  let d = 0;
+  for (let i = 0; i < 64; i += 1) if (a[i] !== b[i]) d += 1;
+  return d;
+}
+
+async function fragranticaMapLimit(list, limit, fn) {
+  const out = new Array(list.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, list.length) }, async () => {
+    while (next < list.length) {
+      const i = next++;
+      out[i] = await fn(list[i], i).catch(() => null);
+    }
+  }));
+  return out;
+}
+
+/** Pictures of several cards of one shop: Map offerId → [urls]. */
+async function fragranticaShopCardPhotos(existing, offerIds) {
+  const result = new Map();
+  if (existing.marketplace === "ozon") {
+    const account = fragranticaResolveOzonAccount(existing.target);
+    const data = await ozonRequest("/v3/product/info/list", { offer_id: offerIds }, account);
+    for (const item of data.items || data.result?.items || []) {
+      const primary = Array.isArray(item.primary_image) ? item.primary_image : [item.primary_image];
+      result.set(cleanText(item.offer_id), [...primary, ...(item.images || [])].map((u) => cleanText(typeof u === "string" ? u : u?.url)).filter(Boolean));
+    }
+    return result;
+  }
+  const shop = fragranticaYandexShops().find((s) => cleanText(s.id) === cleanText(existing.target));
+  for (const mapping of await getYandexOfferMappingsByOfferIds(shop, offerIds)) {
+    const offer = mapping?.offer || mapping || {};
+    result.set(cleanText(offer.offerId), (offer.pictures || []).map(cleanText).filter(Boolean));
+  }
+  return result;
+}
+
+/** dHashes of the shop's promo pictures («фото в конце»): the same picture on ≥ 4 of ~30 sampled cards. */
+async function fragranticaShopPromoHashes(existing) {
+  const key = `${existing.marketplace}:${existing.target}`;
+  const cached = fragranticaPromoCache.get(key);
+  if (cached && Date.now() - cached.at < FRAG_PROMO_TTL_MS) return cached.promise;
+  const promise = (async () => {
+    const prisma = await requireFragranticaDraftTables();
+    const sample = await prisma.$queryRawUnsafe(
+      `SELECT offer_id FROM fragrantica_card_matches WHERE target = $1 ORDER BY random() LIMIT 30`, cleanText(existing.target),
+    );
+    const photos = await fragranticaShopCardPhotos(existing, sample.map((r) => r.offer_id));
+    // the promo tail is at the end of a card: the last 4 pictures of every sampled card
+    const tails = [...photos.entries()].filter(([, urls]) => urls.length >= 3).map(([offerId, urls]) => urls.slice(-4).map((url) => ({ offerId, url })));
+    const flat = tails.flat();
+    const hashes = await fragranticaMapLimit(flat, 6, (p) => fragranticaPhotoHash(p.url));
+    const seen = flat.map((p, i) => ({ ...p, hash: hashes[i] })).filter((p) => p.hash);
+    const promo = [];
+    for (const p of seen) {
+      if (promo.some((h) => fragranticaHashDistance(h, p.hash) <= 6)) continue;
+      const cards = new Set(seen.filter((x) => fragranticaHashDistance(x.hash, p.hash) <= 6).map((x) => x.offerId));
+      if (cards.size >= 4) promo.push(p.hash);
+    }
+    logger.info("fragrantica shop promo photos", { shop: key, sampled: photos.size, promo: promo.length });
+    return promo;
+  })();
+  fragranticaPromoCache.set(key, { at: Date.now(), promise });
+  promise.catch(() => fragranticaPromoCache.delete(key));
+  return promise;
+}
+
+/** The old card's own product photos (promo tail and duplicates removed), in their order. */
+async function fragranticaKeepExistingPhotos(existing, urls = []) {
+  if (!urls.length) return [];
+  const promo = await fragranticaShopPromoHashes(existing);
+  const hashes = await fragranticaMapLimit(urls, 6, (url) => fragranticaPhotoHash(url));
+  const keep = [];
+  const kept = [];
+  for (const [i, url] of urls.entries()) {
+    const hash = hashes[i];
+    if (!hash) continue;
+    if (promo.some((h) => fragranticaHashDistance(h, hash) <= 6)) continue;
+    if (kept.some((h) => fragranticaHashDistance(h, hash) <= 3)) continue;
+    keep.push(url);
+    kept.push(hash);
+  }
+  return keep.slice(0, 15);
+}
+
+/** The shops of one improvement: data.existing.targets (new) or the single target of older drafts. */
+function fragranticaExistingTargets(existing = {}) {
+  const list = Array.isArray(existing.targets) && existing.targets.length
+    ? existing.targets
+    : [{ marketplace: existing.marketplace, target: existing.target, offerId: existing.offerId }];
+  return list.filter((t) => t.marketplace && t.target).map((t) => ({ marketplace: t.marketplace, target: cleanText(t.target), offerId: cleanText(t.offerId || existing.offerId) }));
+}
+
+/**
+ * Puts products into «Улучшение карточек»: one draft per product = one offer id in every shop it is matched in
+ * (Ozon and Market together). Best sellers first (units in 90 days over all shops), then the weakest Market rating.
+ */
 async function enqueueFragranticaImprovements({ limit = FRAG_IMPROVE_PER_SCAN, createdBy = "улучшение" } = {}) {
-  if (!(limit > 0)) return { queued: 0 };
+  const wanted = Math.min(1000, Math.max(0, Number(limit) || 0));
+  if (!wanted) return { queued: 0 };
   const prisma = await requireFragranticaDraftTables();
+  await requireCardHealthTables();
   const exists = await prisma.$queryRawUnsafe(`SELECT to_regclass('fragrantica_card_matches') IS NOT NULL AS ok`);
   if (!exists[0]?.ok) return { queued: 0, reason: "сопоставление ещё не готово" };
-  const targets = fragranticaTargets();
   const rows = await prisma.$queryRawUnsafe(
-    `SELECT m.target, m.offer_id, m.perfume_id, m.volume_ml, m.tester, w.marketplace::text AS marketplace,
-            (SELECT min(q.content_rating) FROM card_quality q WHERE q.offer_id = m.offer_id) AS rating
-       FROM fragrantica_card_matches m
-       JOIN warehouse_products w ON w.target = m.target AND w.offer_id = m.offer_id AND w.archived = false
-      WHERE m.volume_ml IS NOT NULL AND m.offer_id !~* '^FR[0-9]'
-        AND NOT EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.account_id = m.target AND e.offer_id = m.offer_id)
-        AND NOT EXISTS (SELECT 1 FROM fragrantica_drafts d WHERE d.data->'existing'->>'offerId' = m.offer_id AND d.data->'existing'->>'target' = m.target)
-      ORDER BY rating ASC NULLS LAST, m.offer_id
-      LIMIT $1`,
-    Math.min(500, Number(limit) || 0),
-  ).catch(async (error) => {
-    // card_quality appears with the first card check — order by offer id until then
-    if (!/card_quality/.test(String(error?.message))) throw error;
-    return prisma.$queryRawUnsafe(
-      `SELECT m.target, m.offer_id, m.perfume_id, m.volume_ml, m.tester, w.marketplace::text AS marketplace, NULL AS rating
-         FROM fragrantica_card_matches m JOIN warehouse_products w ON w.target = m.target AND w.offer_id = m.offer_id AND w.archived = false
+    `WITH m AS (
+       SELECT m.target, m.offer_id, m.perfume_id, m.volume_ml, m.tester, w.marketplace::text AS marketplace
+         FROM fragrantica_card_matches m
+         JOIN warehouse_products w ON w.target = m.target AND w.offer_id = m.offer_id AND w.archived = false
         WHERE m.volume_ml IS NOT NULL AND m.offer_id !~* '^FR[0-9]'
-          AND NOT EXISTS (SELECT 1 FROM fragrantica_exports e WHERE e.account_id = m.target AND e.offer_id = m.offer_id)
-          AND NOT EXISTS (SELECT 1 FROM fragrantica_drafts d WHERE d.data->'existing'->>'offerId' = m.offer_id AND d.data->'existing'->>'target' = m.target)
-        ORDER BY m.offer_id LIMIT $1`,
-      Math.min(500, Number(limit) || 0),
-    );
-  });
+     ), g AS (
+       SELECT lower(offer_id) AS k, min(offer_id) AS offer_id,
+              mode() WITHIN GROUP (ORDER BY perfume_id) AS perfume_id, max(volume_ml) AS volume_ml, bool_or(tester) AS tester,
+              jsonb_agg(jsonb_build_object('marketplace', marketplace, 'target', target, 'offerId', offer_id) ORDER BY marketplace, target) AS targets
+         FROM m GROUP BY 1
+     )
+     SELECT g.*, coalesce(s.sold, 0)::int AS sold, q.rating
+       FROM g
+       LEFT JOIN (SELECT lower(offer_id) AS k, sum(quantity)::int AS sold FROM finance_orders
+                   WHERE offer_id IS NOT NULL AND coalesce(sold_at, created_at) > now() - interval '90 days' GROUP BY 1) s ON s.k = g.k
+       LEFT JOIN (SELECT lower(offer_id) AS k, min(content_rating) AS rating FROM card_quality GROUP BY 1) q ON q.k = g.k
+      WHERE NOT EXISTS (SELECT 1 FROM fragrantica_drafts d WHERE lower(d.data->'existing'->>'offerId') = g.k)
+        AND NOT EXISTS (SELECT 1 FROM fragrantica_exports e WHERE lower(e.offer_id) = g.k AND coalesce(e.item->>'improve', '') <> 'true')
+      ORDER BY sold DESC, rating ASC NULLS LAST, g.k
+      LIMIT $1`,
+    wanted,
+  );
+  const all = fragranticaTargets();
   let queued = 0;
+  let withSales = 0;
   for (const r of rows) {
-    const target = targets.find((t) => t.id === cleanText(r.target) && t.kind === cleanText(r.marketplace));
-    if (!target) continue;
+    const shops = (Array.isArray(r.targets) ? r.targets : [])
+      .map((t) => ({ ...t, key: all.find((x) => x.kind === t.marketplace && x.id === cleanText(t.target))?.key }))
+      .filter((t) => t.key);
+    if (!shops.length) continue;
+    // Ozon first: its card has the price, sizes and the photos we keep
+    shops.sort((a, b) => (a.marketplace === b.marketplace ? 0 : a.marketplace === "ozon" ? -1 : 1));
     await insertFragranticaDraft({
-      perfumeId: Number(r.perfume_id), kind: "card", volume: Number(r.volume_ml), tester: Boolean(r.tester), targets: [target.key], createdBy,
-      data: { existing: { marketplace: target.kind, target: target.id, offerId: cleanText(r.offer_id), rating: r.rating === null ? null : Number(r.rating) } },
+      perfumeId: Number(r.perfume_id), kind: "card", volume: Number(r.volume_ml), tester: Boolean(r.tester),
+      targets: [...new Set(shops.map((t) => t.key))], createdBy,
+      data: {
+        existing: {
+          offerId: cleanText(r.offer_id),
+          marketplace: shops[0].marketplace,
+          target: cleanText(shops[0].target),
+          targets: shops.map(({ marketplace, target, offerId }) => ({ marketplace, target: cleanText(target), offerId: cleanText(offerId) })),
+          rating: r.rating === null ? null : Number(r.rating),
+          sold: Number(r.sold || 0),
+        },
+      },
     });
     queued += 1;
+    if (Number(r.sold) > 0) withSales += 1;
   }
-  if (queued) logger.info("fragrantica improvements queued", { queued });
-  return { queued };
+  if (queued) logger.info("fragrantica improvements queued", { queued, withSales });
+  return { queued, withSales };
 }
 
 async function buildFragranticaCardDraft(draft) {
@@ -441,19 +573,54 @@ async function buildFragranticaCardDraft(draft) {
     warnings,
     buildMs: Date.now() - buildStartedAt,
   };
+  // own photos survive a rebuild (the operator chose them)
+  if (Array.isArray(draft.data?.customPhotos)) {
+    data.customPhotos = draft.data.customPhotos;
+    data.onlyCustomPhotos = Boolean(draft.data.onlyCustomPhotos);
+  }
   if (existing) {
     try {
-      const state = await fragranticaExistingCardState(existing);
+      // every shop of the product: Ozon gives the price, old price, barcode and sizes; Market its own price
+      const shopStates = [];
+      for (const t of fragranticaExistingTargets(existing)) {
+        shopStates.push({ ...t, state: await fragranticaExistingCardState({ ...t }) });
+      }
+      const ozonState = shopStates.find((x) => x.marketplace === "ozon")?.state;
+      const marketState = shopStates.find((x) => x.marketplace === "yandex")?.state;
+      const primary = shopStates[0].state;
+      const state = {
+        price: ozonState?.price || 0,
+        oldPrice: ozonState?.oldPrice || 0,
+        yandexPrice: marketState?.yandexPrice || 0,
+        barcode: ozonState?.barcode || marketState?.barcode || "",
+        dims: [ozonState, marketState].find((x) => x?.dims?.depth && x.dims.width && x.dims.height && x.dims.weight)?.dims || primary.dims,
+        before: primary.before,
+      };
+      // each Ozon cabinet keeps its own current price
+      const allTargets = fragranticaTargets();
+      const prices = {};
+      for (const x of shopStates) {
+        const key = allTargets.find((t) => t.kind === x.marketplace && t.id === x.target)?.key;
+        if (key && x.marketplace === "ozon") prices[key] = { price: x.state.price, oldPrice: x.state.oldPrice };
+      }
       Object.assign(data, {
         offerId: existing.offerId,
         price: state.price, oldPrice: state.oldPrice, yandexPrice: state.yandexPrice,
         barcode: state.barcode,
         supplierName: "", markup: 0,
-        existing: { ...existing, state },
+        existing: { ...existing, state, prices },
         // the Market title the export will use (Ozon keeps data.name)
         marketName: buildFragranticaMarketName({ perfume, typeKey, volume: draft.volume_ml, tester: Boolean(draft.tester) }),
       });
       if (state.dims.depth && state.dims.width && state.dims.height && state.dims.weight) data.dims = state.dims;
+      // the old card's good photos go first (its main stays main), then the new pyramid and aroma cards
+      if (!Array.isArray(data.customPhotos)) {
+        data.customPhotos = await fragranticaKeepExistingPhotos(shopStates[0], state.before?.photos || []).catch((error) => {
+          warnings.push(`Фото старой карточки не разобрали: ${error?.message || error}`);
+          return [];
+        });
+        data.keptExistingPhotos = data.customPhotos.length;
+      }
     } catch (error) {
       data.existing = existing;
       return updateFragranticaDraft(draft.id, { status: "attention", stage: null, type_key: typeKey, error: `Улучшение: ${error?.message || error}`, data });

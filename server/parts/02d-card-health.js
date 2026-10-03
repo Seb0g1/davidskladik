@@ -92,7 +92,7 @@ async function cardHealthImproveStats() {
   const one = async (sql) => (ready.m && ready.d && ready.e ? Number((await prisma.$queryRawUnsafe(sql))[0]?.n || 0) : 0);
   const [cards, matched, drafts, review, improved, rating] = await Promise.all([
     prisma.$queryRawUnsafe(`SELECT count(*)::int AS n FROM warehouse_products WHERE archived = false`).then((r) => Number(r[0]?.n || 0)),
-    one(`SELECT count(*)::int AS n FROM fragrantica_card_matches WHERE volume_ml IS NOT NULL AND offer_id !~* '^FR[0-9]'`),
+    one(`SELECT count(DISTINCT lower(offer_id))::int AS n FROM fragrantica_card_matches WHERE volume_ml IS NOT NULL AND offer_id !~* '^FR[0-9]'`),
     one(`SELECT count(*)::int AS n FROM fragrantica_drafts WHERE data ? 'existing' AND status IN ('queued', 'working')`),
     one(`SELECT count(*)::int AS n FROM fragrantica_drafts WHERE data ? 'existing' AND status IN ('ready', 'attention')`),
     one(`SELECT count(*)::int AS n FROM fragrantica_exports WHERE item->>'improve' = 'true' AND status = 'imported'`),
@@ -508,7 +508,7 @@ app.post("/api/card-health/improve", requireAdmin, async (request, response, nex
     if (request.body?.perScan !== undefined) saved.perScan = Math.max(0, Math.min(500, Number(request.body.perScan) || 0));
     await writeCardHealthState("improve", saved);
     let queued = null;
-    const now = Math.max(0, Math.min(500, Number(request.body?.queueNow) || 0));
+    const now = Math.max(0, Math.min(1000, Number(request.body?.queueNow) || 0));
     if (now) queued = await enqueueFragranticaImprovements({ limit: now, createdBy: cleanText(request.session?.username) || "улучшение" });
     await appendAudit(request, "card_health.improve", { entityType: "card_improve", entityId: "settings", newValue: { ...saved, queueNow: now || undefined, queued: queued?.queued } });
     response.json({ ok: true, queued, improve: await cardHealthImproveStats() });
@@ -556,7 +556,7 @@ app.get("/api/card-improve", requireAdmin, async (request, response, next) => {
     const [rows, counts] = await Promise.all([
       prisma.$queryRawUnsafe(
         `SELECT d.*, p.brand, p.name AS perfume_name FROM fragrantica_drafts d LEFT JOIN fragrantica_perfumes p ON p.id = d.perfume_id
-          WHERE ${where} ORDER BY (d.data->'existing'->>'rating')::int ASC NULLS LAST, d.id LIMIT 200`,
+          WHERE ${where} ORDER BY coalesce((d.data->'existing'->>'sold')::int, 0) DESC, (d.data->'existing'->>'rating')::int ASC NULLS LAST, d.id LIMIT 200`,
         ...params,
       ),
       prisma.$queryRawUnsafe(`SELECT status, count(*)::int AS n FROM fragrantica_drafts WHERE data ? 'existing' GROUP BY status`),
@@ -575,6 +575,7 @@ app.get("/api/card-improve", requireAdmin, async (request, response, next) => {
         const d = r.data || {};
         const ex = d.existing || {};
         const target = targets.find((t) => t.kind === ex.marketplace && t.id === cleanText(ex.target)) || {};
+        const shops = fragranticaExistingTargets(ex).map((t) => targets.find((x) => x.kind === t.marketplace && x.id === t.target)?.label || t.target);
         const style = target.style || "parfumerius";
         // the same order the export uses: own photos first (the first replaces the bottle), then the pyramid and cards
         const own = Array.isArray(d.customPhotos) ? d.customPhotos : [];
@@ -592,11 +593,13 @@ app.get("/api/card-improve", requireAdmin, async (request, response, next) => {
           perfumeName: r.perfume_name || "",
           volume: r.volume_ml === null ? null : Number(r.volume_ml),
           tester: Boolean(r.tester),
-          shop: target.label || ex.target || "",
+          shop: shops.join(", ") || target.label || ex.target || "",
+          sold: Number(ex.sold || 0),
           marketplace: ex.marketplace || "",
           offerId: ex.offerId || "",
           rating: ex.rating ?? null,
-          price: ex.marketplace === "yandex" ? Number(d.yandexPrice || 0) : Number(d.price || 0),
+          price: Number(d.price || 0),
+          yandexPrice: Number(d.yandexPrice || 0),
           before: ex.state?.before || null,
           after: {
             name: ex.marketplace === "yandex" ? d.marketName || d.name || "" : d.name || "",
@@ -606,6 +609,7 @@ app.get("/api/card-improve", requireAdmin, async (request, response, next) => {
           missing: Array.isArray(d.missing) ? d.missing : [],
           customPhotos: own,
           onlyCustomPhotos: Boolean(d.onlyCustomPhotos),
+          keptExistingPhotos: Number(d.keptExistingPhotos || 0),
           exports: (Array.isArray(r.export_ids) ? r.export_ids : []).map((id) => exportsById.get(Number(id))).filter(Boolean),
           updatedAt: r.updated_at,
         };

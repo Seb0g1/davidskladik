@@ -1001,10 +1001,16 @@ async function createFragranticaExports(body = {}, request = { session: {} }) {
     // Ozon: Rich-контент из описания и фото магазина + видеообложка (если категория знает атрибут 11254)
     const ozonMedia = target.kind === "ozon" ? fragranticaOzonMediaExtras({ perfumeId, style: target.style, notes, baseItem, categoryAttrs, perfume }) : null;
     const improveFlag = body.improve === true ? { improve: true } : {};
+    // improvement: every Ozon cabinet gets back its own current price (two cabinets may differ)
+    const ownPrice = body.improve === true && target.kind === "ozon" ? body.pricesByTarget?.[target.key] : null;
+    const priceFields = ownPrice && Number(ownPrice.price) > 0
+      ? { price: String(Math.round(Number(ownPrice.price))), old_price: Number(ownPrice.oldPrice) > Number(ownPrice.price) ? String(Math.round(Number(ownPrice.oldPrice))) : "0" }
+      : {};
     const item = target.kind === "ozon"
       ? {
         ...baseItem,
         ...improveFlag,
+        ...priceFields,
         vat: fragranticaVatForClientId(cleanText(ozonAccount?.clientId), vatOverrides),
         attributes: [...ozonAttributes, ...ozonMedia.attributes],
         ...(ozonMedia.complex.length ? { complex_attributes: ozonMedia.complex } : {}),
