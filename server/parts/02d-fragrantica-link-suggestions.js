@@ -116,8 +116,11 @@ async function fragranticaLinkSuggestionsData(query = {}) {
       const volumes = priceMasterBottleVolumes(row.name);
       const volumeOk = Boolean(volume) && volumes.some((v) => Math.abs(v - volume) < 0.01);
       const nameOk = !check.clone && pmRowConfirmsPinnedName(row, anchor);
-      const recommended = volumeOk && nameOk && !check.notPerfume && check.concentrationOk && !check.extraWords.length && !check.missingNameWords.length;
+      // a placeholder / rouble-as-dollar price (Montblanc went out at 668 169 ₽) is never recommended
+      const priceProblem = priceGuardRowProblem(row, productName);
+      const recommended = !priceProblem && volumeOk && nameOk && !check.notPerfume && check.concentrationOk && !check.extraWords.length && !check.missingNameWords.length;
       const issues = [
+        priceProblem,
         check.clone ? "клон/аналог" : "",
         check.notPerfume ? "не парфюм" : "",
         check.concentration && !check.concentrationOk ? `другая концентрация (${check.concentration.toUpperCase()})` : "",
@@ -174,6 +177,8 @@ async function fragranticaPricePreview(rows = []) {
   const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
   const cheapest = (marketplace) => rows
     .filter((row) => Number(row.price) > 0)
+    // the same guard as the warehouse price send: such a row never sets the card's price
+    .filter((row) => !priceGuardRowProblem(row, row.name))
     .map((row) => ({ row, ...fragranticaRowPrice(row, { usdRate, settings, supplierCount: rows.length, marketplace }) }))
     .sort((a, b) => a.price - b.price)[0];
   const best = cheapest("ozon");

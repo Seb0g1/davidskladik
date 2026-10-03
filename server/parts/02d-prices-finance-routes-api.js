@@ -348,3 +348,41 @@ app.get("/api/ozon-yandex-import/preview", async (request, response, next) => {
   }
 });
 
+// «Проверка цен»: prices the guard held (see priceGuardVerdict) — approve sends it, reject keeps it held
+app.get("/api/price-guard/holds", requireAdmin, async (request, response, next) => {
+  try {
+    const prisma = await ensurePriceGuardTable();
+    const status = cleanText(request.query.status || "pending");
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT * FROM price_guard_holds WHERE ($1 = 'all' OR status = $1) ORDER BY updated_at DESC LIMIT 1000`, status,
+    );
+    const counts = await prisma.$queryRawUnsafe(`SELECT status, count(*)::int AS n FROM price_guard_holds GROUP BY status`);
+    response.json({ ok: true, items: rows, counts: Object.fromEntries(counts.map((c) => [c.status, c.n])) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/price-guard/holds/decide", requireAdmin, async (request, response, next) => {
+  try {
+    const ids = (Array.isArray(request.body?.productIds) ? request.body.productIds : []).map(String).slice(0, 500);
+    const decision = request.body?.decision === "approve" ? "approve" : request.body?.decision === "reject" ? "reject" : "";
+    if (!ids.length || !decision) return response.status(400).json({ error: "productIds и decision (approve | reject) обязательны" });
+    const prisma = await ensurePriceGuardTable();
+    if (decision === "reject") {
+      await prisma.$executeRawUnsafe(`UPDATE price_guard_holds SET status = 'rejected', updated_at = now() WHERE product_id = ANY($1::text[])`, ids);
+      await appendAudit(request, "price_guard.reject", { entityType: "warehouse_product", entityId: ids.slice(0, 20).join(","), newValue: { count: ids.length } });
+      return response.json({ ok: true, rejected: ids.length });
+    }
+    await prisma.$executeRawUnsafe(
+      `UPDATE price_guard_holds SET status = 'approved', approved_price = next_price, updated_at = now() WHERE product_id = ANY($1::text[])`, ids,
+    );
+    await appendAudit(request, "price_guard.approve", { entityType: "warehouse_product", entityId: ids.slice(0, 20).join(","), newValue: { count: ids.length } });
+    // send now: the approved price passes the guard (it matches approved_price)
+    const result = await sendWarehousePrices({ productIds: ids, livePriceMaster: true, reason: "price-guard-approved", sourceEvent: "price-guard-approved" })
+      .catch((error) => ({ ok: false, error: error?.message || String(error) }));
+    response.json({ ok: true, approved: ids.length, sent: result?.sent ?? null, failed: result?.failed ?? null, skipped: (result?.skipped || []).slice(0, 20) });
+  } catch (error) {
+    next(error);
+  }
+});

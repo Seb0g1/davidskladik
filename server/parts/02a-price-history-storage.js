@@ -198,3 +198,104 @@ async function readPriceHistory({ productId, offerId, marketplace, status, dateF
     items: rows.slice(safeOffset, safeOffset + safeLimit),
   };
 }
+
+// ─── Price guard ────────────────────────────────────────────────────────────
+// 2026-10-02/03: a supplier placeholder (Сорин «1000 $») and rouble prices read as dollars («Ирина (марка)»
+// 3900, «Сафронова (марка)» 4205) became 230 403 ₽ … 1 244 177 ₽ on Ozon and Market. A price that looks
+// like that is never sent on its own: it waits on «Проверка цен» until a person approves it.
+const PRICE_GUARD_SUSPECT_USD = 900;       // a dollar row this high for a bottle up to 200 ml
+const PRICE_GUARD_MAX_RISE = 3;            // the new price is this many times the live one
+
+/** Why a supplier row's price can't be trusted (rubles typed as dollars, a placeholder), or "". */
+function priceGuardRowProblem(row = {}, productName = "") {
+  const currency = cleanText(row.priceCurrency || row.currency || "USD").toUpperCase();
+  if (currency === "RUB" || currency === "RUR") return "";
+  const price = Number(row.originalPrice ?? row.price ?? 0);
+  if (!(price >= PRICE_GUARD_SUSPECT_USD)) return "";
+  const volumes = priceMasterBottleVolumes(`${cleanText(row.name)} ${cleanText(productName)}`);
+  const volume = volumes.length ? Math.max(...volumes) : 0;
+  if (volume && volume > 200) return "";
+  return `цена поставщика ${price} $ — похоже на рубли или заглушку`;
+}
+
+/** Verdict for one price send: null = fine, else { reason }. An approved price passes. */
+function priceGuardVerdict(product = {}, approvedPrice = 0) {
+  const next = Math.round(Number(product.nextPrice || 0));
+  const current = Math.round(Number(product.currentPrice || 0));
+  if (!(next > 0)) return null;
+  if (approvedPrice > 0 && Math.abs(next - approvedPrice) <= Math.max(50, approvedPrice * 0.02)) return null;
+  const rowProblem = priceGuardRowProblem(product.selectedSupplier || {}, product.name);
+  if (rowProblem) return { reason: rowProblem };
+  if (current > 0 && next > current * PRICE_GUARD_MAX_RISE) return { reason: `цена вырастет в ${(next / current).toFixed(1)} раза: ${current} → ${next} ₽` };
+  return null;
+}
+
+let priceGuardTableReady = false;
+async function ensurePriceGuardTable() {
+  if (priceGuardTableReady) return getPrisma();
+  const prisma = getPrisma();
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS price_guard_holds (
+      product_id TEXT PRIMARY KEY,
+      marketplace TEXT,
+      target TEXT,
+      offer_id TEXT,
+      name TEXT,
+      current_price INTEGER,
+      next_price INTEGER,
+      supplier TEXT,
+      supplier_price NUMERIC,
+      supplier_currency TEXT,
+      reason TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      approved_price INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`);
+  priceGuardTableReady = true;
+  return prisma;
+}
+
+/** product id → approved price for the products in this send. */
+async function readPriceGuardApprovals(productIds = []) {
+  if (!productIds.length || !getPrisma() || !shouldUsePostgresStorage()) return new Map();
+  const prisma = await ensurePriceGuardTable();
+  const rows = await prisma.$queryRawUnsafe(
+    `SELECT product_id, approved_price FROM price_guard_holds WHERE product_id = ANY($1::text[]) AND status = 'approved'`,
+    productIds.map(String),
+  );
+  return new Map(rows.map((r) => [String(r.product_id), Number(r.approved_price || 0)]));
+}
+
+async function recordPriceGuardHolds(holds = []) {
+  if (!holds.length || !getPrisma() || !shouldUsePostgresStorage()) return;
+  const prisma = await ensurePriceGuardTable();
+  for (const h of holds) {
+    const s = h.product.selectedSupplier || {};
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO price_guard_holds (product_id, marketplace, target, offer_id, name, current_price, next_price, supplier, supplier_price, supplier_currency, reason, status, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending', now())
+       ON CONFLICT (product_id) DO UPDATE SET current_price = EXCLUDED.current_price, next_price = EXCLUDED.next_price,
+         supplier = EXCLUDED.supplier, supplier_price = EXCLUDED.supplier_price, supplier_currency = EXCLUDED.supplier_currency,
+         reason = EXCLUDED.reason, name = EXCLUDED.name,
+         -- a rejected or approved verdict stays for the same price; a different price asks again
+         status = CASE WHEN price_guard_holds.status IN ('rejected', 'approved') AND abs(coalesce(price_guard_holds.next_price, 0) - EXCLUDED.next_price) <= greatest(50, EXCLUDED.next_price * 0.02)
+                       THEN price_guard_holds.status ELSE 'pending' END,
+         updated_at = now()`,
+      String(h.product.id), cleanText(h.product.marketplace), cleanText(h.product.target), cleanText(h.product.offerId),
+      cleanText(h.product.name).slice(0, 300), Math.round(Number(h.product.currentPrice || 0)) || null, Math.round(Number(h.product.nextPrice || 0)),
+      cleanText(s.partnerName || s.supplierName).slice(0, 120), Number(s.originalPrice ?? s.price ?? 0) || null,
+      cleanText(s.priceCurrency || s.currency).slice(0, 8), h.reason,
+    ).catch((error) => logger.warn("price guard hold write failed", { detail: error?.message }));
+  }
+}
+
+/** A price that passed (supplier fixed, price normal again) closes its open hold. */
+async function clearPriceGuardHolds(productIds = []) {
+  if (!productIds.length || !getPrisma() || !shouldUsePostgresStorage()) return;
+  const prisma = await ensurePriceGuardTable();
+  await prisma.$executeRawUnsafe(
+    `UPDATE price_guard_holds SET status = 'cleared', updated_at = now() WHERE product_id = ANY($1::text[]) AND status IN ('pending', 'rejected')`,
+    productIds.map(String),
+  ).catch(() => null);
+}

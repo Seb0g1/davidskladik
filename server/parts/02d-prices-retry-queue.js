@@ -11,6 +11,22 @@ async function processPriceRetryQueue({ queueKeys = [], limit = 1000, respectNex
       : queue.items.filter((item) => !respectNextRetryAt || !item.nextRetryAt || new Date(item.nextRetryAt).getTime() <= now.getTime()))
       .slice(0, Math.max(1, Number(limit || 1000) || 1000));
     if (!selected.length) return { ok: true, processed: 0, retried: 0, failed: 0, remaining: queue.items.length, results: [] };
+    // A price held by the price guard («Проверка цен») is not retried behind its back
+    try {
+      const prisma = shouldUsePostgresStorage() ? await ensurePriceGuardTable() : null;
+      const held = prisma ? await prisma.$queryRawUnsafe(
+        `SELECT product_id FROM price_guard_holds WHERE status IN ('pending', 'rejected') AND product_id = ANY($1::text[])`,
+        selected.map((item) => String(item.productId || item.id)),
+      ) : [];
+      const heldIds = new Set(held.map((r) => String(r.product_id)));
+      if (heldIds.size) {
+        for (let i = selected.length - 1; i >= 0; i -= 1) if (heldIds.has(String(selected[i].productId || selected[i].id))) selected.splice(i, 1);
+        logger.info("price retry: guard-held prices skipped", { count: heldIds.size });
+      }
+    } catch (error) {
+      logger.warn("price retry guard check failed", { detail: error?.message || String(error) });
+    }
+    if (!selected.length) return { ok: true, processed: 0, retried: 0, failed: 0, remaining: queue.items.length, results: [] };
 
     const results = [];
   const failed = [];

@@ -1,7 +1,7 @@
-import { Activity, FileCheck2, Flower2, AlertCircle, AlertTriangle, BadgeDollarSign, Ban, BarChart3, BookOpen, CirclePlay, ClipboardList, DollarSign, Download, HandCoins, HelpCircle, Home, MessageCircle, MessageCircleHeart, PackageCheck, PackagePlus, RefreshCcw, Settings, ShoppingCart, Sparkles, Star, Store, Tag, Truck, Upload, Wrench } from "lucide-react";
+import { ShieldAlert, Activity, FileCheck2, Flower2, AlertCircle, AlertTriangle, BadgeDollarSign, Ban, BarChart3, BookOpen, CirclePlay, ClipboardList, DollarSign, Download, HandCoins, HelpCircle, Home, MessageCircle, MessageCircleHeart, PackageCheck, PackagePlus, RefreshCcw, Settings, ShoppingCart, Sparkles, Star, Store, Tag, Truck, Upload, Wrench } from "lucide-react";
 import { ComponentType, lazy, LazyExoticComponent, ReactNode } from "react";
 
-export type AppRoute = "dashboard" | "import" | "avito" | "shop" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "consignment" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier" | "new-products" | "tnved" | "support" | "brand-bans" | "brands-tnved" | "ozon-card-fix" | "fragrantica" | "ozon-docs";
+export type AppRoute = "dashboard" | "import" | "avito" | "shop" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "consignment" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier" | "new-products" | "tnved" | "support" | "brand-bans" | "brands-tnved" | "ozon-card-fix" | "fragrantica" | "ozon-docs" | "price-guard";
 
 export type NavItem = { route: AppRoute; href: string; label: string; icon: ReactNode; keywords?: string };
 
@@ -34,6 +34,7 @@ export const navItems: NavItem[] = [
   { route: "brand-bans", href: "/app/brand-bans", label: "Запрет брендов", icon: <Ban size={16} />, keywords: "бренды запрет бан" },
   { route: "brands-tnved", href: "/app/brands-tnved", label: "Бренды / ТН ВЭД", icon: <BookOpen size={16} />, keywords: "бренды декларации" },
   { route: "ozon-card-fix", href: "/app/ozon-card-fix", label: "Карточки Ozon", icon: <Wrench size={16} />, keywords: "озон карточки исправить" },
+  { route: "price-guard", href: "/app/price-guard", label: "Проверка цен", icon: <ShieldAlert size={16} />, keywords: "цены карантин подозрительные заглушка рубли проверка отправить" },
   { route: "ozon-docs", href: "/app/ozon-docs", label: "Документы Ozon", icon: <FileCheck2 size={16} />, keywords: "декларации сертификаты документы проверка отклонено одобрено озон" },
   { route: "fragrantica", href: "/app/fragrantica", label: "Фрагрантика", icon: <Flower2 size={16} />, keywords: "fragrantica ароматы каталог добавить на озон новые карточки" },
 ];
@@ -42,7 +43,7 @@ export const navItems: NavItem[] = [
 export const NAV_SECTIONS: Array<{ id: string; title?: string; routes: AppRoute[] }> = [
   { id: "main", routes: ["dashboard", "warehouse", "picking-list", "supplier-cart", "consignment"] },
   { id: "clients", title: "Работа с клиентами", routes: ["reviews", "chats", "questions", "support"] },
-  { id: "marketplace", title: "Маркетплейсы", routes: ["suppliers", "avito", "import", "fragrantica", "ozon-docs", "prices", "finance", "statistics"] },
+  { id: "marketplace", title: "Маркетплейсы", routes: ["suppliers", "avito", "import", "fragrantica", "ozon-docs", "prices", "price-guard", "finance", "statistics"] },
   { id: "admin", title: "Настройки", routes: ["settings", "system", "ai-drafts", "operations"] },
   { id: "tools", title: "Инструменты", routes: ["tnved", "brand-bans", "brands-tnved", "ozon-card-fix", "no-supplier", "recovery-queue", "new-products", "problem-products", "shop"] },
 ];
@@ -95,6 +96,7 @@ const LOADERS: Record<AppRoute, Loader> = {
   "ozon-card-fix": { load: () => import("../routes/OzonCardFixPage"), exportName: "OzonCardFixPage" },
   fragrantica: { load: () => import("../routes/FragranticaPage"), exportName: "FragranticaPage" },
   "ozon-docs": { load: () => import("../routes/OzonDocsPage"), exportName: "OzonDocsPage" },
+  "price-guard": { load: () => import("../routes/PriceGuardPage"), exportName: "PriceGuardPage" },
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

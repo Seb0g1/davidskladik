@@ -77,6 +77,10 @@ async function sendWarehousePrices({
     return { items: [] };
   });
   const delayedQueueUpdates = [];
+  // Price guard: a placeholder / rouble-as-dollar supplier price or a jump of 3×+ waits for a person
+  const guardApprovals = await readPriceGuardApprovals(selected.map((product) => product.id)).catch(() => new Map());
+  const guardHolds = [];
+  const guardPassed = [];
 
   for (const product of selected) {
     if (!product.hasLinks) {
@@ -130,6 +134,13 @@ async function sendWarehousePrices({
       });
       continue;
     }
+    const guard = force === "price-guard" ? null : priceGuardVerdict(product, guardApprovals.get(String(product.id)) || 0);
+    if (guard) {
+      guardHolds.push({ product, reason: guard.reason });
+      skipped.push({ id: product.id, offerId: product.offerId, marketplace: product.marketplace, reason: "price_guard_hold", detail: guard.reason, priceIntentId, priceApplyStatus: "price_guard_hold" });
+      continue;
+    }
+    guardPassed.push(product.id);
     const lastOzonSend = product.marketplace === "ozon" ? product.lastOzonPriceSend : null;
     const lastOzonError = lastOzonSend ? (lastOzonSend.detail || lastOzonSend.error || "") : "";
     const quarantineRelease = lastOzonSend ? needsOzonOldPriceEscalation({ message: lastOzonError }) : false;
@@ -195,6 +206,11 @@ async function sendWarehousePrices({
   }
 
   if (!dryRun) {
+    if (guardHolds.length) {
+      logger.warn("price guard held prices", { count: guardHolds.length, sample: guardHolds.slice(0, 5).map((h) => ({ offerId: h.product.offerId, marketplace: h.product.marketplace, next: h.product.nextPrice, reason: h.reason })) });
+      await recordPriceGuardHolds(guardHolds);
+    }
+    if (guardPassed.length) await clearPriceGuardHolds(guardPassed);
     const pmTimeoutIds = skipped
       .filter((item) => item.reason === "pm_live_timeout")
       .map((item) => item.id || item.productId)
