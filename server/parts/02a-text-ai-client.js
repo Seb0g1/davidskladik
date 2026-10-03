@@ -14,11 +14,16 @@
 // паузой на 429/5xx/сеть, 401 — понятная ошибка без повторов. Не настроен — как раньше (старый
 // провайдер). textFallback=true — при недоступности прокси уходим на старый провайдер.
 
-// Ночное окно (по Москве, деф. 00:00–09:00, NIGHT_WORK_HOURS="0-9"): тяжёлая фоновая работа (конвейер,
-// рендер, описания ИИ) идёт шире; днём — скромнее, сайт и магазин в приоритете.
+// Окно полной мощности генерации (по Москве): будни 00:00–07:00, выходные — с 22:00 пятницы и субботы
+// до 11:00 субботы и воскресенья. В окне конвейер, рендер и описания ИИ идут на полную; вне окна —
+// скромно, сайт и магазин в приоритете. NIGHT_WORK_HOURS="0-7" меняет будничное окно.
 function isNightWorkWindow(now = new Date()) {
-  const [from, to] = String(process.env.NIGHT_WORK_HOURS || "0-9").split("-").map((v) => Number(v));
-  const hour = (now.getUTCHours() + 3) % 24;
+  const msk = new Date(now.getTime() + 3 * 3_600_000);
+  const hour = msk.getUTCHours();
+  const day = msk.getUTCDay(); // 0 = вс, 5 = пт, 6 = сб
+  const [from, to] = String(process.env.NIGHT_WORK_HOURS || "0-7").split("-").map((v) => Number(v));
+  if ((day === 5 || day === 6) && hour >= 22) return true; // пт, сб вечер
+  if ((day === 6 || day === 0) && hour < 11) return true; // сб, вс утро
   return from <= to ? hour >= from && hour < to : hour >= from || hour < to;
 }
 

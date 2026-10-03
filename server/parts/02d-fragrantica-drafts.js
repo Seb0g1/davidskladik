@@ -26,7 +26,7 @@ let fragranticaDraftsRunning = false;
 let fragranticaDraftsInFlight = 0;
 // «Улучшение карточек» has its own pool: a backlog of hundreds never holds up new Fragrantica cards
 const fragranticaImprovePinned = Number(process.env.FRAGRANTICA_IMPROVE_PARALLEL) || 0;
-const fragranticaImproveParallelNow = () => fragranticaImprovePinned || (isNightWorkWindow() ? 16 : 6);
+const fragranticaImproveParallelNow = () => fragranticaImprovePinned || (isNightWorkWindow() ? 20 : 4);
 let fragranticaImproveInFlight = 0;
 let fragranticaExpandInFlight = 0;
 let fragranticaDraftsStarted = false;
