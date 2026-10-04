@@ -1020,8 +1020,8 @@ async function runFragranticaDraftsTick() {
           WHERE d.status = 'queued' AND d.kind = 'card' AND coalesce(d.data ? 'existing', false) = $2
             AND coalesce((d.data->>'retryAt')::timestamptz, 'epoch'::timestamptz) <= now()
             AND (p.detail_at IS NOT NULL OR NOT $3::boolean)
-          -- perfumes whose Fragrantica page is already here build first (no request to Fragrantica)
-          ORDER BY (p.detail_at IS NULL), d.id
+          -- corrections (data.priority) jump the mass queue; then perfumes whose Fragrantica page is already here
+          ORDER BY coalesce((d.data->>'priority')::int, 0) DESC, (p.detail_at IS NULL), d.id
           LIMIT $1
           FOR UPDATE OF d SKIP LOCKED)
        RETURNING *`,
