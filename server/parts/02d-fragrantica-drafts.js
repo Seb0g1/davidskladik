@@ -346,7 +346,41 @@ async function fragranticaBufferHash(buffer) {
 }
 
 async function fragranticaPhotoHash(url) {
+  // our own pictures are read from disk (no round trip through the site)
+  const own = String(url || "").match(/\/uploads\/fragrantica\/(\w+)\/([^/?#]+)$/);
+  if (own) return fragranticaBufferHash(await fragFs.promises.readFile(fragranticaMediaPath(own[1], own[2])));
   return fragranticaBufferHash(await fragranticaPhotoBuffer(url));
+}
+
+/**
+ * The old card's kept photos minus pictures the new card already has: the new bottle and, after an earlier
+ * improvement, our own pyramid / accords / «Характеристики» cards (the same template; the earlier perfume's ones
+ * too, when the first improvement took another perfume) — Givenchy Gentleman got 17 photos with every card twice.
+ */
+async function fragranticaDropRepeatedPhotos(kept, { perfumeId, offerId, images = {} } = {}) {
+  if (!kept?.length) return kept || [];
+  const ids = new Set([Number(perfumeId)]);
+  const prisma = getPrisma();
+  if (prisma && cleanText(offerId)) {
+    const earlier = await prisma.$queryRawUnsafe(
+      `SELECT DISTINCT perfume_id FROM fragrantica_drafts WHERE status = 'sent' AND lower(data->'existing'->>'offerId') = lower($1)`, cleanText(offerId),
+    ).catch(() => []);
+    for (const r of earlier) ids.add(Number(r.perfume_id));
+  }
+  const ours = [images.main, ...Object.values(images.notes || {}), ...Object.values(images.specs || {}), images.closeup];
+  for (const id of ids) {
+    for (const style of ["magicstick", "parfumerius"]) ours.push(...fragranticaExtraPhotos(id, style));
+    for (const kind of ["main", "notes-magicstick", "notes-parfumerius"]) {
+      for (const v of ["v1", "v2"]) {
+        const file = `${id}-${kind}-${v}.jpg`;
+        if (fragFs.existsSync(fragranticaMediaPath("cards", file))) ours.push(fragranticaMediaUrl("cards", file));
+      }
+    }
+  }
+  const ourHashes = (await fragranticaMapLimit([...new Set(ours.filter((u) => u && /\.(jpe?g|png|webp)$/i.test(u)))], 6, (url) => fragranticaPhotoHash(url))).filter(Boolean);
+  if (!ourHashes.length) return kept;
+  const keptHashes = await fragranticaMapLimit(kept, 4, (url) => fragranticaPhotoHash(url));
+  return kept.filter((url, i) => !keptHashes[i] || !ourHashes.some((h) => fragranticaHashDistance(h, keptHashes[i]) <= 4));
 }
 
 // Чёткость: доля мелких деталей (лапласиан на 1024 px по самому товару, без белого фона), которая пропадает
@@ -587,9 +621,11 @@ async function existingCardFacts(offerId) {
 
 /**
  * Card improvement must not turn a product into another perfume (Paco Rabanne XS → «Paco», Boucheron pour Homme →
- * Boucheron women, EDT → EDP). The product's truth: supplier rows linked to the article and the Market card titles
- * (never rewritten by an improvement). The chosen Fragrantica perfume must match one of them by brand, name words and
- * gender (men ≠ women). → "" when it matches or nothing is known, else the reason.
+ * Boucheron women, EDT → EDP). The product's truth: supplier rows linked to the article; the card titles only when
+ * there are no rows (an earlier wrong improvement rewrote them: Just Cavalli for Him became «… женская»). The chosen
+ * Fragrantica perfume must match one of them by brand, name words and gender (men ≠ women), and a concentration
+ * written in the perfume's own name («Gentleman Cologne», «Sauvage Eau de Parfum») must be the product's.
+ * → "" when it matches or nothing is known, else the reason.
  */
 async function existingCardPerfumeMismatch(offerId, perfume) {
   const prisma = getPrisma();
@@ -603,12 +639,19 @@ async function existingCardPerfumeMismatch(offerId, perfume) {
   const cards = await prisma.$queryRawUnsafe(
     `SELECT name FROM warehouse_products WHERE lower(offer_id) = lower($1) AND marketplace = 'yandex'`, cleanText(offerId),
   ).catch(() => []);
-  const truths = [...links.map((r) => r.name), ...cards.map((r) => r.name)].filter(Boolean)
+  const parsedOf = (rows) => rows.map((r) => r.name).filter(Boolean)
     .map((name) => parser.parsePerfumeName(name, { brands })).filter((t) => t.brandKey && t.volume);
+  const linkTruths = parsedOf(links);
+  const truths = linkTruths.length ? linkTruths : parsedOf(cards);
   if (!truths.length) return "";
+  const ownConcentration = parser.parsePerfumeName(`${perfume.brand} ${perfume.name}`, { brands }).concentration;
   const genderWord = { male: "men", female: "women", unisex: "unisex" }[perfume.gender] || "";
   const reasons = new Set();
   for (const t of truths) {
+    if (ownConcentration && t.concentration && ownConcentration !== t.concentration) {
+      reasons.add("concentration");
+      continue;
+    }
     // the perfume written like the product: same volume / concentration / flags, so only brand, name and gender count
     const title = [perfume.brand, perfume.name, genderWord, t.concentration, `${t.volume} ml`, t.tester ? "tester" : ""].filter(Boolean).join(" ");
     const candidate = parser.parsePerfumeName(title, { brands });
@@ -616,7 +659,7 @@ async function existingCardPerfumeMismatch(offerId, perfume) {
     if (res.ok) return "";
     reasons.add(res.reason);
   }
-  const label = { brand: "другой бренд", name: "другое название аромата", gender: "другой пол (мужской / женский)" };
+  const label = { brand: "другой бренд", name: "другое название аромата", gender: "другой пол (мужской / женский)", concentration: "другая концентрация в названии аромата" };
   return `Аромат Фрагрантики «${perfume.brand} ${perfume.name}» не совпадает с товаром (${[...reasons].map((r) => label[r] || r).join(", ")}) — выберите аромат вручную`;
 }
 
@@ -839,6 +882,7 @@ async function buildFragranticaCardDraft(draft) {
         const kept = existingResult.kept || { keep: [], blurry: 0 };
         if (kept.error) warnings.push(`Фото старой карточки не разобрали: ${kept.error?.message || kept.error}`);
         const main = images.main || form.sourceImage;
+        kept.keep = await fragranticaDropRepeatedPhotos(kept.keep, { perfumeId, offerId: existing.offerId, images: { ...images, main } }).catch(() => kept.keep);
         data.customPhotos = ownBottleOnly ? kept.keep : kept.keep.length && main ? [fragranticaAbsoluteUrl(main), ...kept.keep] : [];
         data.customPhotosAuto = true;
         data.keptExistingPhotos = kept.keep.length;

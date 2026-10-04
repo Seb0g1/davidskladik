@@ -1157,7 +1157,13 @@ async function buildFragranticaYandexExtra({ perfume, type, name, volume, tester
       // filterable «Линейка» (the perfume itself) and «Особенности флакона» (spray bottle; oils have none)
       line: fragStripConcentration(perfume.name),
       bottleFeature: type.key === "oil" ? "" : "с распылителем",
-    }),
+    }).concat(
+      // the variant group: «brand + perfume + вид» like every other Market card — EDT and EDP of one perfume are
+      // different groups (one group made Market call them «Дубль варианта»)
+      category.categoryId === YANDEX_CATEGORY_PERFUMERY
+        ? [{ parameterId: YANDEX_PARAM_VARIANT_GROUP, value: `${fragNameWithBrand(perfume)} ${type.nameLabel.toLowerCase()}`.replace(/\s+/g, " ").trim().slice(0, 255) }]
+        : [],
+    ),
   };
 }
 
