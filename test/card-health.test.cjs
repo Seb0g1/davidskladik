@@ -14,7 +14,7 @@ const c = (text) => ctx.classify(text);
 
 test("Market card errors from the 2026-10-03 export are classified", () => {
   assert.equal(c("Не указаны отличия: Отличительный признак «Объем флакона» не указан").code, "variant_volume");
-  assert.equal(c("Дубль варианта: Хотя бы один отличительный признак должен быть уникальным").fix, "resend_card");
+  assert.equal(c("Дубль варианта: Хотя бы один отличительный признак должен быть уникальным").fix, "dedupe_variant");
   assert.equal(c("Общие признаки не совпадают: Проверьте поле Бренд").code, "variant_brand");
   assert.equal(c("Не заполнено обязательное поле: Укажите код ТН ВЭД").code, "tnved");
   assert.equal(c("Не указаны габариты товара: Укажите длину").code, "dimensions");
