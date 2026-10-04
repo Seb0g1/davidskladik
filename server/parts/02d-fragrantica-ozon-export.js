@@ -1092,14 +1092,14 @@ async function createFragranticaExports(body = {}, request = { session: {} }) {
         attributes: [...ozonAttributes, ...ozonMedia.attributes],
         ...(ozonMedia.complex.length ? { complex_attributes: ozonMedia.complex } : {}),
         primary_image: bottle,
-        images: [...ownPhotos, notesPhoto, ...extras].filter(Boolean).slice(0, 29),
+        images: [...new Set([...ownPhotos, notesPhoto, ...extras].filter(Boolean))].slice(0, 29),
       }
       : {
         ...baseItem,
         ...improveFlag,
         // Маркет: «Парфюмерная вода <бренд> <аромат> <для кого> <мл> мл» — так карточка получает больше баллов
         yandexName: buildFragranticaMarketName({ perfume, typeKey: type.key, volume: (volumeAttr?.values || [])[0]?.value, tester: Boolean(body.tester) }),
-        price: String(yandexPrice), yandexPictures: [bottle, ...ownPhotos, notesPhoto, ...extras].filter(Boolean).slice(0, 30), yandexExtra,
+        price: String(yandexPrice), yandexPictures: [...new Set([bottle, ...ownPhotos, notesPhoto, ...extras].filter(Boolean))].slice(0, 30), yandexExtra,
       };
     // the same perfume+volume already sent to this shop → update that row (and that card), no duplicate
     const inserted = await prisma.$queryRawUnsafe(

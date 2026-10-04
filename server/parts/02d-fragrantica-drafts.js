@@ -808,6 +808,13 @@ async function buildFragranticaCardDraft(draft) {
   if (Array.isArray(draft.data?.customPhotos) && !draft.data.customPhotosAuto) {
     data.customPhotos = draft.data.customPhotos;
     data.onlyCustomPhotos = Boolean(draft.data.onlyCustomPhotos);
+    // kept photos that repeat our pictures (an earlier improvement's cards re-hosted by Ozon, our own files) go —
+    // the card gets them anyway after the bottle; the first photo and an «only own photos» set stay as chosen
+    if (!data.onlyCustomPhotos && data.customPhotos.length > 1) {
+      const [first, ...rest] = data.customPhotos;
+      const kept = await fragranticaDropRepeatedPhotos(rest, { perfumeId, offerId: draft.data?.existing?.offerId, images }).catch(() => rest);
+      data.customPhotos = [first, ...kept];
+    }
   }
   if (existing) {
     try {
