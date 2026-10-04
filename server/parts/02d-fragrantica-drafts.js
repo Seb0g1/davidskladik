@@ -700,12 +700,21 @@ async function buildFragranticaCardDraft(draft) {
       const createOn = marketRefuses.length ? [] : missingMarket;
       const dropOzon = [
         ...existingResult.missing.filter((x) => x.marketplace === "ozon").map(keyOf).filter(Boolean),
-        ...(marketRefuses.length ? missingMarket : []),
+        // Market refuses these goods (hidden brand, tester, < 20 ml): its shops are left out entirely
+        ...(marketRefuses.length ? fragranticaDraftTargets(draft.targets).filter((t) => t.kind === "yandex").map((t) => t.key) : []),
       ];
       if (marketRefuses.length && missingMarket.length) warnings.push(`На Маркете карточки ${existing.offerId} нет — и не загружаем: ${marketRefuses.join("; ")}.`);
       if (dropOzon.length) {
         draft.targets = (draft.targets || []).filter((k) => !dropOzon.includes(k));
         if (existingResult.missing.some((x) => x.marketplace === "ozon")) warnings.push(`На Ozon карточки ${existing.offerId} нет — улучшаем только Маркет.`);
+        if (marketRefuses.length && !missingMarket.length && dropOzon.some((k) => k.startsWith("yandex:"))) warnings.push(`Маркет не улучшаем: ${marketRefuses.join("; ")}.`);
+      }
+      if (!(draft.targets || []).length) {
+        return updateFragranticaDraft(draft.id, {
+          status: "skipped", stage: null, type_key: typeKey, targets: [],
+          error: `Улучшать негде: ${marketRefuses.length ? marketRefuses.join("; ") : "карточки нет ни в одном магазине"}`,
+          data: { ...data, existing },
+        });
       }
       if (createOn.length) warnings.push(`На Маркете карточки ${existing.offerId} нет — загрузим её (цену и остаток отправит обычная синхронизация).`);
       const ozonState = shopStates.find((x) => x.marketplace === "ozon")?.state;
@@ -812,8 +821,9 @@ async function processFragranticaDraft(draft) {
     // Фрагрантика занята (429 / проверка Cloudflare): черновик ждёт и пересобирается сам — 1, 2, 4 … 30 мин, до 8 раз
     const busy = /ответила (429|403)|too many|challenge/i.test(String(error?.message || ""));
     const tries = Number(draft.data?.fetchRetries || 0);
-    if (busy && draft.status !== "sending" && tries < 8) {
-      const waitMin = Math.min(30, 2 ** tries);
+    if (busy && draft.status !== "sending") {
+      // 1, 2, 4 … 30 min; after 8 tries once an hour — a long Cloudflare block never turns into «attention»
+      const waitMin = tries < 8 ? Math.min(30, 2 ** tries) : 60;
       logger.info("fragrantica draft waits for Fragrantica", { id: Number(draft.id), tries: tries + 1, waitMin });
       return updateFragranticaDraft(draft.id, {
         status: "queued",
