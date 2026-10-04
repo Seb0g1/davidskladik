@@ -94,10 +94,59 @@ function ozonDocProductReason(item = {}, cert = {}, reasons = {}) {
   return parts.join(". ") || "Ozon не указал причину";
 }
 
+// Own lane to Ozon for the certificate methods: the shared queue (one request per 450 ms for every job —
+// prices, stocks, cards) made a full check take ~2 hours. Up to 3 at a time, 150 ms apart, 429 → wait and retry.
+const OZON_DOC_LANE = { active: 0, waiters: [], lastAt: 0 };
+async function ozonDocRequest(pathname, body, account) {
+  const lane = OZON_DOC_LANE;
+  if (lane.active >= 3) await new Promise((resolve) => lane.waiters.push(resolve));
+  lane.active += 1;
+  try {
+    const wait = Math.max(0, lane.lastAt + 150 - Date.now());
+    lane.lastAt = Date.now() + wait;
+    if (wait) await sleep(wait);
+    for (let attempt = 1; ; attempt += 1) {
+      const response = await fetch(`${ozonBaseUrl}${pathname}`, {
+        method: "POST",
+        headers: { "Client-Id": account.clientId, "Api-Key": account.apiKey, "Content-Type": "application/json" },
+        body: JSON.stringify(body || {}),
+        signal: AbortSignal.timeout(60_000),
+      });
+      const data = parseApiResponse(await response.text());
+      if (response.ok) return data;
+      const error = Object.assign(new Error(data.message || data.error || `Ozon API error ${response.status}`), { statusCode: response.status, ozon: data });
+      if (!isOzonRateLimitError(error) || attempt >= 5) throw error;
+      await sleep(ozonRetryDelayMs(attempt, response));
+    }
+  } finally {
+    lane.active -= 1;
+    lane.waiters.shift()?.();
+  }
+}
+
+/** Card info (name, photo, offer, Ozon sale status) by product_id — 1000 per request in the doc lane. */
+async function ozonDocProductInfo(productIds, account) {
+  const map = new Map();
+  const ids = [...new Set(productIds.map(Number).filter((v) => Number.isFinite(v) && v > 0))];
+  const chunks = [];
+  for (let i = 0; i < ids.length; i += 1000) chunks.push(ids.slice(i, i + 1000));
+  await Promise.all(chunks.map(async (chunk) => {
+    const data = await ozonDocRequest("/v3/product/info/list", { product_id: chunk }, account).catch((error) => {
+      logger.warn("ozon doc status: product info failed", { account: account.id, detail: error?.message });
+      return {};
+    });
+    for (const item of data.items || data.result?.items || []) {
+      const id = cleanText(item.id || item.product_id);
+      if (id) map.set(id, item);
+    }
+  }));
+  return map;
+}
+
 async function ozonDocListCertificates(account) {
   const out = [];
   for (let page = 1; page <= 200; page += 1) {
-    const data = await ozonRequest("/v1/product/certificate/list", { page, page_size: 100 }, account);
+    const data = await ozonDocRequest("/v1/product/certificate/list", { page, page_size: 100 }, account);
     const list = data?.result?.certificates || [];
     out.push(...list);
     const pages = Number(data?.result?.page_count || 0);
@@ -114,7 +163,7 @@ async function ozonDocListCertificateProducts(account, certificateId) {
   for (let round = 0; round < 500; round += 1) {
     const body = { certificate_id: Number(certificateId), limit: 1000 };
     if (lastId) body.last_id = lastId;
-    const data = await ozonRequest("/v1/product/certificate/products/list", body, account);
+    const data = await ozonDocRequest("/v1/product/certificate/products/list", body, account);
     const items = data?.result?.items || [];
     let fresh = 0;
     for (const item of items) {
@@ -133,7 +182,7 @@ async function ozonDocListCertificateProducts(account, certificateId) {
 
 async function syncOzonDocStatusAccount(account, startedAt, progress) {
   const prisma = await requireOzonDocStatusTables();
-  const dict = async (path) => ozonDocDictionary(await ozonRequest(path, {}, account).catch(() => ({})));
+  const dict = async (path) => ozonDocDictionary(await ozonDocRequest(path, {}, account).catch(() => ({})));
   const [reasons, certStatuses] = [await dict("/v1/product/certificate/rejection_reasons/list"), await dict("/v1/product/certificate/status/list")];
   const certificates = await ozonDocListCertificates(account);
   const rows = [];
@@ -150,9 +199,7 @@ async function syncOzonDocStatusAccount(account, startedAt, progress) {
     }
   });
   await Promise.all(workers);
-  const info = rows.length
-    ? await getOzonProductInfoMapByProductIds([...new Set(rows.map((r) => String(r.item.product_id)))], account, { continueOnError: true })
-    : new Map();
+  const info = rows.length ? await ozonDocProductInfo(rows.map((r) => r.item.product_id), account) : new Map();
   const infoFor = (productId) => info.get(String(productId)) || {};
   const accountName = cleanText(account.name) || `Ozon ${cleanText(account.clientId)}`;
   const records = rows.map(({ cert, item }) => {
