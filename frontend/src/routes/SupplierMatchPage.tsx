@@ -178,7 +178,7 @@ export function SupplierMatchPage() {
           {job.running ? <Loader2 className="spin" size={14} /> : <CheckCircle2 size={14} />}
           {job.running ? "Привязываем" : "Готово"}: {job.linked + job.failed} из {job.total}
           {job.failed ? <span className="sm2-bad"> · ошибок {job.failed}</span> : null}
-          {job.running ? <span className="sm2-bar"><i style={{ width: `${job.total ? Math.round(((job.linked + job.failed) / job.total) * 100) : 0}%` }} /></span> : null}
+          {job.running ? <span className="sm2-bar"><i style={{ transform: `scaleX(${job.total ? (job.linked + job.failed) / job.total : 0})` }} /></span> : null}
         </div>
       ) : null}
 
