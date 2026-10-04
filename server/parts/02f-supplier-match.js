@@ -201,7 +201,7 @@ function supplierMatchCandidates(group, rowIndex, { stoppedPartners = new Set(),
 /** Every product of the warehouse: cards grouped by article (one product = its cards in every shop), links, sales. */
 async function loadSupplierMatchGroups(prisma, brands) {
   const cards = await prisma.$queryRawUnsafe(`
-    SELECT w.id, w.offer_id AS "offerId", w.target, w.name, w.brand, w.archived
+    SELECT w.id, w.offer_id AS "offerId", w.target, w.name, w.brand, w.archived, coalesce(w.raw->'ozon'->>'name', '') AS "ozonName"
       FROM warehouse_products w
      WHERE w.offer_id IS NOT NULL AND coalesce(w.name, '') <> ''
      ORDER BY w.archived, w.updated_at DESC`);
@@ -230,13 +230,17 @@ async function loadSupplierMatchGroups(prisma, brands) {
       groups.set(key, { key, name: card.name, parsed: perfumeMatch.parsePerfumeName(card.name, { brands, brand: card.brand || "" }), ids: [], shops: [], links: [], archived: true });
     }
     const g = groups.get(key);
+    // a card the seller renamed «Дубль98» on Ozon is a duplicate of another product — the whole article is left alone
+    if (OZON_DUPLICATE_NAME_RE.test(card.name) || OZON_DUPLICATE_NAME_RE.test(card.ozonName)) g.duplicate = true;
     g.ids.push(card.id);
     g.shops.push(card.target);
     if (!card.archived) g.archived = false;
     g.links.push(...(linksByProduct.get(card.id) || []));
   }
+  for (const [key, g] of groups) if (g.duplicate) groups.delete(key);
   return { groups, soldByOffer };
 }
+const OZON_DUPLICATE_NAME_RE = /^\s*дубл[ья]\s*\d*\s*$/i;
 
 async function runSupplierMatchScan(trigger = "schedule") {
   if (supplierMatchRunning) return { status: "already_running" };

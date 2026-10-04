@@ -250,8 +250,18 @@ function isTesterName(name = "") {
 
 // Variant-group parameters for «Парфюмерия»: one group per aroma of one brand and one kind
 // (EDP/EDT differ), variants distinguished by bottle volume and tester flag.
+// The concentration written in the offer name beats the Ozon product type: an EDT card filed on Ozon as
+// «Парфюмерная вода» went into the EDP variant group on Market («Дубль варианта» with its EDP namesake).
+const perfumeNameParser = require("./lib/perfume-match");
+const YANDEX_KIND_BY_CONCENTRATION = { edp: "парфюмерная вода", edt: "туалетная вода", parfum: "духи", edc: "одеколон" };
+function perfumeKindFromName(name = "") {
+  const parsed = perfumeNameParser.parsePerfumeName(name);
+  return parsed.type === "perfume" ? YANDEX_KIND_BY_CONCENTRATION[parsed.concentration] || "" : "";
+}
+
 function buildPerfumeVariantParameters({ categoryId, vendor = "", model = "", kind = "", name = "" } = {}) {
   if (Number(categoryId) !== YANDEX_CATEGORY_PERFUMERY) return [];
+  kind = perfumeKindFromName(name) || kind;
   const params = [];
   const volume = extractBottleVolumeMl(name);
   if (volume) params.push({ parameterId: YANDEX_PARAM_BOTTLE_VOLUME, value: String(volume) });

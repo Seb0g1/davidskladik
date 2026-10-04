@@ -17,7 +17,7 @@ let cardHealthTablesReady = false;
 let cardHealthRunning = false;
 
 const CARD_HEALTH_RULES = [
-  { code: "variant_duplicate", re: /дубль варианта/i, title: "Дубль варианта: один товар под разными артикулами", fix: "dedupe_variant", howTo: "В группе оставим лучший артикул (больше продаж → больше остаток → выше рейтинг), остальные уйдут в архив Маркета и не вернутся автоматически." },
+  { code: "variant_duplicate", re: /дубль варианта/i, title: "Дубль варианта: один товар под разными артикулами", fix: "dedupe_variant", howTo: "Один и тот же товар (аромат, объём, концентрация, пол) — оставим лучший артикул, остальные в архив Маркета. Разные товары в одной группе (туалетная и парфюмерная вода, мужской и женский) не архивируются: каждый получит свою группу вариантов." },
   { code: "variant_volume", re: /не указаны отличия/i, title: "Группа вариантов: нет объёма", fix: "resend_card", howTo: "Переотправим карточку: объём флакона и «тестер» берутся из названия, группа — по аромату и бренду." },
   { code: "variant_brand", re: /общие признаки не совпадают/i, title: "Группа вариантов: разные бренды или признаки", fix: "resend_card", howTo: "Переотправим карточку: группа строится заново из бренда, аромата и концентрации — чужие варианты выйдут из неё." },
   { code: "tnved", re: /тн вэд/i, title: "Нет кода ТН ВЭД", fix: "resend_card", howTo: "Переотправим карточку: ТН ВЭД и ОКПД 2 подставятся по типу товара." },
@@ -360,6 +360,9 @@ async function applyCardIssues(issueIds = [], { source = "manual" } = {}) {
     result.applied += ok.length;
     result.failed += bad.length;
     result.details.push({ fix: "dedupe_variant", groups: r.groups, archived: r.archived, failed: r.failed });
+    // EDT next to EDP, men next to women in one group: not duplicates — each gets its own variant group
+    const split = await applyVariantGroupSplit({ offerIds: dupes.map((i) => i.offer_id) }).catch((error) => ({ error: error?.message }));
+    result.details.push({ fix: "split_variant_group", ...split, plan: undefined });
   }
   return result;
 }
@@ -728,7 +731,7 @@ app.post("/api/card-improve/approve-all", requireAdmin, async (request, response
 // Группа вариантов на Маркете = одна карточка с вариантами (наш параметр 200 «бренд + аромат + вид»).
 // «Дубль варианта» — в группе два наших артикула с одинаковыми объёмом и «тестером». Здесь — список таких
 // групп с данными для решения: продажи, остаток, рейтинг, давность.
-async function cardVariantDuplicates() {
+async function cardVariantGroups() {
   const prisma = await requireCardHealthTables();
   const rows = await prisma.$queryRawUnsafe(`
     WITH q AS (
@@ -753,6 +756,17 @@ async function cardVariantDuplicates() {
     });
   }
   return [...groups.values()];
+}
+
+/** True duplicates: offers of one Market group (volume / tester) that are the same product by name. */
+async function cardVariantDuplicates() {
+  const prisma = await requireCardHealthTables();
+  const brands = await supplierMatchBrands(prisma);
+  const out = [];
+  for (const g of await cardVariantGroups()) {
+    for (const c of splitVariantGroupByProduct(g.offers, brands)) if (c.offers.length > 1) out.push({ ...g, offers: c.offers });
+  }
+  return out;
 }
 
 app.get("/api/card-health/variant-duplicates", requireAdmin, async (_request, response, next) => {
@@ -861,6 +875,140 @@ app.post("/api/card-health/variant-duplicates/apply", requireAdmin, async (reque
   try {
     const result = await applyVariantDedupe({ dryRun: request.body?.dryRun === true, offerIds: Array.isArray(request.body?.offerIds) ? request.body.offerIds : null });
     if (!request.body?.dryRun) await appendAudit(request, "card_health.variant_dedupe", { entityType: "market_offer", entityId: "variant-duplicates", newValue: { groups: result.groups, archived: result.archived, failed: result.failed } });
+    response.json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─── Разные товары в одной группе вариантов Маркета ───────────────────────────
+// «Дубль варианта» бывает и у разных товаров: EDT и EDP одного аромата, мужская и женская версии, другой аромат —
+// когда у них одно название группы (параметр 200). Такие карточки не архивируются, а получают свою группу:
+// «… туалетная вода», «… парфюмерная вода», «… мужская» / «… женская».
+
+const VARIANT_KIND_BY_CONCENTRATION = { edp: "парфюмерная вода", edt: "туалетная вода", parfum: "духи", edc: "одеколон" };
+const VARIANT_GENDER_WORD = { men: "мужская", women: "женская", unisex: "унисекс" };
+const VARIANT_GROUP_TAIL_RE = /\s*(парфюмерная вода|туалетная вода|духи|одеколон|мужская|женская|унисекс)\s*/gi;
+
+/** Offers of one Market group (same volume / tester) split into products by their names. */
+function splitVariantGroupByProduct(offers, brands) {
+  const clusters = [];
+  for (const offer of offers) {
+    const parsed = perfumeNameParser.parsePerfumeName(offer.name, { brands });
+    const cluster = clusters.find((c) => perfumeNameParser.comparePerfumes(c.parsed, parsed).ok);
+    if (cluster) cluster.offers.push(offer);
+    else clusters.push({ parsed, offers: [offer] });
+  }
+  return clusters;
+}
+
+/** The group name each product of a conflicting group should carry. */
+function variantGroupNames(groupName, clusters) {
+  const base = String(groupName || "").replace(VARIANT_GROUP_TAIL_RE, " ").replace(/\s+/g, " ").trim();
+  const kinds = new Set(clusters.map((c) => c.parsed.concentration || ""));
+  const genders = new Set(clusters.map((c) => c.parsed.gender || ""));
+  return clusters.map((c) => {
+    const kind = VARIANT_KIND_BY_CONCENTRATION[c.parsed.concentration] || "";
+    const gender = genders.size > 1 ? VARIANT_GENDER_WORD[c.parsed.gender] || "" : "";
+    // another perfume under the same group (not only another concentration / gender): its own name goes in
+    const nameWords = kinds.size === 1 && genders.size === 1 ? c.parsed.name.replace(/(^|\s)\S/g, (m) => m.toUpperCase()) : "";
+    const words = [base, nameWords && !base.toLowerCase().includes(c.parsed.name) ? nameWords : "", kind, gender].filter(Boolean);
+    return words.join(" ").replace(/\s+/g, " ").trim().slice(0, 255);
+  });
+}
+
+async function cardVariantConflicts() {
+  const prisma = await requireCardHealthTables();
+  const brands = await supplierMatchBrands(prisma);
+  const out = [];
+  for (const g of await cardVariantGroups()) {
+    const clusters = splitVariantGroupByProduct(g.offers, brands);
+    if (clusters.length < 2) continue;
+    const names = variantGroupNames(g.groupName, clusters);
+    out.push({ ...g, products: clusters.map((c, i) => ({ groupName: names[i], concentration: c.parsed.concentration, gender: c.parsed.gender, offers: c.offers.map((o) => o.offerId) })) });
+  }
+  return out;
+}
+
+/** Gives every product of a conflicting group its own variant group on Market (parameter 200). */
+async function applyVariantGroupSplit({ dryRun = false, offerIds = null } = {}) {
+  const only = offerIds ? new Set(offerIds.map((id) => cleanText(id).toLowerCase())) : null;
+  const conflicts = (await cardVariantConflicts()).filter((g) => !only || g.offers.some((o) => only.has(String(o.offerId).toLowerCase())));
+  const byShop = new Map();
+  for (const g of conflicts) {
+    for (const p of g.products) {
+      if (!p.groupName || p.groupName === g.groupName) continue;
+      for (const offerId of p.offers) {
+        if (!byShop.has(g.shopId)) byShop.set(g.shopId, []);
+        byShop.get(g.shopId).push({ offerId, marketCategoryId: YANDEX_CATEGORY_PERFUMERY, parameterValues: [{ parameterId: YANDEX_PARAM_VARIANT_GROUP, value: p.groupName }] });
+      }
+    }
+  }
+  const out = { groups: conflicts.length, offers: [...byShop.values()].reduce((s, l) => s + l.length, 0), updated: 0, failed: 0, errors: [], plan: conflicts.map((g) => ({ group: g.groupName, volume: g.volume, products: g.products })) };
+  if (dryRun) return out;
+  const shops = getYandexShops({ includeSyncDisabled: true });
+  for (const [shopId, offers] of byShop) {
+    const shop = shops.find((s) => cleanText(s.id) === cleanText(shopId));
+    if (!shop) continue;
+    for (const r of await sendYandexOfferMappings(shop, offers, { onlyChanged: true })) {
+      if (r.ok) out.updated += 1;
+      else { out.failed += 1; out.errors.push(`${r.offerId}: ${String(r.error || "").slice(0, 160)}`); }
+    }
+  }
+  logger.info("market variant group split", { groups: out.groups, updated: out.updated, failed: out.failed });
+  return out;
+}
+
+/**
+ * Offers archived as «duplicates» that are another product than the offer kept (EDT vs EDP, men vs women…):
+ * the block is lifted and they go back on sale. skip — offer ids to leave archived.
+ */
+async function restoreWrongVariantDedupes({ dryRun = false, skip = [] } = {}) {
+  const prisma = await requireMarketDedupeTable();
+  const brands = await supplierMatchBrands(prisma);
+  const skipSet = new Set(skip.map((id) => cleanText(id).toLowerCase()));
+  const rows = await prisma.$queryRawUnsafe(`
+    SELECT d.shop_id, d.offer_id, d.keeper_offer_id,
+           coalesce((SELECT name FROM card_quality q WHERE q.shop_id = d.shop_id AND q.offer_id = d.offer_id LIMIT 1),
+                    (SELECT name FROM warehouse_products w WHERE w.target = d.shop_id AND w.offer_id = d.offer_id LIMIT 1)) AS name,
+           coalesce((SELECT name FROM card_quality q WHERE q.shop_id = d.shop_id AND q.offer_id = d.keeper_offer_id LIMIT 1),
+                    (SELECT name FROM warehouse_products w WHERE w.target = d.shop_id AND w.offer_id = d.keeper_offer_id LIMIT 1)) AS keeper_name
+      FROM market_offer_dedupe d`);
+  const wrong = [];
+  for (const r of rows) {
+    if (skipSet.has(String(r.offer_id).toLowerCase())) continue;
+    const res = perfumeNameParser.comparePerfumes(perfumeNameParser.parsePerfumeName(r.name, { brands }), perfumeNameParser.parsePerfumeName(r.keeper_name, { brands }));
+    if (!res.ok) wrong.push({ shopId: r.shop_id, offerId: r.offer_id, name: r.name, keeper: r.keeper_offer_id, keeperName: r.keeper_name, reason: res.reason });
+  }
+  const out = { checked: rows.length, wrong: wrong.length, restored: 0, failed: 0, items: wrong };
+  if (dryRun) return out;
+  const shops = getYandexShops({ includeSyncDisabled: true });
+  for (const w of wrong) {
+    const shop = shops.find((s) => cleanText(s.id) === cleanText(w.shopId));
+    if (!shop) continue;
+    await prisma.$executeRawUnsafe(`DELETE FROM market_offer_dedupe WHERE shop_id = $1 AND offer_id = $2`, cleanText(w.shopId), w.offerId);
+    const [r] = await sendYandexOfferArchiveState(shop, [w.offerId], false);
+    if (r?.ok) out.restored += 1; else out.failed += 1;
+  }
+  marketDedupeCache.at = 0;
+  logger.info("market variant dedupe restore", { wrong: out.wrong, restored: out.restored, failed: out.failed });
+  return out;
+}
+
+app.post("/api/card-health/variant-conflicts/apply", requireAdmin, async (request, response, next) => {
+  try {
+    const result = await applyVariantGroupSplit({ dryRun: request.body?.dryRun === true, offerIds: Array.isArray(request.body?.offerIds) ? request.body.offerIds : null });
+    if (!request.body?.dryRun) await appendAudit(request, "card_health.variant_split", { entityType: "market_offer", entityId: "variant-conflicts", newValue: { groups: result.groups, updated: result.updated, failed: result.failed } });
+    response.json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/card-health/variant-duplicates/restore-wrong", requireAdmin, async (request, response, next) => {
+  try {
+    const result = await restoreWrongVariantDedupes({ dryRun: request.body?.dryRun === true, skip: Array.isArray(request.body?.skip) ? request.body.skip : [] });
+    if (!request.body?.dryRun) await appendAudit(request, "card_health.variant_restore_wrong", { entityType: "market_offer", entityId: "variant-duplicates", newValue: { wrong: result.wrong, restored: result.restored } });
     response.json({ ok: true, ...result });
   } catch (error) {
     next(error);
