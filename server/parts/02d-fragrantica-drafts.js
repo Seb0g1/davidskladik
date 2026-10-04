@@ -819,7 +819,8 @@ async function processFragranticaDraft(draft) {
     return await buildFragranticaCardDraft(draft);
   } catch (error) {
     // Фрагрантика занята (429 / проверка Cloudflare): черновик ждёт и пересобирается сам — 1, 2, 4 … 30 мин, до 8 раз
-    const busy = /ответила (429|403)|too many|challenge/i.test(String(error?.message || ""));
+    // Fragrantica busy, or a marketplace rate limit (Market «Hit rate limit», Ozon 429): wait and retry
+    const busy = /ответила (429|403)|too many|challenge|rate limit|METHOD_FAILURE|429/i.test(String(error?.message || ""));
     const tries = Number(draft.data?.fetchRetries || 0);
     if (busy && draft.status !== "sending") {
       // 1, 2, 4 … 30 min; after 8 tries once an hour — a long Cloudflare block never turns into «attention»
