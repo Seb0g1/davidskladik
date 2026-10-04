@@ -46,6 +46,9 @@ async function requireOzonDocStatusTables() {
       PRIMARY KEY (account_id, product_id, certificate_id)
     )`);
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS ozon_doc_status_status_idx ON ozon_doc_status (product_status, account_id)`);
+  // the page's default order and the per-account filter
+  await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS ozon_doc_status_changed_idx ON ozon_doc_status (status_changed_at DESC NULLS LAST, product_id DESC)`);
+  await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS ozon_doc_status_account_idx ON ozon_doc_status (account_id, product_status, status_changed_at DESC)`);
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS ozon_doc_status_state (
       key TEXT PRIMARY KEY,
@@ -103,18 +106,27 @@ async function ozonDocListCertificates(account) {
   return out;
 }
 
+// Products of one certificate: last_id + limit (up to 1000 per request; page / page_size are deprecated)
 async function ozonDocListCertificateProducts(account, certificateId) {
   const out = [];
+  const seen = new Set();
   let lastId = 0;
-  for (let page = 1; page <= 200; page += 1) {
-    const body = { certificate_id: Number(certificateId), page, page_size: 100, limit: 100 };
+  for (let round = 0; round < 500; round += 1) {
+    const body = { certificate_id: Number(certificateId), limit: 1000 };
     if (lastId) body.last_id = lastId;
     const data = await ozonRequest("/v1/product/certificate/products/list", body, account);
     const items = data?.result?.items || [];
-    const fresh = items.filter((i) => !out.some((o) => Number(o.product_id) === Number(i.product_id)));
-    out.push(...fresh);
-    if (items.length < 100 || !fresh.length) break;
-    lastId = Number(items[items.length - 1].product_id) || 0;
+    let fresh = 0;
+    for (const item of items) {
+      const id = Number(item.product_id);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push(item);
+      fresh += 1;
+    }
+    const nextId = Number(items[items.length - 1]?.product_id) || 0;
+    if (items.length < 1000 || !fresh || !nextId || nextId === lastId) break;
+    lastId = nextId;
   }
   return out;
 }
@@ -125,15 +137,19 @@ async function syncOzonDocStatusAccount(account, startedAt, progress) {
   const [reasons, certStatuses] = [await dict("/v1/product/certificate/rejection_reasons/list"), await dict("/v1/product/certificate/status/list")];
   const certificates = await ozonDocListCertificates(account);
   const rows = [];
-  for (const cert of certificates) {
-    if (Number(cert.products_count || 0) <= 0) continue;
-    const items = await ozonDocListCertificateProducts(account, cert.certificate_id).catch((error) => {
-      logger.warn("ozon doc status: products list failed", { account: account.id, certificate: cert.certificate_id, detail: error?.message });
-      return [];
-    });
-    for (const item of items) rows.push({ cert, item });
-    progress.products += items.length;
-  }
+  // a few certificates at a time — each one is a chain of last_id requests
+  const queue = certificates.filter((cert) => Number(cert.products_count || 0) > 0);
+  const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
+    for (let cert = queue.shift(); cert; cert = queue.shift()) {
+      const items = await ozonDocListCertificateProducts(account, cert.certificate_id).catch((error) => {
+        logger.warn("ozon doc status: products list failed", { account: account.id, certificate: cert.certificate_id, detail: error?.message });
+        return [];
+      });
+      for (const item of items) rows.push({ cert, item });
+      progress.products += items.length;
+    }
+  });
+  await Promise.all(workers);
   const info = rows.length
     ? await getOzonProductInfoMapByProductIds([...new Set(rows.map((r) => String(r.item.product_id)))], account, { continueOnError: true })
     : new Map();
@@ -211,6 +227,7 @@ async function runOzonDocStatusSync({ reason = "schedule" } = {}) {
         accounts.push({ account: cleanText(account.name) || cleanText(account.id), error: String(error?.message || error).slice(0, 300) });
       }
     }
+    ozonDocAggregatesCache.clear();
     const result = { running: false, doneAt: new Date().toISOString(), lastDoneAt: new Date().toISOString(), startedAt: startedAt.toISOString(), elapsedMs: Date.now() - startedAt.getTime(), accounts, reason };
     await writeOzonDocStatusState(result);
     logger.info("ozon doc status sync done", { accounts: accounts.map((a) => `${a.account}:${a.products ?? a.error}`).join(", "), elapsedMs: result.elapsedMs });
@@ -230,6 +247,33 @@ function scheduleOzonDocStatus(delayMs = ozonDocStatusIntervalMs) {
       scheduleOzonDocStatus(ozonDocStatusIntervalMs);
     }
   }, Math.max(30_000, Number(delayMs) || ozonDocStatusIntervalMs)).unref?.();
+}
+
+// Totals of the page (per account / status, certificates) — the same for every filter, cached for a minute
+const ozonDocAggregatesCache = new Map();
+async function ozonDocAggregates(prisma, account) {
+  const key = account || "*";
+  const hit = ozonDocAggregatesCache.get(key);
+  if (hit && Date.now() - hit.at < 60_000) return hit.value;
+  const [counts, notSelling, certificates] = await Promise.all([
+    prisma.$queryRawUnsafe(
+      `SELECT account_id AS "accountId", MAX(account_name) AS "accountName", product_status AS status, COUNT(*)::int AS n
+         FROM ozon_doc_status GROUP BY account_id, product_status`,
+    ),
+    prisma.$queryRawUnsafe(
+      `SELECT account_id AS "accountId", COUNT(*)::int AS n FROM ozon_doc_status
+        WHERE product_status <> 'declined' AND ozon_status IS NOT NULL AND ozon_status !~* 'продается|продаётся|selling' GROUP BY account_id`,
+    ),
+    prisma.$queryRawUnsafe(
+      `SELECT certificate_number AS number, MAX(certificate_type) AS type, COUNT(*)::int AS n,
+              COUNT(*) FILTER (WHERE product_status = 'declined')::int AS declined
+         FROM ozon_doc_status ${account ? "WHERE account_id = $1" : ""} GROUP BY certificate_number ORDER BY COUNT(*) DESC LIMIT 300`,
+      ...(account ? [account] : []),
+    ),
+  ]);
+  const value = { counts, notSelling, certificates };
+  ozonDocAggregatesCache.set(key, { at: Date.now(), value });
+  return value;
 }
 
 app.get("/api/ozon-docs", requireAdmin, async (request, response, next) => {
@@ -260,20 +304,7 @@ app.get("/api/ozon-docs", requireAdmin, async (request, response, next) => {
       ...params,
     );
     const [{ total }] = await prisma.$queryRawUnsafe(`SELECT COUNT(*)::int AS total FROM ozon_doc_status ${whereSql}`, ...params);
-    const counts = await prisma.$queryRawUnsafe(
-      `SELECT account_id AS "accountId", MAX(account_name) AS "accountName", product_status AS status, COUNT(*)::int AS n
-         FROM ozon_doc_status GROUP BY account_id, product_status`,
-    );
-    const notSelling = await prisma.$queryRawUnsafe(
-      `SELECT account_id AS "accountId", COUNT(*)::int AS n FROM ozon_doc_status
-        WHERE product_status <> 'declined' AND ozon_status IS NOT NULL AND ozon_status !~* 'продается|продаётся|selling' GROUP BY account_id`,
-    );
-    const certificates = await prisma.$queryRawUnsafe(
-      `SELECT certificate_number AS number, MAX(certificate_type) AS type, COUNT(*)::int AS n,
-              COUNT(*) FILTER (WHERE product_status = 'declined')::int AS declined
-         FROM ozon_doc_status ${account ? "WHERE account_id = $1" : ""} GROUP BY certificate_number ORDER BY COUNT(*) DESC LIMIT 300`,
-      ...(account ? [account] : []),
-    );
+    const { counts, notSelling, certificates } = await ozonDocAggregates(prisma, account);
     const sync = await readOzonDocStatusState().catch(() => ({}));
     response.json({
       ok: true,
