@@ -149,7 +149,8 @@ function fragNameWithBrand(perfume = {}) {
 function buildFragranticaOzonName({ perfume = {}, typeKey = "edp", volume, tester = false } = {}) {
   const type = fragOzonTypeByKey(typeKey);
   const vol = fragFormatVolume(volume);
-  return [fragNameWithBrand(perfume), type.nameLabel, tester ? "тестер" : "", vol ? `${vol} мл` : ""].filter(Boolean).join(" ");
+  const gender = (FRAG_MARKET_GENDER[type.key] || FRAG_MARKET_GENDER.edp)[perfume.gender] || "";
+  return [fragNameWithBrand(perfume), type.nameLabel, gender, tester ? "тестер" : "", vol ? `${vol} мл` : ""].filter(Boolean).join(" ");
 }
 
 // Маркет даёт 10 из 10 за название вида «Парфюмерная вода Creed Iris Debonair Eau de Parfum унисекс 50 мл»:

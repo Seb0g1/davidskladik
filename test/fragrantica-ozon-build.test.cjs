@@ -48,8 +48,8 @@ const sauvage = {
 };
 
 test("name: brand + name + type + volume; brand is not repeated; tester", () => {
-  assert.equal(b.buildFragranticaOzonName({ perfume: sauvage, typeKey: "edp", volume: 100 }), "Dior Sauvage Парфюмерная вода 100 мл");
-  assert.equal(b.buildFragranticaOzonName({ perfume: sauvage, typeKey: "edt", volume: "7,5", tester: true }), "Dior Sauvage Туалетная вода тестер 7.5 мл");
+  assert.equal(b.buildFragranticaOzonName({ perfume: sauvage, typeKey: "edp", volume: 100 }), "Dior Sauvage Парфюмерная вода мужская 100 мл");
+  assert.equal(b.buildFragranticaOzonName({ perfume: sauvage, typeKey: "edt", volume: "7,5", tester: true }), "Dior Sauvage Туалетная вода мужская тестер 7.5 мл");
   assert.equal(
     b.buildFragranticaOzonName({ perfume: { brand: "Marc Jacobs", name: "Marc Jacobs Gardenia" }, typeKey: "edp", volume: 50 }),
     "Marc Jacobs Gardenia Парфюмерная вода 50 мл",
@@ -109,7 +109,7 @@ test("prefill + item: required attributes are reported missing until filled", ()
   assert.equal(byId[8163][0].value, "100");
   assert.equal(byId[23536][0].value, "false");
   assert.equal(byId[9024][0].value, "FR31861-100");
-  assert.equal(prefill.name, "Dior Sauvage Парфюмерная вода 100 мл");
+  assert.equal(prefill.name, "Dior Sauvage Парфюмерная вода мужская 100 мл");
 
   const required = [85, 8229, 9048, 8205, 23536, 22232, 9163, 4389].map((id) => ({ id, name: `attr${id}`, is_required: true }));
   const { item, missing } = b.buildFragranticaOzonItem({

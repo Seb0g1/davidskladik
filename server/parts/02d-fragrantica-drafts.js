@@ -557,24 +557,67 @@ async function enqueueFragranticaImprovements({ limit = FRAG_IMPROVE_PER_SCAN, c
 // into EDP ones (Kenzo Flower, Light Blue, Born in Roma…) — it is the last resort only.
 const DRAFT_TYPE_BY_CONCENTRATION = { edp: "edp", edt: "edt", parfum: "parfum", edc: "cologne" };
 async function existingCardTypeKey(offerId) {
+  return (await existingCardFacts(offerId)).typeKey;
+}
+
+/** Type and gender (male / female / unisex) of the product behind an existing card: supplier rows, else its titles. */
+async function existingCardFacts(offerId) {
   const prisma = getPrisma();
-  if (!prisma || !cleanText(offerId)) return null;
+  if (!prisma || !cleanText(offerId)) return { typeKey: null, gender: null };
   const parser = require("./lib/perfume-match");
-  const vote = (names) => {
+  const voteBy = (pick) => (names) => {
     const counts = new Map();
     for (const name of names) {
-      const p = parser.parsePerfumeName(name);
-      const key = p.type === "oil" ? "oil" : DRAFT_TYPE_BY_CONCENTRATION[p.concentration];
+      const key = pick(parser.parsePerfumeName(name));
       if (key) counts.set(key, (counts.get(key) || 0) + 1);
     }
     return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
   };
+  const vote = voteBy((p) => (p.type === "oil" ? "oil" : DRAFT_TYPE_BY_CONCENTRATION[p.concentration]));
+  const voteGender = voteBy((p) => ({ men: "male", women: "female", unisex: "unisex" }[p.gender]));
   const links = await prisma.$queryRawUnsafe(
     `SELECT l.exact_name AS name FROM product_links l JOIN warehouse_products w ON w.id = l.product_id
       WHERE lower(w.offer_id) = lower($1) AND coalesce(l.exact_name, '') <> ''`, cleanText(offerId),
   ).catch(() => []);
   const cards = await prisma.$queryRawUnsafe(`SELECT name FROM warehouse_products WHERE lower(offer_id) = lower($1)`, cleanText(offerId)).catch(() => []);
-  return vote(links.map((r) => r.name)) || vote(cards.map((r) => r.name));
+  const linkNames = links.map((r) => r.name);
+  const cardNames = cards.map((r) => r.name);
+  return { typeKey: vote(linkNames) || vote(cardNames), gender: voteGender(cardNames) || voteGender(linkNames) };
+}
+
+/**
+ * Card improvement must not turn a product into another perfume (Paco Rabanne XS → «Paco», Boucheron pour Homme →
+ * Boucheron women, EDT → EDP). The product's truth: supplier rows linked to the article and the Market card titles
+ * (never rewritten by an improvement). The chosen Fragrantica perfume must match one of them by brand, name words and
+ * gender (men ≠ women). → "" when it matches or nothing is known, else the reason.
+ */
+async function existingCardPerfumeMismatch(offerId, perfume) {
+  const prisma = getPrisma();
+  if (!prisma || !cleanText(offerId) || !perfume) return "";
+  const parser = require("./lib/perfume-match");
+  const brands = await supplierMatchBrands(prisma).catch(() => null);
+  const links = await prisma.$queryRawUnsafe(
+    `SELECT l.exact_name AS name FROM product_links l JOIN warehouse_products w ON w.id = l.product_id
+      WHERE lower(w.offer_id) = lower($1) AND coalesce(l.exact_name, '') <> ''`, cleanText(offerId),
+  ).catch(() => []);
+  const cards = await prisma.$queryRawUnsafe(
+    `SELECT name FROM warehouse_products WHERE lower(offer_id) = lower($1) AND marketplace = 'yandex'`, cleanText(offerId),
+  ).catch(() => []);
+  const truths = [...links.map((r) => r.name), ...cards.map((r) => r.name)].filter(Boolean)
+    .map((name) => parser.parsePerfumeName(name, { brands })).filter((t) => t.brandKey && t.volume);
+  if (!truths.length) return "";
+  const genderWord = { male: "men", female: "women", unisex: "unisex" }[perfume.gender] || "";
+  const reasons = new Set();
+  for (const t of truths) {
+    // the perfume written like the product: same volume / concentration / flags, so only brand, name and gender count
+    const title = [perfume.brand, perfume.name, genderWord, t.concentration, `${t.volume} ml`, t.tester ? "tester" : ""].filter(Boolean).join(" ");
+    const candidate = parser.parsePerfumeName(title, { brands });
+    const res = parser.comparePerfumes(t, { ...candidate, set: t.set, decant: t.decant, sample: t.sample, nonPerfume: t.nonPerfume, type: t.type, defect: false });
+    if (res.ok) return "";
+    reasons.add(res.reason);
+  }
+  const label = { brand: "другой бренд", name: "другое название аромата", gender: "другой пол (мужской / женский)" };
+  return `Аромат Фрагрантики «${perfume.brand} ${perfume.name}» не совпадает с товаром (${[...reasons].map((r) => label[r] || r).join(", ")}) — выберите аромат вручную`;
 }
 
 async function buildFragranticaCardDraft(draft) {
@@ -598,12 +641,22 @@ async function buildFragranticaCardDraft(draft) {
     return value;
   };
   const ozonTarget = targets.find((t) => t.kind === "ozon");
-  const perfume = await fragranticaPerfumeForExport(perfumeId);
+  let perfume = await fragranticaPerfumeForExport(perfumeId);
+  // Fragrantica without a gender: the card says who it is for («унисекс», «для женщин» stay in the new title)
+  if (!perfume.gender && draft.data?.existing?.offerId) {
+    const facts = await existingCardFacts(draft.data.existing.offerId).catch(() => ({}));
+    if (facts.gender) perfume = { ...perfume, gender: facts.gender };
+  }
   parts.perfume = Date.now() - buildStartedAt;
   // the type is known before the form: the draft's own; an existing card keeps its product's type; else the guess
   const existingType = !FRAG_OZON_TYPES.some((t) => t.key === draft.type_key) && draft.data?.existing?.offerId
     ? await existingCardTypeKey(draft.data.existing.offerId).catch(() => null) : null;
   const typeKey = FRAG_OZON_TYPES.some((t) => t.key === draft.type_key) ? draft.type_key : existingType || fragOzonGuessTypeKey(perfume);
+  // an improvement of an existing card only for the same perfume; a manual choice (perfumeChosen) is trusted
+  if (draft.data?.existing?.offerId && !draft.data?.perfumeChosen) {
+    const mismatch = await existingCardPerfumeMismatch(draft.data.existing.offerId, perfume).catch(() => "");
+    if (mismatch) return updateFragranticaDraft(draft.id, { status: "attention", stage: null, type_key: typeKey, error: mismatch });
+  }
   const styles = [...new Set(targets.map((t) => t.style))];
   const marketplace = targets.some((t) => t.kind === "yandex") ? "yandex" : "ozon";
 
