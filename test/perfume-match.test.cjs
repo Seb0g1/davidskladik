@@ -8,7 +8,7 @@ const { parsePerfumeName, comparePerfumes, matchCardRows, buildBrandIndex } = re
 const brands = buildBrandIndex([
   "Dior", "Lancome", "Parfums de Marly", "Stefano Ricci", "Versace", "Patrick Ta", "Yves Saint Laurent", "Chanel", "Dolce & Gabbana",
   "Calvin Klein", "Paco Rabanne", "Hugo Boss", "Guerlain", "Ex Nihilo", "Issey Miyake", "Kilian", "Montale", "Armaf", "Givenchy",
-  "Maison Francis Kurkdjian", "Tom Ford", "Juliette Has A Gun", "Goldfield & Banks Australia", "Afnan", "Christian Dior",
+  "Maison Francis Kurkdjian", "Tom Ford", "Juliette Has A Gun", "Goldfield & Banks Australia", "Afnan", "Christian Dior", "Al Haramain Perfumes",
 ]);
 const P = (text) => parsePerfumeName(text, { brands });
 const cmp = (card, row) => comparePerfumes(P(card), P(row));
@@ -38,6 +38,7 @@ test("same product: spelling, apostrophes, word order, line / packaging words", 
     ["GOLDFIELD & BANKS SUNSET HOUR Парфюмерная вода 100 мл", "GOLDFIELD & BANKS AUSTRALIA SUNSET HOUR EDP 100 ml"],
     ["Christian Dior - Dior Homme Sport Туалетная вода 125 мл", "DIOR HOMME SPORT 125 ml EDT"],
     ["Armaf Club De Nuit Man Туалетная вода для мужчин 105ml", "Armaf  Club De Nuit  [ M]  edt   105 ml"],
+    ["AL HARAMAIN L'AVENTURE Парфюмерная вода для мужчин 100 мл", "Al Haramain L'aventure men 100ml edp"],
   ];
   for (const [card, row] of same) assert.equal(cmp(card, row).ok, true, `${card} ⇐ ${row}: ${cmp(card, row).reason}`);
 });
