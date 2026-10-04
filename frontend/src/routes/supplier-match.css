@@ -67,3 +67,15 @@
   .sm2-actions > button { flex: 1; justify-content: center; min-height: 40px; }
 }
 
+/* «Только от поставщиков» */
+.sm2-sf { position: relative; }
+.sm2-sf > .secondary-action.is-on { border-color: rgba(var(--accent-rgb), .55); background: rgba(var(--accent-rgb), .14); }
+.sm2-sf-pop { position: absolute; left: 0; top: calc(100% + 6px); z-index: 60; display: grid; gap: 6px; width: 320px; max-width: calc(100vw - 32px); padding: 8px; border-radius: 12px; border: 1px solid var(--ux-border-strong, var(--line)); background: var(--panel); box-shadow: var(--ux-shadow-pop); }
+.sm2-sf-pop input[type="text"], .sm2-sf-pop > input { width: 100%; }
+.sm2-sf-list { display: grid; max-height: 320px; overflow-y: auto; }
+.sm2-sf-list label { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; min-height: 34px; padding: 0 6px; border-radius: 8px; font-size: 13px; cursor: pointer; }
+.sm2-sf-list label:hover { background: var(--ux-hover); }
+.sm2-sf-list label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sm2-sf-list small { font-size: 11.5px; color: var(--text-soft); white-space: nowrap; }
+.sm2-sf-empty { padding: 8px; font-size: 12.5px; color: var(--text-soft); }
+

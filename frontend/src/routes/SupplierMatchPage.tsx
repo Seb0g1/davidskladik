@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Link2, Loader2, PackageCheck, RefreshCw, Rocket, Search, ShieldCheck, X } from "lucide-react";
+import { CheckCircle2, Link2, Loader2, PackageCheck, RefreshCw, Rocket, Search, ShieldCheck, Users, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { z } from "zod";
 import { fetchJson, mutationBody } from "../api";
@@ -16,10 +16,11 @@ type Tab = "launch" | "extra";
 type Row = { rowId?: string; article?: string; name?: string; supplierName?: string; partnerId?: string; price?: number; priceCurrency?: string; updatedAt?: string | null };
 type Suggestion = { id: string; row: Row; ozonPrice: number | null; confidence: "exact" | "probable"; issues: string[]; status: string; error: string | null };
 type Product = { offerKey: string; productName: string; productIds: string[]; shops: string[]; cardStatus: string; archived: boolean; sold30: number; suggestions: Suggestion[] };
-type Counts = { launchProducts: number; launchExact: number; extraProducts: number; extraExact: number; filtered: number };
+type Counts = { launchProducts: number; launchExact: number; extraProducts: number; extraExact: number; filtered: number; exactSelected: number };
+type SupplierOption = { partnerId: string; name: string; products: number; exact: number };
 type ScanState = { at?: string; running?: boolean; status?: string; error?: string; suggestions?: number; elapsedMs?: number };
 type ApproveJob = { running: boolean; total: number; linked: number; failed: number; products: number; error?: string } | null;
-type Page = { products: Product[]; counts: Counts; scan: ScanState; scanRequest: { at?: string }; approveJob: ApproveJob };
+type Page = { products: Product[]; counts: Counts; suppliers: SupplierOption[]; scan: ScanState; scanRequest: { at?: string }; approveJob: ApproveJob };
 
 const PAGE = 40;
 const anyJson = <T,>(url: string, init?: RequestInit) => fetchJson<T>(url, z.custom<T>(() => true), init);
@@ -48,6 +49,8 @@ export function SupplierMatchPage() {
   const [tab, setTab] = useState<Tab>("launch");
   const [exactOnly, setExactOnly] = useState(false);
   const [search, setSearch] = useState("");
+  // «Только от поставщиков»: partner id (or name when there is none), empty = everyone
+  const [only, setOnly] = useState<string[]>([]);
   const [q, setQ] = useState("");
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState<Set<string>>(new Set());
@@ -57,11 +60,11 @@ export function SupplierMatchPage() {
     return () => clearTimeout(t);
   }, [search]);
 
-  const key = ["supplier-match", tab, exactOnly, q];
+  const key = ["supplier-match", tab, exactOnly, q, only.join(",")];
   const list = useInfiniteQuery({
     queryKey: key,
     initialPageParam: 0,
-    queryFn: ({ pageParam }) => anyJson<Page>(`/api/supplier-match?tab=${tab}&confidence=${exactOnly ? "exact" : "all"}&q=${encodeURIComponent(q)}&limit=${PAGE}&offset=${pageParam}`),
+    queryFn: ({ pageParam }) => anyJson<Page>(`/api/supplier-match?tab=${tab}&confidence=${exactOnly ? "exact" : "all"}&q=${encodeURIComponent(q)}&only=${encodeURIComponent(only.join(","))}&limit=${PAGE}&offset=${pageParam}`),
     getNextPageParam: (last, pages) => (last.products.length < PAGE ? undefined : pages.length * PAGE),
     refetchInterval: (query) => {
       const first = query.state.data?.pages[0];
@@ -111,12 +114,12 @@ export function SupplierMatchPage() {
     onSettled: (_r, _e, ids) => mark(ids, false),
   });
   const approveAll = useMutation({
-    mutationFn: () => anyJson<{ queued: number }>("/api/supplier-match/approve", mutationBody({ allExact: true, tab })),
+    mutationFn: () => anyJson<{ queued: number }>("/api/supplier-match/approve", mutationBody({ allExact: true, tab, only })),
     onSuccess: (r) => { toast.success(`Привязываем надёжные: ${r.queued}`); refreshAll(); },
     onError: (e) => toast.error(errorMessage(e)),
   });
 
-  const exactCount = tab === "launch" ? counts?.launchExact || 0 : counts?.extraExact || 0;
+  const exactCount = only.length ? counts?.exactSelected || 0 : tab === "launch" ? counts?.launchExact || 0 : counts?.extraExact || 0;
   const tabs: Array<[Tab, string, number | undefined, React.ReactNode]> = [
     ["launch", "Запустить в продажу", counts?.launchProducts, <Rocket size={15} key="r" />],
     ["extra", "Новые привязки", counts?.extraProducts, <Link2 size={15} key="l" />],
@@ -157,6 +160,7 @@ export function SupplierMatchPage() {
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Товар, артикул или поставщик" />
           {search ? <button type="button" aria-label="Очистить" onClick={() => setSearch("")}><X size={14} /></button> : null}
         </label>
+        <SupplierFilter options={first?.suppliers || []} value={only} onChange={(v) => { setOnly(v); setHidden(new Set()); }} />
         <label className="sm2-toggle">
           <input type="checkbox" checked={exactOnly} onChange={(e) => setExactOnly(e.target.checked)} /> Только надёжные
         </label>
@@ -248,5 +252,40 @@ export function SupplierMatchPage() {
         </button>
       ) : null}
     </section>
+  );
+}
+
+// «Только от поставщиков»: one or several suppliers whose rows are shown and approved
+function SupplierFilter({ options, value, onChange }: { options: SupplierOption[]; value: string[]; onChange: (v: string[]) => void }) {
+  const [open, setOpen] = useState(false);
+  const [find, setFind] = useState("");
+  const keyOf = (o: SupplierOption) => o.partnerId || o.name;
+  const chosen = new Set(value);
+  const names = options.filter((o) => chosen.has(keyOf(o))).map((o) => o.name);
+  const label = !value.length ? "Все поставщики" : names.length <= 2 ? names.join(", ") || `${value.length} выбрано` : `${names.slice(0, 2).join(", ")} +${names.length - 2}`;
+  const list = options.filter((o) => !find.trim() || o.name.toLowerCase().includes(find.trim().toLowerCase()));
+  const toggle = (k: string) => onChange(chosen.has(k) ? value.filter((v) => v !== k) : [...value, k]);
+  return (
+    <span className="sm2-sf">
+      <button type="button" className={`secondary-action${value.length ? " is-on" : ""}`} onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        <Users size={14} /> {label}
+      </button>
+      {open ? (
+        <span className="sm2-sf-pop" onMouseLeave={() => setOpen(false)}>
+          <input autoFocus value={find} onChange={(e) => setFind(e.target.value)} placeholder="Найти поставщика" />
+          <span className="sm2-sf-list">
+            {list.map((o) => (
+              <label key={keyOf(o)}>
+                <input type="checkbox" checked={chosen.has(keyOf(o))} onChange={() => toggle(keyOf(o))} />
+                <span>{o.name || "Без названия"}</span>
+                <small>{o.products} тов. · надёжных {o.exact}</small>
+              </label>
+            ))}
+            {!list.length ? <span className="sm2-sf-empty">Никого не нашли</span> : null}
+          </span>
+          {value.length ? <button type="button" className="secondary-action compact" onClick={() => onChange([])}>Показать всех</button> : null}
+        </span>
+      ) : null}
+    </span>
   );
 }

@@ -435,6 +435,12 @@ async function approveSupplierMatchIds(ids = [], username = "supplier-match", on
 
 // ─── Роуты ───────────────────────────────────────────────────────────────────
 
+/** «Только от поставщиков»: "77,49" or ["77", "Сима 2218"] → normalised keys (partner id or name). */
+function supplierMatchOnlyKeys(value) {
+  const list = Array.isArray(value) ? value : String(value || "").split(",");
+  return [...new Set(list.map((v) => supplierMatchKey(v)).filter(Boolean))].slice(0, 100);
+}
+
 app.get("/api/supplier-match", requireAdmin, async (request, response, next) => {
   try {
     const prisma = await requireSupplierMatchTables();
@@ -444,21 +450,25 @@ app.get("/api/supplier-match", requireAdmin, async (request, response, next) => 
     const limit = Math.min(100, Math.max(1, Number(request.query.limit) || 40));
     const offset = Math.max(0, Number(request.query.offset) || 0);
     const excluded = [...(await supplierMatchExcludedKeys())];
+    // «Только от поставщиков»: partner ids / names, empty = everyone
+    const only = supplierMatchOnlyKeys(request.query.only);
     const where = `tab = $1 AND status IN ('new', 'failed') AND ($2::boolean = false OR confidence = 'exact')
       AND NOT (lower(coalesce(row_data->>'partnerId', '')) = ANY($6::text[]) OR lower(coalesce(row_data->>'supplierName', '')) = ANY($6::text[]))
+      AND (cardinality($7::text[]) = 0 OR lower(coalesce(row_data->>'partnerId', '')) = ANY($7::text[]) OR lower(coalesce(row_data->>'supplierName', '')) = ANY($7::text[]))
       AND ($3 = '' OR lower(product_name) LIKE '%' || $3 || '%' OR offer_key LIKE '%' || $3 || '%' OR lower(row_data->>'supplierName') LIKE '%' || $3 || '%')`;
     const offers = await prisma.$queryRawUnsafe(
       `SELECT offer_key, max(sold30) AS sold30 FROM supplier_match_suggestions WHERE ${where}
         GROUP BY offer_key ORDER BY max(sold30) DESC, offer_key LIMIT $4 OFFSET $5`,
-      tab, exactOnly, q, limit, offset, excluded,
+      tab, exactOnly, q, limit, offset, excluded, only,
     );
     const keys = offers.map((o) => o.offer_key);
     const items = keys.length ? await prisma.$queryRawUnsafe(
       `SELECT * FROM supplier_match_suggestions WHERE offer_key = ANY($1::text[]) AND tab = $2 AND status IN ('new', 'failed')
          AND ($3::boolean = false OR confidence = 'exact')
          AND NOT (lower(coalesce(row_data->>'partnerId', '')) = ANY($4::text[]) OR lower(coalesce(row_data->>'supplierName', '')) = ANY($4::text[]))
+         AND (cardinality($5::text[]) = 0 OR lower(coalesce(row_data->>'partnerId', '')) = ANY($5::text[]) OR lower(coalesce(row_data->>'supplierName', '')) = ANY($5::text[]))
         ORDER BY (confidence = 'exact') DESC, ozon_price NULLS LAST`,
-      keys, tab, exactOnly, excluded,
+      keys, tab, exactOnly, excluded, only,
     ) : [];
     const byKey = new Map(keys.map((k) => [k, null]));
     for (const it of items) {
@@ -477,14 +487,24 @@ app.get("/api/supplier-match", requireAdmin, async (request, response, next) => 
              count(*) FILTER (WHERE tab = 'launch' AND confidence = 'exact')::int AS "launchExact",
              count(DISTINCT offer_key) FILTER (WHERE tab = 'extra')::int AS "extraProducts",
              count(*) FILTER (WHERE tab = 'extra' AND confidence = 'exact')::int AS "extraExact",
-             count(DISTINCT offer_key) FILTER (WHERE tab = $1 AND ($2::boolean = false OR confidence = 'exact'))::int AS "filtered"
+             count(DISTINCT offer_key) FILTER (WHERE tab = $1 AND ($2::boolean = false OR confidence = 'exact'))::int AS "filtered",
+             count(*) FILTER (WHERE tab = $1 AND confidence = 'exact' AND (cardinality($4::text[]) = 0
+               OR lower(coalesce(row_data->>'partnerId', '')) = ANY($4::text[]) OR lower(coalesce(row_data->>'supplierName', '')) = ANY($4::text[])))::int AS "exactSelected"
         FROM supplier_match_suggestions WHERE status IN ('new', 'failed')
-         AND NOT (lower(coalesce(row_data->>'partnerId', '')) = ANY($3::text[]) OR lower(coalesce(row_data->>'supplierName', '')) = ANY($3::text[]))`, tab, exactOnly, excluded);
+         AND NOT (lower(coalesce(row_data->>'partnerId', '')) = ANY($3::text[]) OR lower(coalesce(row_data->>'supplierName', '')) = ANY($3::text[]))`, tab, exactOnly, excluded, only);
+    // suppliers of this tab for the «Только от поставщиков» picker
+    const suppliers = await prisma.$queryRawUnsafe(`
+      SELECT coalesce(row_data->>'partnerId', '') AS "partnerId", max(row_data->>'supplierName') AS name,
+             count(DISTINCT offer_key)::int AS products, count(*) FILTER (WHERE confidence = 'exact')::int AS exact
+        FROM supplier_match_suggestions WHERE tab = $1 AND status IN ('new', 'failed')
+         AND NOT (lower(coalesce(row_data->>'partnerId', '')) = ANY($2::text[]) OR lower(coalesce(row_data->>'supplierName', '')) = ANY($2::text[]))
+       GROUP BY 1 ORDER BY 3 DESC`, tab, excluded);
     response.json({
       ok: true,
       tab,
       products: [...byKey.values()].filter(Boolean),
       counts,
+      suppliers,
       scan: await readSupplierMatchState("scan"),
       scanRequest: await readSupplierMatchState("scan_request"),
       approveJob: supplierMatchApproveJob,
@@ -510,11 +530,13 @@ app.post("/api/supplier-match/approve", requireAdmin, async (request, response, 
     if (request.body?.allExact) {
       if (supplierMatchApproveJob?.running) return response.status(409).json({ error: "Уже идёт массовое одобрение." });
       const tab = request.body.tab === "extra" ? "extra" : "launch";
+      const only = supplierMatchOnlyKeys(request.body.only);
       const rows = await prisma.$queryRawUnsafe(
         `SELECT id FROM supplier_match_suggestions WHERE tab = $1 AND status = 'new' AND confidence = 'exact'
            AND NOT (lower(coalesce(row_data->>'partnerId', '')) = ANY($2::text[]) OR lower(coalesce(row_data->>'supplierName', '')) = ANY($2::text[]))
+           AND (cardinality($3::text[]) = 0 OR lower(coalesce(row_data->>'partnerId', '')) = ANY($3::text[]) OR lower(coalesce(row_data->>'supplierName', '')) = ANY($3::text[]))
          ORDER BY sold30 DESC, id`,
-        tab, [...(await supplierMatchExcludedKeys())],
+        tab, [...(await supplierMatchExcludedKeys())], only,
       );
       const ids = rows.map((r) => String(r.id));
       supplierMatchApproveJob = { running: true, tab, total: ids.length, linked: 0, failed: 0, products: 0, startedAt: new Date().toISOString() };
