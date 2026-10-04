@@ -79,7 +79,8 @@ const articlesOf = (s: Supplier) => {
 };
 const stopText = (s: Supplier) => {
   const r = asRecord(s);
-  const until = r.inactiveUntilUnknown || !r.inactiveUntil ? "срок не указан" : `до ${compactDate(String(r.inactiveUntil))}`;
+  const day = String(r.inactiveUntil || "").slice(0, 10).split("-").reverse().join(".");
+  const until = r.inactiveUntilUnknown || !r.inactiveUntil ? "срок не указан" : `до ${day}`;
   const why = String(r.inactiveComment || s.stopReason || "").trim();
   return `${until}${why ? ` · ${why}` : ""}`;
 };
@@ -92,15 +93,13 @@ type Signal = { tone: "danger" | "warn" | "info"; text: string };
 function signalsOf(s: Supplier, ins: Insight | undefined): Signal[] {
   const out: Signal[] = [];
   const active = isActive(s);
-  const bal = ledgerOf(asRecord(s).ledger).balance;
   if (!active && (ins?.singleSource || 0) > 0) out.push({ tone: "danger", text: `${ins!.singleSource} ${plural(ins!.singleSource, "товар", "товара", "товаров")} без замены — не продаются` });
   if (active && ins && ins.products > 0) {
     const d = daysSince(ins.lastPriceAt);
     if (d > 14) out.push({ tone: "danger", text: `Прайс не обновлялся ${ins.lastPriceAt ? ago(ins.lastPriceAt) : "давно"}` });
-    else if (d > 3) out.push({ tone: "warn", text: `Прайс обновлён ${ago(ins.lastPriceAt)}` });
+    else if (d > 4) out.push({ tone: "warn", text: `Прайс обновлён ${ago(ins.lastPriceAt)}` });
     if (ins.activeRows === 0) out.push({ tone: "danger", text: "В PriceMaster нет живых строк" });
   }
-  if (bal < 0 && Math.abs(bal) >= (currencyOf(s) === "RUB" ? 100_000 : 1_000)) out.push({ tone: "warn", text: `Большой долг: ${money(bal, currencyOf(s))}` });
   if (s.pricingMode === "stock_only" || s.stockOnly) out.push({ tone: "info", text: "Только остаток — цену не берём" });
   return out;
 }
@@ -200,9 +199,10 @@ export function SuppliersPage() {
     if (!selectedId && list.length && window.matchMedia("(min-width: 980px)").matches) setSelectedId(sid(list[0]));
   }, [list, selectedId]);
 
+  const pushedRef = useRef(false);
   // phone: opening a card is a history step, so the system «back» returns to the list
   useEffect(() => {
-    const onPop = () => setSelectedId(new URLSearchParams(window.location.search).get("id") || "");
+    const onPop = () => { pushedRef.current = false; setSelectedId(new URLSearchParams(window.location.search).get("id") || ""); };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
@@ -212,12 +212,13 @@ export function SuppliersPage() {
       const url = new URL(window.location.href);
       url.searchParams.set("id", sid(s));
       window.history.pushState(window.history.state, "", url.toString());
+      pushedRef.current = true;
       window.scrollTo(0, 0);
     }
     setSelectedId(sid(s)); setTab("overview");
   };
   const back = () => {
-    if (isPhone() && window.history.length > 1 && new URLSearchParams(window.location.search).get("id")) window.history.back();
+    if (pushedRef.current) window.history.back();
     else setSelectedId("");
   };
   const filters: Array<[Filter, string, number]> = [
@@ -500,7 +501,7 @@ function PaymentBox({ supplier, currency, inputRef, onDone }: { supplier: Suppli
           <span>{sym(currency)}</span>
         </span>
       </label>
-      <input className="sp2-pay-note" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Комментарий (необязательно)" />
+      <input className="sp2-pay-note" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Комментарий" />
       <button className="primary-action" type="submit" disabled={!(value > 0) || pay.isPending}>
         {pay.isPending ? <Loader2 className="spin" size={15} /> : <CheckCircle2 size={15} />} Заплатил
       </button>
