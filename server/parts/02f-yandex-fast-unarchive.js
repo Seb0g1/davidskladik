@@ -50,8 +50,11 @@ async function runFastYandexBulkUnarchive({ source = "schedule" } = {}) {
     // not by our cached marketplaceState.
     const toDelete = [];
     const toUnarchive = [];
+    const deduped = typeof marketDedupeOfferKeys === "function" ? await marketDedupeOfferKeys().catch(() => new Set()) : new Set();
     for (const product of products) {
       if (!cleanText(product.target) || !cleanText(product.offerId)) continue;
+      // a duplicate archived on purpose («Дубль варианта») stays archived
+      if (deduped.has(`${cleanText(product.target)}|${cleanText(product.offerId).toLowerCase()}`)) continue;
       let name = cleanText(product.name || product.yandex?.name || product.offerId);
       if (!name || name === cleanText(product.offerId)) {
         name = ozonNameByOffer.get(cleanText(product.offerId).toLowerCase()) || name;

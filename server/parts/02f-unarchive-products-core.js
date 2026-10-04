@@ -1,7 +1,13 @@
 async function unarchiveProductsOnMarketplaces(products = [], options = {}) {
   const actions = [];
   const byTarget = new Map();
+  // Market duplicates archived on purpose («Дубль варианта» → one offer kept) stay archived
+  const deduped = typeof marketDedupeOfferKeys === "function" ? await marketDedupeOfferKeys().catch(() => new Set()) : new Set();
   for (const product of products) {
+    if (product?.marketplace === "yandex" && deduped.has(`${cleanText(product.target)}|${cleanText(product.offerId).toLowerCase()}`)) {
+      actions.push({ id: product.id, type: "unarchive", offerId: product.offerId, target: product.target, ok: false, skipped: true, error: "market_duplicate_archived" });
+      continue;
+    }
     if (!product?.id || !product?.target || (product.marketplace === "yandex" && !cleanText(product.offerId))) {
       actions.push({
         id: product?.id || "",

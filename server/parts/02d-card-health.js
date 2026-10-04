@@ -17,7 +17,8 @@ let cardHealthTablesReady = false;
 let cardHealthRunning = false;
 
 const CARD_HEALTH_RULES = [
-  { code: "variant_volume", re: /не указаны отличия|дубль варианта/i, title: "Группа вариантов: нет объёма или дубль", fix: "resend_card", howTo: "Переотправим карточку: объём флакона и «тестер» берутся из названия, группа — по аромату и бренду." },
+  { code: "variant_duplicate", re: /дубль варианта/i, title: "Дубль варианта: один товар под разными артикулами", fix: "dedupe_variant", howTo: "В группе оставим лучший артикул (больше продаж → больше остаток → выше рейтинг), остальные уйдут в архив Маркета и не вернутся автоматически." },
+  { code: "variant_volume", re: /не указаны отличия/i, title: "Группа вариантов: нет объёма", fix: "resend_card", howTo: "Переотправим карточку: объём флакона и «тестер» берутся из названия, группа — по аромату и бренду." },
   { code: "variant_brand", re: /общие признаки не совпадают/i, title: "Группа вариантов: разные бренды или признаки", fix: "resend_card", howTo: "Переотправим карточку: группа строится заново из бренда, аромата и концентрации — чужие варианты выйдут из неё." },
   { code: "tnved", re: /тн вэд/i, title: "Нет кода ТН ВЭД", fix: "resend_card", howTo: "Переотправим карточку: ТН ВЭД и ОКПД 2 подставятся по типу товара." },
   { code: "dimensions", re: /габарит|не указан вес/i, title: "Нет габаритов или веса", fix: "resend_card", howTo: "Переотправим карточку: габариты и вес — из карточки Ozon или шаблона по объёму." },
@@ -344,6 +345,21 @@ async function applyCardIssues(issueIds = [], { source = "manual" } = {}) {
     for (const i of bad) await mark([i.id], "failed", (r.refused || {})[i.offer_id] || "Цена не подтверждена: не совпадает с ценой склада");
     result.applied += ok.length;
     result.failed += bad.length;
+  }
+
+  // dedupe_variant — keep the best offer of each duplicate group, archive the rest on Market
+  const dupes = issues.filter((i) => i.fix === "dedupe_variant");
+  if (dupes.length) {
+    const r = await applyVariantDedupe({ offerIds: dupes.map((i) => i.offer_id) });
+    const kept = new Set(r.plan.map((p) => String(p.keep).toLowerCase()));
+    const archived = new Set(r.plan.flatMap((p) => p.archive).map((id) => String(id).toLowerCase()));
+    const ok = dupes.filter((i) => kept.has(String(i.offer_id).toLowerCase()) || archived.has(String(i.offer_id).toLowerCase()));
+    const bad = dupes.filter((i) => !ok.includes(i));
+    await mark(ok.map((i) => i.id), "applied");
+    await mark(bad.map((i) => i.id), "failed", "Группа дублей не найдена — дождитесь следующей проверки карточек");
+    result.applied += ok.length;
+    result.failed += bad.length;
+    result.details.push({ fix: "dedupe_variant", groups: r.groups, archived: r.archived, failed: r.failed });
   }
   return result;
 }
@@ -743,6 +759,109 @@ app.get("/api/card-health/variant-duplicates", requireAdmin, async (_request, re
   try {
     const groups = await cardVariantDuplicates();
     response.json({ ok: true, groups: groups.length, offers: groups.reduce((s, g) => s + g.offers.length, 0), items: groups });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─── Починка «Дубль варианта» ─────────────────────────────────────────────────
+// Один и тот же товар (группа + объём + тестер) под разными артикулами: оставляем лучший, остальные —
+// в архив Маркета. Список архивированных дублей (market_offer_dedupe) не даёт автоматике разархивировать их.
+
+let marketDedupeCache = { at: 0, keys: new Set() };
+
+async function requireMarketDedupeTable() {
+  const prisma = await requireCardHealthTables();
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS market_offer_dedupe (
+      shop_id TEXT NOT NULL,
+      offer_id TEXT NOT NULL,
+      keeper_offer_id TEXT NOT NULL,
+      group_id TEXT,
+      archived_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (shop_id, offer_id)
+    )`);
+  return prisma;
+}
+
+/** `${shop}|${offer id lower}` of every duplicate archived on purpose (1 min cache). */
+async function marketDedupeOfferKeys() {
+  if (Date.now() - marketDedupeCache.at < 60_000) return marketDedupeCache.keys;
+  const prisma = await requireMarketDedupeTable();
+  const rows = await prisma.$queryRawUnsafe(`SELECT shop_id, offer_id FROM market_offer_dedupe`);
+  marketDedupeCache = { at: Date.now(), keys: new Set(rows.map((r) => `${r.shop_id}|${String(r.offer_id).toLowerCase()}`)) };
+  return marketDedupeCache.keys;
+}
+
+/** The offer of a duplicate group that stays: more sales → more stock → higher rating → not a conveyor copy → older. */
+function pickVariantKeeper(offers = []) {
+  return [...offers].sort((a, b) => (b.sold - a.sold) || (b.stock - a.stock) || ((b.rating ?? -1) - (a.rating ?? -1))
+    || (Number(a.fromFragrantica) - Number(b.fromFragrantica))
+    || (new Date(a.createdAt || 0) - new Date(b.createdAt || 0)) || String(a.offerId).localeCompare(String(b.offerId)))[0];
+}
+
+async function applyVariantDedupe({ dryRun = false, offerIds = null } = {}) {
+  const prisma = await requireMarketDedupeTable();
+  const only = offerIds ? new Set(offerIds.map((id) => cleanText(id).toLowerCase())) : null;
+  const groups = (await cardVariantDuplicates()).filter((g) => !only || g.offers.some((o) => only.has(String(o.offerId).toLowerCase())));
+  const shops = getYandexShops({ includeSyncDisabled: true });
+  const plan = groups.map((g) => {
+    const keeper = pickVariantKeeper(g.offers);
+    return { ...g, keeper: keeper.offerId, archive: g.offers.filter((o) => o.offerId !== keeper.offerId).map((o) => o.offerId) };
+  });
+  const out = { groups: plan.length, archived: 0, failed: 0, plan: plan.map((p) => ({ group: p.groupName, volume: p.volume, tester: p.tester, keep: p.keeper, archive: p.archive })) };
+  if (dryRun) return out;
+  for (const p of plan) {
+    const shop = shops.find((s) => cleanText(s.id) === cleanText(p.shopId));
+    if (!shop || !p.archive.length) continue;
+    // remember first: the minute-long unarchive loop must already skip them when Market reports «archived»
+    for (const offerId of p.archive) {
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO market_offer_dedupe (shop_id, offer_id, keeper_offer_id, group_id) VALUES ($1, $2, $3, $4)
+         ON CONFLICT (shop_id, offer_id) DO UPDATE SET keeper_offer_id = EXCLUDED.keeper_offer_id, group_id = EXCLUDED.group_id, archived_at = now()`,
+        cleanText(p.shopId), offerId, p.keeper, p.groupId,
+      );
+    }
+    marketDedupeCache.at = 0;
+    const results = await sendYandexOfferArchiveState(shop, p.archive, true);
+    for (const r of results) {
+      if (r.ok) out.archived += 1;
+      else {
+        out.failed += 1;
+        await prisma.$executeRawUnsafe(`DELETE FROM market_offer_dedupe WHERE shop_id = $1 AND offer_id = $2`, cleanText(p.shopId), r.offerId);
+        logger.warn("market variant dedupe archive failed", { offerId: r.offerId, detail: r.error });
+      }
+    }
+  }
+  marketDedupeCache.at = 0;
+  logger.info("market variant dedupe", { groups: out.groups, archived: out.archived, failed: out.failed });
+  return out;
+}
+
+// Вернуть артикул из «архивированных дублей» (например, по ошибке): снять блок и разархивировать
+app.post("/api/card-health/variant-duplicates/restore", requireAdmin, async (request, response, next) => {
+  try {
+    const prisma = await requireMarketDedupeTable();
+    const offerId = cleanText(request.body?.offerId);
+    const rows = await prisma.$queryRawUnsafe(`DELETE FROM market_offer_dedupe WHERE lower(offer_id) = lower($1) RETURNING shop_id, offer_id`, offerId);
+    marketDedupeCache.at = 0;
+    const shops = getYandexShops({ includeSyncDisabled: true });
+    for (const r of rows) {
+      const shop = shops.find((s) => cleanText(s.id) === cleanText(r.shop_id));
+      if (shop) await sendYandexOfferArchiveState(shop, [r.offer_id], false);
+    }
+    await appendAudit(request, "card_health.variant_restore", { entityType: "market_offer", entityId: offerId, newValue: { restored: rows.length } });
+    response.json({ ok: true, restored: rows.length });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/card-health/variant-duplicates/apply", requireAdmin, async (request, response, next) => {
+  try {
+    const result = await applyVariantDedupe({ dryRun: request.body?.dryRun === true, offerIds: Array.isArray(request.body?.offerIds) ? request.body.offerIds : null });
+    if (!request.body?.dryRun) await appendAudit(request, "card_health.variant_dedupe", { entityType: "market_offer", entityId: "variant-duplicates", newValue: { groups: result.groups, archived: result.archived, failed: result.failed } });
+    response.json({ ok: true, ...result });
   } catch (error) {
     next(error);
   }

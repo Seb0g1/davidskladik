@@ -36,7 +36,7 @@ type Improve = {
 };
 
 const STATUSES: Array<[string, string]> = [["open", "Нужно решить"], ["failed", "Не починилось"], ["applied", "Починка отправлена"], ["fixed", "Исправлено"], ["dismissed", "Скрыто"]];
-const FIX_LABEL: Record<string, string> = { resend_card: "Переотправить карточку", reprice: "Отправить цену", confirm_quarantine: "Подтвердить цену" };
+const FIX_LABEL: Record<string, string> = { resend_card: "Переотправить карточку", reprice: "Отправить цену", confirm_quarantine: "Подтвердить цену", dedupe_variant: "Оставить лучший, дубли в архив" };
 
 export function CardHealthPage() {
   const [status, setStatus] = useState("open");
