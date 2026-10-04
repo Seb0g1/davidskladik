@@ -96,7 +96,7 @@ async function cardHealthImproveStats() {
   const one = async (sql) => (ready.m && ready.d && ready.e ? Number((await prisma.$queryRawUnsafe(sql))[0]?.n || 0) : 0);
   const [cards, matched, drafts, review, improved, rating] = await Promise.all([
     prisma.$queryRawUnsafe(`SELECT count(*)::int AS n FROM warehouse_products WHERE archived = false`).then((r) => Number(r[0]?.n || 0)),
-    one(`SELECT count(DISTINCT lower(offer_id))::int AS n FROM fragrantica_card_matches WHERE volume_ml IS NOT NULL AND offer_id !~* '^FR[0-9]'`),
+    one(`SELECT count(DISTINCT lower(offer_id))::int AS n FROM fragrantica_card_matches WHERE volume_ml IS NOT NULL AND NOT archived AND offer_id !~* '^FR[0-9]'`),
     one(`SELECT count(*)::int AS n FROM fragrantica_drafts WHERE data ? 'existing' AND status IN ('queued', 'working')`),
     one(`SELECT count(*)::int AS n FROM fragrantica_drafts WHERE data ? 'existing' AND status IN ('ready', 'attention')`),
     one(`SELECT count(*)::int AS n FROM fragrantica_exports WHERE item->>'improve' = 'true' AND status = 'imported'`),

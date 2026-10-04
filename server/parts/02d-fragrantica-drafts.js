@@ -423,7 +423,7 @@ async function fragranticaShopPromoHashes(existing) {
   const promise = (async () => {
     const prisma = await requireFragranticaDraftTables();
     const sample = await prisma.$queryRawUnsafe(
-      `SELECT offer_id FROM fragrantica_card_matches WHERE target = $1 ORDER BY random() LIMIT 30`, cleanText(existing.target),
+      `SELECT offer_id FROM fragrantica_card_matches WHERE target = $1 AND NOT archived ORDER BY random() LIMIT 30`, cleanText(existing.target),
     );
     const photos = await fragranticaShopCardPhotos(existing, sample.map((r) => r.offer_id));
     // the promo tail is at the end of a card: the last 4 pictures of every sampled card

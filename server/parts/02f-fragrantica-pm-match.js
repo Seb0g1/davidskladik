@@ -116,11 +116,12 @@ async function runFragranticaShopStockMatch(prisma) {
         if (m.count) stock[shop] = { n: m.count, v: m.volumes };
         for (const i of m.matched || []) {
           const row = index.rows[i];
-          if (!row.offerId || row.archived) continue;
+          // archived cards are matched too («Подбор поставщиков» looks for them); card improvement skips them itself
+          if (!row.offerId) continue;
           // a set («набор», «5 x 5 ml», «200 ml + 25 ml») is not one bottle of this perfume
           if (FRAG_SET_NAME_RE.test(row.name)) continue;
           const key = `${shop}\u0000${row.offerId}`;
-          if (!cardMatches.has(key)) cardMatches.set(key, { shop, offerId: row.offerId, name: row.name, perfumeIds: [] });
+          if (!cardMatches.has(key)) cardMatches.set(key, { shop, offerId: row.offerId, name: row.name, archived: Boolean(row.archived), perfumeIds: [] });
           cardMatches.get(key).perfumeIds.push(perfume.id);
         }
       }
@@ -139,7 +140,7 @@ async function runFragranticaShopStockMatch(prisma) {
   for (const m of cardMatches.values()) {
     if (m.perfumeIds.length !== 1) continue;
     const volumes = fragPmVolumes(m.name);
-    matches.push({ target: m.shop, offerId: m.offerId, perfumeId: m.perfumeIds[0], volume: volumes.length === 1 ? volumes[0] : null, tester: /тестер|tester/i.test(m.name) });
+    matches.push({ target: m.shop, offerId: m.offerId, perfumeId: m.perfumeIds[0], volume: volumes.length === 1 ? volumes[0] : null, tester: /тестер|tester/i.test(m.name), archived: m.archived });
   }
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS fragrantica_card_matches (
@@ -151,11 +152,12 @@ async function runFragranticaShopStockMatch(prisma) {
       matched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (target, offer_id)
     )`);
+  await prisma.$executeRawUnsafe(`ALTER TABLE fragrantica_card_matches ADD COLUMN IF NOT EXISTS archived BOOLEAN NOT NULL DEFAULT false`);
   await prisma.$transaction([
     prisma.$executeRawUnsafe(`DELETE FROM fragrantica_card_matches`),
     prisma.$executeRawUnsafe(
-      `INSERT INTO fragrantica_card_matches (target, offer_id, perfume_id, volume_ml, tester)
-       SELECT x->>'target', x->>'offerId', (x->>'perfumeId')::int, NULLIF(x->>'volume', '')::numeric, (x->>'tester')::boolean
+      `INSERT INTO fragrantica_card_matches (target, offer_id, perfume_id, volume_ml, tester, archived)
+       SELECT x->>'target', x->>'offerId', (x->>'perfumeId')::int, NULLIF(x->>'volume', '')::numeric, (x->>'tester')::boolean, coalesce((x->>'archived')::boolean, false)
          FROM jsonb_array_elements($1::jsonb) x ON CONFLICT DO NOTHING`,
       JSON.stringify(matches),
     ),
