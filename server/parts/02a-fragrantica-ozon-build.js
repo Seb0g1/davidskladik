@@ -127,7 +127,8 @@ function fragOzonGuessTypeKey(perfume = {}) {
   const text = `${perfume.name || ""} ${perfume.title || ""}`.toLowerCase();
   if (/eau de toilette|\bedt\b|туалетн/.test(text)) return "edt";
   if (/eau de cologne|cologne|одеколон/.test(text)) return "cologne";
-  if (/perfume oil|parfum oil|attar|масло/.test(text)) return "oil";
+  // «attar» is not a type: Attar Collection makes eau de parfum
+  if (/perfume oil|parfum oil|масло/.test(text)) return "oil";
   if (/extrait|(^|\s)parfum$|(^|\s)духи/.test(text)) return "parfum";
   return "edp";
 }

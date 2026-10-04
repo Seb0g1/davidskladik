@@ -552,6 +552,31 @@ async function enqueueFragranticaImprovements({ limit = FRAG_IMPROVE_PER_SCAN, c
   return { queued, withSales };
 }
 
+// The type of the product behind an existing card (card improvement): the supplier rows linked to the article say
+// what is really sold, else the card's own titles. Fragrantica's guess («eau de parfum» by default) turned EDT cards
+// into EDP ones (Kenzo Flower, Light Blue, Born in Roma…) — it is the last resort only.
+const DRAFT_TYPE_BY_CONCENTRATION = { edp: "edp", edt: "edt", parfum: "parfum", edc: "cologne" };
+async function existingCardTypeKey(offerId) {
+  const prisma = getPrisma();
+  if (!prisma || !cleanText(offerId)) return null;
+  const parser = require("./lib/perfume-match");
+  const vote = (names) => {
+    const counts = new Map();
+    for (const name of names) {
+      const p = parser.parsePerfumeName(name);
+      const key = p.type === "oil" ? "oil" : DRAFT_TYPE_BY_CONCENTRATION[p.concentration];
+      if (key) counts.set(key, (counts.get(key) || 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+  };
+  const links = await prisma.$queryRawUnsafe(
+    `SELECT l.exact_name AS name FROM product_links l JOIN warehouse_products w ON w.id = l.product_id
+      WHERE lower(w.offer_id) = lower($1) AND coalesce(l.exact_name, '') <> ''`, cleanText(offerId),
+  ).catch(() => []);
+  const cards = await prisma.$queryRawUnsafe(`SELECT name FROM warehouse_products WHERE lower(offer_id) = lower($1)`, cleanText(offerId)).catch(() => []);
+  return vote(links.map((r) => r.name)) || vote(cards.map((r) => r.name));
+}
+
 async function buildFragranticaCardDraft(draft) {
   const perfumeId = Number(draft.perfume_id);
   const targets = fragranticaDraftTargets(draft.targets);
@@ -575,8 +600,10 @@ async function buildFragranticaCardDraft(draft) {
   const ozonTarget = targets.find((t) => t.kind === "ozon");
   const perfume = await fragranticaPerfumeForExport(perfumeId);
   parts.perfume = Date.now() - buildStartedAt;
-  // the type is known before the form: the draft's own, else the guess from the name (same rule as the form)
-  const typeKey = FRAG_OZON_TYPES.some((t) => t.key === draft.type_key) ? draft.type_key : fragOzonGuessTypeKey(perfume);
+  // the type is known before the form: the draft's own; an existing card keeps its product's type; else the guess
+  const existingType = !FRAG_OZON_TYPES.some((t) => t.key === draft.type_key) && draft.data?.existing?.offerId
+    ? await existingCardTypeKey(draft.data.existing.offerId).catch(() => null) : null;
+  const typeKey = FRAG_OZON_TYPES.some((t) => t.key === draft.type_key) ? draft.type_key : existingType || fragOzonGuessTypeKey(perfume);
   const styles = [...new Set(targets.map((t) => t.style))];
   const marketplace = targets.some((t) => t.kind === "yandex") ? "yandex" : "ozon";
 
