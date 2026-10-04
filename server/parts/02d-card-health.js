@@ -79,6 +79,9 @@ async function requireCardHealthTables() {
       checked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       PRIMARY KEY (shop_id, offer_id)
     )`);
+  // Market variant group of every card: what «Дубль варианта» is about
+  await prisma.$executeRawUnsafe(`ALTER TABLE card_quality ADD COLUMN IF NOT EXISTS group_id TEXT, ADD COLUMN IF NOT EXISTS group_name TEXT, ADD COLUMN IF NOT EXISTS volume NUMERIC, ADD COLUMN IF NOT EXISTS tester BOOLEAN, ADD COLUMN IF NOT EXISTS name TEXT`);
+  await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS card_quality_group_idx ON card_quality (shop_id, group_id)`);
   await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS card_health_state (key TEXT PRIMARY KEY, value JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
   cardHealthTablesReady = true;
   return prisma;
@@ -150,10 +153,16 @@ async function runCardHealthScan({ autoFix = true } = {}) {
         const rows = [];
         if (cards.length) {
           await prisma.$executeRawUnsafe(
-            `INSERT INTO card_quality (shop_id, offer_id, content_rating, errors, warnings, checked_at)
-             SELECT $1, x->>'o', NULLIF(x->>'r', '')::int, (x->>'e')::int, (x->>'w')::int, now() FROM jsonb_array_elements($2::jsonb) x
-             ON CONFLICT (shop_id, offer_id) DO UPDATE SET content_rating = EXCLUDED.content_rating, errors = EXCLUDED.errors, warnings = EXCLUDED.warnings, checked_at = now()`,
-            shop.id, JSON.stringify(cards.filter((c) => c.offerId).map((c) => ({ o: c.offerId, r: Number.isFinite(Number(c.contentRating)) ? Number(c.contentRating) : "", e: (c.errors || []).length, w: (c.warnings || []).length }))),
+            `INSERT INTO card_quality (shop_id, offer_id, content_rating, errors, warnings, checked_at, group_id, group_name, volume, tester, name)
+             SELECT $1, x->>'o', NULLIF(x->>'r', '')::int, (x->>'e')::int, (x->>'w')::int, now(),
+                    NULLIF(x->>'g', ''), NULLIF(x->>'gn', ''), NULLIF(x->>'v', '')::numeric, (x->>'t')::boolean, NULLIF(x->>'n', '')
+               FROM jsonb_array_elements($2::jsonb) x
+             ON CONFLICT (shop_id, offer_id) DO UPDATE SET content_rating = EXCLUDED.content_rating, errors = EXCLUDED.errors, warnings = EXCLUDED.warnings, checked_at = now(),
+               group_id = EXCLUDED.group_id, group_name = EXCLUDED.group_name, volume = EXCLUDED.volume, tester = EXCLUDED.tester, name = EXCLUDED.name`,
+            shop.id, JSON.stringify(cards.filter((c) => c.offerId).map((c) => ({
+              o: c.offerId, r: Number.isFinite(Number(c.contentRating)) ? Number(c.contentRating) : "", e: (c.errors || []).length, w: (c.warnings || []).length,
+              g: c.groupId || "", gn: c.groupName || "", v: c.volume || "", t: c.tester === undefined ? null : c.tester, n: names.get(c.offerId) || "",
+            }))),
           ).catch((error) => logger.warn("card quality save failed", { detail: error?.message }));
         }
         for (const card of cards) {
@@ -694,6 +703,46 @@ app.post("/api/card-improve/approve-all", requireAdmin, async (request, response
     );
     await appendAudit(request, "card_improve.approve_all", { entityType: "fragrantica_draft", entityId: "all-ready", newValue: { approved: rows.length } });
     response.json({ ok: true, approved: rows.length });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─── Дубли вариантов Маркета ──────────────────────────────────────────────────
+// Группа вариантов на Маркете = одна карточка с вариантами (наш параметр 200 «бренд + аромат + вид»).
+// «Дубль варианта» — в группе два наших артикула с одинаковыми объёмом и «тестером». Здесь — список таких
+// групп с данными для решения: продажи, остаток, рейтинг, давность.
+async function cardVariantDuplicates() {
+  const prisma = await requireCardHealthTables();
+  const rows = await prisma.$queryRawUnsafe(`
+    WITH q AS (
+      SELECT shop_id, offer_id, group_id, group_name, volume, coalesce(tester, false) AS tester, name, content_rating, errors, warnings
+        FROM card_quality WHERE group_id IS NOT NULL
+    ), d AS (
+      SELECT shop_id, group_id, volume, tester FROM q GROUP BY 1, 2, 3, 4 HAVING count(*) > 1
+    )
+    SELECT q.*, coalesce(s.sold, 0)::int AS sold, w.target_stock, w.status, w.created_at
+      FROM q JOIN d USING (shop_id, group_id, volume, tester)
+      LEFT JOIN (SELECT lower(offer_id) AS k, sum(quantity)::int AS sold FROM finance_orders
+                  WHERE coalesce(sold_at, created_at) > now() - interval '90 days' GROUP BY 1) s ON s.k = lower(q.offer_id)
+      LEFT JOIN warehouse_products w ON w.target = q.shop_id AND w.offer_id = q.offer_id
+     ORDER BY q.group_id, q.volume, q.tester, q.offer_id`);
+  const groups = new Map();
+  for (const r of rows) {
+    const key = `${r.shop_id}|${r.group_id}|${r.volume}|${r.tester}`;
+    if (!groups.has(key)) groups.set(key, { shopId: r.shop_id, groupId: r.group_id, groupName: r.group_name, volume: r.volume === null ? null : Number(r.volume), tester: r.tester, offers: [] });
+    groups.get(key).offers.push({
+      offerId: r.offer_id, name: r.name, sold: Number(r.sold || 0), stock: Number(r.target_stock || 0), status: r.status,
+      rating: r.content_rating === null ? null : Number(r.content_rating), createdAt: r.created_at, fromFragrantica: /^FR\d/i.test(r.offer_id),
+    });
+  }
+  return [...groups.values()];
+}
+
+app.get("/api/card-health/variant-duplicates", requireAdmin, async (_request, response, next) => {
+  try {
+    const groups = await cardVariantDuplicates();
+    response.json({ ok: true, groups: groups.length, offers: groups.reduce((s, g) => s + g.offers.length, 0), items: groups });
   } catch (error) {
     next(error);
   }

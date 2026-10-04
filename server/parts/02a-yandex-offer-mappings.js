@@ -73,9 +73,16 @@ function normalizeYandexOfferCardQuality(item = {}, shop = {}) {
   const recommendations = Array.isArray(item.recommendations) ? item.recommendations : [];
   const errors = Array.isArray(item.errors) ? item.errors : [];
   const warnings = Array.isArray(item.warnings) ? item.warnings : [];
+  // variant group: Market's group id plus our group name (200), bottle volume and tester flag
+  const params = Array.isArray(item.parameterValues) ? item.parameterValues : [];
+  const param = (id) => params.find((p) => Number(p.parameterId) === id)?.value;
   return compactObject({
     offerId,
     target: shop.id || "",
+    groupId: cleanText(item.groupId || item.group_id) || undefined,
+    groupName: cleanText(param(200)) || undefined,
+    volume: Number(param(24139073)) || undefined,
+    tester: param(53763303) === undefined ? undefined : String(param(53763303)) === "true",
     contentRating: Number.isFinite(contentRating) ? contentRating : 0,
     averageContentRating: Number.isFinite(averageContentRating) ? averageContentRating : undefined,
     contentRatingStatus: cleanText(item.contentRatingStatus || item.content_rating_status),
