@@ -47,7 +47,8 @@ const YANDEX_NAME_CATEGORY_RULES = [
 ];
 
 // Words that mean the product is not a fragrance itself.
-const NOT_PERFUME_NAME_RE = /гель|крем|масл[оа]\s+для|мыл[оа]|шампун|бальзам|лосьон|дезодорант|заправк|скраб|пилинг|маск[аи]|сыворотк|для\s+волос|hair|body\s+(lotion|cream|wash)|свеч|диффузор|для\s+дома|спрей\s+для\s+тела|(?<![а-яё])мист|\bmist\b|body\s+(spray|mist)/i;
+// «бальзамический» is a perfume note in a Market title (Jeroboam Ambra), not a balm.
+const NOT_PERFUME_NAME_RE = /гель|крем|масл[оа]\s+для|мыл[оа]|шампун|бальзам(?!ическ)|лосьон|дезодорант|заправк|скраб|пилинг|маск[аи]|сыворотк|для\s+волос|hair|body\s+(lotion|cream|wash)|свеч|диффузор|для\s+дома|спрей\s+для\s+тела|(?<![а-яё])мист|\bmist\b|body\s+(spray|mist)/i;
 
 const KIDS_NAME_RE = /детск|для\s+детей|малыш|младен|\bkids?\b|\bbaby\b|\bjunior\b/i;
 
