@@ -164,6 +164,9 @@ test("supplier row assessment: clones, non-perfume, concentration, flankers (rea
   assert.deepEqual([real.clone, real.notPerfume, real.concentrationOk, real.extraWords.length], [false, false, true, 0]);
   assert.equal(a("DIOR SAUVAGE (M) EDT 60 ML", { typeKey: "edt" }).extraWords.length, 0);
   assert.equal(a("Christian Dior Sauvage туалетная вода 60мл, шт", { typeKey: "edt" }).extraWords.length, 0);
+  // a former brand name is not an extra word («Thierry Mugler» = Mugler), a flanker still is
+  assert.equal(a("Thierry Mugler Alien eau EXTRAORDINAIRE W edT 6ml", { brand: "Mugler", name: "Alien Eau Extraordinaire", typeKey: "edt" }).extraWords.length, 0);
+  assert.deepEqual(a("THIERRY MUGLER A MEN STELLAR LUMINEUSE edp (m) 100ml", { brand: "Mugler", name: "A*Men" }).extraWords, ["stellar", "lumineuse"]);
   // non-perfume
   assert.equal(a("Dior Sauvage M A/Sh Lotion 100ml New 2015").notPerfume, true);
   assert.equal(a("Dior Sauvage After Shave Balm 100 ml").notPerfume, true);

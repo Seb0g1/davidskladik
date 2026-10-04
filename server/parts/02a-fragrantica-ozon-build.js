@@ -422,6 +422,10 @@ const FRAG_BRAND_ALIASES = {
   "abercrombie fitch": ["a&f", "abercrombie"],
   "estee lauder": ["lauder"],
   "van cleef arpels": ["vca", "arpels"],
+  // former / full brand names that supplier price lists still use
+  "mugler": ["thierry"],
+  "jo malone": ["london"],
+  "jo malone london": ["jo", "malone"],
 };
 
 function fragRowTokens(text) {
@@ -454,7 +458,8 @@ function assessFragranticaSupplierRow(rowName, { brand = "", name = "", typeKey 
   const concentration = fragRowConcentration(outsideTokens, outside);
   const wanted = typeKey === "oil" ? "parfum" : typeKey;
   const concentrationOk = !concentration || concentration === wanted;
-  const known = new Set([...brandTokens, ...fragRowTokens(brand), ...nameTokens]);
+  // brand aliases are part of the brand, not extra words («Thierry Mugler» = Mugler)
+  const known = new Set([...brandTokens, ...fragRowTokens(brand), ...nameTokens, ...aliases.flatMap((alias) => fragRowTokens(alias))]);
   // «eau de parfum» is a concentration, a lone «eau» is part of a name (Eau Sauvage ≠ Sauvage)
   const wordsOutside = fragRowTokens(outside.replace(/eau\s+de\s+(parfum|toilette|cologne)/g, " "));
   const extraWords = wordsOutside.filter((w) => !known.has(w) && !FRAG_ROW_STOP_WORDS.has(w) && !/^\d/.test(w) && (w.length >= 3 || w === "eau"));
