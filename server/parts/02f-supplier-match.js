@@ -74,6 +74,19 @@ async function writeSupplierMatchState(key, value) {
   );
 }
 
+// shorthand concentrations of supplier price lists («YSL Opium lady dt», «т/в», «п/в»)
+function supplierMatchRowConcentration(text) {
+  const t = String(text || "").toLowerCase().replace(/ё/g, "е");
+  const found = fragRowConcentration(fragRowTokens(t), t);
+  if (found) return found;
+  if (/(^|[^a-zа-я])(dt|т\s*[/.]\s*в)([^a-zа-я]|$)/.test(t)) return "edt";
+  if (/(^|[^a-zа-я])(dp|п\s*[/.]\s*в)([^a-zа-я]|$)/.test(t)) return "edp";
+  return "";
+}
+
+// damaged / discounted goods: a fine row to sell from, but never an «exact» one
+const SUPPLIER_MATCH_DEFECT_RE = /(подмят|мят(ая|ый|ой)?\s*(короб|упак)|без\s*(короб|упак|крыш|слюд|целлофан)|уценк|брак|дефект|царап|поврежд|витрин|damaged|no\s*box|without\s*box|unbox)/i;
+
 const supplierMatchKey = (value) => String(value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
 
 /** All active rows of the latest price lists with what a link needs (article, row id, partner, price, currency). */
@@ -116,8 +129,10 @@ function supplierMatchCandidates(group, index, { stoppedPartners = new Set(), ne
       if (link.exactName) linkedKeys.add(`n|${supplierMatchKey(link.exactName)}|${p}`);
     }
   }
-  const cardText = String(group.name || "").toLowerCase().replace(/ё/g, "е");
-  const cardConcentration = fragRowConcentration(fragRowTokens(cardText), cardText);
+  const cardConcentration = supplierMatchRowConcentration(group.name);
+  // a name word that is also a brand word must be there twice: «Ormonde Jayne Ormonde Elixir» ≠ «Ormonde Jayne Ta'if Elixir»
+  const brandWords = new Set(fragRowTokens(group.brand));
+  const doubledWords = [...new Set(fragRowTokens(group.perfumeName))].filter((w) => brandWords.has(w));
   const typeKey = cardConcentration || "edp";
   const out = [];
   for (const i of m.matched || []) {
@@ -135,11 +150,17 @@ function supplierMatchCandidates(group, index, { stoppedPartners = new Set(), ne
     if (!volumes.some((v) => Math.abs(v - Number(group.volume)) < 0.01)) continue;
     if (supplierRowVolumeMismatch(group.name, row.name)) continue;
     if (priceGuardRowProblem(row, group.name)) continue;
+    if (doubledWords.length) {
+      const rowTokens = fragRowTokens(row.name);
+      if (doubledWords.some((w) => rowTokens.filter((t) => t === w).length < 2)) continue;
+    }
     const check = assessFragranticaSupplierRow(row.name, { brand: group.brand, name: group.perfumeName, typeKey });
     if (check.clone || check.notPerfume) continue;
-    if (check.concentration && cardConcentration && check.concentration !== cardConcentration) continue;
+    const rowConcentration = check.concentration || supplierMatchRowConcentration(row.name);
+    if (rowConcentration && cardConcentration && rowConcentration !== cardConcentration) continue;
     const issues = [];
-    if (!check.concentration) issues.push("концентрация не указана");
+    if (SUPPLIER_MATCH_DEFECT_RE.test(row.name)) issues.push("уценка / повреждение");
+    if (!rowConcentration) issues.push("концентрация не указана");
     if (!cardConcentration) issues.push("у карточки не указана концентрация");
     out.push({ row, confidence: issues.length ? "probable" : "exact", issues });
   }
