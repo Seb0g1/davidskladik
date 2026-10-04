@@ -1,7 +1,7 @@
-import { ShieldAlert, Activity, FileCheck2, Flower2, AlertCircle, AlertTriangle, BadgeDollarSign, Ban, BarChart3, BookOpen, CirclePlay, ClipboardList, DollarSign, Download, HandCoins, HelpCircle, Home, MessageCircle, MessageCircleHeart, PackageCheck, PackagePlus, RefreshCcw, Settings, ShoppingCart, Sparkles, Star, Store, Tag, Truck, Upload, Wrench } from "lucide-react";
+import { ShieldAlert, Activity, FileCheck2, Flower2, AlertCircle, AlertTriangle, BadgeDollarSign, Ban, BarChart3, BookOpen, CirclePlay, ClipboardList, DollarSign, Download, HandCoins, HelpCircle, Home, Link2, MessageCircle, MessageCircleHeart, PackageCheck, PackagePlus, RefreshCcw, Settings, ShoppingCart, Sparkles, Star, Store, Tag, Truck, Upload, Wrench } from "lucide-react";
 import { ComponentType, lazy, LazyExoticComponent, ReactNode } from "react";
 
-export type AppRoute = "dashboard" | "import" | "avito" | "shop" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "consignment" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier" | "new-products" | "tnved" | "support" | "brand-bans" | "brands-tnved" | "ozon-card-fix" | "fragrantica" | "ozon-docs" | "price-guard" | "card-health" | "card-improve";
+export type AppRoute = "dashboard" | "import" | "avito" | "shop" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "consignment" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier" | "new-products" | "tnved" | "support" | "brand-bans" | "brands-tnved" | "ozon-card-fix" | "fragrantica" | "ozon-docs" | "price-guard" | "card-health" | "card-improve" | "supplier-match";
 
 export type NavItem = { route: AppRoute; href: string; label: string; icon: ReactNode; keywords?: string };
 
@@ -22,6 +22,7 @@ export const navItems: NavItem[] = [
   { route: "operations", href: "/app/operations", label: "Операции", icon: <CirclePlay size={16} />, keywords: "синхронизация запуск" },
   { route: "recovery-queue", href: "/app/recovery-queue", label: "Восстановление", icon: <RefreshCcw size={16} />, keywords: "очередь восстановления" },
   { route: "suppliers", href: "/app/suppliers", label: "Поставщики", icon: <Truck size={16} />, keywords: "балансы оплаты postavshiki" },
+  { route: "supplier-match", href: "/app/supplier-match", label: "Подбор поставщиков", icon: <Link2 size={16} />, keywords: "подбор поставщиков привязки pricemaster нет поставщика запустить в продажу новые привязки" },
   { route: "shop", href: "/app/shop", label: "Магазин MV", icon: <Store size={16} />, keywords: "magicvibes сайт магазин" },
   { route: "import", href: "/app/import", label: "Импорт на Яндекс", icon: <Download size={16} />, keywords: "яндекс маркет перенос" },
   { route: "supplier-cart", href: "/app/supplier-cart", label: "Автокорзина", icon: <ShoppingCart size={16} />, keywords: "корзина pricemaster заказы avtokorzina" },
@@ -45,7 +46,7 @@ export const navItems: NavItem[] = [
 export const NAV_SECTIONS: Array<{ id: string; title?: string; routes: AppRoute[] }> = [
   { id: "main", routes: ["dashboard", "warehouse", "picking-list", "supplier-cart", "consignment"] },
   { id: "clients", title: "Работа с клиентами", routes: ["reviews", "chats", "questions", "support"] },
-  { id: "marketplace", title: "Маркетплейсы", routes: ["suppliers", "avito", "import", "fragrantica", "ozon-docs", "prices", "price-guard", "card-health", "card-improve", "finance", "statistics"] },
+  { id: "marketplace", title: "Маркетплейсы", routes: ["suppliers", "supplier-match", "avito", "import", "fragrantica", "ozon-docs", "prices", "price-guard", "card-health", "card-improve", "finance", "statistics"] },
   { id: "admin", title: "Настройки", routes: ["settings", "system", "ai-drafts", "operations"] },
   { id: "tools", title: "Инструменты", routes: ["tnved", "brand-bans", "brands-tnved", "ozon-card-fix", "no-supplier", "recovery-queue", "new-products", "problem-products", "shop"] },
 ];
@@ -101,6 +102,7 @@ const LOADERS: Record<AppRoute, Loader> = {
   "price-guard": { load: () => import("../routes/PriceGuardPage"), exportName: "PriceGuardPage" },
   "card-health": { load: () => import("../routes/CardHealthPage"), exportName: "CardHealthPage" },
   "card-improve": { load: () => import("../routes/CardImprovePage"), exportName: "CardImprovePage" },
+  "supplier-match": { load: () => import("../routes/SupplierMatchPage"), exportName: "SupplierMatchPage" },
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
