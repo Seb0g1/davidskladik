@@ -614,3 +614,97 @@ app.post("/api/supplier-ledger/returns", requireAdmin, async (request, response,
   }
 });
 
+// ─── Сводка по поставщикам (страница «Поставщики») ─────────────────────────────
+// По каждому поставщику: сколько товаров на нём держится и сколько из них в продаже, сколько держится только
+// на нём, продажи за 30 дней и свежесть прайса в PriceMaster. Кэш 5 минут.
+let supplierInsightsCache = null;
+
+async function buildSupplierInsights() {
+  const prisma = getPrisma();
+  const out = { byKey: {}, builtAt: new Date().toISOString() };
+  const key = (partnerId, name) => (cleanText(partnerId) ? `p:${cleanText(partnerId)}` : `n:${normalizeSupplierName(name)}`);
+  const slot = (k) => (out.byKey[k] ||= { products: 0, sellable: 0, singleSource: 0, sold30: 0, revenue30: 0, lastPriceAt: null, activeRows: null });
+  if (prisma) {
+    // one product = one article across all shops (warehouse_products holds a row per marketplace card)
+    const links = await prisma.$queryRawUnsafe(`
+      SELECT lower(p.offer_id) AS offer, l.partner_id, l.supplier_name,
+             (NOT p.archived AND p.status = 'active' AND coalesce(p.target_stock, 0) > 0) AS sellable
+        FROM product_links l JOIN warehouse_products p ON p.id = l.product_id
+       WHERE p.offer_id IS NOT NULL`);
+    const byProduct = new Map();
+    for (const r of links) {
+      const k = key(r.partner_id, r.supplier_name);
+      if (!byProduct.has(r.offer)) byProduct.set(r.offer, { keys: new Set(), sellable: false });
+      const item = byProduct.get(r.offer);
+      item.keys.add(k);
+      if (r.sellable) item.sellable = true;
+    }
+    for (const { keys, sellable } of byProduct.values()) {
+      for (const k of keys) {
+        const s = slot(k);
+        s.products += 1;
+        if (sellable) s.sellable += 1;
+        if (keys.size === 1) s.singleSource += 1;
+      }
+    }
+    // pieces = what was picked up at the supplier; revenue = what those goods sold for on the marketplaces
+    const sales = await prisma.$queryRawUnsafe(`
+      SELECT partner_id, supplier_name,
+             sum(CASE WHEN source = 'supplier_picking' THEN quantity ELSE 0 END)::int AS qty,
+             sum(CASE WHEN source = 'marketplace_sync' AND status NOT ILIKE '%cancel%' THEN coalesce(sale_amount, 0) ELSE 0 END)::float AS revenue
+        FROM finance_orders
+       WHERE coalesce(sold_at, created_at) > now() - interval '30 days' AND (supplier_name IS NOT NULL OR partner_id IS NOT NULL)
+       GROUP BY 1, 2`).catch(() => []);
+    for (const r of sales) {
+      const s = slot(key(r.partner_id, r.supplier_name));
+      s.sold30 += Number(r.qty || 0);
+      s.revenue30 += Number(r.revenue || 0);
+    }
+  }
+  // PriceMaster: the date of the newest price list and how many rows are live in the active ones
+  try {
+    await discoverOfferDocsActiveColumn();
+    const activeDocFilter = offerDocsActiveColumn ? ` AND d.${offerDocsActiveColumn}${offerDocsActiveFilterSuffix}` : "";
+    const [docs] = await pool.query(`SELECT d.PartnerID AS partnerId, MAX(d.DocDate) AS lastDoc FROM OfferDocs d GROUP BY d.PartnerID`);
+    const [rows] = await pool.query(
+      `SELECT d.PartnerID AS partnerId, COUNT(*) AS activeRows
+         FROM OfferRows r JOIN OfferDocs d ON d.DocID = r.DocID
+        WHERE r.Ignored = 0 AND r.Active != 0 ${activeDocFilter}
+        GROUP BY d.PartnerID`,
+    );
+    for (const d of docs) slot(`p:${cleanText(String(d.partnerId))}`).lastPriceAt = d.lastDoc ? new Date(d.lastDoc).toISOString() : null;
+    for (const r of rows) slot(`p:${cleanText(String(r.partnerId))}`).activeRows = Number(r.activeRows || 0);
+  } catch (error) {
+    out.priceMasterError = error?.message || String(error);
+  }
+  return out;
+}
+
+app.get("/api/suppliers/insights", requireAdmin, async (request, response, next) => {
+  try {
+    if (request.query.refresh !== "true" && supplierInsightsCache && Date.now() - supplierInsightsCache.at < 5 * 60_000) {
+      return response.json(supplierInsightsCache.value);
+    }
+    const insights = await buildSupplierInsights();
+    const warehouse = await readWarehouse();
+    // one row per managed supplier (by partner id, else by name)
+    const suppliers = {};
+    for (const supplier of (warehouse.suppliers || []).map(normalizeManagedSupplier)) {
+      const byPartner = supplier.partnerId ? insights.byKey[`p:${cleanText(supplier.partnerId)}`] : null;
+      const byName = insights.byKey[`n:${normalizeSupplierName(supplier.name)}`];
+      const merged = { products: 0, sellable: 0, singleSource: 0, sold30: 0, revenue30: 0, lastPriceAt: null, activeRows: null };
+      for (const part of [byPartner, byName].filter(Boolean)) {
+        merged.products += part.products; merged.sellable += part.sellable; merged.singleSource += part.singleSource;
+        merged.sold30 += part.sold30; merged.revenue30 += part.revenue30;
+        merged.lastPriceAt = merged.lastPriceAt || part.lastPriceAt;
+        merged.activeRows = merged.activeRows ?? part.activeRows;
+      }
+      suppliers[supplier.id] = merged;
+    }
+    const value = { ok: true, builtAt: insights.builtAt, priceMasterError: insights.priceMasterError || null, suppliers };
+    supplierInsightsCache = { at: Date.now(), value };
+    response.json(value);
+  } catch (error) {
+    next(error);
+  }
+});

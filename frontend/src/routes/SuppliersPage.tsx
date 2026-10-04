@@ -1,1023 +1,902 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Boxes, CheckCircle2, ChevronRight, CreditCard, Edit3, Filter, Loader2, Package, PackageX, Plus, RefreshCw, RotateCcw, Scale, Search, Trash2, Truck, UserX, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import {
+  AlertTriangle, ArrowLeft, Ban, CheckCircle2, ChevronRight, Clock, CreditCard, Edit3, FileText, Loader2, Mail, MapPin,
+  MessageCircle, MoreHorizontal, Package, PackageX, Phone, Plus, RefreshCw, RotateCcw, Scale, Search, Send, Trash2, Truck, User, X,
+} from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
-import { DiagnosticValue } from "../components/DiagnosticValue";
-import { PageHeader } from "../components/PageHeader";
-import { SelectField } from "../components/SelectField";
-import { Stat } from "../components/Stat";
 import { SupplierLedgerEntrySchema, SupplierLedgerPaymentSchema, SupplierProfileResponseSchema, SupplierSchema, SuppliersResponseSchema } from "../types";
-import { asRecord, compactDate, errorMessage, numberValue } from "../lib/common";
+import { asRecord, compactDate, errorMessage } from "../lib/common";
+import { toast } from "../lib/toast";
+import "./suppliers.css";
+
+// «Поставщики» — рабочее место по поставщикам, как в CRM: слева список (поиск, фильтры, сигналы), справа карточка
+// выбранного поставщика. Главное наверху карточки: баланс и оплата, «остановить / включить», связь с поставщиком.
+// На телефоне список и карточка — отдельные экраны, быстрые действия закреплены снизу.
 
 type Supplier = z.infer<typeof SupplierSchema>;
 type LedgerEntry = z.infer<typeof SupplierLedgerEntrySchema>;
 type SupplierProfile = z.infer<typeof SupplierProfileResponseSchema>;
+type Contacts = { phone: string; telegram: string; whatsapp: string; email: string; manager: string; address: string; hours: string };
+type Insight = { products: number; sellable: number; singleSource: number; sold30: number; revenue30: number; lastPriceAt: string | null; activeRows: number | null };
+type InsightsResponse = { builtAt: string; priceMasterError: string | null; suppliers: Record<string, Insight> };
+type Filter = "all" | "active" | "stopped" | "debt" | "attention";
+type Tab = "overview" | "payments" | "orders" | "articles" | "settings";
 
-type SupplierForm = {
-  id: string;
-  name: string;
-  note: string;
-  stopReason: string;
-  priceCurrency: string;
+const OkSchema = z.object({ ok: z.boolean().optional().default(true) }).passthrough();
+const anyJson = <T,>(url: string, init?: RequestInit) => fetchJson<T>(url, z.custom<T>(() => true), init);
+const emptyContacts: Contacts = { phone: "", telegram: "", whatsapp: "", email: "", manager: "", address: "", hours: "" };
+
+// ── форматирование ───────────────────────────────────────────────────────────
+const sym = (c: string) => (String(c).toUpperCase() === "RUB" ? "₽" : "$");
+const money = (v: unknown, c = "USD", digits = 2) => {
+  const n = Math.abs(Number(v || 0));
+  return `${n.toLocaleString("ru-RU", { minimumFractionDigits: n % 1 ? digits : 0, maximumFractionDigits: digits })} ${sym(c)}`;
 };
-
-type ArticleDraft = {
-  id?: string;
-  article: string;
-  note: string;
+const signed = (v: unknown, c = "USD") => {
+  const n = Number(v || 0);
+  if (!n) return `0 ${sym(c)}`;
+  return `${n > 0 ? "+" : "−"}${money(n, c)}`;
 };
-
-type InactiveDraft = {
-  supplier: Supplier;
-  comment: string;
-  inactiveUntil: string;
-  inactiveUntilUnknown: boolean;
+const ago = (iso: string | null | undefined) => {
+  if (!iso) return "нет данных";
+  const ms = Date.now() - new Date(iso).getTime();
+  const h = Math.floor(ms / 3_600_000);
+  if (h < 1) return "только что";
+  if (h < 24) return `${h} ч назад`;
+  const d = Math.floor(h / 24);
+  return `${d} ${d % 10 === 1 && d % 100 !== 11 ? "день" : d % 10 >= 2 && d % 10 <= 4 && (d % 100 < 10 || d % 100 >= 20) ? "дня" : "дней"} назад`;
 };
-
-const MutationResultSchema = z.object({ ok: z.boolean().optional().default(true) }).passthrough();
-const emptySupplierForm: SupplierForm = { id: "", name: "", note: "", stopReason: "", priceCurrency: "USD" };
-
-const currencySymbol = (currency: string) => (String(currency || "USD").toUpperCase() === "RUB" ? "₽" : "$");
-
-const moneyAmount = (value: unknown, currency = "USD") => {
-  const n = Number(value || 0);
-  if (!Number.isFinite(n) || n <= 0) return "-";
-  return `${n.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currencySymbol(currency)}`;
+const daysSince = (iso: string | null | undefined) => (iso ? (Date.now() - new Date(iso).getTime()) / 86_400_000 : Infinity);
+const plural = (n: number, one: string, few: string, many: string) => {
+  const a = Math.abs(n) % 100; const b = a % 10;
+  return a > 10 && a < 20 ? many : b === 1 ? one : b >= 2 && b <= 4 ? few : many;
 };
+const dateInput = (days: number) => { const d = new Date(); d.setDate(d.getDate() + days); return d.toISOString().slice(0, 10); };
+const endOfMonth = () => { const d = new Date(); d.setMonth(d.getMonth() + 1, 0); return d.toISOString().slice(0, 10); };
 
-const moneySigned = (value: unknown, currency = "USD") => {
-  const n = Number(value || 0);
-  const sym = currencySymbol(currency);
-  if (!Number.isFinite(n) || n === 0) return `0 ${sym}`;
-  const sign = n > 0 ? "+" : "-";
-  return `${sign}${Math.abs(n).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${sym}`;
+// ── данные поставщика ────────────────────────────────────────────────────────
+const sid = (s: Supplier) => String(s.id || s.partnerId || s.name || "");
+const isActive = (s: Supplier) => s.stopped !== true && s.active !== false;
+const currencyOf = (s: Supplier): "USD" | "RUB" => {
+  const r = asRecord(s);
+  const c = String(asRecord(r.ledger).currency || r.priceCurrency || "USD").toUpperCase();
+  return c === "RUB" ? "RUB" : "USD";
 };
-
-function supplierId(supplier: Supplier) {
-  return String(supplier.id || supplier.partnerId || supplier.name || "");
-}
-
-function supplierArticles(supplier: Supplier) {
-  const raw = asRecord(supplier).articles;
-  return Array.isArray(raw) ? raw.map(asRecord) : [];
-}
-
-function supplierSearchText(supplier: Supplier) {
-  return [
-    supplier.name,
-    supplier.partnerId,
-    supplier.stopReason,
-    asRecord(supplier).note,
-    supplier.pricingMode,
-    ...supplierArticles(supplier).flatMap((article) => [article.article, article.note]),
-  ].join(" ").toLowerCase();
-}
-
-function supplierCurrencyOf(supplier: Supplier): "USD" | "RUB" {
-  // The ledger summary carries the supplier's currency (USD, RUB for Инна) straight from the server.
-  const ledgerCurrency = String(asRecord(asRecord(supplier).ledger).currency || "").toUpperCase();
-  const currency = ledgerCurrency === "RUB" || ledgerCurrency === "USD" ? ledgerCurrency : String(asRecord(supplier).priceCurrency || "USD").toUpperCase();
-  return currency === "RUB" ? "RUB" : "USD";
-}
-
-// The server keeps every supplier in its own currency with no exchange rates; the UI only shows it.
-function ledgerInCurrency(ledgerValue: unknown, _currency: "USD" | "RUB") {
-  const ledger = asRecord(ledgerValue);
+const ledgerOf = (v: unknown) => {
+  const l = asRecord(v);
   return {
-    balance: Number(ledger.balance || 0),
-    debt: Number(ledger.debtTotal || 0),
-    paid: Number(ledger.paidTotal || 0),
-    returns: Number(ledger.returnsTotal || 0),
-    corrections: Number(ledger.correctionsTotal || 0),
+    balance: Number(l.balance || 0), debt: Number(l.debtTotal || 0), paid: Number(l.paidTotal || 0),
+    returns: Number(l.returnsTotal || 0), corrections: Number(l.correctionsTotal || 0),
+    lastPaymentAt: l.lastPaymentAt ? String(l.lastPaymentAt) : null,
   };
-}
+};
+const contactsOf = (s: Supplier): Contacts => ({ ...emptyContacts, ...(asRecord(asRecord(s).contacts) as Partial<Contacts>) });
+const articlesOf = (s: Supplier) => {
+  const a = asRecord(s).articles;
+  return Array.isArray(a) ? a.map(asRecord) : [];
+};
+const stopText = (s: Supplier) => {
+  const r = asRecord(s);
+  const until = r.inactiveUntilUnknown || !r.inactiveUntil ? "срок не указан" : `до ${compactDate(String(r.inactiveUntil))}`;
+  const why = String(r.inactiveComment || s.stopReason || "").trim();
+  return `${until}${why ? ` · ${why}` : ""}`;
+};
+const initials = (name: string) => name.split(/[\s«»"'()-]+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "?";
+const phoneDigits = (p: string) => p.replace(/[^\d+]/g, "");
+const waNumber = (p: string) => p.replace(/\D/g, "").replace(/^8(\d{10})$/, "7$1");
 
-function supplierBalance(supplier: Supplier) {
-  return ledgerInCurrency(asRecord(supplier).ledger, supplierCurrencyOf(supplier)).balance;
-}
-
-function supplierIsActive(supplier: Supplier) {
-  return supplier.stopped !== true && supplier.active !== false;
-}
-
-function dateInput(days = 7) {
-  const date = new Date();
-  date.setDate(date.getDate() + days);
-  return date.toISOString().slice(0, 10);
-}
-
-function endOfMonthInput() {
-  const date = new Date();
-  date.setMonth(date.getMonth() + 1, 0);
-  return date.toISOString().slice(0, 10);
-}
-
-function inactiveText(supplier: Supplier) {
-  const raw = asRecord(supplier);
-  if (raw.inactiveUntilUnknown) return "срок не указан";
-  return raw.inactiveUntil ? `до ${compactDate(String(raw.inactiveUntil))}` : "срок не указан";
+type Signal = { tone: "danger" | "warn" | "info"; text: string };
+/** Что требует внимания: висят товары без замены, старый прайс, пустой прайс, большой долг. */
+function signalsOf(s: Supplier, ins: Insight | undefined): Signal[] {
+  const out: Signal[] = [];
+  const active = isActive(s);
+  const bal = ledgerOf(asRecord(s).ledger).balance;
+  if (!active && (ins?.singleSource || 0) > 0) out.push({ tone: "danger", text: `${ins!.singleSource} ${plural(ins!.singleSource, "товар", "товара", "товаров")} без замены — не продаются` });
+  if (active && ins && ins.products > 0) {
+    const d = daysSince(ins.lastPriceAt);
+    if (d > 14) out.push({ tone: "danger", text: `Прайс не обновлялся ${ins.lastPriceAt ? ago(ins.lastPriceAt) : "давно"}` });
+    else if (d > 3) out.push({ tone: "warn", text: `Прайс обновлён ${ago(ins.lastPriceAt)}` });
+    if (ins.activeRows === 0) out.push({ tone: "danger", text: "В PriceMaster нет живых строк" });
+  }
+  if (bal < 0 && Math.abs(bal) >= (currencyOf(s) === "RUB" ? 100_000 : 1_000)) out.push({ tone: "warn", text: `Большой долг: ${money(bal, currencyOf(s))}` });
+  if (s.pricingMode === "stock_only" || s.stockOnly) out.push({ tone: "info", text: "Только остаток — цену не берём" });
+  return out;
 }
 
 export function SuppliersPage() {
   const queryClient = useQueryClient();
-  const [view, setView] = useState<"active" | "inactive">("active");
+  const [filter, setFilter] = useState<Filter>("active");
+  const [sort, setSort] = useState<"name" | "debt" | "sales">("debt");
   const [search, setSearch] = useState("");
-  const [sortBy, setSortBy] = useState<"name" | "debt">("name");
-  const [hasDebtFilter, setHasDebtFilter] = useState(false);
-  const [form, setForm] = useState<SupplierForm>(emptySupplierForm);
-  const [articleDrafts, setArticleDrafts] = useState<Record<string, ArticleDraft>>({});
-  const [inactiveDraft, setInactiveDraft] = useState<InactiveDraft | null>(null);
-  const [paymentDrafts, setPaymentDrafts] = useState<Record<string, string>>({});
-  const [paymentNotes, setPaymentNotes] = useState<Record<string, string>>({});
-  const [returnDrafts, setReturnDrafts] = useState<Record<string, string>>({});
-  const [returnNotes, setReturnNotes] = useState<Record<string, string>>({});
-  const [adjustDrafts, setAdjustDrafts] = useState<Record<string, string>>({});
-  const [adjustNotes, setAdjustNotes] = useState<Record<string, string>>({});
-  const [adjustOpen, setAdjustOpen] = useState<Set<string>>(new Set());
-  const [drawerSupplier, setDrawerSupplier] = useState<Supplier | null>(null);
-  const [drawerTab, setDrawerTab] = useState<"balance" | "articles" | "history" | "settings">("balance");
-  const [historyShowAll, setHistoryShowAll] = useState(false);
-  const [payHistoryOpen, setPayHistoryOpen] = useState(false);
+  const [selectedId, setSelectedId] = useState<string>(() => new URLSearchParams(window.location.search).get("id") || "");
+  const [tab, setTab] = useState<Tab>("overview");
+  const [stopFor, setStopFor] = useState<Supplier | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
-  const suppliersQuery = useQuery({
-    queryKey: ["suppliers"],
-    queryFn: () => fetchJson("/api/suppliers", SuppliersResponseSchema),
-    staleTime: 30_000,
-  });
+  const suppliersQuery = useQuery({ queryKey: ["suppliers"], queryFn: () => fetchJson("/api/suppliers", SuppliersResponseSchema), staleTime: 30_000 });
+  const insightsQuery = useQuery({ queryKey: ["suppliers", "insights"], queryFn: () => anyJson<InsightsResponse>("/api/suppliers/insights"), staleTime: 5 * 60_000 });
+  const suppliers = suppliersQuery.data?.suppliers || [];
+  const insights = insightsQuery.data?.suppliers || {};
 
-  const refreshMutation = useMutation({
+  // the selected supplier lives in the address (?id=…): back button and shared links work
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (selectedId) url.searchParams.set("id", selectedId); else url.searchParams.delete("id");
+    window.history.replaceState(window.history.state, "", url.toString());
+  }, [selectedId]);
+
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
+    void queryClient.invalidateQueries({ queryKey: ["supplier-profile"] });
+    void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
+    void queryClient.invalidateQueries({ queryKey: ["finance"] });
+  };
+  const refreshPm = useMutation({
     mutationFn: () => fetchJson("/api/suppliers?refresh=true", SuppliersResponseSchema),
     onSuccess: (data) => {
       queryClient.setQueryData(["suppliers"], data);
-      void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
+      const s = asRecord(data.supplierSync);
+      toast.success(s.error ? `PriceMaster: ${String(s.error)}` : `PriceMaster: партнёров ${s.partners || 0}, новых ${s.imported || 0}`);
+      void queryClient.invalidateQueries({ queryKey: ["suppliers", "insights"] });
     },
+    onError: (e) => toast.error(errorMessage(e)),
   });
-
-  const dalikMigrationMutation = useMutation({
-    mutationFn: () => fetchJson("/api/warehouse/check-dalik-migrations", MutationResultSchema, { method: "POST" }),
-  });
-
-  const saveSupplier = useMutation({
-    mutationFn: (payload: SupplierForm) => {
-      const body = {
-        id: payload.id || undefined,
-        name: payload.name.trim(),
-        note: payload.note.trim(),
-        stopReason: payload.stopReason.trim(),
-        priceCurrency: payload.priceCurrency,
-      };
-      return payload.id
-        ? fetchJson(`/api/suppliers/${encodeURIComponent(payload.id)}`, MutationResultSchema, patchBody(body))
-        : fetchJson("/api/suppliers", MutationResultSchema, mutationBody(body));
+  const dalik = useMutation({
+    mutationFn: () => fetchJson("/api/warehouse/check-dalik-migrations", OkSchema, { method: "POST" }),
+    onSuccess: (d) => {
+      const r = asRecord(d);
+      toast.success(`Далик: проверено ${r.checked ?? 0}${Number(r.diverged) ? `, сброшено ${r.diverged}` : ""}${Number(r.articleFixed) ? `, артикул обновлён у ${r.articleFixed}` : " — всё в порядке"}`);
     },
-    onSuccess: () => {
-      setForm(emptySupplierForm);
-      void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
-      void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
-    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const resetAll = useMutation({
+    mutationFn: () => anyJson<{ ledger: number; picking: number; cart: number }>("/api/supplier-ledger/reset-all-history", { method: "DELETE" }),
+    onSuccess: (r) => { toast.success(`Сброшено: долгов ${r.ledger}, строк сборки ${r.picking}, корзин ${r.cart}`); invalidate(); },
+    onError: (e) => toast.error(errorMessage(e)),
   });
 
-  const patchSupplier = useMutation({
-    mutationFn: ({ id, patch }: { id: string; patch: Record<string, unknown> }) =>
-      fetchJson(`/api/suppliers/${encodeURIComponent(id)}`, MutationResultSchema, patchBody(patch)),
-    onSuccess: () => {
-      setInactiveDraft(null);
-      void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
-      void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
-    },
-  });
+  // KPI: долги по валютам, сколько остановлено, сколько требует внимания
+  const kpi = useMemo(() => {
+    const debt = { USD: 0, RUB: 0 };
+    let stopped = 0; let attention = 0;
+    for (const s of suppliers) {
+      const b = ledgerOf(asRecord(s).ledger).balance;
+      if (b < 0) debt[currencyOf(s)] += -b;
+      if (!isActive(s)) stopped += 1;
+      if (signalsOf(s, insights[sid(s)]).some((x) => x.tone !== "info")) attention += 1;
+    }
+    return { debt, stopped, active: suppliers.length - stopped, attention };
+  }, [suppliers, insights]);
 
-  const deleteSupplier = useMutation({
-    mutationFn: (id: string) => fetchJson(`/api/suppliers/${encodeURIComponent(id)}`, MutationResultSchema, { method: "DELETE" }),
-    onSuccess: () => {
-      setDrawerSupplier(null);
-      void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
-      void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
-    },
-  });
-
-  const saveArticle = useMutation({
-    mutationFn: ({ supplierIdValue, draft }: { supplierIdValue: string; draft: ArticleDraft }) =>
-      fetchJson(`/api/suppliers/${encodeURIComponent(supplierIdValue)}/articles`, MutationResultSchema, mutationBody(draft)),
-    onSuccess: (_data, variables) => {
-      setArticleDrafts((current) => ({ ...current, [variables.supplierIdValue]: { article: "", note: "" } }));
-      void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
-      void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
-    },
-  });
-
-  const deleteArticle = useMutation({
-    mutationFn: ({ supplierIdValue, articleId }: { supplierIdValue: string; articleId: string }) =>
-      fetchJson(`/api/suppliers/${encodeURIComponent(supplierIdValue)}/articles/${encodeURIComponent(articleId)}`, MutationResultSchema, { method: "DELETE" }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
-      void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
-    },
-  });
-
-  const historyQuery = useQuery<SupplierProfile>({
-    queryKey: ["supplier-profile", drawerSupplier ? supplierId(drawerSupplier) : "none"],
-    queryFn: () => {
-      const s = drawerSupplier;
-      if (!s) return Promise.resolve({ ok: true, history: [], ledger: { source: "", total: 0, entries: [], error: "" } } as unknown as SupplierProfile);
-      return fetchJson(`/api/suppliers/${encodeURIComponent(supplierId(s))}/profile`, SupplierProfileResponseSchema);
-    },
-    enabled: !!drawerSupplier,
-    staleTime: 5_000,
-  });
-
-  const returnSupplier = useMutation({
-    mutationFn: ({ supplier, amount, currency, note }: { supplier: Supplier; amount: number; currency: "USD" | "RUB"; note: string }) =>
-      fetchJson("/api/supplier-ledger/returns", SupplierLedgerPaymentSchema, mutationBody({
-        supplierName: supplier.name || "",
-        partnerId: supplier.partnerId || "",
-        amount,
-        currency,
-        note,
-      })),
-    onSuccess: (_data, variables) => {
-      const id = supplierId(variables.supplier);
-      setReturnDrafts((current) => ({ ...current, [id]: "" }));
-      setReturnNotes((current) => ({ ...current, [id]: "" }));
-      void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
-      void queryClient.invalidateQueries({ queryKey: ["supplier-profile"] });
-      void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
-      void queryClient.invalidateQueries({ queryKey: ["finance"] });
-    },
-  });
-
-  const returnPicking = useMutation({
-    mutationFn: ({ pickingKey, note }: { pickingKey: string; note?: string }) =>
-      fetchJson("/api/supplier-ledger/return-picking", SupplierLedgerPaymentSchema, mutationBody({ pickingKey, note: note || "" })),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
-      void queryClient.invalidateQueries({ queryKey: ["supplier-profile"] });
-      void queryClient.invalidateQueries({ queryKey: ["finance"] });
-    },
-  });
-
-  const paySupplier = useMutation({
-    mutationFn: ({ supplier, amount, currency, note }: { supplier: Supplier; amount: number; currency: string; note: string }) =>
-      fetchJson("/api/supplier-ledger/payments", SupplierLedgerPaymentSchema, mutationBody({
-        supplierName: supplier.name || "",
-        partnerId: supplier.partnerId || "",
-        amount,
-        currency,
-        note,
-      })),
-    onSuccess: (data, variables) => {
-      const id = supplierId(variables.supplier);
-      setPaymentDrafts((current) => ({ ...current, [id]: "" }));
-      setPaymentNotes((current) => ({ ...current, [id]: "" }));
-      // Immediately patch the supplier's ledger in the list cache with the fresh per-supplier
-      // summary from the payment response — avoids showing a stale balance while the bulk
-      // suppliers re-fetch completes (bulk query can miss entries stored with alternate names).
-      if (data?.summary) {
-        queryClient.setQueryData(["suppliers"], (old: Record<string, unknown> | undefined) => {
-          if (!old?.suppliers || !Array.isArray(old.suppliers)) return old;
-          return {
-            ...old,
-            suppliers: (old.suppliers as Supplier[]).map((s) =>
-              supplierId(s) === id ? { ...s, ledger: data.summary } : s
-            ),
-          };
-        });
-      }
-      void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
-      void queryClient.invalidateQueries({ queryKey: ["supplier-profile"] });
-      void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
-      void queryClient.invalidateQueries({ queryKey: ["finance"] });
-      void queryClient.invalidateQueries({ queryKey: ["picker-balances"] });
-      void queryClient.invalidateQueries({ queryKey: ["picker-balance"] });
-      void queryClient.invalidateQueries({ queryKey: ["picker-spending"] });
-    },
-  });
-
-  const adjustBalance = useMutation({
-    mutationFn: ({ supplier, targetBalance, currency, note }: { supplier: Supplier; targetBalance: number; currency: "USD" | "RUB"; note: string }) =>
-      fetchJson("/api/supplier-ledger/adjust", z.object({ ok: z.boolean(), skipped: z.boolean().optional(), currentBalance: z.number().optional(), targetBalance: z.number().optional(), delta: z.number().optional(), message: z.string().optional() }).passthrough(), mutationBody({
-        supplierName: supplier.name || "",
-        partnerId: supplier.partnerId || "",
-        targetBalance,
-        currency,
-        note,
-      })),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
-      void queryClient.invalidateQueries({ queryKey: ["supplier-profile"] });
-      void queryClient.invalidateQueries({ queryKey: ["finance"] });
-    },
-  });
-
-  const resetAllHistory = useMutation({
-    mutationFn: () => fetchJson("/api/supplier-ledger/reset-all-history", z.object({ ok: z.boolean(), ledger: z.number(), picking: z.number(), cart: z.number() }), { method: "DELETE" }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
-      void queryClient.invalidateQueries({ queryKey: ["supplier-profile"] });
-      void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
-    },
-  });
-
-  const zeroStockMutation = useMutation({
-    mutationFn: (id: string) => fetchJson(`/api/suppliers/${id}/zero-stock`, z.object({ ok: z.boolean(), zeroed: z.number(), total: z.number() }), { method: "POST" }),
-    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["suppliers"] }); },
-  });
-
-  const suppliers = suppliersQuery.data?.suppliers || [];
-  const sync = asRecord(suppliersQuery.data?.supplierSync);
-  const activeCount = suppliers.filter(supplierIsActive).length;
-  const inactiveCount = suppliers.length - activeCount;
-  const articleCount = suppliers.reduce((sum, supplier) => sum + supplierArticles(supplier).length, 0);
-  const affectedCount = suppliers.reduce((sum, supplier) => sum + numberValue(supplier.impactProductCount, 0), 0);
-
-  const filtered = useMemo(() => {
+  const list = useMemo(() => {
     const words = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
     return suppliers
-      .filter((supplier) => view === "active" ? supplierIsActive(supplier) : !supplierIsActive(supplier))
-      .filter((supplier) => {
+      .filter((s) => {
+        if (filter === "active") return isActive(s);
+        if (filter === "stopped") return !isActive(s);
+        if (filter === "debt") return ledgerOf(asRecord(s).ledger).balance < -0.005;
+        if (filter === "attention") return signalsOf(s, insights[sid(s)]).some((x) => x.tone !== "info");
+        return true;
+      })
+      .filter((s) => {
         if (!words.length) return true;
-        const text = supplierSearchText(supplier);
+        const c = contactsOf(s);
+        const text = [s.name, s.partnerId, asRecord(s).note, c.manager, c.phone, c.telegram, ...articlesOf(s).map((a) => a.article)].join(" ").toLowerCase();
         return words.every((w) => text.includes(w));
       })
-      .filter((supplier) => !hasDebtFilter || supplierBalance(supplier) < -0.005)
       .sort((a, b) => {
-        // Compare in RUB so USD and RUB suppliers rank on one scale.
-        if (sortBy === "debt") return supplierBalance(a) - supplierBalance(b);
-        return String(a.name || "").localeCompare(String(b.name || ""), "ru");
+        if (sort === "debt") return ledgerOf(asRecord(a).ledger).balance - ledgerOf(asRecord(b).ledger).balance || String(a.name).localeCompare(String(b.name), "ru");
+        if (sort === "sales") return (insights[sid(b)]?.sold30 || 0) - (insights[sid(a)]?.sold30 || 0);
+        return String(a.name).localeCompare(String(b.name), "ru");
       });
-  }, [search, suppliers, view, sortBy, hasDebtFilter]);
+  }, [suppliers, insights, filter, search, sort]);
 
-  const startEdit = (supplier: Supplier) => {
-    setForm({
-      id: supplierId(supplier),
-      name: supplier.name || "",
-      note: String(asRecord(supplier).note || ""),
-      stopReason: String(supplier.stopReason || ""),
-      priceCurrency: String(asRecord(supplier).priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD",
-    });
-    setDrawerSupplier(null);
+  const selected = suppliers.find((s) => sid(s) === selectedId) || null;
+  // desktop: the first supplier is open by default; phone: the list stays until a tap
+  useEffect(() => {
+    if (!selectedId && list.length && window.matchMedia("(min-width: 980px)").matches) setSelectedId(sid(list[0]));
+  }, [list, selectedId]);
+
+  // phone: opening a card is a history step, so the system «back» returns to the list
+  useEffect(() => {
+    const onPop = () => setSelectedId(new URLSearchParams(window.location.search).get("id") || "");
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+  const isPhone = () => !window.matchMedia("(min-width: 980px)").matches;
+  const open = (s: Supplier) => {
+    if (isPhone()) {
+      const url = new URL(window.location.href);
+      url.searchParams.set("id", sid(s));
+      window.history.pushState(window.history.state, "", url.toString());
+      window.scrollTo(0, 0);
+    }
+    setSelectedId(sid(s)); setTab("overview");
   };
-
-  const startInactive = (supplier: Supplier) => {
-    const raw = asRecord(supplier);
-    setInactiveDraft({
-      supplier,
-      comment: String(raw.inactiveComment || supplier.stopReason || ""),
-      inactiveUntil: typeof raw.inactiveUntil === "string" ? raw.inactiveUntil.slice(0, 10) : dateInput(7),
-      inactiveUntilUnknown: Boolean(raw.inactiveUntilUnknown),
-    });
+  const back = () => {
+    if (isPhone() && window.history.length > 1 && new URLSearchParams(window.location.search).get("id")) window.history.back();
+    else setSelectedId("");
   };
-
-  const openDrawer = (supplier: Supplier) => {
-    setDrawerSupplier(supplier);
-    setDrawerTab("balance");
-    setHistoryShowAll(false);
-    setPayHistoryOpen(false);
-  };
-
-  const setArticleDraft = (id: string, patch: Partial<ArticleDraft>) => {
-    setArticleDrafts((current) => {
-      const currentDraft = current[id];
-      return { ...current, [id]: { ...(currentDraft || { article: "", note: "" }), ...patch } };
-    });
-  };
-
-  const submitInactive = () => {
-    if (!inactiveDraft) return;
-    const id = supplierId(inactiveDraft.supplier);
-    patchSupplier.mutate({
-      id,
-      patch: {
-        stopped: true,
-        stopReason: inactiveDraft.comment,
-        inactiveComment: inactiveDraft.comment,
-        inactiveUntil: inactiveDraft.inactiveUntilUnknown ? null : inactiveDraft.inactiveUntil,
-        inactiveUntilUnknown: inactiveDraft.inactiveUntilUnknown,
-      },
-    });
-  };
-
-  const anyError = suppliersQuery.error || refreshMutation.error || saveSupplier.error || patchSupplier.error || deleteSupplier.error || saveArticle.error || deleteArticle.error || paySupplier.error || returnSupplier.error || returnPicking.error;
-
-  // Derive all drawer-specific data in one pass
-  const drawerData = drawerSupplier ? (() => {
-    const supplier = drawerSupplier;
-    const id = supplierId(supplier);
-    const raw = asRecord(supplier);
-    const articles = supplierArticles(supplier);
-    const draft = articleDrafts[id] || { article: "", note: "" };
-    const supplierCurrency = supplierCurrencyOf(supplier);
-    const profile = historyQuery.data;
-    // Prefer the fresh per-supplier profile summary; the list summary is built by the same
-    // server function over the same entries, so both always agree.
-    const ledger = asRecord((profile?.ledger?.summary ?? raw.ledger) as Record<string, unknown>);
-    const totals = ledgerInCurrency(ledger, supplierCurrency);
-    const paymentAmount = paymentDrafts[id] || "";
-    const paymentNote = paymentNotes[id] || "";
-    const active = supplierIsActive(supplier);
-    const stockOnly = supplier.pricingMode === "stock_only" || supplier.stockOnly === true;
-    const ledgerEntries = profile?.ledger?.entries || [];
-    const returnedKeys = new Set(
-      ledgerEntries.filter((e) => e.entryType === "supplier_return" && e.pickingKey).map((e) => e.pickingKey as string)
-    );
-    const debtByKey = new Map(
-      ledgerEntries.filter((e) => e.entryType === "purchase_debt" && e.pickingKey).map((e) => [e.pickingKey as string, e])
-    );
-    const paymentEntries = ledgerEntries
-      .filter((e) => e.entryType === "payment" || e.entryType === "balance_correction" || e.entryType === "supplier_return")
-      .sort((a, b) => String(b.occurredAt || "").localeCompare(String(a.occurredAt || "")));
-    const cutoff = historyShowAll ? null : new Date(Date.now() - 30 * 86_400_000);
-    const pickedRows = (profile?.history || []).filter((r) => {
-      if (r.status !== "picked") return false;
-      if (cutoff && r.pickedAt) return new Date(r.pickedAt) >= cutoff;
-      if (cutoff && !r.pickedAt) return false;
-      return true;
-    });
-    return { id, supplier, raw, articles, draft, ledger, totals, supplierCurrency, paymentAmount, paymentNote, active, stockOnly, profile, ledgerEntries, returnedKeys, debtByKey, pickedRows, paymentEntries };
-  })() : null;
+  const filters: Array<[Filter, string, number]> = [
+    ["active", "Активные", kpi.active],
+    ["debt", "С долгом", suppliers.filter((s) => ledgerOf(asRecord(s).ledger).balance < -0.005).length],
+    ["attention", "Внимание", kpi.attention],
+    ["stopped", "Остановлены", kpi.stopped],
+    ["all", "Все", suppliers.length],
+  ];
 
   return (
-    <section className="page-section suppliers-page">
-      <PageHeader
-        title="Поставщики"
-        subtitle="Импорт из PriceMaster, баланс долгов, история заказов и управление артикулами."
-        action={(
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button className="secondary-action" type="button"
-              disabled={dalikMigrationMutation.isPending}
-              title="Проверить и исправить рассинхрон артикулов Далика после переименования в PriceMaster"
-              onClick={() => dalikMigrationMutation.mutate()}>
-              {dalikMigrationMutation.isPending ? <Loader2 className="spin" size={16} /> : <RotateCcw size={16} />} Артикулы Далика
-            </button>
-            <button className="primary-action" type="button" disabled={refreshMutation.isPending} onClick={() => refreshMutation.mutate()}>
-              {refreshMutation.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Загрузить из PriceMaster
-            </button>
-          </div>
-        )}
-      />
-
-      {anyError ? <div className="inline-error sp-error-mb">{errorMessage(anyError)}</div> : null}
-      {dalikMigrationMutation.isSuccess && (
-        <div className="success-strip">
-          Далик: проверено {String((dalikMigrationMutation.data as Record<string, unknown>)?.checked ?? 0)} привязок
-          {Number((dalikMigrationMutation.data as Record<string, unknown>)?.diverged ?? 0) > 0
-            ? ` · сброшено ${String((dalikMigrationMutation.data as Record<string, unknown>)?.diverged)} рассинхронизированных`
-            : ""}
-          {Number((dalikMigrationMutation.data as Record<string, unknown>)?.articleFixed ?? 0) > 0
-            ? ` · артикул обновлён у ${String((dalikMigrationMutation.data as Record<string, unknown>)?.articleFixed)}`
-            : " · всё в порядке"}
+    <section className={`page-section sp2${selected ? " has-selected" : ""}`}>
+      <header className="sp2-head">
+        <div className="sp2-title">
+          <h1>Поставщики</h1>
+          <p>
+            {kpi.debt.USD || kpi.debt.RUB ? <>Мы должны <b className="sp2-debt">{[kpi.debt.USD ? money(kpi.debt.USD, "USD", 0) : "", kpi.debt.RUB ? money(kpi.debt.RUB, "RUB", 0) : ""].filter(Boolean).join(" + ")}</b> · </> : "Долгов нет · "}
+            активных {kpi.active}, остановлено {kpi.stopped}{kpi.attention ? <> · <span className="sp2-warn-text">внимание {kpi.attention}</span></> : null}
+          </p>
         </div>
-      )}
-
-      <section className="dashboard-metrics">
-        <Stat label="Активных" value={activeCount} tone={activeCount ? "success" : ""} icon={<Truck size={18} />} />
-        <Stat label="Остановлено" value={inactiveCount} tone={inactiveCount ? "warn" : "success"} icon={<UserX size={18} />} />
-        <Stat label="Артикулов" value={articleCount} tone="accent" icon={<Boxes size={18} />} />
-        <Stat label="Связанных товаров" value={affectedCount} tone="accent" icon={<Package size={18} />} />
-      </section>
-
-      {sync.ok === true || sync.error ? (
-        <div className={sync.error ? "inline-error" : "success-strip"}>
-          {sync.error ? `PriceMaster: ${String(sync.error)}` : `PriceMaster: найдено партнеров ${String(sync.partners || 0)}, импортировано ${String(sync.imported || 0)}.`}
-        </div>
-      ) : null}
-
-      <section className="settings-grid supplier-layout-grid">
-        {/* Left panel: add/edit form */}
-        <div className="settings-panel supplier-form-panel">
-          <div className="section-title">
-            <div><span>Карточка</span><h3>{form.id ? "Редактировать поставщика" : "Новый поставщик"}</h3></div>
-          </div>
-          <form
-            className="supplier-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!form.name.trim()) return;
-              saveSupplier.mutate(form);
-            }}
-          >
-            <label>Название<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
-            <label>Заметка<input value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} /></label>
-            <label>Причина остановки<input value={form.stopReason} onChange={(event) => setForm({ ...form, stopReason: event.target.value })} /></label>
-            <label>Валюта закупки в PriceMaster
-              <SelectField
-                ariaLabel="Валюта поставщика"
-                value={form.priceCurrency}
-                onChange={(next) => setForm({ ...form, priceCurrency: next })}
-                options={[
-                  { value: "USD", label: "Доллары (USD) — цена × курс × наценка" },
-                  { value: "RUB", label: "Рубли (RUB) — цена × наценка" },
-                ]}
-              />
-            </label>
-            <div className="row-actions">
-              <button className="primary-action" type="submit" disabled={saveSupplier.isPending || !form.name.trim()}>
-                {saveSupplier.isPending ? <Loader2 className="spin" size={16} /> : <Plus size={16} />} Сохранить
-              </button>
-              {form.id ? <button className="secondary-action" type="button" onClick={() => setForm(emptySupplierForm)}><X size={16} /> Отмена</button> : null}
-            </div>
-          </form>
-        </div>
-
-        {/* Right panel: compact table */}
-        <div className="settings-panel supplier-list-panel">
-          <div className="section-title">
-            <div><span>Список</span><h3>Все поставщики</h3></div>
-            <button className="secondary-action" type="button" disabled={suppliersQuery.isFetching} onClick={() => suppliersQuery.refetch()}>
-              {suppliersQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить
-            </button>
-          </div>
-
-          <div className="supplier-toolbar-flex">
-            <div className="settings-tabs">
-              <button className={view === "active" ? "is-active" : ""} type="button" onClick={() => setView("active")}>Активные</button>
-              <button className={view === "inactive" ? "is-active" : ""} type="button" onClick={() => setView("inactive")}>Остановленные</button>
-            </div>
-            <div className="settings-tabs">
-              <button className={sortBy === "name" ? "is-active" : ""} type="button" title="Сортировка по имени" onClick={() => setSortBy("name")}>А→Я</button>
-              <button className={sortBy === "debt" ? "is-active" : ""} type="button" title="Сортировка по долгу" onClick={() => setSortBy("debt")}><Scale size={13} /> Долг</button>
-              <button
-                className={hasDebtFilter ? "is-active" : ""}
-                type="button"
-                title={hasDebtFilter ? "Сбросить фильтр долга" : "Показать только поставщиков с долгом"}
-                onClick={() => setHasDebtFilter((v) => !v)}
-              >
-                <Filter size={13} /> Есть долг
-              </button>
-            </div>
-            <label className="supplier-search sp-search-flex">
-              <Search size={16} />
-              <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Поиск" />
-            </label>
-          </div>
-
-          {/* Compact table */}
-          <div className="supplier-compact-table">
-            <div className="supplier-table-head">
-              <span>Поставщик</span>
-              <span>Валюта</span>
-              <span>Баланс</span>
-              <span>Последняя оплата</span>
-              <span></span>
-            </div>
-
-            {suppliersQuery.isLoading ? (
-              <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю поставщиков...</div>
+        <div className="sp2-head-actions">
+          <button className="secondary-action" type="button" disabled={refreshPm.isPending} onClick={() => refreshPm.mutate()} title="Подтянуть новых партнёров из PriceMaster">
+            {refreshPm.isPending ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />} <span className="sp2-hide-sm">Из PriceMaster</span>
+          </button>
+          <button className="primary-action" type="button" onClick={() => setCreating(true)}><Plus size={15} /> <span className="sp2-hide-sm">Поставщик</span></button>
+          <div className="sp2-menu-wrap">
+            <button className="icon-action" type="button" aria-label="Ещё" onClick={() => setMenuOpen((v) => !v)}><MoreHorizontal size={18} /></button>
+            {menuOpen ? (
+              <div className="sp2-menu" onMouseLeave={() => setMenuOpen(false)}>
+                <button type="button" disabled={dalik.isPending} onClick={() => { setMenuOpen(false); dalik.mutate(); }}><RotateCcw size={14} /> Проверить артикулы Далика</button>
+                <button type="button" onClick={() => { setMenuOpen(false); void insightsQuery.refetch(); }}><RefreshCw size={14} /> Пересчитать сводку</button>
+                <button type="button" className="is-danger" disabled={resetAll.isPending} onClick={() => {
+                  setMenuOpen(false);
+                  if (window.confirm("Удалить ВСЮ историю долгов, сборки и корзин для всех поставщиков? Это необратимо.")) resetAll.mutate();
+                }}><Trash2 size={14} /> Сбросить все долги и историю…</button>
+              </div>
             ) : null}
-            {!suppliersQuery.isLoading && !filtered.length ? (
-              <div className="soft-empty">{hasDebtFilter ? "Нет поставщиков с долгом." : "Поставщики не найдены."}</div>
-            ) : null}
+          </div>
+        </div>
+      </header>
+      {suppliersQuery.isError ? <div className="inline-error">{errorMessage(suppliersQuery.error)}</div> : null}
 
-            {filtered.map((supplier) => {
-              const id = supplierId(supplier);
-              const raw = asRecord(supplier);
-              const ledger = asRecord(raw.ledger);
-              const supplierCurrency = supplierCurrencyOf(supplier);
-              const balanceDisplay = ledgerInCurrency(ledger, supplierCurrency).balance;
-              const active = supplierIsActive(supplier);
-              const isOpen = drawerSupplier && supplierId(drawerSupplier) === id;
+      <div className="sp2-body">
+        {/* ── список ── */}
+        <aside className="sp2-list" aria-label="Список поставщиков">
+          <label className="sp2-search">
+            <Search size={15} />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Имя, артикул, менеджер, телефон" />
+            {search ? <button type="button" aria-label="Очистить" onClick={() => setSearch("")}><X size={14} /></button> : null}
+          </label>
+          <div className="sp2-filters" role="tablist">
+            {filters.map(([key, label, n]) => (
+              <button key={key} type="button" role="tab" aria-selected={filter === key} className={filter === key ? "is-on" : ""} onClick={() => setFilter(key)}>
+                {label}<span>{n}</span>
+              </button>
+            ))}
+          </div>
+          <div className="sp2-sort">
+            Сортировка:
+            {([["debt", "долг"], ["sales", "продажи"], ["name", "имя"]] as const).map(([k, l]) => (
+              <button key={k} type="button" className={sort === k ? "is-on" : ""} onClick={() => setSort(k)}>{l}</button>
+            ))}
+          </div>
+          <div className="sp2-rows">
+            {suppliersQuery.isLoading ? <div className="sp2-empty"><Loader2 className="spin" size={15} /> Загружаем поставщиков…</div> : null}
+            {!suppliersQuery.isLoading && !list.length ? <div className="sp2-empty">Никого не нашли. Измените фильтр или поиск.</div> : null}
+            {list.map((s) => {
+              const id = sid(s);
+              const l = ledgerOf(asRecord(s).ledger);
+              const cur = currencyOf(s);
+              const ins = insights[id];
+              const signals = signalsOf(s, ins).filter((x) => x.tone !== "info");
+              const active = isActive(s);
               return (
-                <div
-                  className={`supplier-table-row${active ? "" : " is-inactive"}${isOpen ? " is-open" : ""}`}
-                  key={id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => openDrawer(supplier)}
-                  onKeyDown={(e) => e.key === "Enter" && openDrawer(supplier)}
-                >
-                  <div className="supplier-table-name">
-                    <strong>{supplier.name || "Поставщик"}</strong>
-                    <small>{supplier.partnerId ? `partner ${supplier.partnerId}` : "local"}</small>
-                    {!active ? <span className="supplier-stopped-tag"><UserX size={11} /> стоп</span> : null}
-                  </div>
-                  <div>{supplierCurrency}</div>
-                  <div className={`${balanceDisplay < 0 ? "danger-text" : balanceDisplay > 0 ? "success-text" : ""} sp-tabular`}>
-                    {moneySigned(balanceDisplay, supplierCurrency)}
-                  </div>
-                  <div className="muted-note">
-                    {ledger.lastPaymentAt ? compactDate(String(ledger.lastPaymentAt)) : "—"}
-                  </div>
-                  <div className="supplier-table-open">
-                    <ChevronRight size={15} />
-                  </div>
-                </div>
+                <button key={id} type="button" className={`sp2-row${id === selectedId ? " is-selected" : ""}${active ? "" : " is-stopped"}`} onClick={() => open(s)}>
+                  <span className={`sp2-avatar${active ? "" : " is-off"}`}>{initials(String(s.name || ""))}</span>
+                  <span className="sp2-row-main">
+                    <span className="sp2-row-top">
+                      <b>{s.name || "Без названия"}</b>
+                      {signals.length ? <AlertTriangle size={13} className={`sp2-sig is-${signals[0].tone}`} aria-label={signals.map((x) => x.text).join("; ")} /> : null}
+                    </span>
+                    <span className="sp2-row-sub">
+                      {active ? null : <span className="sp2-stop-tag">стоп</span>}
+                      {ins ? `${ins.products} ${plural(ins.products, "товар", "товара", "товаров")} · ${ins.sold30} шт. за 30 дн.` : `${s.impactProductCount || 0} ${plural(Number(s.impactProductCount || 0), "товар", "товара", "товаров")}`}
+                    </span>
+                  </span>
+                  <span className={`sp2-row-bal${l.balance < 0 ? " is-debt" : l.balance > 0 ? " is-plus" : ""}`}>
+                    {l.balance ? (l.balance < 0 ? `−${money(l.balance, cur, 0)}` : `+${money(l.balance, cur, 0)}`) : "—"}
+                  </span>
+                  <ChevronRight size={15} className="sp2-row-go" />
+                </button>
               );
             })}
           </div>
+        </aside>
 
-          <details className="supplier-reset-details">
-            <summary className="muted-note sp-summary-reset">
-              <Trash2 size={13} /> Сбросить все данные (долги, история заказов)
-            </summary>
-            <div className="sp-detail-body">
-              <p className="muted-note sp-detail-note">
-                Удаляет все записи долгов, историю сборки и черновики корзин. Операция необратима.
-              </p>
-              {resetAllHistory.isSuccess ? (
-                <div className="success-strip sp-small-strip">
-                  Сброшено: долгов {resetAllHistory.data.ledger}, строк сборки {resetAllHistory.data.picking}, корзин {resetAllHistory.data.cart}
-                </div>
-              ) : null}
-              {resetAllHistory.isError ? <div className="inline-error">{errorMessage(resetAllHistory.error)}</div> : null}
-              <button
-                className="secondary-action danger-action"
-                type="button"
-                disabled={resetAllHistory.isPending}
-                onClick={() => {
-                  if (window.confirm("Удалить ВСЮ историю долгов, сборки и корзин для всех поставщиков? Это действие необратимо.")) {
-                    resetAllHistory.mutate();
-                  }
-                }}
-              >
-                {resetAllHistory.isPending ? <Loader2 className="spin" size={15} /> : <Trash2 size={15} />} Сбросить всё
-              </button>
+        {/* ── карточка ── */}
+        <main className="sp2-card-wrap">
+          {selected ? (
+            <SupplierCard
+              key={sid(selected)}
+              supplier={selected}
+              insight={insights[sid(selected)]}
+              tab={tab}
+              setTab={setTab}
+              onBack={back}
+              onStop={() => setStopFor(selected)}
+              onChanged={invalidate}
+              onDeleted={() => { setSelectedId(""); invalidate(); }}
+            />
+          ) : (
+            <div className="sp2-placeholder"><Truck size={28} /> Выберите поставщика слева</div>
+          )}
+        </main>
+      </div>
+
+      {stopFor ? <StopDialog supplier={stopFor} onClose={() => setStopFor(null)} onDone={() => { setStopFor(null); invalidate(); }} /> : null}
+      {creating ? <CreateDialog onClose={() => setCreating(false)} onCreated={(id) => { setCreating(false); invalidate(); if (id) setSelectedId(id); }} /> : null}
+    </section>
+  );
+}
+
+// ═══ Карточка поставщика ═════════════════════════════════════════════════════
+function SupplierCard({ supplier, insight, tab, setTab, onBack, onStop, onChanged, onDeleted }: {
+  supplier: Supplier; insight?: Insight; tab: Tab; setTab: (t: Tab) => void;
+  onBack: () => void; onStop: () => void; onChanged: () => void; onDeleted: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const id = sid(supplier);
+  const cur = currencyOf(supplier);
+  const active = isActive(supplier);
+  const contacts = contactsOf(supplier);
+  const profileQuery = useQuery<SupplierProfile>({
+    queryKey: ["supplier-profile", id],
+    queryFn: () => fetchJson(`/api/suppliers/${encodeURIComponent(id)}/profile`, SupplierProfileResponseSchema),
+    staleTime: 10_000,
+  });
+  const profile = profileQuery.data;
+  const ledger = ledgerOf(profile?.ledger?.summary ?? asRecord(supplier).ledger);
+  const signals = signalsOf(supplier, insight);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const payRef = useRef<HTMLInputElement>(null);
+
+  const resume = useMutation({
+    mutationFn: () => fetchJson(`/api/suppliers/${encodeURIComponent(id)}`, OkSchema, patchBody({ stopped: false })),
+    onSuccess: () => { toast.success(`${supplier.name} снова в работе`); onChanged(); },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const zeroStock = useMutation({
+    mutationFn: () => anyJson<{ zeroed: number; total: number }>(`/api/suppliers/${encodeURIComponent(id)}/zero-stock`, { method: "POST" }),
+    onSuccess: (r) => { toast.success(`Остатки обнулены: ${r.zeroed} из ${r.total}`); onChanged(); },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const remove = useMutation({
+    mutationFn: () => fetchJson(`/api/suppliers/${encodeURIComponent(id)}`, OkSchema, { method: "DELETE" }),
+    onSuccess: () => { toast.success("Поставщик удалён"); onDeleted(); },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+
+  const tabs: Array<[Tab, string]> = [["overview", "Обзор"], ["payments", "Оплаты"], ["orders", "Заказы"], ["articles", "Артикулы"], ["settings", "Настройки"]];
+  const tg = contacts.telegram ? `https://t.me/${contacts.telegram.replace(/^@/, "")}` : "";
+  const wa = contacts.whatsapp || contacts.phone ? `https://wa.me/${waNumber(contacts.whatsapp || contacts.phone)}` : "";
+
+  return (
+    <article className="sp2-card">
+      <div className="sp2-card-head">
+        <button className="sp2-back" type="button" onClick={onBack}><ArrowLeft size={18} /> Поставщики</button>
+        <div className="sp2-card-id">
+          <span className={`sp2-avatar is-lg${active ? "" : " is-off"}`}>{initials(String(supplier.name || ""))}</span>
+          <div>
+            <h2>{supplier.name || "Без названия"}</h2>
+            <div className="sp2-card-meta">
+              <span className={`sp2-status${active ? " is-on" : " is-off"}`}>{active ? <><CheckCircle2 size={12} /> в работе</> : <><Ban size={12} /> остановлен</>}</span>
+              <span>{cur === "RUB" ? "₽ рубли" : "$ доллары"}</span>
+              {supplier.partnerId ? <span>PriceMaster #{supplier.partnerId}</span> : <span>вне PriceMaster</span>}
+              {contacts.manager ? <span><User size={12} /> {contacts.manager}</span> : null}
             </div>
-          </details>
+          </div>
         </div>
+        <div className="sp2-card-actions">
+          {contacts.phone ? <a className="icon-action" href={`tel:${phoneDigits(contacts.phone)}`} title={`Позвонить ${contacts.phone}`}><Phone size={16} /></a> : null}
+          {tg ? <a className="icon-action" href={tg} target="_blank" rel="noreferrer" title="Telegram"><Send size={16} /></a> : null}
+          {wa ? <a className="icon-action" href={wa} target="_blank" rel="noreferrer" title="WhatsApp"><MessageCircle size={16} /></a> : null}
+          {active
+            ? <button className="secondary-action danger-action" type="button" onClick={onStop}><Ban size={15} /> Остановить</button>
+            : <button className="primary-action" type="button" disabled={resume.isPending} onClick={() => resume.mutate()}>{resume.isPending ? <Loader2 className="spin" size={15} /> : <CheckCircle2 size={15} />} Включить</button>}
+          <div className="sp2-menu-wrap">
+            <button className="icon-action" type="button" aria-label="Ещё действия" onClick={() => setMoreOpen((v) => !v)}><MoreHorizontal size={18} /></button>
+            {moreOpen ? (
+              <div className="sp2-menu" onMouseLeave={() => setMoreOpen(false)}>
+                <button type="button" onClick={() => { setMoreOpen(false); setTab("settings"); }}><Edit3 size={14} /> Изменить данные</button>
+                <button type="button" className="is-danger" disabled={zeroStock.isPending} onClick={() => {
+                  setMoreOpen(false);
+                  if (window.confirm(`Обнулить остатки на маркетплейсах для всех товаров «${supplier.name}»? Товары сразу пропадут из продажи.`)) zeroStock.mutate();
+                }}><PackageX size={14} /> Обнулить остатки товаров</button>
+                <button type="button" className="is-danger" disabled={remove.isPending} onClick={() => {
+                  setMoreOpen(false);
+                  if (window.confirm(`Удалить поставщика «${supplier.name}»?`)) remove.mutate();
+                }}><Trash2 size={14} /> Удалить поставщика</button>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
+      {!active ? <div className="sp2-stopped-note"><Ban size={14} /> Остановлен {stopText(supplier)}</div> : null}
+
+      {/* баланс + оплата — главное */}
+      <section className="sp2-balance">
+        <div className="sp2-balance-main">
+          <span className="sp2-label">{ledger.balance < 0 ? "Мы должны" : ledger.balance > 0 ? "Аванс у поставщика" : "Расчёты"}</span>
+          <strong className={ledger.balance < 0 ? "is-debt" : ledger.balance > 0 ? "is-plus" : ""}>
+            {ledger.balance ? money(ledger.balance, cur) : "закрыты"}
+          </strong>
+          <span className="sp2-balance-sub">
+            Последняя оплата: {ledger.lastPaymentAt ? compactDate(ledger.lastPaymentAt) : "не было"}
+            {profileQuery.isFetching ? <Loader2 className="spin" size={12} /> : null}
+          </span>
+        </div>
+        <PaymentBox supplier={supplier} currency={cur} inputRef={payRef} onDone={() => { void queryClient.invalidateQueries({ queryKey: ["supplier-profile", id] }); onChanged(); }} />
       </section>
 
-      {/* ===== Supplier Drawer ===== */}
-      {drawerSupplier && drawerData ? (
-        <div
-          className="supplier-modal-backdrop"
-          onClick={() => setDrawerSupplier(null)}
-        >
-          <aside
-            className="supplier-drawer"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Header */}
-            <div className="supplier-drawer-head">
-              <div>
-                <small className="muted-note">{drawerData.supplier.partnerId ? `partner ${drawerData.supplier.partnerId}` : "local"}</small>
-                <h3>{drawerData.supplier.name || "Поставщик"}</h3>
-                <div className="supplier-badge-row sp-badge-mt">
-                  <span className={`supplier-status-pill${drawerData.active ? "" : " is-stopped"}`}>
-                    {drawerData.active ? <><CheckCircle2 size={12} /> активен</> : <><UserX size={12} /> остановлен</>}
-                  </span>
-                  {drawerData.stockOnly ? <span className="warning-badge">не берет цену</span> : null}
-                  {drawerData.supplier.reseller ? <span>перекупщик</span> : null}
-                  <span>товаров {drawerData.supplier.impactProductCount || 0}</span>
-                  <span>доверие {drawerData.supplier.trustFactor ?? 100}</span>
-                </div>
-              </div>
-              <button className="icon-action sp-close-btn" type="button" onClick={() => setDrawerSupplier(null)}><X size={18} /></button>
+      <nav className="sp2-tabs" role="tablist">
+        {tabs.map(([k, l]) => (
+          <button key={k} type="button" role="tab" aria-selected={tab === k} className={tab === k ? "is-on" : ""} onClick={() => setTab(k)}>{l}</button>
+        ))}
+      </nav>
+
+      <div className="sp2-tab-body">
+        {tab === "overview" ? <OverviewTab supplier={supplier} insight={insight} signals={signals} ledger={ledger} currency={cur} profile={profile} onChanged={onChanged} /> : null}
+        {tab === "payments" ? <PaymentsTab supplier={supplier} currency={cur} ledger={ledger} profile={profile} loading={profileQuery.isLoading} onChanged={onChanged} /> : null}
+        {tab === "orders" ? <OrdersTab supplier={supplier} currency={cur} profile={profile} loading={profileQuery.isLoading} onChanged={onChanged} /> : null}
+        {tab === "articles" ? <ArticlesTab supplier={supplier} onChanged={onChanged} /> : null}
+        {tab === "settings" ? <SettingsTab supplier={supplier} onChanged={onChanged} /> : null}
+      </div>
+
+      {/* телефон: быстрые действия всегда под пальцем */}
+      <div className="sp2-mobile-bar">
+        <button type="button" className="primary-action" onClick={() => { payRef.current?.focus(); payRef.current?.scrollIntoView({ block: "center", behavior: "smooth" }); }}><CreditCard size={16} /> Оплата</button>
+        {active
+          ? <button type="button" className="secondary-action danger-action" onClick={onStop}><Ban size={16} /> Стоп</button>
+          : <button type="button" className="secondary-action" disabled={resume.isPending} onClick={() => resume.mutate()}><CheckCircle2 size={16} /> Включить</button>}
+        {contacts.phone ? <a className="secondary-action" href={`tel:${phoneDigits(contacts.phone)}`}><Phone size={16} /> Звонок</a>
+          : tg ? <a className="secondary-action" href={tg} target="_blank" rel="noreferrer"><Send size={16} /> Написать</a>
+          : <button type="button" className="secondary-action" onClick={() => setTab("overview")}><Phone size={16} /> Контакты</button>}
+      </div>
+    </article>
+  );
+}
+
+// ── оплата в одно действие ───────────────────────────────────────────────────
+function PaymentBox({ supplier, currency, inputRef, onDone }: { supplier: Supplier; currency: "USD" | "RUB"; inputRef: React.RefObject<HTMLInputElement | null>; onDone: () => void }) {
+  const queryClient = useQueryClient();
+  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
+  const pay = useMutation({
+    mutationFn: () => fetchJson("/api/supplier-ledger/payments", SupplierLedgerPaymentSchema, mutationBody({
+      supplierName: supplier.name || "", partnerId: supplier.partnerId || "", amount: Number(amount.replace(",", ".")), currency, note,
+    })),
+    onSuccess: (data) => {
+      toast.success(`Оплата ${money(Number(amount.replace(",", ".")), currency)} записана`);
+      if (data?.summary) {
+        queryClient.setQueryData(["suppliers"], (old: Record<string, unknown> | undefined) => (
+          old && Array.isArray(old.suppliers) ? { ...old, suppliers: (old.suppliers as Supplier[]).map((s) => (sid(s) === sid(supplier) ? { ...s, ledger: data.summary } : s)) } : old
+        ));
+      }
+      setAmount(""); setNote("");
+      for (const key of [["supplier-picking-list"], ["picker-balances"], ["picker-balance"], ["picker-spending"]]) void queryClient.invalidateQueries({ queryKey: key });
+      onDone();
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const value = Number(amount.replace(",", "."));
+  return (
+    <form className="sp2-pay" onSubmit={(e) => { e.preventDefault(); if (value > 0) pay.mutate(); }}>
+      <label className="sp2-pay-amount">
+        <span className="sp2-label">Внести оплату</span>
+        <span className="sp2-money-input">
+          <input ref={inputRef} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d.,]/g, ""))} placeholder="0" aria-label={`Сумма, ${sym(currency)}`} />
+          <span>{sym(currency)}</span>
+        </span>
+      </label>
+      <input className="sp2-pay-note" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Комментарий (необязательно)" />
+      <button className="primary-action" type="submit" disabled={!(value > 0) || pay.isPending}>
+        {pay.isPending ? <Loader2 className="spin" size={15} /> : <CheckCircle2 size={15} />} Заплатил
+      </button>
+    </form>
+  );
+}
+
+// ── Обзор: сигналы, товары и продажи, прайс, контакты ────────────────────────
+function OverviewTab({ supplier, insight, signals, ledger, currency, profile, onChanged }: {
+  supplier: Supplier; insight?: Insight; signals: Signal[]; ledger: ReturnType<typeof ledgerOf>; currency: "USD" | "RUB"; profile?: SupplierProfile; onChanged: () => void;
+}) {
+  const stats = asRecord(profile?.stats);
+  const note = String(asRecord(supplier).note || "").trim();
+  return (
+    <div className="sp2-overview">
+      {signals.length ? (
+        <ul className="sp2-signals">
+          {signals.map((s) => <li key={s.text} className={`is-${s.tone}`}>{s.tone === "info" ? <FileText size={14} /> : <AlertTriangle size={14} />} {s.text}</li>)}
+        </ul>
+      ) : <div className="sp2-ok"><CheckCircle2 size={14} /> Всё в порядке</div>}
+
+      <div className="sp2-facts">
+        <Fact icon={<Package size={15} />} label="Товаров на поставщике" value={insight ? String(insight.products) : String(supplier.impactProductCount || 0)}
+          hint={insight ? `в продаже ${insight.sellable} · только у него ${insight.singleSource}` : ""} />
+        <Fact icon={<Truck size={15} />} label="Взяли у него за 30 дней" value={insight ? `${insight.sold30} шт.` : "—"}
+          hint={insight && insight.revenue30 ? `продали на ${Math.round(insight.revenue30).toLocaleString("ru")} ₽` : ""} />
+        <Fact icon={<Clock size={15} />} label="Прайс в PriceMaster" value={insight?.lastPriceAt ? ago(insight.lastPriceAt) : supplier.partnerId ? "нет данных" : "не из PriceMaster"}
+          hint={insight?.activeRows != null ? `живых строк ${insight.activeRows.toLocaleString("ru")}` : ""}
+          tone={insight && daysSince(insight.lastPriceAt) > 14 ? "danger" : insight && daysSince(insight.lastPriceAt) > 3 ? "warn" : ""} />
+        <Fact icon={<Scale size={15} />} label="Оборот по долгу" value={money(ledger.debt, currency)}
+          hint={`оплачено ${money(ledger.paid, currency)}${ledger.returns ? ` · возвраты ${money(ledger.returns, currency)}` : ""}`} />
+        {stats.totalPurchases ? <Fact icon={<CheckCircle2 size={15} />} label="Сборка заказов" value={`${stats.successRate ?? "—"}%`} hint={`собрано ${stats.picked ?? 0}, не было ${stats.missing ?? 0}`} /> : null}
+      </div>
+
+      {note ? <p className="sp2-note"><FileText size={14} /> {note}</p> : null}
+      <ContactsBlock supplier={supplier} onChanged={onChanged} />
+    </div>
+  );
+}
+
+function Fact({ icon, label, value, hint, tone = "" }: { icon: React.ReactNode; label: string; value: string; hint?: string; tone?: string }) {
+  return (
+    <div className={`sp2-fact${tone ? ` is-${tone}` : ""}`}>
+      <span className="sp2-fact-label">{icon} {label}</span>
+      <b>{value}</b>
+      {hint ? <small>{hint}</small> : null}
+    </div>
+  );
+}
+
+function ContactsBlock({ supplier, onChanged }: { supplier: Supplier; onChanged: () => void }) {
+  const saved = contactsOf(supplier);
+  const [edit, setEdit] = useState(false);
+  const [draft, setDraft] = useState<Contacts>(saved);
+  useEffect(() => { if (!edit) setDraft(contactsOf(supplier)); }, [supplier, edit]);
+  const save = useMutation({
+    mutationFn: () => fetchJson(`/api/suppliers/${encodeURIComponent(sid(supplier))}/profile`, OkSchema, patchBody({ contacts: draft })),
+    onSuccess: () => { toast.success("Контакты сохранены"); setEdit(false); onChanged(); },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const has = Object.values(saved).some(Boolean);
+  const fields: Array<[keyof Contacts, string, React.ReactNode, string]> = [
+    ["manager", "Менеджер", <User size={14} key="u" />, "Имя"],
+    ["phone", "Телефон", <Phone size={14} key="p" />, "+7 900 000-00-00"],
+    ["telegram", "Telegram", <Send size={14} key="t" />, "@username"],
+    ["whatsapp", "WhatsApp", <MessageCircle size={14} key="w" />, "если отличается от телефона"],
+    ["email", "Почта", <Mail size={14} key="m" />, "mail@example.ru"],
+    ["address", "Адрес / склад", <MapPin size={14} key="a" />, "Откуда забирать"],
+    ["hours", "Часы работы", <Clock size={14} key="h" />, "пн–пт 10–19"],
+  ];
+  return (
+    <section className="sp2-contacts">
+      <div className="sp2-section-head">
+        <h3>Контакты</h3>
+        {edit ? null : <button type="button" className="secondary-action compact" onClick={() => setEdit(true)}><Edit3 size={13} /> {has ? "Изменить" : "Добавить"}</button>}
+      </div>
+      {edit ? (
+        <form className="sp2-contacts-form" onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
+          {fields.map(([k, label, icon, ph]) => (
+            <label key={k}><span>{icon} {label}</span><input value={draft[k]} onChange={(e) => setDraft({ ...draft, [k]: e.target.value })} placeholder={ph} /></label>
+          ))}
+          <div className="sp2-form-actions">
+            <button className="primary-action" type="submit" disabled={save.isPending}>{save.isPending ? <Loader2 className="spin" size={14} /> : null} Сохранить</button>
+            <button className="secondary-action" type="button" onClick={() => setEdit(false)}>Отмена</button>
+          </div>
+        </form>
+      ) : has ? (
+        <dl className="sp2-contacts-list">
+          {fields.filter(([k]) => saved[k]).map(([k, label, icon]) => (
+            <div key={k}>
+              <dt>{icon} {label}</dt>
+              <dd>
+                {k === "phone" ? <a href={`tel:${phoneDigits(saved.phone)}`}>{saved.phone}</a>
+                  : k === "telegram" ? <a href={`https://t.me/${saved.telegram}`} target="_blank" rel="noreferrer">@{saved.telegram}</a>
+                  : k === "whatsapp" ? <a href={`https://wa.me/${waNumber(saved.whatsapp)}`} target="_blank" rel="noreferrer">{saved.whatsapp}</a>
+                  : k === "email" ? <a href={`mailto:${saved.email}`}>{saved.email}</a>
+                  : saved[k]}
+              </dd>
             </div>
-
-            {/* Ledger strip */}
-            <div className="summary-grid compact-summary supplier-ledger-strip">
-              <DiagnosticValue label={drawerData.totals.balance < 0 ? "Долг поставщику" : "Аванс / баланс"} value={moneySigned(drawerData.totals.balance, drawerData.supplierCurrency)} tone={drawerData.totals.balance < 0 ? "danger" : drawerData.totals.balance > 0 ? "success" : ""} />
-              <DiagnosticValue label="Собрано в долг" value={moneyAmount(drawerData.totals.debt, drawerData.supplierCurrency)} />
-              <DiagnosticValue label="Оплачено" value={moneySigned(drawerData.totals.paid, drawerData.supplierCurrency)} tone={drawerData.totals.paid > 0 ? "success" : ""} />
-              {Math.abs(drawerData.totals.returns) >= 0.005 ? <DiagnosticValue label="Возвраты" value={moneySigned(drawerData.totals.returns, drawerData.supplierCurrency)} /> : null}
-              {Math.abs(drawerData.totals.corrections) >= 0.005 ? <DiagnosticValue label="Корректировки" value={moneySigned(drawerData.totals.corrections, drawerData.supplierCurrency)} /> : null}
-              <DiagnosticValue label="Последняя оплата" value={drawerData.ledger.lastPaymentAt ? compactDate(String(drawerData.ledger.lastPaymentAt)) : "—"} />
-            </div>
-
-            {/* Drawer tabs */}
-            <div className="settings-tabs supplier-drawer-tabs">
-              <button type="button" className={drawerTab === "balance" ? "is-active" : ""} onClick={() => setDrawerTab("balance")}>Баланс</button>
-              <button type="button" className={drawerTab === "articles" ? "is-active" : ""} onClick={() => setDrawerTab("articles")}>Артикулы</button>
-              <button type="button" className={drawerTab === "history" ? "is-active" : ""} onClick={() => setDrawerTab("history")}>История</button>
-              <button type="button" className={drawerTab === "settings" ? "is-active" : ""} onClick={() => setDrawerTab("settings")}>Настройки</button>
-            </div>
-
-            {drawerTab === "balance" ? (
-            <>
-            {drawerData.raw.note ? <p className="supplier-note">{String(drawerData.raw.note)}</p> : null}
-            {!drawerData.active ? <p className="supplier-note danger-text">Остановлен {inactiveText(drawerData.supplier)}. {String(drawerData.raw.inactiveComment || drawerData.supplier.stopReason || "")}</p> : null}
-
-            {/* Payment */}
-            <div className="supplier-drawer-section">
-              <strong>Оплата</strong>
-              <div className="settings-form-row supplier-payment-row">
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  placeholder={drawerData.supplierCurrency === "USD" ? "Сумма, $" : "Сумма, ₽"}
-                  value={drawerData.paymentAmount}
-                  onChange={(event) => setPaymentDrafts((current) => ({ ...current, [drawerData.id]: event.target.value }))}
-                />
-                <input
-                  className="supplier-payment-note"
-                  placeholder="Комментарий"
-                  value={drawerData.paymentNote}
-                  onChange={(event) => setPaymentNotes((current) => ({ ...current, [drawerData.id]: event.target.value }))}
-                />
-                <button
-                  className="primary-action"
-                  type="button"
-                  disabled={paySupplier.isPending || !(Number(drawerData.paymentAmount) > 0)}
-                  onClick={() => paySupplier.mutate({
-                    supplier: drawerData.supplier,
-                    amount: Number(drawerData.paymentAmount || 0),
-                    currency: drawerData.supplierCurrency,
-                    note: drawerData.paymentNote,
-                  })}
-                >
-                  {paySupplier.isPending ? <Loader2 className="spin" size={16} /> : <CheckCircle2 size={16} />} Заплатил
-                </button>
-              </div>
-            </div>
-
-            {/* Adjust balance */}
-            <details open={adjustOpen.has(drawerData.id)} onToggle={(e) => {
-              const el = e.currentTarget as HTMLDetailsElement;
-              setAdjustOpen((prev) => { const n = new Set(prev); el.open ? n.add(drawerData.id) : n.delete(drawerData.id); return n; });
-            }}>
-              <summary className="muted-note sp-summary-toggle">
-                <Scale size={13} /> Свести баланс с поставщиком
-              </summary>
-              <div className="settings-form-row supplier-payment-row sp-form-row-mt">
-                <input
-                  type="number"
-                  step="0.01"
-                  placeholder={drawerData.supplierCurrency === "USD" ? "Фактический баланс, $" : "Фактический баланс, ₽"}
-                  value={adjustDrafts[drawerData.id] || ""}
-                  onChange={(e) => setAdjustDrafts((p) => ({ ...p, [drawerData.id]: e.target.value }))}
-                  title={`Текущий: ${moneySigned(drawerData.totals.balance, drawerData.supplierCurrency)}`}
-                />
-                <input
-                  className="supplier-payment-note"
-                  placeholder="Комментарий"
-                  value={adjustNotes[drawerData.id] || ""}
-                  onChange={(e) => setAdjustNotes((p) => ({ ...p, [drawerData.id]: e.target.value }))}
-                />
-                <button
-                  className="primary-action"
-                  type="button"
-                  disabled={adjustBalance.isPending || !Number.isFinite(Number(adjustDrafts[drawerData.id] || undefined))}
-                  onClick={() => {
-                    const inputVal = Number(adjustDrafts[drawerData.id] || 0);
-                    if (!Number.isFinite(inputVal)) return;
-                    adjustBalance.mutate({ supplier: drawerData.supplier, targetBalance: inputVal, currency: drawerData.supplierCurrency, note: adjustNotes[drawerData.id] || "" }, {
-                      onSuccess: () => {
-                        setAdjustDrafts((p) => ({ ...p, [drawerData.id]: "" }));
-                        setAdjustNotes((p) => ({ ...p, [drawerData.id]: "" }));
-                      },
-                    });
-                  }}
-                >
-                  {adjustBalance.isPending ? <Loader2 className="spin" size={16} /> : <Scale size={16} />} Свести
-                </button>
-              </div>
-              {adjustBalance.isSuccess && adjustBalance.data && adjustBalance.variables && supplierId(adjustBalance.variables.supplier) === drawerData.id && (
-                <div className="inline-success sp-adjust-ok">
-                  {adjustBalance.data.skipped
-                    ? adjustBalance.data.message
-                    : `Корректировка: ${moneySigned(adjustBalance.data.currentBalance ?? 0, adjustBalance.variables.currency)} → ${moneySigned(adjustBalance.data.targetBalance ?? 0, adjustBalance.variables.currency)} (запись на ${moneySigned(adjustBalance.data.delta ?? 0, adjustBalance.variables.currency)})`}
-                </div>
-              )}
-              {adjustBalance.isError && adjustBalance.variables && supplierId(adjustBalance.variables.supplier) === drawerData.id && <div className="inline-error sp-adjust-error">{errorMessage(adjustBalance.error)}</div>}
-            </details>
-
-            {/* Payment history */}
-            {drawerData.paymentEntries.length > 0 ? (
-              <details open={payHistoryOpen} onToggle={(e) => setPayHistoryOpen((e.currentTarget as HTMLDetailsElement).open)} className="sp-details-mt">
-                <summary className="muted-note sp-summary-toggle">
-                  <CreditCard size={13} /> История оплат ({drawerData.paymentEntries.length})
-                </summary>
-                <div className="supplier-orders-list sp-list-mt">
-                  <div className="supplier-orders-header">
-                    <span>Тип</span><span>Сумма</span><span>Дата</span><span>Заметка</span>
-                  </div>
-                  {drawerData.paymentEntries.map((entry) => {
-                    const entryCurrency = String(entry.currency || "RUB").toUpperCase() === "USD" ? "USD" : "RUB";
-                    const typeLabel = entry.entryType === "payment" ? "Оплата"
-                      : entry.entryType === "balance_correction" ? "Корректировка"
-                      : entry.entryType === "supplier_return" ? "Возврат"
-                      : entry.entryType;
-                    const isNeg = entry.amount < 0;
-                    return (
-                      <div className="supplier-order-row" key={entry.id}>
-                        <div className="supplier-order-name"><span>{typeLabel}</span></div>
-                        <span className="supplier-order-amount" style={{ color: isNeg ? "var(--danger, #f87171)" : "var(--success, #4ed39a)" }}>
-                          {moneySigned(entry.amount, entryCurrency)}
-                        </span>
-                        <span className="muted-note">{compactDate(entry.occurredAt ?? null)}</span>
-                        <span className="muted-note sp-note-xs">{entry.note || ""}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </details>
-            ) : null}
-            </>
-            ) : null}
-
-            {drawerTab === "history" ? (
-            <div className="supplier-drawer-section">
-              <div className="sp-history-head">
-                <strong>История заказов</strong>
-                <div className="sp-history-controls">
-                  {historyQuery.isFetching ? <Loader2 className="spin" size={13} /> : null}
-                  <div className="settings-tabs">
-                    <button type="button" className={!historyShowAll ? "is-active" : ""} onClick={() => setHistoryShowAll(false)}>30 дней</button>
-                    <button type="button" className={historyShowAll ? "is-active" : ""} onClick={() => setHistoryShowAll(true)}>Все</button>
-                  </div>
-                </div>
-              </div>
-
-              {historyQuery.isLoading ? (
-                <div className="soft-empty sp-list-mt"><Loader2 className="spin" size={14} /> Загружаю историю...</div>
-              ) : drawerData.pickedRows.length > 0 ? (
-                <div className="supplier-orders-list sp-list-mt">
-                  <div className="supplier-orders-header">
-                    <span>Товар</span><span>Сумма</span><span>Дата</span><span></span>
-                  </div>
-                  {drawerData.pickedRows.map((row) => {
-                    const debt = drawerData.debtByKey.get(row.key);
-                    const amountRub = debt ? Math.abs(Number(debt.amount)) : null;
-                    const isReturned = drawerData.returnedKeys.has(row.key);
-                    const isPending = returnPicking.isPending && returnPicking.variables?.pickingKey === row.key;
-                    return (
-                      <div className="supplier-order-row" key={row.key}>
-                        <div className="supplier-order-name">
-                          <span>{row.productName || row.offerId || row.key}</span>
-                          {row.offerId ? <small className="muted-note">{row.offerId}</small> : null}
-                        </div>
-                        <span className="supplier-order-amount">
-                          {drawerData.supplierCurrency === "USD" && row.price
-                            ? moneyAmount(Number(row.price) * Math.max(1, Number(row.quantity || 1)), String(row.priceCurrency || "USD"))
-                            : amountRub !== null ? moneyAmount(amountRub, "RUB") : `${row.price} ${row.priceCurrency}`}
-                        </span>
-                        <span className="muted-note">{compactDate(row.pickedAt ?? null)}</span>
-                        {isReturned ? (
-                          <span className="supplier-returned-badge"><RotateCcw size={12} /> Возврат</span>
-                        ) : (
-                          <button
-                            className="secondary-action danger-action supplier-return-btn"
-                            type="button"
-                            disabled={isPending || returnPicking.isPending}
-                            onClick={() => {
-                              if (window.confirm(`Вернуть «${row.productName || row.offerId || row.key}» поставщику? Это действие нельзя отменить.`)) {
-                                returnPicking.mutate({ pickingKey: row.key });
-                              }
-                            }}
-                          >
-                            {isPending ? <Loader2 className="spin" size={13} /> : <RotateCcw size={13} />} Возврат
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="soft-empty sp-list-mt">
-                  {historyShowAll ? "Заказов пока нет." : "Заказов за последние 30 дней нет."}
-                  {!historyShowAll ? (
-                    <button type="button" className="sp-show-more-btn" onClick={() => setHistoryShowAll(true)}>
-                      Показать всё
-                    </button>
-                  ) : null}
-                </div>
-              )}
-
-              <details className="supplier-manual-return-details sp-details-mt-lg">
-                <summary className="muted-note sp-summary-plain">Ручной возврат (произвольная сумма)</summary>
-                <div className="settings-form-row supplier-payment-row sp-form-row-mt">
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    placeholder={drawerData.supplierCurrency === "USD" ? "Сумма возврата, $" : "Сумма возврата, ₽"}
-                    value={returnDrafts[drawerData.id] || ""}
-                    onChange={(event) => setReturnDrafts((current) => ({ ...current, [drawerData.id]: event.target.value }))}
-                  />
-                  <input
-                    placeholder="Комментарий"
-                    value={returnNotes[drawerData.id] || ""}
-                    onChange={(event) => setReturnNotes((current) => ({ ...current, [drawerData.id]: event.target.value }))}
-                  />
-                  <button
-                    className="primary-action"
-                    type="button"
-                    disabled={returnSupplier.isPending || !(Number(returnDrafts[drawerData.id]) > 0)}
-                    onClick={() => returnSupplier.mutate({ supplier: drawerData.supplier, amount: Number(returnDrafts[drawerData.id] || 0), currency: drawerData.supplierCurrency, note: returnNotes[drawerData.id] || "" })}
-                  >
-                    {returnSupplier.isPending ? <Loader2 className="spin" size={16} /> : <RotateCcw size={16} />} Возврат
-                  </button>
-                </div>
-              </details>
-            </div>
-            ) : null}
-
-            {drawerTab === "articles" ? (
-            <div className="supplier-articles">
-              <strong>Артикулы поставщика</strong>
-              {drawerData.articles.map((article) => {
-                const articleId = String(article.id || article.article || "");
-                return (
-                  <div className="supplier-article-row" key={articleId}>
-                    <div>
-                      <span>{String(article.article || "-")}</span>
-                      <small>{String(article.note || "")}</small>
-                    </div>
-                    <button className="icon-action" type="button" title="Редактировать" onClick={() => setArticleDraft(drawerData.id, { id: articleId, article: String(article.article || ""), note: String(article.note || "") })}><Edit3 size={15} /></button>
-                    <button className="icon-action danger-action" type="button" title="Удалить" onClick={() => deleteArticle.mutate({ supplierIdValue: drawerData.id, articleId })}><Trash2 size={15} /></button>
-                  </div>
-                );
-              })}
-              {!drawerData.articles.length ? <small className="muted-line">Артикулы пока не добавлены.</small> : null}
-              <form
-                className="supplier-article-form"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  if (!drawerData.draft.article.trim()) return;
-                  saveArticle.mutate({ supplierIdValue: drawerData.id, draft: drawerData.draft });
-                }}
-              >
-                <input value={drawerData.draft.article} onChange={(event) => setArticleDraft(drawerData.id, { article: event.target.value })} placeholder="Артикул" />
-                <input value={drawerData.draft.note} onChange={(event) => setArticleDraft(drawerData.id, { note: event.target.value })} placeholder="Заметка" />
-                <button className="secondary-action" type="submit" disabled={saveArticle.isPending || !drawerData.draft.article.trim()}>{drawerData.draft.id ? "Сохранить" : "Добавить"}</button>
-                {drawerData.draft.id ? <button className="icon-action" type="button" title="Отмена" onClick={() => setArticleDraft(drawerData.id, { id: undefined, article: "", note: "" })}><X size={16} /></button> : null}
-              </form>
-            </div>
-            ) : null}
-
-            {drawerTab === "settings" ? (
-            <>
-              <label className="supplier-currency-inline">
-                <span>Валюта закупки</span>
-                <SelectField
-                  ariaLabel="Валюта закупки"
-                  value={drawerData.supplierCurrency}
-                  disabled={patchSupplier.isPending}
-                  onChange={(next) => patchSupplier.mutate({ id: drawerData.id, patch: { priceCurrency: next } })}
-                  options={[{ value: "USD", label: "USD" }, { value: "RUB", label: "RUB" }]}
-                />
-              </label>
-              {drawerData.raw.note ? <p className="supplier-note">{String(drawerData.raw.note)}</p> : null}
-              {!drawerData.active ? <p className="supplier-note danger-text">Остановлен {inactiveText(drawerData.supplier)}. {String(drawerData.raw.inactiveComment || drawerData.supplier.stopReason || "")}</p> : null}
-              <div className="row-actions sp-actions-mt">
-                <button className="secondary-action" type="button" onClick={() => startEdit(drawerData.supplier)}><Edit3 size={16} /> Редактировать</button>
-                {drawerData.active ? (
-                  <button className="secondary-action danger-action" type="button" onClick={() => startInactive(drawerData.supplier)}><UserX size={16} /> Не работает</button>
-                ) : (
-                  <button className="secondary-action" type="button" disabled={patchSupplier.isPending} onClick={() => patchSupplier.mutate({ id: drawerData.id, patch: { stopped: false } })}><CheckCircle2 size={16} /> Вернуть</button>
-                )}
-                <button
-                  className="secondary-action danger-action"
-                  type="button"
-                  disabled={zeroStockMutation.isPending}
-                  title="Немедленно обнулить остатки на всех маркетплейсах для товаров этого поставщика"
-                  onClick={() => {
-                    if (!window.confirm(`Обнулить остатки на маркетплейсах для всех товаров поставщика «${drawerData.supplier.name}»?\n\nЭто немедленно скроет товары из продажи.`)) return;
-                    zeroStockMutation.mutate(drawerData.id, {
-                      onSuccess: (res) => window.alert(`Готово: обнулено ${res.zeroed} из ${res.total} товаров.`),
-                    });
-                  }}
-                >
-                  {zeroStockMutation.isPending ? "Обнуляем…" : <><PackageX size={16} /> Обнулить остатки</>}
-                </button>
-                <button
-                  className="secondary-action danger-action"
-                  type="button"
-                  disabled={deleteSupplier.isPending}
-                  onClick={() => {
-                    if (window.confirm(`Удалить поставщика ${drawerData.supplier.name || drawerData.id}?`)) deleteSupplier.mutate(drawerData.id);
-                  }}
-                >
-                  <Trash2 size={16} /> Удалить
-                </button>
-              </div>
-            </>
-            ) : null}
-          </aside>
-        </div>
-      ) : null}
-
-      {/* Inactive modal */}
-      {inactiveDraft ? (
-        <div className="supplier-modal-backdrop" onClick={() => setInactiveDraft(null)}>
-          <section className="supplier-inactive-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="section-title">
-              <div><span>Поставщик</span><h3>Временно не работает</h3></div>
-              <button className="icon-action" type="button" onClick={() => setInactiveDraft(null)}><X size={16} /></button>
-            </div>
-            <p className="settings-hint">{inactiveDraft.supplier.name || supplierId(inactiveDraft.supplier)}</p>
-            <label>Комментарий<textarea value={inactiveDraft.comment} onChange={(event) => setInactiveDraft({ ...inactiveDraft, comment: event.target.value })} /></label>
-            <label className="toggle-line">
-              <input type="checkbox" checked={inactiveDraft.inactiveUntilUnknown} onChange={(event) => setInactiveDraft({ ...inactiveDraft, inactiveUntilUnknown: event.target.checked })} />
-              <span>срок неизвестен</span>
-            </label>
-            {!inactiveDraft.inactiveUntilUnknown ? <label>Вернется<input type="date" value={inactiveDraft.inactiveUntil} onChange={(event) => setInactiveDraft({ ...inactiveDraft, inactiveUntil: event.target.value })} /></label> : null}
-            <div className="row-actions">
-              <button className="secondary-action" type="button" onClick={() => setInactiveDraft({ ...inactiveDraft, inactiveUntil: dateInput(7), inactiveUntilUnknown: false })}>+7 дней</button>
-              <button className="secondary-action" type="button" onClick={() => setInactiveDraft({ ...inactiveDraft, inactiveUntil: dateInput(14), inactiveUntilUnknown: false })}>+14 дней</button>
-              <button className="secondary-action" type="button" onClick={() => setInactiveDraft({ ...inactiveDraft, inactiveUntil: endOfMonthInput(), inactiveUntilUnknown: false })}>до конца месяца</button>
-            </div>
-            <div className="row-actions">
-              <button className="primary-action" type="button" disabled={patchSupplier.isPending} onClick={submitInactive}>
-                {patchSupplier.isPending ? <Loader2 className="spin" size={16} /> : <Truck size={16} />} Сохранить остановку
-              </button>
-              <button className="secondary-action" type="button" onClick={() => setInactiveDraft(null)}>Отмена</button>
-            </div>
-          </section>
-        </div>
-      ) : null}
+          ))}
+        </dl>
+      ) : <p className="sp2-muted">Контактов нет — добавьте телефон или Telegram, чтобы связываться в одно нажатие.</p>}
     </section>
+  );
+}
+
+// ── Оплаты: история + сверка баланса ─────────────────────────────────────────
+function PaymentsTab({ supplier, currency, ledger, profile, loading, onChanged }: {
+  supplier: Supplier; currency: "USD" | "RUB"; ledger: ReturnType<typeof ledgerOf>; profile?: SupplierProfile; loading: boolean; onChanged: () => void;
+}) {
+  const [target, setTarget] = useState("");
+  const [note, setNote] = useState("");
+  const adjust = useMutation({
+    mutationFn: () => anyJson<{ skipped?: boolean; message?: string; delta?: number }>("/api/supplier-ledger/adjust", mutationBody({
+      supplierName: supplier.name || "", partnerId: supplier.partnerId || "", targetBalance: Number(target.replace(",", ".")), currency, note,
+    })),
+    onSuccess: (r) => { toast.success(r.skipped ? (r.message || "Баланс уже такой") : `Баланс сведён (поправка ${signed(r.delta, currency)})`); setTarget(""); setNote(""); onChanged(); },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const entries = (profile?.ledger?.entries || [])
+    .filter((e: LedgerEntry) => ["payment", "balance_correction", "supplier_return"].includes(String(e.entryType)))
+    .sort((a: LedgerEntry, b: LedgerEntry) => String(b.occurredAt || "").localeCompare(String(a.occurredAt || "")));
+  const label = (t: string) => (t === "payment" ? "Оплата" : t === "balance_correction" ? "Сверка" : t === "supplier_return" ? "Возврат" : t);
+  return (
+    <div className="sp2-stack">
+      <section>
+        <div className="sp2-section-head"><h3>История оплат</h3>{loading ? <Loader2 className="spin" size={14} /> : null}</div>
+        {entries.length ? (
+          <ul className="sp2-ledger">
+            {entries.map((e: LedgerEntry) => {
+              const c = String(e.currency || currency).toUpperCase() === "RUB" ? "RUB" : "USD";
+              return (
+                <li key={e.id}>
+                  <span className="sp2-ledger-type">{label(String(e.entryType))}</span>
+                  <span className="sp2-ledger-date">{compactDate(e.occurredAt ?? null)}</span>
+                  <b className={Number(e.amount) < 0 ? "is-debt" : "is-plus"}>{signed(e.amount, c)}</b>
+                  {e.note ? <small>{e.note}</small> : null}
+                </li>
+              );
+            })}
+          </ul>
+        ) : <p className="sp2-muted">{loading ? "Загружаем…" : "Оплат ещё не было."}</p>}
+      </section>
+      <section className="sp2-box">
+        <h3>Свести баланс с поставщиком</h3>
+        <p className="sp2-muted">Если у поставщика другая цифра — впишите её, мы добавим поправку. Сейчас: {signed(ledger.balance, currency)}.</p>
+        <form className="sp2-inline-form" onSubmit={(e) => { e.preventDefault(); if (Number.isFinite(Number(target.replace(",", "."))) && target !== "") adjust.mutate(); }}>
+          <span className="sp2-money-input"><input inputMode="decimal" value={target} onChange={(e) => setTarget(e.target.value.replace(/[^\d.,-]/g, ""))} placeholder="Баланс у поставщика" /><span>{sym(currency)}</span></span>
+          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Комментарий" />
+          <button className="secondary-action" type="submit" disabled={adjust.isPending || target === ""}>{adjust.isPending ? <Loader2 className="spin" size={14} /> : <Scale size={14} />} Свести</button>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+// ── Заказы: собранное у поставщика + возвраты ────────────────────────────────
+function OrdersTab({ supplier, currency, profile, loading, onChanged }: { supplier: Supplier; currency: "USD" | "RUB"; profile?: SupplierProfile; loading: boolean; onChanged: () => void }) {
+  const [all, setAll] = useState(false);
+  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
+  const returnPicking = useMutation({
+    mutationFn: (pickingKey: string) => fetchJson("/api/supplier-ledger/return-picking", SupplierLedgerPaymentSchema, mutationBody({ pickingKey, note: "" })),
+    onSuccess: () => { toast.success("Возврат записан"); onChanged(); },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const manualReturn = useMutation({
+    mutationFn: () => fetchJson("/api/supplier-ledger/returns", SupplierLedgerPaymentSchema, mutationBody({
+      supplierName: supplier.name || "", partnerId: supplier.partnerId || "", amount: Number(amount.replace(",", ".")), currency, note,
+    })),
+    onSuccess: () => { toast.success("Возврат записан"); setAmount(""); setNote(""); onChanged(); },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const entries = profile?.ledger?.entries || [];
+  const returned = new Set(entries.filter((e: LedgerEntry) => e.entryType === "supplier_return" && e.pickingKey).map((e: LedgerEntry) => String(e.pickingKey)));
+  const debtByKey = new Map(entries.filter((e: LedgerEntry) => e.entryType === "purchase_debt" && e.pickingKey).map((e: LedgerEntry) => [String(e.pickingKey), e]));
+  const cutoff = Date.now() - 30 * 86_400_000;
+  const rows = (profile?.history || []).filter((r) => r.status === "picked" && (all || (r.pickedAt && new Date(r.pickedAt).getTime() >= cutoff)));
+  return (
+    <div className="sp2-stack">
+      <section>
+        <div className="sp2-section-head">
+          <h3>Собрано у поставщика</h3>
+          <div className="sp2-seg">
+            <button type="button" className={!all ? "is-on" : ""} onClick={() => setAll(false)}>30 дней</button>
+            <button type="button" className={all ? "is-on" : ""} onClick={() => setAll(true)}>Все</button>
+          </div>
+        </div>
+        {loading ? <p className="sp2-muted"><Loader2 className="spin" size={13} /> Загружаем…</p> : rows.length ? (
+          <ul className="sp2-orders">
+            {rows.map((r) => {
+              const debt = debtByKey.get(r.key);
+              const sum = currency === "USD" && r.price ? money(Number(r.price) * Math.max(1, Number(r.quantity || 1)), String(r.priceCurrency || "USD"))
+                : debt ? money(Math.abs(Number(debt.amount)), "RUB") : `${r.price ?? ""} ${r.priceCurrency ?? ""}`;
+              const isReturned = returned.has(r.key);
+              return (
+                <li key={r.key}>
+                  <div className="sp2-order-name"><span>{r.productName || r.offerId || r.key}</span><small>{r.offerId} · {compactDate(r.pickedAt ?? null)}</small></div>
+                  <b>{sum}</b>
+                  {isReturned ? <span className="sp2-chip"><RotateCcw size={12} /> возврат</span> : (
+                    <button type="button" className="secondary-action compact" disabled={returnPicking.isPending} onClick={() => {
+                      if (window.confirm(`Вернуть «${r.productName || r.offerId}» поставщику?`)) returnPicking.mutate(r.key);
+                    }}><RotateCcw size={13} /> Возврат</button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        ) : <p className="sp2-muted">{all ? "Заказов у поставщика ещё не было." : "За 30 дней заказов нет."}</p>}
+      </section>
+      <section className="sp2-box">
+        <h3>Возврат на произвольную сумму</h3>
+        <form className="sp2-inline-form" onSubmit={(e) => { e.preventDefault(); if (Number(amount.replace(",", ".")) > 0) manualReturn.mutate(); }}>
+          <span className="sp2-money-input"><input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value.replace(/[^\d.,]/g, ""))} placeholder="Сумма" /><span>{sym(currency)}</span></span>
+          <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Комментарий" />
+          <button className="secondary-action" type="submit" disabled={manualReturn.isPending || !(Number(amount.replace(",", ".")) > 0)}><RotateCcw size={14} /> Записать возврат</button>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+// ── Артикулы ─────────────────────────────────────────────────────────────────
+function ArticlesTab({ supplier, onChanged }: { supplier: Supplier; onChanged: () => void }) {
+  const id = sid(supplier);
+  const [draft, setDraft] = useState<{ id?: string; article: string; note: string }>({ article: "", note: "" });
+  const save = useMutation({
+    mutationFn: () => fetchJson(`/api/suppliers/${encodeURIComponent(id)}/articles`, OkSchema, mutationBody(draft)),
+    onSuccess: () => { toast.success(draft.id ? "Артикул обновлён" : "Артикул добавлен"); setDraft({ article: "", note: "" }); onChanged(); },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const del = useMutation({
+    mutationFn: (articleId: string) => fetchJson(`/api/suppliers/${encodeURIComponent(id)}/articles/${encodeURIComponent(articleId)}`, OkSchema, { method: "DELETE" }),
+    onSuccess: () => { toast.success("Артикул удалён"); onChanged(); },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  const articles = articlesOf(supplier);
+  return (
+    <div className="sp2-stack">
+      <form className="sp2-inline-form" onSubmit={(e) => { e.preventDefault(); if (draft.article.trim()) save.mutate(); }}>
+        <input value={draft.article} onChange={(e) => setDraft({ ...draft, article: e.target.value })} placeholder="Артикул" />
+        <input value={draft.note} onChange={(e) => setDraft({ ...draft, note: e.target.value })} placeholder="Заметка" />
+        <button className="primary-action" type="submit" disabled={save.isPending || !draft.article.trim()}>{draft.id ? "Сохранить" : <><Plus size={14} /> Добавить</>}</button>
+        {draft.id ? <button className="secondary-action" type="button" onClick={() => setDraft({ article: "", note: "" })}>Отмена</button> : null}
+      </form>
+      {articles.length ? (
+        <ul className="sp2-articles">
+          {articles.map((a) => {
+            const aid = String(a.id || a.article || "");
+            return (
+              <li key={aid}>
+                <div><b>{String(a.article || "—")}</b>{a.note ? <small>{String(a.note)}</small> : null}</div>
+                <button className="icon-action" type="button" title="Изменить" onClick={() => setDraft({ id: aid, article: String(a.article || ""), note: String(a.note || "") })}><Edit3 size={15} /></button>
+                <button className="icon-action danger-action" type="button" title="Удалить" disabled={del.isPending} onClick={() => del.mutate(aid)}><Trash2 size={15} /></button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : <p className="sp2-muted">Артикулов нет.</p>}
+    </div>
+  );
+}
+
+// ── Настройки ────────────────────────────────────────────────────────────────
+function SettingsTab({ supplier, onChanged }: { supplier: Supplier; onChanged: () => void }) {
+  const r = asRecord(supplier);
+  const initial = {
+    name: String(supplier.name || ""),
+    note: String(r.note || ""),
+    priceCurrency: currencyOf(supplier),
+    pricingMode: String(supplier.pricingMode || "normal") === "stock_only" ? "stock_only" : "normal",
+    trustFactor: String(supplier.trustFactor ?? 100),
+    orderCutoffTime: String(supplier.orderCutoffTime || ""),
+    reseller: Boolean(supplier.reseller),
+  };
+  const [d, setD] = useState(initial);
+  const dirty = JSON.stringify(d) !== JSON.stringify(initial);
+  const save = useMutation({
+    mutationFn: () => fetchJson(`/api/suppliers/${encodeURIComponent(sid(supplier))}`, OkSchema, patchBody({
+      name: d.name.trim(), note: d.note.trim(), priceCurrency: d.priceCurrency, pricingMode: d.pricingMode,
+      trustFactor: Number(d.trustFactor) || 100, orderCutoffTime: d.orderCutoffTime, reseller: d.reseller,
+    })),
+    onSuccess: () => { toast.success("Сохранено"); onChanged(); },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  return (
+    <form className="sp2-settings" onSubmit={(e) => { e.preventDefault(); if (d.name.trim()) save.mutate(); }}>
+      <label><span>Название</span><input value={d.name} onChange={(e) => setD({ ...d, name: e.target.value })} /></label>
+      <label><span>Заметка</span><textarea rows={2} value={d.note} onChange={(e) => setD({ ...d, note: e.target.value })} placeholder="Что важно помнить о поставщике" /></label>
+      <fieldset>
+        <legend>Валюта прайса</legend>
+        <div className="sp2-seg">
+          <button type="button" className={d.priceCurrency === "USD" ? "is-on" : ""} onClick={() => setD({ ...d, priceCurrency: "USD" })}>$ доллары — цена × курс × наценка</button>
+          <button type="button" className={d.priceCurrency === "RUB" ? "is-on" : ""} onClick={() => setD({ ...d, priceCurrency: "RUB" })}>₽ рубли — цена × наценка</button>
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend>Что берём от поставщика</legend>
+        <div className="sp2-seg">
+          <button type="button" className={d.pricingMode === "normal" ? "is-on" : ""} onClick={() => setD({ ...d, pricingMode: "normal" })}>Цену и остаток</button>
+          <button type="button" className={d.pricingMode === "stock_only" ? "is-on" : ""} onClick={() => setD({ ...d, pricingMode: "stock_only" })}>Только остаток</button>
+        </div>
+      </fieldset>
+      <div className="sp2-settings-row">
+        <label><span>Доверие, %</span><input inputMode="numeric" value={d.trustFactor} onChange={(e) => setD({ ...d, trustFactor: e.target.value.replace(/\D/g, "") })} /></label>
+        <label><span>Приём заказов до</span><input type="time" value={d.orderCutoffTime} onChange={(e) => setD({ ...d, orderCutoffTime: e.target.value })} /></label>
+      </div>
+      <label className="sp2-check"><input type="checkbox" checked={d.reseller} onChange={(e) => setD({ ...d, reseller: e.target.checked })} /> Перекупщик (берёт товар у других)</label>
+      <div className="sp2-form-actions">
+        <button className="primary-action" type="submit" disabled={!dirty || save.isPending || !d.name.trim()}>{save.isPending ? <Loader2 className="spin" size={14} /> : null} {dirty ? "Сохранить" : "Сохранено"}</button>
+        {dirty ? <button className="secondary-action" type="button" onClick={() => setD(initial)}>Отменить изменения</button> : null}
+      </div>
+    </form>
+  );
+}
+
+// ── Остановка поставщика ─────────────────────────────────────────────────────
+function StopDialog({ supplier, onClose, onDone }: { supplier: Supplier; onClose: () => void; onDone: () => void }) {
+  const r = asRecord(supplier);
+  const [comment, setComment] = useState(String(r.inactiveComment || supplier.stopReason || ""));
+  const [until, setUntil] = useState(typeof r.inactiveUntil === "string" ? r.inactiveUntil.slice(0, 10) : dateInput(7));
+  const [unknown, setUnknown] = useState(false);
+  const stop = useMutation({
+    mutationFn: () => fetchJson(`/api/suppliers/${encodeURIComponent(sid(supplier))}`, OkSchema, patchBody({
+      stopped: true, stopReason: comment, inactiveComment: comment, inactiveUntil: unknown ? null : until, inactiveUntilUnknown: unknown,
+    })),
+    onSuccess: () => { toast.success(`${supplier.name} остановлен`); onDone(); },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const quick: Array<[string, string]> = [["Не отвечает", "не отвечает"], ["Нет товара", "нет товара"], ["Отпуск", "отпуск"], ["Проблемы с качеством", "проблемы с качеством"]];
+  return (
+    <div className="sp2-modal" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <form className="sp2-dialog" onSubmit={(e) => { e.preventDefault(); stop.mutate(); }}>
+        <div className="sp2-section-head"><h3>Остановить «{supplier.name}»</h3><button type="button" className="icon-action" onClick={onClose} aria-label="Закрыть"><X size={16} /></button></div>
+        <p className="sp2-muted">Его товары перестанут продаваться с его цен и остатков. Вернуть можно одной кнопкой «Включить».</p>
+        <div className="sp2-chips">{quick.map(([l, v]) => <button key={v} type="button" className={comment === v ? "is-on" : ""} onClick={() => setComment(v)}>{l}</button>)}</div>
+        <label><span>Причина</span><textarea rows={2} value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Например: уехал до 15-го" /></label>
+        <label className="sp2-check"><input type="checkbox" checked={unknown} onChange={(e) => setUnknown(e.target.checked)} /> Срок неизвестен</label>
+        {!unknown ? (
+          <>
+            <label><span>Вернётся</span><input type="date" value={until} onChange={(e) => setUntil(e.target.value)} /></label>
+            <div className="sp2-chips">
+              <button type="button" onClick={() => setUntil(dateInput(1))}>завтра</button>
+              <button type="button" onClick={() => setUntil(dateInput(7))}>+7 дней</button>
+              <button type="button" onClick={() => setUntil(dateInput(14))}>+14 дней</button>
+              <button type="button" onClick={() => setUntil(endOfMonth())}>до конца месяца</button>
+            </div>
+          </>
+        ) : null}
+        <div className="sp2-form-actions">
+          <button className="primary-action danger-fill" type="submit" disabled={stop.isPending}>{stop.isPending ? <Loader2 className="spin" size={14} /> : <Ban size={14} />} Остановить</button>
+          <button className="secondary-action" type="button" onClick={onClose}>Отмена</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// ── Новый поставщик ──────────────────────────────────────────────────────────
+function CreateDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
+  const [name, setName] = useState("");
+  const [currency, setCurrency] = useState<"USD" | "RUB">("USD");
+  const [note, setNote] = useState("");
+  const create = useMutation({
+    mutationFn: () => anyJson<{ warehouse?: { suppliers?: Array<{ id?: string; name?: string }> } }>("/api/suppliers", mutationBody({ name: name.trim(), note: note.trim(), priceCurrency: currency })),
+    onSuccess: (r) => {
+      toast.success("Поставщик добавлен");
+      const made = (r?.warehouse?.suppliers || []).filter((s) => String(s.name || "").trim().toLowerCase() === name.trim().toLowerCase()).pop();
+      onCreated(String(made?.id || ""));
+    },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  return (
+    <div className="sp2-modal" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <form className="sp2-dialog" onSubmit={(e) => { e.preventDefault(); if (name.trim()) create.mutate(); }}>
+        <div className="sp2-section-head"><h3>Новый поставщик</h3><button type="button" className="icon-action" onClick={onClose} aria-label="Закрыть"><X size={16} /></button></div>
+        <p className="sp2-muted">Поставщики из PriceMaster появляются сами — кнопка «Из PriceMaster». Вручную — для тех, кого там нет.</p>
+        <label><span>Название</span><input autoFocus value={name} onChange={(e) => setName(e.target.value)} /></label>
+        <fieldset>
+          <legend>Валюта прайса</legend>
+          <div className="sp2-seg">
+            <button type="button" className={currency === "USD" ? "is-on" : ""} onClick={() => setCurrency("USD")}>$ доллары</button>
+            <button type="button" className={currency === "RUB" ? "is-on" : ""} onClick={() => setCurrency("RUB")}>₽ рубли</button>
+          </div>
+        </fieldset>
+        <label><span>Заметка</span><input value={note} onChange={(e) => setNote(e.target.value)} /></label>
+        <div className="sp2-form-actions">
+          <button className="primary-action" type="submit" disabled={create.isPending || !name.trim()}>{create.isPending ? <Loader2 className="spin" size={14} /> : <Plus size={14} />} Добавить</button>
+          <button className="secondary-action" type="button" onClick={onClose}>Отмена</button>
+        </div>
+      </form>
+    </div>
   );
 }

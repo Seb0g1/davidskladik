@@ -43,6 +43,21 @@ function normalizeSupplierOrderCutoff(value = "") {
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
+/** Supplier contacts (page «Поставщики»): phone, Telegram, WhatsApp, manager, address, hours, email. */
+function normalizeSupplierContacts(input = {}) {
+  const c = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  const text = (v, max = 160) => cleanText(v).slice(0, max);
+  return {
+    phone: text(c.phone, 40),
+    telegram: text(c.telegram, 80).replace(/^https?:\/\/t\.me\//i, "").replace(/^@/, ""),
+    whatsapp: text(c.whatsapp, 40),
+    email: text(c.email, 120),
+    manager: text(c.manager, 120),
+    address: text(c.address, 240),
+    hours: text(c.hours, 120),
+  };
+}
+
 function normalizeManagedSupplier(input = {}) {
   const inactiveUntil = cleanText(input.inactiveUntil || input.inactive_until);
   const stopped = Boolean(input.stopped);
@@ -72,6 +87,7 @@ function normalizeManagedSupplier(input = {}) {
     inactiveUntil: inactiveUntil || null,
     inactiveUntilUnknown: Boolean(input.inactiveUntilUnknown || input.inactive_until_unknown || (stopped && !inactiveUntil)),
     articles: Array.isArray(input.articles) ? input.articles.map(normalizeSupplierArticle) : [],
+    contacts: normalizeSupplierContacts(input.contacts || raw.contacts),
     createdAt: input.createdAt || new Date().toISOString(),
     // Preserve the original timestamp: bumping it on every normalize makes a stale
     // in-memory copy (api/worker keep independent caches) look "fresh" and lets a
