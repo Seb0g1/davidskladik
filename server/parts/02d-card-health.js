@@ -567,10 +567,12 @@ app.get("/api/card-improve", requireAdmin, async (request, response, next) => {
     const targets = fragranticaTargets();
     const byStatus = Object.fromEntries(counts.map((c) => [c.status, c.n]));
     const tabCounts = Object.fromEntries(Object.entries(CARD_IMPROVE_TABS).map(([key, list]) => [key, list.reduce((s, st) => s + (byStatus[st] || 0), 0)]));
+    const fragrantica = await readCardHealthState("fragrantica").catch(() => ({}));
     response.json({
       ok: true,
       tab,
       counts: tabCounts,
+      fragranticaPausedUntil: fragrantica?.pausedUntil && new Date(fragrantica.pausedUntil) > new Date() ? fragrantica.pausedUntil : null,
       items: rows.map((r) => {
         const d = r.data || {};
         const ex = d.existing || {};

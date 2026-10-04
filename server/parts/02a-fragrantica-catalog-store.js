@@ -336,6 +336,14 @@ async function withFragranticaPageSlot(fn) {
   }
 }
 
+/** When every Fragrantica route rests: the time the first one may be tried again (ms), else 0. */
+function fragranticaPagesPausedUntil() {
+  const routes = fragranticaRoutes();
+  const now = Date.now();
+  const until = routes.map((r) => fragranticaRouteBlockedUntil.get(r.name) || 0);
+  return routes.length && until.every((t) => t > now) ? Math.min(...until) : 0;
+}
+
 async function fetchFragranticaHtml(url) {
   return withFragranticaPageSlot(() => fetchFragranticaHtmlRoutes(url));
 }
@@ -344,7 +352,15 @@ async function fetchFragranticaHtmlRoutes(url) {
   const routes = fragranticaRoutes();
   const now = Date.now();
   // Routes that are resting go last (still tried — the challenge may already be gone)
-  const ordered = [...routes.filter((r) => (fragranticaRouteBlockedUntil.get(r.name) || 0) <= now), ...routes.filter((r) => (fragranticaRouteBlockedUntil.get(r.name) || 0) > now)];
+  // Every route is resting after Cloudflare said no: no request at all until the first rest ends — knocking
+  // during a block only makes it longer
+  const resting = routes.filter((r) => (fragranticaRouteBlockedUntil.get(r.name) || 0) > now);
+  if (routes.length && resting.length === routes.length) {
+    const error = new FragranticaHttpError(403, url);
+    error.pausedUntil = Math.min(...resting.map((r) => fragranticaRouteBlockedUntil.get(r.name)));
+    throw error;
+  }
+  const ordered = [...routes.filter((r) => (fragranticaRouteBlockedUntil.get(r.name) || 0) <= now), ...resting];
   let lastError = null;
   for (const route of ordered) {
     try {

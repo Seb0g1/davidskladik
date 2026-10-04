@@ -29,7 +29,7 @@ type Item = {
   customPhotos?: string[]; onlyCustomPhotos?: boolean; keptExistingPhotos?: number; blurryExistingPhotos?: number; ownBottleOnly?: boolean; notes?: string[];
   brandMatched?: boolean; brandCandidates?: Array<{ id: number; value: string }>; retryAt?: string | null;
 };
-type ImproveResponse = { tab: string; counts: Record<string, number>; items: Item[] };
+type ImproveResponse = { tab: string; counts: Record<string, number>; items: Item[]; fragranticaPausedUntil?: string | null };
 
 const TABS: Array<[string, string]> = [
   ["review", "На проверке"],
@@ -103,6 +103,14 @@ export function CardImprovePage() {
       </div>
 
       <ImproveAdd />
+
+      {list.data?.fragranticaPausedUntil ? (
+        <div className="ci-pause">
+          <AlertTriangle size={14} /> Фрагрантика временно не пускает (защита Cloudflare). Новые ароматы продолжат собираться
+          в {new Date(list.data.fragranticaPausedUntil).toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" })} —
+          пока запросы к ней не идут, чтобы блокировка не продлевалась. Товары с уже скачанными ароматами собираются как обычно.
+        </div>
+      ) : null}
 
       <div className="ci-toolbar">
         <label className="ci-search">

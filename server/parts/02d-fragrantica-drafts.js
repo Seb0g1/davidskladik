@@ -28,6 +28,7 @@ let fragranticaDraftsInFlight = 0;
 const fragranticaImprovePinned = Number(process.env.FRAGRANTICA_IMPROVE_PARALLEL) || 0;
 const fragranticaImproveParallelNow = () => fragranticaImprovePinned || (isNightWorkWindow() ? 14 : 4);
 let fragranticaImproveInFlight = 0;
+let fragranticaPauseShown = null;
 let fragranticaExpandInFlight = 0;
 let fragranticaDraftsStarted = false;
 const FRAG_EXPAND_PARALLEL = 6;
@@ -824,7 +825,8 @@ async function processFragranticaDraft(draft) {
     const tries = Number(draft.data?.fetchRetries || 0);
     if (busy && draft.status !== "sending") {
       // 1, 2, 4 … 30 min; after 8 tries once an hour — a long Cloudflare block never turns into «attention»
-      const waitMin = tries < 8 ? Math.min(30, 2 ** tries) : 60;
+      const pauseMin = error?.pausedUntil ? Math.ceil((error.pausedUntil - Date.now()) / 60_000) + 1 : 0;
+      const waitMin = Math.max(pauseMin, tries < 8 ? Math.min(30, 2 ** tries) : 60);
       logger.info("fragrantica draft waits for Fragrantica", { id: Number(draft.id), tries: tries + 1, waitMin });
       return updateFragranticaDraft(draft.id, {
         status: "queued",
@@ -879,6 +881,13 @@ async function runFragranticaDraftsTick() {
         .catch(() => {})
         .finally(() => { fragranticaExpandInFlight = Math.max(0, fragranticaExpandInFlight - 1); });
     }
+    // Fragrantica pause is shown on «Улучшение карточек» (the API process reads it from card_health_state)
+    const pausedUntil = fragranticaPagesPausedUntil();
+    const pagesPaused = pausedUntil > 0;
+    if (pagesPaused !== fragranticaPauseShown) {
+      fragranticaPauseShown = pagesPaused;
+      writeCardHealthState("fragrantica", { pausedUntil: pagesPaused ? new Date(pausedUntil).toISOString() : null }).catch(() => {});
+    }
     const claimPool = (improve, limit) => prisma.$queryRawUnsafe(
       `UPDATE fragrantica_drafts SET status = 'working', stage = 'start', started_at = now(), updated_at = now()
        WHERE id IN (
@@ -886,12 +895,13 @@ async function runFragranticaDraftsTick() {
            LEFT JOIN fragrantica_perfumes p ON p.id = d.perfume_id
           WHERE d.status = 'queued' AND d.kind = 'card' AND coalesce(d.data ? 'existing', false) = $2
             AND coalesce((d.data->>'retryAt')::timestamptz, 'epoch'::timestamptz) <= now()
+            AND (p.detail_at IS NOT NULL OR NOT $3::boolean)
           -- perfumes whose Fragrantica page is already here build first (no request to Fragrantica)
           ORDER BY (p.detail_at IS NULL), d.id
           LIMIT $1
           FOR UPDATE OF d SKIP LOCKED)
        RETURNING *`,
-      Math.max(0, limit), improve,
+      Math.max(0, limit), improve, pagesPaused,
     );
     const claimed = await claimPool(false, fragranticaDraftsParallel - fragranticaDraftsInFlight);
     for (const draft of claimed) {
