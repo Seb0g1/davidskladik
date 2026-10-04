@@ -91,3 +91,10 @@
 .sm2-pick button:hover, .sm2-pick button.is-on { color: var(--text); border-color: rgba(var(--accent-rgb), .55); background: rgba(var(--accent-rgb), .14); }
 .sm2-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 
+/* the dialog lives in <body> (portal) — outside .app-content, so its fields need their own look */
+.sm2-dialog { color: var(--text); font-size: 14px; }
+.sm2-dialog input:not([type="file"]) { height: 38px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--field-bg); color: var(--text); font: inherit; font-size: 14px; outline: none; }
+.sm2-dialog input:not([type="file"]):focus { border-color: rgba(var(--accent-rgb), .6); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), .15); }
+.sm2-dialog input[type="file"] { color: var(--text-soft); font: inherit; font-size: 13px; }
+.sm2-dialog input[type="file"]::file-selector-button { height: 36px; margin-right: 10px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--line); background: rgba(var(--accent-rgb), .12); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; }
+.sm2-dialog input[type="file"]::file-selector-button:hover { border-color: rgba(var(--accent-rgb), .55); }

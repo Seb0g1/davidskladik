@@ -1,6 +1,7 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, FileSpreadsheet, Link2, Loader2, PackageCheck, RefreshCw, Rocket, Search, ShieldCheck, Upload, Users, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { z } from "zod";
 import { fetchJson, mutationBody } from "../api";
 import { errorMessage } from "../lib/common";
@@ -351,6 +352,11 @@ function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone: () => 
   const [find, setFind] = useState("");
   const [sheet, setSheet] = useState<{ file: string; rows: SheetRow[]; columns: string } | null>(null);
   const [reading, setReading] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
   const list = (suppliers.data?.suppliers || []).filter((s) => s.partnerId && (!find.trim() || s.name.toLowerCase().includes(find.trim().toLowerCase())));
   const chosen = (suppliers.data?.suppliers || []).find((s) => s.partnerId === supplierId);
   const run = useMutation({
@@ -358,7 +364,8 @@ function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone: () => 
     onSuccess: (r) => { toast.success(`Нашлось наших товаров: ${r.products} (надёжно ${r.exact})`); onDone(); },
     onError: (e) => toast.error(errorMessage(e)),
   });
-  return (
+  // in <body>: the page container is a containing block for position: fixed, so the dialog ended up off-screen
+  return createPortal(
     <div className="sm2-modal" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="sm2-dialog" role="dialog" aria-modal="true" aria-label="Прайс из Excel">
         <div className="sm2-dialog-head"><h3>Прайс поставщика из Excel</h3><button type="button" className="icon-action" onClick={onClose} aria-label="Закрыть"><X size={16} /></button></div>
@@ -389,6 +396,7 @@ function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone: () => 
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
