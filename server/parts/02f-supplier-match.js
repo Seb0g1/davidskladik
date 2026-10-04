@@ -4,11 +4,11 @@
 //     на живой строке последнего прайса — товар не продаётся. Ищем строки, на которых его можно запустить.
 //   Вкладка «Новые привязки» (tab = extra): товар продаётся — ищем строки поставщиков, которых у него ещё нет.
 //
-// Кто такой товар: fragrantica_card_matches (карточка → аромат Фрагрантики, объём, тестер; строит
-// runFragranticaShopStockMatch). Строки ищем тем же сопоставлением, что и конвейер (matchFragranticaPmIndex:
-// бренд, все слова названия, без фланкеров / клонов / лосьонов, лишние числа = другой аромат), плюс
-// тот же объём, тестер = тестер, без пробников, концентрация, проверка цены-заглушки, без остановленных
-// поставщиков. «Надёжное» совпадение — объём и концентрация совпали и нет замечаний.
+// Все товары склада (артикул = карточки во всех магазинах). Название карточки и строки PriceMaster разбирает
+// lib/perfume-match.js: бренд, название аромата, объём, концентрация (EDP / EDT / EDC / духи), пол, тестер / отливант /
+// пробник / набор, уценка. Совпадение — тот же бренд, те же слова названия (порядок, апострофы, слитно / раздельно
+// не важны), объём, концентрация и пол; плюс проверка цены-заглушки, без остановленных и исключённых поставщиков.
+// «Надёжно» — всё совпало и нет замечаний; иначе «проверьте» с причинами.
 //
 // Скан — в воркере раз в SUPPLIER_MATCH_HOURS (деф. 3) или по кнопке (запрос через supplier_match_state).
 // Одобрение — в API: привязка ко всем карточкам товара (все магазины), затем обычная активация привязанных.
@@ -74,19 +74,6 @@ async function writeSupplierMatchState(key, value) {
   );
 }
 
-// shorthand concentrations of supplier price lists («YSL Opium lady dt», «т/в», «п/в»)
-function supplierMatchRowConcentration(text) {
-  const t = String(text || "").toLowerCase().replace(/ё/g, "е");
-  const found = fragRowConcentration(fragRowTokens(t), t);
-  if (found) return found;
-  if (/(^|[^a-zа-я])(dt|т\s*[/.]\s*в)([^a-zа-я]|$)/.test(t)) return "edt";
-  if (/(^|[^a-zа-я])(dp|п\s*[/.]\s*в)([^a-zа-я]|$)/.test(t)) return "edp";
-  return "";
-}
-
-// damaged / discounted goods: a fine row to sell from, but never an «exact» one
-const SUPPLIER_MATCH_DEFECT_RE = /(подмят|мят(ая|ый|ой)?\s*(короб|упак)|без\s*(короб|упак|крыш|слюд|целлофан)|уценк|брак|дефект|царап|поврежд|витрин|damaged|no\s*box|without\s*box|unbox)/i;
-
 // Suppliers never offered in «Подбор поставщиков» and Фрагрантика link suggestions (shared list, editable on both pages).
 // Until the list is saved for the first time these are excluded.
 const SUPPLIER_MATCH_DEFAULT_EXCLUDED = [
@@ -140,80 +127,88 @@ async function loadSupplierMatchPmRows(suppliers = []) {
   return { usdRate, settings, rows: rows.map((row) => mapPriceMasterSearchResponseRow(row, usdRate, maps)).filter((row) => row.available) };
 }
 
+// ─── Сопоставление по названию (lib/perfume-match.js) ─────────────────────────
+// Наша карточка и строка PriceMaster разбираются на бренд, название аромата, объём, концентрацию (EDP / EDT / EDC /
+// духи), пол, тестер / отливант / пробник / набор. Совпадают, когда совпали бренд, слова названия (в любом порядке,
+// слитно / раздельно, с апострофами и без), объём, концентрация и пол.
+const perfumeMatch = require("./lib/perfume-match");
+let supplierMatchBrandsCache = { at: 0, index: null };
+
+/** Known brands (Fragrantica catalogue + sellers' spellings), cached for 6 hours. */
+async function supplierMatchBrands(prisma) {
+  if (supplierMatchBrandsCache.index && Date.now() - supplierMatchBrandsCache.at < 6 * 3_600_000) return supplierMatchBrandsCache.index;
+  const exists = await prisma.$queryRawUnsafe(`SELECT to_regclass('fragrantica_perfumes') IS NOT NULL AS ok`);
+  const rows = exists[0]?.ok ? await prisma.$queryRawUnsafe(`SELECT DISTINCT brand FROM fragrantica_perfumes WHERE brand <> ''`) : [];
+  const index = perfumeMatch.buildBrandIndex(rows.map((r) => r.brand));
+  supplierMatchBrandsCache = { at: Date.now(), index };
+  return index;
+}
+
+/** Price-list rows parsed and indexed by «brand|volume» and «w:first brand word|volume» (brands Fragrantica lacks). */
+function indexSupplierMatchRows(rows, brands) {
+  const byKey = new Map();
+  const put = (key, item) => {
+    const list = byKey.get(key);
+    if (list) list.push(item); else byKey.set(key, [item]);
+  };
+  for (const row of rows) {
+    const parsed = perfumeMatch.parsePerfumeName(row.name, { brands });
+    if (!parsed.brandKey || !parsed.volume) continue;
+    const item = { row: parsed, source: row };
+    put(`${parsed.brandKey}|${parsed.volume}`, item);
+    const first = parsed.brandGuessed ? parsed.brandKey.slice(1) : parsed.brandWords[0];
+    if (first) put(`w:${first}|${parsed.volume}`, item);
+  }
+  return byKey;
+}
+
 /**
- * Pure: candidate rows for one product. group = { name, brand, perfumeName, volume, tester, links }, index = PM index
- * of mapped rows. Returns [{ row, confidence, issues }] (already linked rows and stopped suppliers excluded).
+ * Rows of the index that are the same product as the card. group = { name, parsed, links }; rows already linked to the
+ * product and rows of stopped / excluded suppliers are left out; newSuppliersOnly — only suppliers the product lacks.
+ * → [{ row, confidence, issues }]
  */
-function supplierMatchCandidates(group, index, { stoppedPartners = new Set(), newSuppliersOnly = false } = {}) {
-  if (!group.volume) return [];
-  const perfume = { brand: group.brand, name: group.perfumeName };
-  const m = matchFragranticaPmIndex(index, perfume, { strictNumbers: true, keepTesters: true });
-  if (!m.count) return [];
+function supplierMatchCandidates(group, rowIndex, { stoppedPartners = new Set(), newSuppliersOnly = false } = {}) {
+  const card = group.parsed;
+  if (!card?.brandKey || !card.volume) return [];
+  const first = card.brandGuessed ? card.brandKey.slice(1) : card.brandWords[0];
+  const pool = new Set([...(rowIndex.get(`${card.brandKey}|${card.volume}`) || []), ...(first ? rowIndex.get(`w:${first}|${card.volume}`) || [] : [])]);
+  if (!pool.size) return [];
   const linkedRows = new Set();
   const linkedKeys = new Set();
   const linkedPartners = new Set();
   for (const link of group.links || []) {
     if (link.sourceRowId) linkedRows.add(String(link.sourceRowId));
-    const partners = [supplierMatchKey(link.partnerId), supplierMatchKey(link.supplierName)].filter(Boolean);
-    for (const p of partners) {
+    for (const p of [supplierMatchKey(link.partnerId), supplierMatchKey(link.supplierName)].filter(Boolean)) {
       linkedPartners.add(p);
       if (link.supplierArticle) linkedKeys.add(`a|${supplierMatchKey(link.supplierArticle)}|${p}`);
       if (link.exactName) linkedKeys.add(`n|${supplierMatchKey(link.exactName)}|${p}`);
     }
   }
-  const cardConcentration = supplierMatchRowConcentration(group.name);
-  // a name word that is also a brand word must be there twice: «Ormonde Jayne Ormonde Elixir» ≠ «Ormonde Jayne Ta'if Elixir»
-  const brandWords = new Set(fragRowTokens(group.brand));
-  const doubledWords = [...new Set(fragRowTokens(group.perfumeName))].filter((w) => brandWords.has(w));
-  const typeKey = cardConcentration || "edp";
-  const out = [];
-  for (const i of m.matched || []) {
-    const row = index.rows[i];
+  const items = [];
+  for (const item of pool) {
+    const row = item.source;
     const partners = [supplierMatchKey(row.partnerId), supplierMatchKey(row.supplierName)].filter(Boolean);
     if (partners.some((p) => stoppedPartners.has(p))) continue;
     if (row.rowId && linkedRows.has(String(row.rowId))) continue;
     if (partners.some((p) => linkedKeys.has(`a|${supplierMatchKey(row.article)}|${p}`) || linkedKeys.has(`n|${supplierMatchKey(row.name)}|${p}`))) continue;
     if (newSuppliersOnly && partners.some((p) => linkedPartners.has(p))) continue;
-    // a tester card takes tester rows only, a bottle — never a tester / sample / decant
-    if (isTesterOrDecantSupplierRowName(row.name) !== Boolean(group.tester)) continue;
-    if (isSingleSampleName(row.name)) continue;
-    if (FRAG_SET_NAME_RE.test(row.name)) continue;
-    const volumes = fragPmVolumes(row.name);
-    if (!volumes.some((v) => Math.abs(v - Number(group.volume)) < 0.01)) continue;
-    if (supplierRowVolumeMismatch(group.name, row.name)) continue;
-    if (priceGuardRowProblem(row, group.name)) continue;
-    if (doubledWords.length) {
-      const rowTokens = fragRowTokens(row.name);
-      if (doubledWords.some((w) => rowTokens.filter((t) => t === w).length < 2)) continue;
-    }
-    const check = assessFragranticaSupplierRow(row.name, { brand: group.brand, name: group.perfumeName, typeKey });
-    if (check.clone || check.notPerfume) continue;
-    const rowConcentration = check.concentration || supplierMatchRowConcentration(row.name);
-    if (rowConcentration && cardConcentration && rowConcentration !== cardConcentration) continue;
-    const issues = [];
-    if (SUPPLIER_MATCH_DEFECT_RE.test(row.name)) issues.push("уценка / повреждение");
-    if (!rowConcentration) issues.push("концентрация не указана");
-    if (!cardConcentration) issues.push("у карточки не указана концентрация");
-    out.push({ row, confidence: issues.length ? "probable" : "exact", issues });
+    if (row.price && priceGuardRowProblem(row, group.name)) continue;
+    items.push(item);
   }
-  return out;
+  return perfumeMatch.matchCardRows(card, items).map((x) => ({ row: x.source, confidence: x.result.confidence, issues: x.result.issues }));
 }
 
-/** Products that know their perfume: cards grouped by article (one product = its cards in every shop), links, sales. */
-async function loadSupplierMatchGroups(prisma) {
-  // cards that know their perfume, grouped by article (one product = its cards in every shop)
+/** Every product of the warehouse: cards grouped by article (one product = its cards in every shop), links, sales. */
+async function loadSupplierMatchGroups(prisma, brands) {
   const cards = await prisma.$queryRawUnsafe(`
-    SELECT w.id, w.offer_id AS "offerId", w.target, w.marketplace::text AS marketplace, w.name, w.archived,
-           m.volume_ml AS volume, m.tester, p.brand, p.name AS "perfumeName"
-      FROM fragrantica_card_matches m
-      JOIN warehouse_products w ON w.target = m.target AND w.offer_id = m.offer_id
-      JOIN fragrantica_perfumes p ON p.id = m.perfume_id`);
+    SELECT w.id, w.offer_id AS "offerId", w.target, w.name, w.brand, w.archived
+      FROM warehouse_products w
+     WHERE w.offer_id IS NOT NULL AND coalesce(w.name, '') <> ''
+     ORDER BY w.archived, w.updated_at DESC`);
   const links = await prisma.$queryRawUnsafe(`
     SELECT l.product_id AS "productId", l.supplier_article AS "supplierArticle", l.supplier_name AS "supplierName",
            l.partner_id AS "partnerId", l.source_row_id AS "sourceRowId", l.exact_name AS "exactName"
-      FROM product_links l
-      JOIN warehouse_products w ON w.id = l.product_id
-      JOIN fragrantica_card_matches m ON m.target = w.target AND m.offer_id = w.offer_id`);
+      FROM product_links l`);
   const linksByProduct = new Map();
   for (const l of links) {
     if (!linksByProduct.has(l.productId)) linksByProduct.set(l.productId, []);
@@ -231,14 +226,13 @@ async function loadSupplierMatchGroups(prisma) {
     const key = supplierMatchKey(card.offerId);
     if (!key) continue;
     if (!groups.has(key)) {
-      groups.set(key, { key, name: card.name, brand: card.brand, perfumeName: card.perfumeName, volume: card.volume === null ? null : Number(card.volume), tester: Boolean(card.tester), ids: [], shops: [], links: [], archived: true });
+      // the name of an active card first (ORDER BY archived)
+      groups.set(key, { key, name: card.name, parsed: perfumeMatch.parsePerfumeName(card.name, { brands, brand: card.brand || "" }), ids: [], shops: [], links: [], archived: true });
     }
     const g = groups.get(key);
     g.ids.push(card.id);
     g.shops.push(card.target);
     if (!card.archived) g.archived = false;
-    // the volume / tester must agree on every card, otherwise the article is ambiguous
-    if (g.volume !== (card.volume === null ? null : Number(card.volume)) || g.tester !== Boolean(card.tester)) g.volume = null;
     g.links.push(...(linksByProduct.get(card.id) || []));
   }
   return { groups, soldByOffer };
@@ -261,10 +255,11 @@ async function runSupplierMatchScan(trigger = "schedule") {
     }
     for (const key of await supplierMatchExcludedKeys()) stoppedPartners.add(key);
     const pm = await loadSupplierMatchPmRows(warehouse.suppliers || []);
-    const index = buildFragranticaPmIndex(pm.rows);
+    const brands = await supplierMatchBrands(prisma);
+    const index = indexSupplierMatchRows(pm.rows, brands);
     const liveIndex = await getLiveSupplierIndex();
 
-    const { groups, soldByOffer } = await loadSupplierMatchGroups(prisma);
+    const { groups, soldByOffer } = await loadSupplierMatchGroups(prisma, brands);
 
     const records = [];
     let launchGroups = 0;
@@ -654,8 +649,9 @@ async function runSupplierMatchImport({ supplier, rows, username }) {
       price: Number.isFinite(price) && price > 0 ? price : 0, priceCurrency: currency, updatedAt: pm.docDate || null, available: true,
     });
   }
-  const index = buildFragranticaPmIndex(excel);
-  const { groups, soldByOffer } = await loadSupplierMatchGroups(prisma);
+  const brands = await supplierMatchBrands(prisma);
+  const index = indexSupplierMatchRows(excel, brands);
+  const { groups, soldByOffer } = await loadSupplierMatchGroups(prisma, brands);
   const records = [];
   const usedRows = new Set();
   for (const g of groups.values()) {
