@@ -18,22 +18,22 @@
 
 /* ── список ── */
 .sp2-list { min-width: 0; position: sticky; top: calc(var(--ux-topbar-h, 54px) + 8px); display: flex; flex-direction: column; gap: 8px; max-height: calc(100vh - var(--ux-topbar-h, 54px) - 20px); padding: 10px; border-radius: 14px; border: 1px solid var(--ux-border, var(--line)); background: var(--ux-panel, var(--panel)); }
-.sp2-search { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--field-bg); color: var(--text-soft); }
+.sp2-search { flex: none; display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--field-bg); color: var(--text-soft); }
 .sp2-search:focus-within { border-color: rgba(var(--accent-rgb), .6); }
 .sp2-search input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-size: 14px; outline: none; padding: 0; min-height: 0; box-shadow: none; }
 .sp2-search button { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-soft); cursor: pointer; min-height: 0; }
-.sp2-filters { display: flex; flex-wrap: wrap; gap: 4px; }
+.sp2-filters { flex: none; display: flex; flex-wrap: wrap; gap: 4px; }
 .sp2-filters::-webkit-scrollbar { display: none; }
 .sp2-filters button { flex: none; display: inline-flex; gap: 6px; align-items: center; min-height: 30px; padding: 0 10px; border-radius: 999px; border: 1px solid transparent; background: transparent; color: var(--text-soft); font: inherit; font-size: 13px; cursor: pointer; }
 .sp2-filters button span { font-size: 11.5px; padding: 0 6px; border-radius: 999px; background: rgba(var(--accent-rgb), .1); font-variant-numeric: tabular-nums; }
 .sp2-filters button:hover { color: var(--text); }
 .sp2-filters button.is-on { color: var(--text); border-color: rgba(var(--accent-rgb), .45); background: rgba(var(--accent-rgb), .14); }
-.sp2-sort { display: flex; gap: 2px; align-items: center; font-size: 12px; color: var(--muted, var(--text-soft)); padding: 0 2px; }
+.sp2-sort { flex: none; display: flex; gap: 2px; align-items: center; font-size: 12px; color: var(--muted, var(--text-soft)); padding: 0 2px; }
 .sp2-sort button { min-height: 24px; padding: 0 7px; border: 0; border-radius: 6px; background: transparent; color: var(--text-soft); font: inherit; font-size: 12px; cursor: pointer; }
 .sp2-sort button.is-on { color: var(--text); background: var(--ux-hover); font-weight: 600; }
-.sp2-rows { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; margin: 0 -4px; padding: 0 4px; min-height: 120px; }
+.sp2-rows { flex: 1 1 auto; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; margin: 0 -4px; padding: 0 4px; min-height: 120px; }
 .sp2-empty { display: flex; gap: 8px; align-items: center; padding: 18px 8px; font-size: 13px; color: var(--text-soft); }
-.sp2-row { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; gap: 10px; align-items: center; width: 100%; padding: 8px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; min-height: 0; }
+.sp2-row { flex: none; display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; gap: 10px; align-items: center; width: 100%; padding: 8px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; min-height: 0; }
 .sp2-row:hover { background: var(--ux-hover); }
 .sp2-row:focus-visible { outline: 2px solid rgba(var(--accent-rgb), .7); outline-offset: -2px; }
 .sp2-row.is-selected { background: rgba(var(--accent-rgb), .13); border-color: rgba(var(--accent-rgb), .35); }
