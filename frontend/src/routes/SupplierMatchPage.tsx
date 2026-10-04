@@ -1,5 +1,5 @@
-import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Link2, Loader2, PackageCheck, RefreshCw, Rocket, Search, ShieldCheck, Users, X } from "lucide-react";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { CheckCircle2, FileSpreadsheet, Link2, Loader2, PackageCheck, RefreshCw, Rocket, Search, ShieldCheck, Upload, Users, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { z } from "zod";
 import { fetchJson, mutationBody } from "../api";
@@ -12,15 +12,16 @@ import "./supplier-match.css";
 //   «Запустить в продажу» — товар без привязок или без живого поставщика: найдена строка, на которой он продастся.
 //   «Новые привязки» — товар продаётся: найдены поставщики, которых у него ещё нет.
 
-type Tab = "launch" | "extra";
+type Tab = "launch" | "extra" | "import";
+type ImportState = { at?: string; supplier?: { partnerId: string; name: string }; excelRows?: number; inPriceMaster?: number; notInPm?: number; products?: number; exact?: number };
 type Row = { rowId?: string; article?: string; name?: string; supplierName?: string; partnerId?: string; price?: number; priceCurrency?: string; updatedAt?: string | null };
 type Suggestion = { id: string; row: Row; ozonPrice: number | null; confidence: "exact" | "probable"; issues: string[]; status: string; error: string | null };
 type Product = { offerKey: string; productName: string; productIds: string[]; shops: string[]; cardStatus: string; archived: boolean; sold30: number; suggestions: Suggestion[] };
-type Counts = { launchProducts: number; launchExact: number; extraProducts: number; extraExact: number; filtered: number; exactSelected: number };
+type Counts = { launchProducts: number; launchExact: number; extraProducts: number; extraExact: number; importProducts: number; importExact: number; filtered: number; exactSelected: number };
 type SupplierOption = { partnerId: string; name: string; products: number; exact: number };
 type ScanState = { at?: string; running?: boolean; status?: string; error?: string; suggestions?: number; elapsedMs?: number };
 type ApproveJob = { running: boolean; total: number; linked: number; failed: number; products: number; error?: string } | null;
-type Page = { products: Product[]; counts: Counts; suppliers: SupplierOption[]; scan: ScanState; scanRequest: { at?: string }; approveJob: ApproveJob };
+type Page = { products: Product[]; counts: Counts; suppliers: SupplierOption[]; scan: ScanState; scanRequest: { at?: string }; importState: ImportState; approveJob: ApproveJob };
 
 const PAGE = 40;
 const anyJson = <T,>(url: string, init?: RequestInit) => fetchJson<T>(url, z.custom<T>(() => true), init);
@@ -119,10 +120,13 @@ export function SupplierMatchPage() {
     onError: (e) => toast.error(errorMessage(e)),
   });
 
-  const exactCount = only.length ? counts?.exactSelected || 0 : tab === "launch" ? counts?.launchExact || 0 : counts?.extraExact || 0;
+  const exactCount = only.length ? counts?.exactSelected || 0 : tab === "launch" ? counts?.launchExact || 0 : tab === "import" ? counts?.importExact || 0 : counts?.extraExact || 0;
+  const [importing, setImporting] = useState(false);
+  const imp = first?.importState;
   const tabs: Array<[Tab, string, number | undefined, React.ReactNode]> = [
     ["launch", "Запустить в продажу", counts?.launchProducts, <Rocket size={15} key="r" />],
     ["extra", "Новые привязки", counts?.extraProducts, <Link2 size={15} key="l" />],
+    ...(counts?.importProducts || imp?.at ? [["import", "Из прайса", counts?.importProducts, <FileSpreadsheet size={15} key="x" />] as [Tab, string, number | undefined, React.ReactNode]] : []),
   ];
 
   return (
@@ -136,6 +140,9 @@ export function SupplierMatchPage() {
           <span>{scanPending ? <><Loader2 className="spin" size={13} /> Проверяем PriceMaster…</> : <>Проверено {ago(first?.scan.at)}</>}</span>
           <button className="secondary-action" type="button" disabled={scan.isPending || scanPending} onClick={() => scan.mutate()}>
             <RefreshCw size={15} /> Проверить сейчас
+          </button>
+          <button className="secondary-action" type="button" onClick={() => setImporting(true)}>
+            <FileSpreadsheet size={15} /> Прайс из Excel
           </button>
         </div>
       </header>
@@ -151,7 +158,11 @@ export function SupplierMatchPage() {
       <p className="sm2-hint">
         {tab === "launch"
           ? "Товары, которые сейчас не продаются: нет привязки или у всех поставщиков закончился товар. После привязки цена и остаток сразу уйдут на маркетплейсы."
-          : "Товары в продаже, для которых нашлись новые поставщики. Больше поставщиков — меньше пропаж из наличия и ниже закупка."}
+          : tab === "import"
+            ? (imp?.at
+              ? `Прайс «${imp.supplier?.name || ""}» от ${new Date(imp.at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}: строк ${imp.excelRows}, есть в PriceMaster ${imp.inPriceMaster}${imp.notInPm ? ` (нет в PriceMaster ${imp.notInPm} — их не привязать)` : ""}, нашлись наши товары: ${imp.products}, надёжно ${imp.exact}. Уже привязанные к этому поставщику товары не показываются.`
+              : "Загрузите прайс поставщика из Excel — найдём наши товары из него.")
+            : "Товары в продаже, для которых нашлись новые поставщики. Больше поставщиков — меньше пропаж из наличия и ниже закупка."}
       </p>
 
       <div className="sm2-toolbar">
@@ -165,13 +176,14 @@ export function SupplierMatchPage() {
           <input type="checkbox" checked={exactOnly} onChange={(e) => setExactOnly(e.target.checked)} /> Только надёжные
         </label>
         <button className="primary-action" type="button" disabled={!exactCount || approveAll.isPending || Boolean(job?.running)} onClick={() => {
-          if (window.confirm(`Привязать все надёжные совпадения на вкладке «${tab === "launch" ? "Запустить в продажу" : "Новые привязки"}» — ${exactCount} строк?`)) approveAll.mutate();
+          if (window.confirm(`Привязать все надёжные совпадения на вкладке «${tab === "launch" ? "Запустить в продажу" : tab === "import" ? "Из прайса" : "Новые привязки"}» — ${exactCount} строк?`)) approveAll.mutate();
         }}>
           <ShieldCheck size={15} /> Одобрить все надёжные ({exactCount})
         </button>
       </div>
 
       <ExcludedSuppliers onChange={refreshAll} />
+      {importing ? <ImportDialog onClose={() => setImporting(false)} onDone={() => { setImporting(false); setTab("import"); setOnly([]); setHidden(new Set()); refreshAll(); }} /> : null}
 
       {job ? (
         <div className={`sm2-job${job.running ? " is-running" : ""}`}>
@@ -287,5 +299,96 @@ function SupplierFilter({ options, value, onChange }: { options: SupplierOption[
         </span>
       ) : null}
     </span>
+  );
+}
+
+// ─── Прайс поставщика из Excel ───────────────────────────────────────────────
+type SheetRow = [string, string, number];
+
+/** Finds the «артикул / наименование / цена» columns (by header, else by content) and reads the rows. */
+async function readPriceSheet(file: File): Promise<{ rows: SheetRow[]; columns: string }> {
+  const XLSX = await import("xlsx");
+  const book = XLSX.read(await file.arrayBuffer(), { type: "array" });
+  const sheet = book.Sheets[book.SheetNames[0]];
+  const table = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, raw: true, defval: "" });
+  const text = (v: unknown) => String(v ?? "").trim();
+  let headerAt = -1;
+  let col = { article: -1, name: -1, price: -1 };
+  for (let i = 0; i < Math.min(40, table.length); i += 1) {
+    const cells = table[i].map((c) => text(c).toLowerCase());
+    const name = cells.findIndex((c) => /наимен|назван|товар|name|описан/.test(c));
+    if (name < 0) continue;
+    headerAt = i;
+    col = { name, article: cells.findIndex((c) => /артик|код|article|sku|^id$/.test(c)), price: cells.findIndex((c) => /цена|price|стоим/.test(c)) };
+    break;
+  }
+  const body = table.slice(headerAt + 1);
+  if (col.name < 0) {
+    // no header: the longest text column is the name, a numeric one is the price, the first other one — the article
+    const width = Math.max(...body.slice(0, 200).map((r) => r.length));
+    const avg = (j: number) => body.slice(0, 200).reduce((sum, r) => sum + text(r[j]).length, 0);
+    const isNum = (j: number) => body.slice(0, 200).filter((r) => text(r[j]) && !Number.isNaN(Number(String(r[j]).replace(",", ".")))).length;
+    const cols = Array.from({ length: width }, (_, j) => j);
+    col.name = cols.sort((a, b) => avg(b) - avg(a))[0];
+    col.price = cols.filter((j) => j !== col.name).sort((a, b) => isNum(b) - isNum(a))[0] ?? -1;
+    col.article = cols.find((j) => j !== col.name && j !== col.price) ?? -1;
+  }
+  const rows: SheetRow[] = [];
+  for (const r of body) {
+    const name = text(r[col.name]);
+    if (name.length < 3 || /^<.*>$/.test(name)) continue;
+    const price = col.price >= 0 ? Number(String(r[col.price]).replace(",", ".")) || 0 : 0;
+    rows.push([col.article >= 0 ? text(r[col.article]) : "", name, price]);
+  }
+  const head = headerAt >= 0 ? table[headerAt] : [];
+  const label = (j: number, fallback: string) => (j >= 0 ? text(head[j]) || `колонка ${j + 1}` : fallback);
+  return { rows, columns: `${label(col.article, "без артикула")} · ${label(col.name, "?")} · ${label(col.price, "без цены")}` };
+}
+
+function ImportDialog({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const suppliers = useQuery({ queryKey: ["supplier-match-excluded"], queryFn: () => anyJson<{ suppliers: Array<{ partnerId: string; name: string }> }>("/api/supplier-match/excluded") });
+  const [supplierId, setSupplierId] = useState("");
+  const [find, setFind] = useState("");
+  const [sheet, setSheet] = useState<{ file: string; rows: SheetRow[]; columns: string } | null>(null);
+  const [reading, setReading] = useState(false);
+  const list = (suppliers.data?.suppliers || []).filter((s) => s.partnerId && (!find.trim() || s.name.toLowerCase().includes(find.trim().toLowerCase())));
+  const chosen = (suppliers.data?.suppliers || []).find((s) => s.partnerId === supplierId);
+  const run = useMutation({
+    mutationFn: () => anyJson<{ products: number; exact: number; inPriceMaster: number; notInPm: number }>("/api/supplier-match/import", mutationBody({ supplier: chosen, rows: sheet?.rows || [] })),
+    onSuccess: (r) => { toast.success(`Нашлось наших товаров: ${r.products} (надёжно ${r.exact})`); onDone(); },
+    onError: (e) => toast.error(errorMessage(e)),
+  });
+  return (
+    <div className="sm2-modal" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="sm2-dialog" role="dialog" aria-modal="true" aria-label="Прайс из Excel">
+        <div className="sm2-dialog-head"><h3>Прайс поставщика из Excel</h3><button type="button" className="icon-action" onClick={onClose} aria-label="Закрыть"><X size={16} /></button></div>
+        <p className="sm2-hint">Найдём наши товары, которые есть в прайсе, и покажем их на вкладке «Из прайса». Привязка ставится на строку этого поставщика в PriceMaster — строки, которых там нет, привязать нельзя.</p>
+        <label className="sm2-field"><span>1. Поставщик</span>
+          <input value={find} onChange={(e) => setFind(e.target.value)} placeholder={chosen ? chosen.name : "Найти поставщика"} />
+        </label>
+        <div className="sm2-pick">
+          {list.slice(0, 40).map((s) => (
+            <button key={s.partnerId} type="button" className={s.partnerId === supplierId ? "is-on" : ""} onClick={() => { setSupplierId(s.partnerId); setFind(""); }}>{s.name}</button>
+          ))}
+        </div>
+        <label className="sm2-field"><span>2. Файл Excel (.xlsx, .xls, .csv)</span>
+          <input type="file" accept=".xlsx,.xls,.csv" onChange={async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            setReading(true);
+            try { setSheet({ file: file.name, ...(await readPriceSheet(file)) }); } catch (err) { toast.error(`Не удалось прочитать файл: ${errorMessage(err)}`); setSheet(null); }
+            finally { setReading(false); }
+          }} />
+        </label>
+        {reading ? <p className="sm2-hint"><Loader2 className="spin" size={13} /> Читаем файл…</p> : null}
+        {sheet ? <p className="sm2-hint">{sheet.file}: строк {sheet.rows.length.toLocaleString("ru-RU")}; колонки — {sheet.columns}</p> : null}
+        <div className="sm2-dialog-actions">
+          <button type="button" className="secondary-action" onClick={onClose}>Отмена</button>
+          <button type="button" className="primary-action" disabled={!chosen || !sheet?.rows.length || run.isPending} onClick={() => run.mutate()}>
+            {run.isPending ? <Loader2 className="spin" size={14} /> : <Upload size={14} />} Найти товары{chosen ? ` · ${chosen.name}` : ""}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

@@ -199,6 +199,51 @@ function supplierMatchCandidates(group, index, { stoppedPartners = new Set(), ne
   return out;
 }
 
+/** Products that know their perfume: cards grouped by article (one product = its cards in every shop), links, sales. */
+async function loadSupplierMatchGroups(prisma) {
+  // cards that know their perfume, grouped by article (one product = its cards in every shop)
+  const cards = await prisma.$queryRawUnsafe(`
+    SELECT w.id, w.offer_id AS "offerId", w.target, w.marketplace::text AS marketplace, w.name, w.archived,
+           m.volume_ml AS volume, m.tester, p.brand, p.name AS "perfumeName"
+      FROM fragrantica_card_matches m
+      JOIN warehouse_products w ON w.target = m.target AND w.offer_id = m.offer_id
+      JOIN fragrantica_perfumes p ON p.id = m.perfume_id`);
+  const links = await prisma.$queryRawUnsafe(`
+    SELECT l.product_id AS "productId", l.supplier_article AS "supplierArticle", l.supplier_name AS "supplierName",
+           l.partner_id AS "partnerId", l.source_row_id AS "sourceRowId", l.exact_name AS "exactName"
+      FROM product_links l
+      JOIN warehouse_products w ON w.id = l.product_id
+      JOIN fragrantica_card_matches m ON m.target = w.target AND m.offer_id = w.offer_id`);
+  const linksByProduct = new Map();
+  for (const l of links) {
+    if (!linksByProduct.has(l.productId)) linksByProduct.set(l.productId, []);
+    linksByProduct.get(l.productId).push(l);
+  }
+  const sales = await prisma.$queryRawUnsafe(`
+    SELECT lower(offer_id) AS offer, sum(quantity)::int AS qty FROM finance_orders
+     WHERE source = 'marketplace_sync' AND offer_id IS NOT NULL AND coalesce(sold_at, created_at) > now() - interval '30 days'
+       AND status NOT ILIKE '%cancel%'
+     GROUP BY 1`).catch(() => []);
+  const soldByOffer = new Map(sales.map((r) => [r.offer, Number(r.qty || 0)]));
+
+  const groups = new Map();
+  for (const card of cards) {
+    const key = supplierMatchKey(card.offerId);
+    if (!key) continue;
+    if (!groups.has(key)) {
+      groups.set(key, { key, name: card.name, brand: card.brand, perfumeName: card.perfumeName, volume: card.volume === null ? null : Number(card.volume), tester: Boolean(card.tester), ids: [], shops: [], links: [], archived: true });
+    }
+    const g = groups.get(key);
+    g.ids.push(card.id);
+    g.shops.push(card.target);
+    if (!card.archived) g.archived = false;
+    // the volume / tester must agree on every card, otherwise the article is ambiguous
+    if (g.volume !== (card.volume === null ? null : Number(card.volume)) || g.tester !== Boolean(card.tester)) g.volume = null;
+    g.links.push(...(linksByProduct.get(card.id) || []));
+  }
+  return { groups, soldByOffer };
+}
+
 async function runSupplierMatchScan(trigger = "schedule") {
   if (supplierMatchRunning) return { status: "already_running" };
   supplierMatchRunning = true;
@@ -219,46 +264,7 @@ async function runSupplierMatchScan(trigger = "schedule") {
     const index = buildFragranticaPmIndex(pm.rows);
     const liveIndex = await getLiveSupplierIndex();
 
-    // cards that know their perfume, grouped by article (one product = its cards in every shop)
-    const cards = await prisma.$queryRawUnsafe(`
-      SELECT w.id, w.offer_id AS "offerId", w.target, w.marketplace::text AS marketplace, w.name, w.archived,
-             m.volume_ml AS volume, m.tester, p.brand, p.name AS "perfumeName"
-        FROM fragrantica_card_matches m
-        JOIN warehouse_products w ON w.target = m.target AND w.offer_id = m.offer_id
-        JOIN fragrantica_perfumes p ON p.id = m.perfume_id`);
-    const links = await prisma.$queryRawUnsafe(`
-      SELECT l.product_id AS "productId", l.supplier_article AS "supplierArticle", l.supplier_name AS "supplierName",
-             l.partner_id AS "partnerId", l.source_row_id AS "sourceRowId", l.exact_name AS "exactName"
-        FROM product_links l
-        JOIN warehouse_products w ON w.id = l.product_id
-        JOIN fragrantica_card_matches m ON m.target = w.target AND m.offer_id = w.offer_id`);
-    const linksByProduct = new Map();
-    for (const l of links) {
-      if (!linksByProduct.has(l.productId)) linksByProduct.set(l.productId, []);
-      linksByProduct.get(l.productId).push(l);
-    }
-    const sales = await prisma.$queryRawUnsafe(`
-      SELECT lower(offer_id) AS offer, sum(quantity)::int AS qty FROM finance_orders
-       WHERE source = 'marketplace_sync' AND offer_id IS NOT NULL AND coalesce(sold_at, created_at) > now() - interval '30 days'
-         AND status NOT ILIKE '%cancel%'
-       GROUP BY 1`).catch(() => []);
-    const soldByOffer = new Map(sales.map((r) => [r.offer, Number(r.qty || 0)]));
-
-    const groups = new Map();
-    for (const card of cards) {
-      const key = supplierMatchKey(card.offerId);
-      if (!key) continue;
-      if (!groups.has(key)) {
-        groups.set(key, { key, name: card.name, brand: card.brand, perfumeName: card.perfumeName, volume: card.volume === null ? null : Number(card.volume), tester: Boolean(card.tester), ids: [], shops: [], links: [], archived: true });
-      }
-      const g = groups.get(key);
-      g.ids.push(card.id);
-      g.shops.push(card.target);
-      if (!card.archived) g.archived = false;
-      // the volume / tester must agree on every card, otherwise the article is ambiguous
-      if (g.volume !== (card.volume === null ? null : Number(card.volume)) || g.tester !== Boolean(card.tester)) g.volume = null;
-      g.links.push(...(linksByProduct.get(card.id) || []));
-    }
+    const { groups, soldByOffer } = await loadSupplierMatchGroups(prisma);
 
     const records = [];
     let launchGroups = 0;
@@ -318,7 +324,7 @@ async function runSupplierMatchScan(trigger = "schedule") {
       );
     }
     // a suggestion that is gone (row left the price list, product got linked) is not offered any more
-    const removed = await prisma.$executeRawUnsafe(`DELETE FROM supplier_match_suggestions WHERE status IN ('new', 'failed') AND seen_at < $1::timestamptz`, scanAt);
+    const removed = await prisma.$executeRawUnsafe(`DELETE FROM supplier_match_suggestions WHERE status IN ('new', 'failed') AND tab <> 'import' AND seen_at < $1::timestamptz`, scanAt);
     const result = {
       status: "ok", trigger, pmRows: pm.rows.length, products: groups.size, launchProducts: launchGroups, extraProducts: extraGroups,
       suggestions: records.length, removed: Number(removed || 0), elapsedMs: Date.now() - startedAt,
@@ -444,7 +450,7 @@ function supplierMatchOnlyKeys(value) {
 app.get("/api/supplier-match", requireAdmin, async (request, response, next) => {
   try {
     const prisma = await requireSupplierMatchTables();
-    const tab = request.query.tab === "extra" ? "extra" : "launch";
+    const tab = ["extra", "import"].includes(request.query.tab) ? request.query.tab : "launch";
     const exactOnly = request.query.confidence === "exact";
     const q = cleanText(request.query.q).toLowerCase();
     const limit = Math.min(100, Math.max(1, Number(request.query.limit) || 40));
@@ -487,6 +493,8 @@ app.get("/api/supplier-match", requireAdmin, async (request, response, next) => 
              count(*) FILTER (WHERE tab = 'launch' AND confidence = 'exact')::int AS "launchExact",
              count(DISTINCT offer_key) FILTER (WHERE tab = 'extra')::int AS "extraProducts",
              count(*) FILTER (WHERE tab = 'extra' AND confidence = 'exact')::int AS "extraExact",
+             count(DISTINCT offer_key) FILTER (WHERE tab = 'import')::int AS "importProducts",
+             count(*) FILTER (WHERE tab = 'import' AND confidence = 'exact')::int AS "importExact",
              count(DISTINCT offer_key) FILTER (WHERE tab = $1 AND ($2::boolean = false OR confidence = 'exact'))::int AS "filtered",
              count(*) FILTER (WHERE tab = $1 AND confidence = 'exact' AND (cardinality($4::text[]) = 0
                OR lower(coalesce(row_data->>'partnerId', '')) = ANY($4::text[]) OR lower(coalesce(row_data->>'supplierName', '')) = ANY($4::text[])))::int AS "exactSelected"
@@ -507,6 +515,7 @@ app.get("/api/supplier-match", requireAdmin, async (request, response, next) => 
       suppliers,
       scan: await readSupplierMatchState("scan"),
       scanRequest: await readSupplierMatchState("scan_request"),
+      importState: await readSupplierMatchState("import"),
       approveJob: supplierMatchApproveJob,
     });
   } catch (error) {
@@ -529,7 +538,7 @@ app.post("/api/supplier-match/approve", requireAdmin, async (request, response, 
     const username = requestUsername(request) || "admin";
     if (request.body?.allExact) {
       if (supplierMatchApproveJob?.running) return response.status(409).json({ error: "Уже идёт массовое одобрение." });
-      const tab = request.body.tab === "extra" ? "extra" : "launch";
+      const tab = ["extra", "import"].includes(request.body.tab) ? request.body.tab : "launch";
       const only = supplierMatchOnlyKeys(request.body.only);
       const rows = await prisma.$queryRawUnsafe(
         `SELECT id FROM supplier_match_suggestions WHERE tab = $1 AND status = 'new' AND confidence = 'exact'
@@ -598,6 +607,105 @@ app.put("/api/supplier-match/excluded", requireAdmin, async (request, response, 
     await appendAudit(request, "supplier_match.excluded", { entityType: "supplier_match", entityId: "excluded", newValue: { suppliers: list.map((s) => s.name) } }).catch(() => {});
     response.json({ ok: true, excluded: list });
   } catch (error) {
+    next(error);
+  }
+});
+
+// ─── Прайс поставщика из Excel ─────────────────────────────────────────────────
+// Оператор выбирает поставщика и загружает его прайс (артикул, название, цена). Строки сверяются с прайсом
+// этого поставщика в PriceMaster по артикулу (привязка ставится на строку PriceMaster), затем ищутся наши
+// товары тем же сопоставлением, что и в скане. Результат — вкладка «Из прайса» (tab = import).
+
+async function runSupplierMatchImport({ supplier, rows, username }) {
+  const prisma = await requireSupplierMatchTables();
+  const startedAt = Date.now();
+  const partnerId = cleanText(supplier?.partnerId);
+  const supplierName = cleanText(supplier?.name);
+  if (!partnerId) throw Object.assign(new Error("У поставщика нет номера в PriceMaster — привязать строки нельзя."), { statusCode: 400 });
+  const settings = await readAppSettings();
+  const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
+  const warehouse = await readWarehouse();
+  const managed = (warehouse.suppliers || []).map(normalizeManagedSupplier).find((s) => cleanText(s.partnerId) === partnerId);
+  const currency = String(managed?.priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD";
+
+  // the supplier's current price list in PriceMaster: article → row (a link needs the PriceMaster row)
+  const cte = await pmLatestDocsCteSql();
+  const [pmRows] = await pool.query(
+    `${cte}
+     SELECT r.NativeID AS article, r.NativeName AS name, r.RowID AS rowId, d.DocDate AS docDate
+       FROM pm_latest_docs ld JOIN OfferDocs d ON d.DocID = ld.DocID JOIN OfferRows r ON r.DocID = d.DocID
+      WHERE d.PartnerID = ? AND r.Ignored = 0 AND r.Active != 0`,
+    [Number(partnerId)],
+  );
+  const byArticle = new Map(pmRows.map((r) => [supplierMatchKey(r.article), r]));
+  const byName = new Map(pmRows.map((r) => [supplierMatchKey(r.name), r]));
+
+  const excel = [];
+  let notInPm = 0;
+  for (const r of rows) {
+    const name = cleanText(r?.name);
+    const price = Number(String(r?.price ?? "").replace(",", "."));
+    if (!name || name.length < 3) continue;
+    const pm = byArticle.get(supplierMatchKey(r?.article)) || byName.get(supplierMatchKey(name));
+    if (!pm) { notInPm += 1; continue; }
+    excel.push({
+      rowId: cleanText(pm.rowId), article: cleanText(pm.article), name: cleanText(pm.name) || name,
+      supplierName: supplierName || cleanText(managed?.name), partnerId,
+      price: Number.isFinite(price) && price > 0 ? price : 0, priceCurrency: currency, updatedAt: pm.docDate || null, available: true,
+    });
+  }
+  const index = buildFragranticaPmIndex(excel);
+  const { groups, soldByOffer } = await loadSupplierMatchGroups(prisma);
+  const records = [];
+  const usedRows = new Set();
+  for (const g of groups.values()) {
+    const candidates = supplierMatchCandidates(g, index, {});
+    if (!candidates.length) continue;
+    // one row of this supplier per product: exact first, then the cheapest
+    const best = candidates.sort((a, b) => Number(b.confidence === "exact") - Number(a.confidence === "exact") || Number(a.row.price) - Number(b.row.price))[0];
+    usedRows.add(best.row.rowId);
+    const { price } = best.row.price ? fragranticaRowPrice(best.row, { usdRate, settings }) : { price: NaN };
+    records.push({
+      offerKey: g.key, rowKey: `x:${best.row.rowId}`, productIds: g.ids, shops: [...new Set(g.shops)], productName: g.name,
+      cardStatus: g.links.length ? "selling" : "no_links", archived: g.archived, sold30: soldByOffer.get(g.key) || 0,
+      row: { rowId: best.row.rowId, article: best.row.article, name: best.row.name, supplierName: best.row.supplierName, partnerId, price: best.row.price, priceCurrency: currency, updatedAt: best.row.updatedAt },
+      ozonPrice: Number.isFinite(price) ? Math.round(price) : null, confidence: best.confidence, issues: best.issues,
+    });
+  }
+  // a new file replaces the previous import
+  await prisma.$executeRawUnsafe(`DELETE FROM supplier_match_suggestions WHERE tab = 'import' AND status IN ('new', 'failed', 'rejected')`);
+  for (let i = 0; i < records.length; i += 1000) {
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO supplier_match_suggestions (offer_key, row_key, tab, product_ids, shops, product_name, card_status, archived, sold30, row_data, ozon_price, confidence, issues, seen_at)
+       SELECT x->>'offerKey', x->>'rowKey', 'import', x->'productIds', x->'shops', x->>'productName', x->>'cardStatus', (x->>'archived')::boolean,
+              (x->>'sold30')::int, x->'row', NULLIF(x->>'ozonPrice', '')::int, x->>'confidence', x->'issues', now()
+         FROM jsonb_array_elements($1::jsonb) x
+       ON CONFLICT (offer_key, row_key) DO UPDATE SET status = 'new', error = NULL, row_data = EXCLUDED.row_data, ozon_price = EXCLUDED.ozon_price,
+         confidence = EXCLUDED.confidence, issues = EXCLUDED.issues, seen_at = now()`,
+      JSON.stringify(records.slice(i, i + 1000)),
+    );
+  }
+  const state = {
+    at: new Date().toISOString(), by: username, supplier: { partnerId, name: supplierName || managed?.name || "" },
+    excelRows: rows.length, inPriceMaster: excel.length, notInPm, products: records.length, rowsMatched: usedRows.size,
+    exact: records.filter((r) => r.confidence === "exact").length, elapsedMs: Date.now() - startedAt,
+  };
+  await writeSupplierMatchState("import", state);
+  logger.info("supplier match import", state);
+  return state;
+}
+
+app.post("/api/supplier-match/import", requireAdmin, async (request, response, next) => {
+  try {
+    // rows: [article, name, price] (compact — the JSON body limit is 1 MB) or { article, name, price }
+    const rows = (Array.isArray(request.body?.rows) ? request.body.rows.slice(0, 50_000) : [])
+      .map((r) => (Array.isArray(r) ? { article: r[0], name: r[1], price: r[2] } : r));
+    if (!rows.length) return response.status(400).json({ error: "В файле не нашлось строк с названием товара." });
+    const result = await runSupplierMatchImport({ supplier: request.body?.supplier, rows, username: requestUsername(request) || "admin" });
+    await appendAudit(request, "supplier_match.import", { entityType: "supplier_match", entityId: result.supplier.partnerId, newValue: result }).catch(() => {});
+    response.json({ ok: true, ...result });
+  } catch (error) {
+    if (error?.statusCode === 400) return response.status(400).json({ error: error.message });
     next(error);
   }
 });

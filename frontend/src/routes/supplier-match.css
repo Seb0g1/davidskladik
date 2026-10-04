@@ -79,3 +79,15 @@
 .sm2-sf-list small { font-size: 11.5px; color: var(--text-soft); white-space: nowrap; }
 .sm2-sf-empty { padding: 8px; font-size: 12.5px; color: var(--text-soft); }
 
+/* «Прайс из Excel» */
+.sm2-modal { position: fixed; inset: 0; z-index: 1900; display: grid; place-items: center; padding: 16px; background: rgba(3, 7, 16, .55); backdrop-filter: blur(3px); }
+.sm2-dialog { display: grid; gap: 12px; width: min(540px, 100%); max-height: calc(100vh - 32px); overflow-y: auto; padding: 18px; border-radius: 14px; border: 1px solid var(--ux-border-strong, var(--line)); background: var(--panel); box-shadow: var(--ux-shadow-pop); }
+.sm2-dialog-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.sm2-dialog-head h3 { margin: 0; font-size: 16px; }
+.sm2-field { display: grid; gap: 5px; font-size: 13px; color: var(--text-soft); }
+.sm2-field input { width: 100%; }
+.sm2-pick { display: flex; flex-wrap: wrap; gap: 6px; max-height: 150px; overflow-y: auto; }
+.sm2-pick button { min-height: 30px; padding: 0 11px; border-radius: 999px; border: 1px solid var(--line); background: transparent; color: var(--text-soft); font: inherit; font-size: 13px; cursor: pointer; }
+.sm2-pick button:hover, .sm2-pick button.is-on { color: var(--text); border-color: rgba(var(--accent-rgb), .55); background: rgba(var(--accent-rgb), .14); }
+.sm2-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+
