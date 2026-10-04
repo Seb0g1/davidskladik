@@ -285,6 +285,10 @@ function startBackgroundSchedulers() {
   if (fragranticaPmMatchEnabled) {
     scheduleFragranticaPmMatch(5 * 60_000);
   }
+  if (supplierMatchEnabled) {
+    // «Подбор поставщиков»: a scan every SUPPLIER_MATCH_HOURS or on the page button
+    scheduleSupplierMatch(6 * 60_000);
+  }
   if (ozonActionGuardEnabled) {
     scheduleOzonActionGuard(60_000);
     logger.info("ozon action guard enabled", { intervalMinutes: Math.round(ozonActionGuardIntervalMs / 60_000), removeManual: ozonActionGuardRemoveManual });

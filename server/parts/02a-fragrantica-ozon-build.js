@@ -554,7 +554,8 @@ function matchFragranticaPmIndex(index, perfume = {}, opts = {}) {
     const tokens = index.tokenSets[i];
     if (!nameTokens.every((w) => tokens.has(w))) continue;
     const row = index.rows[i];
-    if (fragPmIsTesterOrSample(row.name)) continue;
+    // opts.keepTesters — the caller sorts testers out itself («Подбор поставщиков»: a tester card takes tester rows)
+    if (!opts.keepTesters && fragPmIsTesterOrSample(row.name)) continue;
     const rowVolumes = fragPmVolumes(row.name);
     if (rowVolumes.length && Math.max(...rowVolumes) <= 3) continue; // пробник / отливант
     const check = assessFragranticaSupplierRow(row.name, { brand: perfume.brand, name: perfume.name, typeKey: "edp" });
