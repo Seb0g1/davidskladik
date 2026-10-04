@@ -87,6 +87,38 @@ function supplierMatchRowConcentration(text) {
 // damaged / discounted goods: a fine row to sell from, but never an «exact» one
 const SUPPLIER_MATCH_DEFECT_RE = /(подмят|мят(ая|ый|ой)?\s*(короб|упак)|без\s*(короб|упак|крыш|слюд|целлофан)|уценк|брак|дефект|царап|поврежд|витрин|damaged|no\s*box|without\s*box|unbox)/i;
 
+// Suppliers never offered in «Подбор поставщиков» and Фрагрантика link suggestions (shared list, editable on both pages).
+// Until the list is saved for the first time these are excluded.
+const SUPPLIER_MATCH_DEFAULT_EXCLUDED = [
+  { partnerId: "77", name: "Сима 2218" },
+  { partnerId: "49", name: "Армен Арютюрян" },
+  { partnerId: "277", name: "Сафронова (марка)" },
+];
+let supplierExcludedCache = { at: 0, list: null };
+
+async function supplierMatchExcludedList() {
+  if (supplierExcludedCache.list && Date.now() - supplierExcludedCache.at < 60_000) return supplierExcludedCache.list;
+  const state = await readSupplierMatchState("excluded").catch(() => ({}));
+  const list = Array.isArray(state.suppliers) ? state.suppliers : SUPPLIER_MATCH_DEFAULT_EXCLUDED;
+  supplierExcludedCache = { at: Date.now(), list };
+  return list;
+}
+
+/** Keys (partner id / supplier name, normalised) of the excluded suppliers. */
+async function supplierMatchExcludedKeys() {
+  const keys = new Set();
+  for (const s of await supplierMatchExcludedList()) {
+    if (s.partnerId) keys.add(supplierMatchKey(s.partnerId));
+    if (s.name) keys.add(supplierMatchKey(s.name));
+  }
+  return keys;
+}
+
+/** Pure: is a PriceMaster row (partnerId / supplierName) from an excluded supplier. */
+function supplierRowExcluded(row = {}, keys = new Set()) {
+  return [row.partnerId, row.supplierName, row.partnerName].some((v) => v && keys.has(supplierMatchKey(v)));
+}
+
 const supplierMatchKey = (value) => String(value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
 
 /** All active rows of the latest price lists with what a link needs (article, row id, partner, price, currency). */
@@ -182,6 +214,7 @@ async function runSupplierMatchScan(trigger = "schedule") {
       if (s.partnerId) stoppedPartners.add(supplierMatchKey(s.partnerId));
       if (s.name) stoppedPartners.add(supplierMatchKey(s.name));
     }
+    for (const key of await supplierMatchExcludedKeys()) stoppedPartners.add(key);
     const pm = await loadSupplierMatchPmRows(warehouse.suppliers || []);
     const index = buildFragranticaPmIndex(pm.rows);
     const liveIndex = await getLiveSupplierIndex();
@@ -410,19 +443,22 @@ app.get("/api/supplier-match", requireAdmin, async (request, response, next) => 
     const q = cleanText(request.query.q).toLowerCase();
     const limit = Math.min(100, Math.max(1, Number(request.query.limit) || 40));
     const offset = Math.max(0, Number(request.query.offset) || 0);
+    const excluded = [...(await supplierMatchExcludedKeys())];
     const where = `tab = $1 AND status IN ('new', 'failed') AND ($2::boolean = false OR confidence = 'exact')
+      AND NOT (lower(coalesce(row_data->>'partnerId', '')) = ANY($6::text[]) OR lower(coalesce(row_data->>'supplierName', '')) = ANY($6::text[]))
       AND ($3 = '' OR lower(product_name) LIKE '%' || $3 || '%' OR offer_key LIKE '%' || $3 || '%' OR lower(row_data->>'supplierName') LIKE '%' || $3 || '%')`;
     const offers = await prisma.$queryRawUnsafe(
       `SELECT offer_key, max(sold30) AS sold30 FROM supplier_match_suggestions WHERE ${where}
         GROUP BY offer_key ORDER BY max(sold30) DESC, offer_key LIMIT $4 OFFSET $5`,
-      tab, exactOnly, q, limit, offset,
+      tab, exactOnly, q, limit, offset, excluded,
     );
     const keys = offers.map((o) => o.offer_key);
     const items = keys.length ? await prisma.$queryRawUnsafe(
       `SELECT * FROM supplier_match_suggestions WHERE offer_key = ANY($1::text[]) AND tab = $2 AND status IN ('new', 'failed')
          AND ($3::boolean = false OR confidence = 'exact')
+         AND NOT (lower(coalesce(row_data->>'partnerId', '')) = ANY($4::text[]) OR lower(coalesce(row_data->>'supplierName', '')) = ANY($4::text[]))
         ORDER BY (confidence = 'exact') DESC, ozon_price NULLS LAST`,
-      keys, tab, exactOnly,
+      keys, tab, exactOnly, excluded,
     ) : [];
     const byKey = new Map(keys.map((k) => [k, null]));
     for (const it of items) {
@@ -442,7 +478,8 @@ app.get("/api/supplier-match", requireAdmin, async (request, response, next) => 
              count(DISTINCT offer_key) FILTER (WHERE tab = 'extra')::int AS "extraProducts",
              count(*) FILTER (WHERE tab = 'extra' AND confidence = 'exact')::int AS "extraExact",
              count(DISTINCT offer_key) FILTER (WHERE tab = $1 AND ($2::boolean = false OR confidence = 'exact'))::int AS "filtered"
-        FROM supplier_match_suggestions WHERE status IN ('new', 'failed')`, tab, exactOnly);
+        FROM supplier_match_suggestions WHERE status IN ('new', 'failed')
+         AND NOT (lower(coalesce(row_data->>'partnerId', '')) = ANY($3::text[]) OR lower(coalesce(row_data->>'supplierName', '')) = ANY($3::text[]))`, tab, exactOnly, excluded);
     response.json({
       ok: true,
       tab,
@@ -474,8 +511,10 @@ app.post("/api/supplier-match/approve", requireAdmin, async (request, response, 
       if (supplierMatchApproveJob?.running) return response.status(409).json({ error: "Уже идёт массовое одобрение." });
       const tab = request.body.tab === "extra" ? "extra" : "launch";
       const rows = await prisma.$queryRawUnsafe(
-        `SELECT id FROM supplier_match_suggestions WHERE tab = $1 AND status = 'new' AND confidence = 'exact' ORDER BY sold30 DESC, id`,
-        tab,
+        `SELECT id FROM supplier_match_suggestions WHERE tab = $1 AND status = 'new' AND confidence = 'exact'
+           AND NOT (lower(coalesce(row_data->>'partnerId', '')) = ANY($2::text[]) OR lower(coalesce(row_data->>'supplierName', '')) = ANY($2::text[]))
+         ORDER BY sold30 DESC, id`,
+        tab, [...(await supplierMatchExcludedKeys())],
       );
       const ids = rows.map((r) => String(r.id));
       supplierMatchApproveJob = { running: true, tab, total: ids.length, linked: 0, failed: 0, products: 0, startedAt: new Date().toISOString() };
@@ -506,6 +545,36 @@ app.post("/api/supplier-match/reject", requireAdmin, async (request, response, n
       ids, requestUsername(request) || "admin",
     );
     response.json({ ok: true, rejected: Number(updated || 0) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─── Исключённые поставщики (общий список: «Подбор поставщиков» + Фрагрантика) ──
+
+app.get("/api/supplier-match/excluded", requireAdmin, async (request, response, next) => {
+  try {
+    const warehouse = await readWarehouse();
+    const suppliers = (warehouse.suppliers || []).map(normalizeManagedSupplier)
+      .filter((s) => s.name)
+      .map((s) => ({ partnerId: cleanText(s.partnerId), name: s.name }))
+      .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+    response.json({ ok: true, excluded: await supplierMatchExcludedList(), suppliers });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/supplier-match/excluded", requireAdmin, async (request, response, next) => {
+  try {
+    const list = (Array.isArray(request.body?.suppliers) ? request.body.suppliers : [])
+      .map((s) => ({ partnerId: cleanText(s?.partnerId), name: cleanText(s?.name) }))
+      .filter((s) => s.partnerId || s.name)
+      .slice(0, 200);
+    await writeSupplierMatchState("excluded", { suppliers: list, by: requestUsername(request), at: new Date().toISOString() });
+    supplierExcludedCache = { at: 0, list: null };
+    await appendAudit(request, "supplier_match.excluded", { entityType: "supplier_match", entityId: "excluded", newValue: { suppliers: list.map((s) => s.name) } }).catch(() => {});
+    response.json({ ok: true, excluded: list });
   } catch (error) {
     next(error);
   }

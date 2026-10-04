@@ -5,6 +5,7 @@ import { z } from "zod";
 import { fetchJson, mutationBody } from "../api";
 import { errorMessage } from "../lib/common";
 import { toast } from "../lib/toast";
+import { ExcludedSuppliers } from "../components/ExcludedSuppliers";
 import "./supplier-match.css";
 
 // «Подбор поставщиков»: строки PriceMaster, найденные для товаров склада. Привязка — только по кнопке.
@@ -165,6 +166,8 @@ export function SupplierMatchPage() {
           <ShieldCheck size={15} /> Одобрить все надёжные ({exactCount})
         </button>
       </div>
+
+      <ExcludedSuppliers onChange={refreshAll} />
 
       {job ? (
         <div className={`sm2-job${job.running ? " is-running" : ""}`}>

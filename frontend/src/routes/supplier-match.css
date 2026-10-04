@@ -66,3 +66,4 @@
   .sm2-actions { grid-column: 1 / -1; }
   .sm2-actions > button { flex: 1; justify-content: center; min-height: 40px; }
 }
+

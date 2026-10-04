@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import { ExcludedSuppliers } from "../components/ExcludedSuppliers";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ArrowLeft, ArrowRight, Camera, Check, CheckCheck, ChevronDown, ChevronUp, Link2, Loader2, Plus, RefreshCw, Search, Sparkles, Trash2, X } from "lucide-react";
 import { z } from "zod";
@@ -249,6 +250,7 @@ export function ConveyorPanel({ onClose }: { onClose: () => void }) {
             ) : null}
           </div>
         </div>
+        <div className="fr-conv-excluded"><ExcludedSuppliers /></div>
         {active.length ? (
           <div className="fr-overall">
             <div className="fr-overall-head">

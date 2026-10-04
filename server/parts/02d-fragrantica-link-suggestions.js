@@ -104,8 +104,11 @@ async function fragranticaLinkSuggestionsData(query = {}) {
     if (found.length >= 40) break;
   }
 
+  // suppliers excluded on «Подбор поставщиков» are never suggested here either
+  const excludedSuppliers = typeof supplierMatchExcludedKeys === "function" ? await supplierMatchExcludedKeys().catch(() => new Set()) : new Set();
   const rows = found
     .filter((row) => row.available)
+    .filter((row) => !supplierRowExcluded(row, excludedSuppliers))
     .filter((row) => custom || !supplierRowVolumeMismatch(productName, row.name))
     .filter((row) => custom || isTesterOrDecantSupplierRowName(row.name) === tester)
     .filter((row) => custom || volume <= 3 || !isSingleSampleName(row.name))
