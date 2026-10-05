@@ -1336,6 +1336,16 @@ app.patch("/api/fragrantica/drafts/:id", requireAdmin, async (request, response,
       // a shop of a new style needs its «Пирамида аромата» — rebuild only the photos part (cached otherwise)
       if (targets.some((t) => !data.images?.notes?.[t.style])) rebuild = true;
     }
+    // «Выбрать аромат»: another Fragrantica perfume for this card, chosen by a person — trusted by the guard
+    if (Number(body.perfumeId) > 0 && Number(body.perfumeId) !== Number(draft.perfume_id)) {
+      const prisma = await requireFragranticaDraftTables();
+      const [exists] = await prisma.$queryRawUnsafe(`SELECT id FROM fragrantica_perfumes WHERE id = $1`, Number(body.perfumeId));
+      if (!exists) return response.status(404).json({ error: "Аромат не найден в каталоге." });
+      fields.perfume_id = Number(body.perfumeId);
+      data.perfumeChosen = true;
+      delete data.notesConfirmed;
+      rebuild = true;
+    }
     // «Ноты верны»: AI-named notes checked by a person — the card is built with them
     if (body.notesConfirmed === true && !data.notesConfirmed) {
       data.notesConfirmed = true;
@@ -1467,6 +1477,59 @@ app.post("/api/fragrantica/drafts/:id/photos", requireAdmin, uploadImages.array(
 });
 
 // «Подобрать похожий бренд»: поиск по справочнику брендов Ozon (для карточки, чей бренд не нашёлся по имени)
+// «Выбрать аромат»: without q — perfumes of the brand that match the card's supplier rows (or its Ozon title);
+// with q — a catalog search. Each item: { id, brand, name, year, gender, hasPage, hits }.
+app.get("/api/fragrantica/drafts/:id/perfume-options", requireAdmin, async (request, response, next) => {
+  try {
+    if (!/^\d+$/.test(request.params.id)) return next();
+    const draft = await readFragranticaDraft(request.params.id);
+    if (!draft) return response.status(404).json({ error: "Черновик не найден." });
+    const prisma = await requireFragranticaDraftTables();
+    const pick = (row, hits = 0) => ({ id: Number(row.id), brand: row.brand, name: row.name, year: row.year ? Number(row.year) : null, gender: row.gender || "", hasPage: Boolean(row.has_page), hits });
+    const q = fragranticaSearchText(cleanText(request.query.q));
+    if (q) {
+      const tokens = q.split(" ").filter(Boolean).slice(0, 6);
+      const rows = await prisma.$queryRawUnsafe(
+        `SELECT id, brand, name, year, gender, detail_at IS NOT NULL AS has_page FROM fragrantica_perfumes
+          WHERE ${tokens.map((_, i) => `search LIKE $${i + 1}`).join(" AND ")} ORDER BY votes DESC NULLS LAST LIMIT 20`,
+        ...tokens.map((t) => `%${t}%`),
+      );
+      return response.json({ ok: true, items: rows.map((row) => pick(row)) });
+    }
+    const [current] = await prisma.$queryRawUnsafe(`SELECT brand FROM fragrantica_perfumes WHERE id = $1`, Number(draft.perfume_id));
+    const offerId = cleanText(draft.data?.existing?.offerId);
+    if (!current || !offerId) return response.json({ ok: true, items: [] });
+    const parser = require("./lib/perfume-match");
+    const brands = await supplierMatchBrands(prisma).catch(() => null);
+    const links = await prisma.$queryRawUnsafe(
+      `SELECT l.exact_name AS name FROM product_links l JOIN warehouse_products w ON w.id = l.product_id
+        WHERE lower(w.offer_id) = lower($1) AND coalesce(l.exact_name, '') <> ''`, offerId,
+    ).catch(() => []);
+    const ozon = await prisma.$queryRawUnsafe(`SELECT name FROM warehouse_products WHERE lower(offer_id) = lower($1) AND marketplace = 'ozon' LIMIT 1`, offerId).catch(() => []);
+    const truths = (links.length ? links : ozon).map((r) => parser.parsePerfumeName(r.name, { brands })).filter((t) => t.brandKey && t.volume);
+    const candidates = await prisma.$queryRawUnsafe(
+      `SELECT id, brand, name, year, gender, votes, detail_at IS NOT NULL AS has_page FROM fragrantica_perfumes WHERE lower(brand) = lower($1)`, current.brand,
+    );
+    const G = { male: "men", female: "women", unisex: "unisex" };
+    const scored = [];
+    for (const c of candidates) {
+      const own = parser.parsePerfumeName(`${c.brand} ${c.name}`, { brands }).concentration;
+      let hits = 0;
+      for (const t of truths) {
+        if (own && t.concentration && own !== t.concentration) continue;
+        const cand = parser.parsePerfumeName([c.brand, c.name, G[c.gender] || "", t.concentration, `${t.volume} ml`].filter(Boolean).join(" "), { brands });
+        const r = parser.comparePerfumes(t, { ...cand, set: t.set, decant: t.decant, sample: t.sample, nonPerfume: t.nonPerfume, type: t.type, defect: false });
+        if (r.ok) hits += 1;
+      }
+      if (hits) scored.push({ row: c, hits });
+    }
+    scored.sort((a, b) => b.hits - a.hits || (Number(b.row.votes) || 0) - (Number(a.row.votes) || 0));
+    response.json({ ok: true, items: scored.slice(0, 8).map(({ row, hits }) => pick(row, hits)), basis: links.length ? "links" : "ozon" });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/fragrantica/drafts/:id/brand-search", requireAdmin, async (request, response, next) => {
   try {
     if (!/^\d+$/.test(request.params.id)) return next();

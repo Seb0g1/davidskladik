@@ -213,6 +213,7 @@ function ImproveCard({ item, picked, onPick, onApprove, onSkip, onRestore, onReb
       {item.brandMatched === false && editable ? <BrandPicker item={item} /> : null}
       {/^(Вид меняется|Не выбран вид)/.test(String(item.error || "")) ? <TypePicker item={item} /> : null}
       {/^Ноты подобрал ИИ/.test(String(item.error || "")) ? <NotesConfirm id={item.id} /> : null}
+      {/выберите аромат|другая версия аромата|не совпадает с товаром|Show Me Love/i.test(String(item.error || "")) ? <PerfumePicker item={item} /> : null}
       {item.exports.length ? (
         <div className="ci-exports">
           {item.exports.map((e, i) => (
@@ -298,6 +299,48 @@ export function ImproveAdd({ compact = false }: { compact?: boolean }) {
 
 // EDP — парфюмерная вода, EDT — туалетная вода, Extrait / exdp — духи, Parfum — парфюм
 const CARD_TYPES: Array<[string, string]> = [["edp", "Парфюмерная вода"], ["edt", "Туалетная вода"], ["extrait", "Духи (Extrait)"], ["parfum", "Парфюм (Parfum)"], ["cologne", "Одеколон"]];
+
+type PerfumeOption = { id: number; brand: string; name: string; year: number | null; gender: string; hasPage: boolean; hits: number };
+const GENDER_LABEL: Record<string, string> = { male: "муж.", female: "жен.", unisex: "унисекс" };
+
+/** «Выбрать аромат»: perfumes matching the card's supplier rows first, or a catalog search; the card is rebuilt. */
+function PerfumePicker({ item }: { item: Item }) {
+  const queryClient = useQueryClient();
+  const [q, setQ] = useState("");
+  const query = useDebounced(q, 350).trim();
+  const options = useQuery({
+    queryKey: ["card-improve", "perfume-options", item.id, query],
+    queryFn: () => apiJson<{ items: PerfumeOption[] }>(`/api/fragrantica/drafts/${item.id}/perfume-options?q=${encodeURIComponent(query)}`),
+    staleTime: 5 * 60_000,
+  });
+  const pick = useMutation({
+    mutationFn: (perfume: PerfumeOption) => apiJson(`/api/fragrantica/drafts/${item.id}`, { method: "PATCH", body: JSON.stringify({ perfumeId: perfume.id }) }),
+    onSuccess: (_r, perfume) => { toast.success(`Аромат: ${perfume.brand} ${perfume.name} — карточка пересобирается`); queryClient.invalidateQueries({ queryKey: ["card-improve"] }); },
+    onError: (error) => toast.error(errorMessage(error)),
+  });
+  const list = options.data?.items || [];
+  return (
+    <div className="ci-brand">
+      <span className="ci-brand-title"><AlertTriangle size={13} /> Выберите аромат — {query ? "результаты поиска" : "подходят по строкам поставщиков"}:</span>
+      <div className="ci-brand-row">
+        <label className="ci-search ci-brand-search">
+          <Search size={13} />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Найти аромат: бренд и название" />
+          {options.isFetching ? <Loader2 size={13} className="spin" /> : null}
+        </label>
+        <div className="ci-brand-list">
+          {list.map((p) => (
+            <button key={p.id} type="button" className="ci-brand-chip" disabled={pick.isPending || p.id === item.perfumeId} onClick={() => pick.mutate(p)}
+              title={p.hasPage ? "Страница аромата есть — соберётся сразу" : "Страницы аромата ещё нет — соберётся, когда появятся данные"}>
+              {p.brand} {p.name}{p.year ? ` (${p.year})` : ""}{p.gender ? ` · ${GENDER_LABEL[p.gender] || p.gender}` : ""}{p.hasPage ? "" : " · без страницы"}
+            </button>
+          ))}
+          {!options.isFetching && !list.length ? <span className="ci-muted">{query ? "Не нашлось — попробуйте иначе." : "Подсказок нет — найдите аромат поиском."}</span> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /** «Ноты подобрал ИИ»: a person checks the pyramid in the message above and confirms it. */
 function NotesConfirm({ id }: { id: number }) {
