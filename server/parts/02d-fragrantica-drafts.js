@@ -695,8 +695,9 @@ async function buildFragranticaCardDraft(draft) {
   };
   const ozonTarget = targets.find((t) => t.kind === "ozon");
   let perfume = await fragranticaPerfumeForExport(perfumeId);
-  // Fragrantica without a gender: the card says who it is for («унисекс», «для женщин» stay in the new title)
-  if (!perfume.gender && draft.data?.existing?.offerId) {
+  // An improved card keeps who it is for: its Ozon / card titles and supplier rows («WOMAN», «жен») outrank Fragrantica
+  // (Plume Impression Art Nouveau is unisex there, sold as «женская»); Fragrantica decides only when the card says nothing
+  if (draft.data?.existing?.offerId) {
     const facts = await existingCardFacts(draft.data.existing.offerId).catch(() => ({}));
     if (facts.gender) perfume = { ...perfume, gender: facts.gender };
   }
