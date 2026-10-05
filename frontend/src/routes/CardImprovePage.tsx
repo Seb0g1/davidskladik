@@ -212,7 +212,7 @@ function ImproveCard({ item, picked, onPick, onApprove, onSkip, onRestore, onReb
         <div className="ci-note">Фрагрантика просит подождать — соберём сами в {new Date(item.retryAt).toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" })}</div>
       ) : null}
       {item.brandMatched === false && editable ? <BrandPicker item={item} /> : null}
-      {editable ? <GenderPicker item={item} /> : null}
+      {editable || item.status === "sent" ? <GenderPicker item={item} /> : null}
       {/^(Вид меняется|Не выбран вид)/.test(String(item.error || "")) ? <TypePicker item={item} /> : null}
       {/^Ноты подобрал ИИ/.test(String(item.error || "")) ? <NotesConfirm id={item.id} /> : null}
       {/выберите аромат|другая версия аромата|не совпадает с товаром|Show Me Love/i.test(String(item.error || "")) ? <PerfumePicker item={item} /> : null}

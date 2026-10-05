@@ -1360,8 +1360,10 @@ app.patch("/api/fragrantica/drafts/:id", requireAdmin, async (request, response,
     if (!/^\d+$/.test(request.params.id)) return next();
     const draft = await readFragranticaDraft(request.params.id);
     if (!draft) return response.status(404).json({ error: "Черновик не найден." });
-    if (["working", "sending", "sent"].includes(draft.status)) return response.status(409).json({ error: "Черновик сейчас собирается или уже отправлен." });
     const body = request.body || {};
+    // a sent card may still get another gender: it is rebuilt and waits for «Одобрить» again
+    const regender = draft.status === "sent" && ["male", "female", "unisex"].includes(body.gender) && Object.keys(body).length === 1;
+    if (["working", "sending", "sent"].includes(draft.status) && !regender) return response.status(409).json({ error: "Черновик сейчас собирается или уже отправлен." });
     const data = { ...(draft.data || {}) };
     const fields = {};
     let rebuild = false;
