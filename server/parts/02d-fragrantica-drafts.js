@@ -613,10 +613,16 @@ async function existingCardFacts(offerId) {
     `SELECT l.exact_name AS name FROM product_links l JOIN warehouse_products w ON w.id = l.product_id
       WHERE lower(w.offer_id) = lower($1) AND coalesce(l.exact_name, '') <> ''`, cleanText(offerId),
   ).catch(() => []);
-  const cards = await prisma.$queryRawUnsafe(`SELECT name FROM warehouse_products WHERE lower(offer_id) = lower($1)`, cleanText(offerId)).catch(() => []);
+  const cards = await prisma.$queryRawUnsafe(`SELECT name, marketplace FROM warehouse_products WHERE lower(offer_id) = lower($1)`, cleanText(offerId)).catch(() => []);
   const linkNames = links.map((r) => r.name);
+  // Ozon titles are never rewritten by an improvement — they outrank Market titles (an earlier improvement may have
+  // turned a Market «туалетная вода» / «духи» into «парфюмерная вода»)
+  const ozonNames = cards.filter((r) => r.marketplace === "ozon").map((r) => r.name);
   const cardNames = cards.map((r) => r.name);
-  return { typeKey: vote(linkNames) || vote(cardNames), gender: voteGender(cardNames) || voteGender(linkNames) };
+  return {
+    typeKey: vote(linkNames) || vote(ozonNames) || vote(cardNames),
+    gender: voteGender(ozonNames) || voteGender(cardNames) || voteGender(linkNames),
+  };
 }
 
 /**
