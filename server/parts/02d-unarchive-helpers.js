@@ -138,6 +138,32 @@ async function rewriteResolvedOzonUnarchiveQueueItems(rewrites = []) {
   await writeOzonUnarchiveQueue(queue);
 }
 
+// «Умный» автоархив: the daily unarchive quota is small, so products that sold go back first — units sold in
+// 90 days, then ever; never-sold ones keep their queue order behind them.
+let unarchiveSalesCache = { at: 0, map: new Map() };
+async function unarchiveSalesRank() {
+  if (unarchiveSalesCache.map.size && Date.now() - unarchiveSalesCache.at < 10 * 60_000) return unarchiveSalesCache.map;
+  const prisma = getPrisma();
+  const rows = prisma ? await prisma.$queryRawUnsafe(
+    `SELECT lower(offer_id) AS k,
+            coalesce(sum(quantity) FILTER (WHERE coalesce(sold_at, created_at) > now() - interval '90 days'), 0)::int AS s90,
+            coalesce(sum(quantity), 0)::int AS s_all
+       FROM finance_orders
+      WHERE offer_id IS NOT NULL AND coalesce(status, '') NOT ILIKE '%cancel%'
+      GROUP BY 1`,
+  ).catch(() => []) : [];
+  unarchiveSalesCache = { at: Date.now(), map: new Map(rows.map((r) => [r.k, { s90: Number(r.s90 || 0), all: Number(r.s_all || 0) }])) };
+  return unarchiveSalesCache.map;
+}
+
+function sortUnarchiveItemsBySales(items = [], rank = new Map()) {
+  const sales = (item) => rank.get(cleanText(item.offerId).toLowerCase()) || { s90: 0, all: 0 };
+  return items
+    .map((item, index) => ({ item, index, s: sales(item) }))
+    .sort((a, b) => (Number(b.item.due) - Number(a.item.due)) || (b.s.s90 - a.s.s90) || (b.s.all - a.s.all) || (a.index - b.index))
+    .map(({ item }) => item);
+}
+
 async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarchiveQueueBatchLimit, force = false, queueRunId = "" } = {}) {
   if (ozonUnarchiveQueueAutoRunning) {
     return {
@@ -202,10 +228,11 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
     const candidateLimit = Math.min(5000, Math.ceil(Math.max(1, effectiveLimit) * 1.5) + 20);
     const perTargetTaken = new Map();
     const dueItems = [];
+    const salesRank = await unarchiveSalesRank();
     // Due items whose target has no daily quota left. Without a bulk defer they stay due and the
     // auto scheduler keeps re-running every second, burning heavy product builds for nothing.
     const quotaExhaustedItems = [];
-    for (const item of publicQueue.items || []) {
+    for (const item of sortUnarchiveItemsBySales(publicQueue.items || [], salesRank)) {
       if (!item.due) continue;
       const target = cleanText(item.target) || "default";
       const available = availableByTarget.get(target);
@@ -396,7 +423,8 @@ async function processYandexUnarchiveQueue({ source = "manual", limit = yandexUn
     const normalizedLimit = Math.max(1, Math.min(500, Math.round(Number(limit || yandexUnarchiveQueueBatchLimit) || yandexUnarchiveQueueBatchLimit)));
     const queue = await readYandexUnarchiveQueue();
     const publicQueue = yandexUnarchiveQueuePublic(queue, { limit: 5000 });
-    const dueItems = (publicQueue.items || []).filter((item) => item.due).slice(0, normalizedLimit);
+    // sold products first (the same «smart» order as Ozon)
+    const dueItems = sortUnarchiveItemsBySales((publicQueue.items || []).filter((item) => item.due), await unarchiveSalesRank()).slice(0, normalizedLimit);
     const ids = Array.from(new Set(dueItems.map((item) => cleanText(item.warehouseProductId || item.id)).filter(Boolean)));
     if (!ids.length) {
       const empty = {
