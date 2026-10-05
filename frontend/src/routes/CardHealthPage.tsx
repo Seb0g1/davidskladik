@@ -103,14 +103,21 @@ export function CardHealthPage() {
       </div>
 
       {data?.improve && !data.improve.error ? (
+        // свёрнуто в одну строку: подробности и настройки — по клику, работа — на странице «Улучшение карточек»
+        <details className="ch-improve-fold">
+          <summary>
+            <span className="ch-improve-fold-title">Улучшение карточек</span>
+            <span>сопоставлено <b>{data.improve.matched.toLocaleString("ru")}</b></span>
+            <span>в конвейере <b>{data.improve.building + data.improve.review}</b>{data.improve.review ? <> · ждут проверки <b>{data.improve.review}</b></> : null}</span>
+            <span>улучшено <b>{data.improve.improved}</b></span>
+            <span>рейтинг Маркета <b>{data.improve.rating.avg ?? "—"}</b></span>
+            <a className="secondary-action compact" href="/app/card-improve" onClick={(e) => e.stopPropagation()}>Открыть</a>
+          </summary>
         <section className="ch-improve" aria-label="Улучшение карточек">
           <div className="ch-improve-text">
-            <h2>Улучшение карточек</h2>
             <p>
-              Старые карточки (сделанные не через «Фрагрантику») сопоставляются с ароматом и попадают в конвейер «Фрагрантики» как черновики:
-              фото, пирамиды, «О аромате», Rich, видео, описание и название по формуле Маркета. Артикул, цена и штрихкод остаются прежними,
-              на Маркет уходит только контент. Один товар — сразу его карточки в Ozon и на Маркете, первыми идут самые продаваемые.
-              <b> Отправка — только после «Одобрить» на странице «Улучшение карточек».</b>
+              Старые карточки сопоставляются с ароматом и попадают в конвейер как черновики: новые фото, описание и название.
+              Артикул, цена и штрихкод не меняются. Первыми идут самые продаваемые. На маркетплейс уходит только то, что вы одобрите.
             </p>
           </div>
           <div className="ch-improve-stats">
@@ -129,6 +136,7 @@ export function CardHealthPage() {
             <a className="primary-action compact" href="/app/card-improve">Открыть «Улучшение карточек»</a>
           </div>
         </section>
+        </details>
       ) : null}
 
       <div className="ch-tabs" role="tablist">
