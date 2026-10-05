@@ -663,7 +663,8 @@ async function existingCardPerfumeMismatch(offerId, perfume) {
   // a bare «Cologne» / «Parfum» is part of the name: Gentleman Cologne and Cologne 352 are sold as EDT / EDP
   const explicitConcentration = /eau\s+de\s+(parfum|toilette|cologne)|\bextrait\b|\bexdp\b|\bedp\b|\bedt\b|\bedc\b/i.test(String(perfume.name || ""));
   const ownConcentration = explicitConcentration ? parser.parsePerfumeName(`${perfume.brand} ${perfume.name}`, { brands }).concentration : "";
-  const genderWord = { male: "men", female: "women", unisex: "unisex" }[perfume.gender] || "";
+  // «unisex» on the catalog side proves nothing against a «WOMAN» row (Plume Art Nouveau): only men ≠ women does
+  const genderWord = { male: "men", female: "women" }[perfume.gender] || "";
   const reasons = new Set();
   for (const t of truths) {
     if (ownConcentration && t.concentration && ownConcentration !== t.concentration) {
@@ -806,6 +807,9 @@ async function buildFragranticaCardDraft(draft) {
   {
     const forWhom = { male: "для мужчин", female: "для женщин", unisex: "для мужчин и женщин" }[perfume.gender];
     if (forWhom) description = description.replace(/(аромат\S*\s+)для\s+(мужчин\s+и\s+женщин|женщин\s+и\s+мужчин|мужчин|женщин)/gi, `$1${forWhom}`);
+    // «… — унисекс-аромат, в котором …» / «мужской аромат» / «женский аромат»
+    const kind = { male: "мужской аромат", female: "женский аромат", unisex: "унисекс-аромат" }[perfume.gender];
+    if (kind) description = description.replace(/(^|[\s—–-])(унисекс-аромат|мужской аромат|женский аромат)/gi, (m, pre, word) => `${pre}${word[0] === word[0].toUpperCase() ? kind[0].toUpperCase() + kind.slice(1) : kind}`);
   }
 
   const data = {
