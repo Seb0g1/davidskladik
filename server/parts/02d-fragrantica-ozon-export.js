@@ -158,6 +158,184 @@ async function fragranticaFindTnved(account, typeId, volume) {
   return values.find((v) => v.value.startsWith(code) && /до 3 мл/i.test(v.value) === small) || values[0] || null;
 }
 
+// ─── Fragella: notes, accords and the bottle when Fragrantica gives us no page ───
+// Fragrantica answers our server with Cloudflare 403 — no new perfume pages. Fragella (api.fragella.com, a paid
+// fragrance API with a key, FRAGELLA_API_KEY) has the same facts: the note pyramid, accords, gender, year and a
+// bottle photo. A perfume without a page is looked up there by brand + name (checked with the perfume parser),
+// and the result is stored as its detail in the Fragrantica shape — the conveyor, pyramid cards and the AI
+// description work unchanged. Note / accord names come in English and are translated once (fragella_ru cache).
+
+const FRAGELLA_API = "https://api.fragella.com/api/v1";
+const FRAGELLA_SHARE = { dominant: 100, prominent: 80, moderate: 60, subtle: 40 };
+let fragellaChain = Promise.resolve();
+let fragellaTablesReady = false;
+const fragellaAccordColors = { at: 0, map: new Map() };
+
+function fragellaKey() {
+  return cleanText(process.env.FRAGELLA_API_KEY);
+}
+
+// the plan allows 60 requests a minute — one at a time, 1.1 s apart, for every caller of the process
+function fragellaRequest(pathname) {
+  const run = fragellaChain.then(async () => {
+    const response = await fetch(`${FRAGELLA_API}${pathname}`, { headers: { "x-api-key": fragellaKey() }, signal: AbortSignal.timeout(20_000) });
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    if (!response.ok) throw Object.assign(new Error(`Fragella ответила ${response.status}`), { statusCode: response.status });
+    return response.json();
+  });
+  fragellaChain = run.catch(() => {});
+  return run;
+}
+
+async function requireFragellaTables() {
+  const prisma = getPrisma();
+  if (!prisma) throw new Error("PostgreSQL недоступен.");
+  if (!fragellaTablesReady) {
+    await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS fragella_ru (kind TEXT NOT NULL, en TEXT NOT NULL, ru TEXT NOT NULL, PRIMARY KEY (kind, en))`);
+    fragellaTablesReady = true;
+  }
+  return prisma;
+}
+
+/** English note / accord names → Russian, the way Russian Fragrantica writes them; cached for good. */
+async function fragellaTranslate(kind, names = []) {
+  const prisma = await requireFragellaTables();
+  const list = [...new Set(names.map((name) => cleanText(name)).filter(Boolean))];
+  const out = new Map();
+  if (!list.length) return out;
+  const known = await prisma.$queryRawUnsafe(`SELECT en, ru FROM fragella_ru WHERE kind = $1 AND en = ANY($2::text[])`, kind, list);
+  for (const row of known) out.set(row.en, row.ru);
+  const missing = list.filter((name) => !out.has(name));
+  if (!missing.length) return out;
+  const examples = kind === "note"
+    ? "Bergamot → Бергамот, Calabrian bergamot → Калабрийский бергамот, Pink Pepper → Розовый перец, Ambroxan → Амброксан, Tonka Bean → Бобы тонка"
+    : "fresh spicy → свежий пряный, amber → амбровый, woody → древесный, citrus → цитрусовый, aromatic → ароматический, white floral → белые цветы";
+  const { data } = await createTextAiJson([
+    { role: "system", content: `Ты переводишь названия ${kind === "note" ? "парфюмерных нот" : "аккордов аромата"} на русский язык так, как их пишет русская Фрагрантика. Примеры: ${examples}. Только перевод, ничего не добавляй.` },
+    { role: "user", content: `Верни JSON-объект {"английское название": "русское название"} для каждого: ${JSON.stringify(missing)}` },
+  ], { temperature: 0 });
+  for (const name of missing) {
+    let ru = cleanText(data?.[name]);
+    if (!ru) continue;
+    ru = kind === "note" ? ru.charAt(0).toUpperCase() + ru.slice(1) : ru.toLowerCase();
+    out.set(name, ru);
+    await prisma.$executeRawUnsafe(`INSERT INTO fragella_ru (kind, en, ru) VALUES ($1, $2, $3) ON CONFLICT (kind, en) DO UPDATE SET ru = EXCLUDED.ru`, kind, name, ru);
+  }
+  return out;
+}
+
+/** Accord colours as Fragrantica paints them (from the pages we have), by the Russian accord name. */
+async function fragellaAccordPalette() {
+  if (fragellaAccordColors.map.size && Date.now() - fragellaAccordColors.at < 6 * 3_600_000) return fragellaAccordColors.map;
+  const prisma = getPrisma();
+  const rows = await prisma.$queryRawUnsafe(
+    `SELECT DISTINCT ON (a->>'name') a->>'name' AS name, a->>'color' AS color, a->>'background' AS background
+       FROM fragrantica_perfumes p, jsonb_array_elements(coalesce(p.detail->'accords', '[]'::jsonb)) a
+      WHERE p.detail_at IS NOT NULL AND coalesce(p.detail->>'source', '') <> 'fragella'`,
+  ).catch(() => []);
+  fragellaAccordColors.map = new Map(rows.map((row) => [cleanText(row.name).toLowerCase(), { color: row.color || "#000000", background: row.background || "#d9d9d9" }]));
+  fragellaAccordColors.at = Date.now();
+  return fragellaAccordColors.map;
+}
+
+// Note icons we already render («Бергамот» looks the same on every card): Russian note name → icon, from the
+// pages we have; Fragella's own picture only for notes we have never shown.
+const fragellaNoteIconCache = { at: 0, map: new Map() };
+async function fragellaKnownNoteIcons() {
+  if (fragellaNoteIconCache.map.size && Date.now() - fragellaNoteIconCache.at < 6 * 3_600_000) return fragellaNoteIconCache.map;
+  const rows = await getPrisma().$queryRawUnsafe(
+    `SELECT DISTINCT ON (lower(n->>'name')) lower(n->>'name') AS name, n->>'icon' AS icon
+       FROM fragrantica_perfumes p,
+            jsonb_array_elements(coalesce(p.detail->'notes'->'top', '[]'::jsonb) || coalesce(p.detail->'notes'->'middle', '[]'::jsonb) || coalesce(p.detail->'notes'->'base', '[]'::jsonb)) n
+      WHERE p.detail_at IS NOT NULL AND coalesce(p.detail->>'source', '') <> 'fragella' AND coalesce(n->>'icon', '') <> ''`,
+  ).catch(() => []);
+  fragellaNoteIconCache.map = new Map(rows.map((row) => [row.name, row.icon]));
+  fragellaNoteIconCache.at = Date.now();
+  return fragellaNoteIconCache.map;
+}
+
+/** The Fragella entry for our perfume: same brand, same name words, same gender — or null. */
+async function fragellaFindPerfume(row) {
+  const parser = require("./lib/perfume-match");
+  const prisma = getPrisma();
+  const brands = await supplierMatchBrands(prisma).catch(() => null);
+  const results = await fragellaRequest(`/fragrances?search=${encodeURIComponent(`${row.brand} ${row.name}`)}&limit=10`);
+  const genderWord = { male: "men", female: "women", unisex: "unisex" };
+  const want = parser.parsePerfumeName(`${row.brand} ${row.name} ${genderWord[row.gender] || ""} 100 ml`, { brands });
+  const brandWords = new Set(parser.tokensOf(`${row.brand}`));
+  for (const item of Array.isArray(results) ? results : []) {
+    // «Dior Sauvage» by «Christian Dior»: the brand words lead the name — keep only the perfume's own words
+    const own = parser.tokensOf(item.Brand || "");
+    const words = parser.tokensOf(item.Name || "");
+    while (words.length && (brandWords.has(words[0]) || own.includes(words[0]))) words.shift();
+    const gender = genderWord[{ men: "male", women: "female", unisex: "unisex" }[cleanText(item.Gender).toLowerCase()]] || "";
+    const candidate = parser.parsePerfumeName(`${row.brand} ${words.join(" ")} ${gender} 100 ml`, { brands });
+    const result = parser.comparePerfumes(want, candidate);
+    if (result.ok && !result.probable) return item;
+  }
+  return null;
+}
+
+/** Looks the perfume up in Fragella and stores it as its detail. → true when stored. */
+async function fillPerfumeFromFragella(row) {
+  if (!fragellaKey() || !row) return false;
+  const item = await fragellaFindPerfume(row);
+  if (!item) {
+    logger.info("fragella perfume not found", { id: Number(row.id), brand: row.brand, name: row.name });
+    return false;
+  }
+  const levels = { top: item.Notes?.Top || [], middle: item.Notes?.Middle || [], base: item.Notes?.Base || [] };
+  // only a flat list («General Notes»): Fragrantica shows such perfumes with one tier
+  if (!levels.top.length && !levels.middle.length && !levels.base.length) {
+    levels.middle = (item["General Notes"] || []).map((name) => ({ name, imageUrl: "" }));
+  }
+  const noteNames = Object.values(levels).flat().map((note) => note.name);
+  if (!noteNames.length) return false;
+  const accordNames = (item["Main Accords"] || []).slice(0, 10);
+  const [notesRu, accordsRu, palette, knownIcons] = await Promise.all([fragellaTranslate("note", noteNames), fragellaTranslate("accord", accordNames), fragellaAccordPalette(), fragellaKnownNoteIcons()]);
+  if (noteNames.some((name) => !notesRu.has(cleanText(name)))) throw new Error("Перевод нот не удался.");
+  const notes = Object.fromEntries(Object.entries(levels).map(([level, list]) => [level, list.map((note) => {
+    const name = notesRu.get(cleanText(note.name));
+    return { name, icon: knownIcons.get(name.toLowerCase()) || cleanText(note.imageUrl) };
+  })]));
+  const accords = accordNames.map((name) => {
+    const ru = accordsRu.get(cleanText(name)) || cleanText(name);
+    const colors = palette.get(ru.toLowerCase()) || { color: "#000000", background: "#d9d9d9" };
+    const share = FRAGELLA_SHARE[cleanText(item["Main Accords Percentage"]?.[name]).toLowerCase()] || 50;
+    return { name: ru, share, ...colors };
+  });
+  const gender = { men: "male", women: "female", unisex: "unisex" }[cleanText(item.Gender).toLowerCase()] || row.gender || "";
+  const year = Number(item.Year) || Number(row.year) || null;
+  const title = `${row.name} ${row.brand}`;
+  const tierText = [["Верхние ноты", notes.top], ["средние ноты", notes.middle], ["базовые ноты", notes.base]]
+    .filter(([, list]) => list.length).map(([label, list]) => `${label}: ${list.map((n) => n.name).join(", ")}`).join("; ");
+  const forWhom = { male: "для мужчин", female: "для женщин", unisex: "для мужчин и женщин" }[gender] || "";
+  const detail = {
+    id: Number(row.id), url: row.url, name: row.name, year, brand: row.brand,
+    image: cleanText(item["Image URL"]), notes, title, votes: null, family: "", gender,
+    rating: Number(item.rating) || null, accords, brandSlug: row.brand_slug || "", perfumers: [],
+    description: `${title} — это аромат${forWhom ? ` ${forWhom}` : ""}.${year ? ` ${row.name} выпущен в ${year} году.` : ""} ${tierText}.`,
+    source: "fragella", fragellaId: cleanText(item._id),
+  };
+  // the bottle: Fragella's photo in place of the Fragrantica thumbnail (no Fragrantica «HD original» lookup)
+  if (detail.image) {
+    try {
+      await downloadFragranticaMedia(detail.image, "images", `${Number(row.id)}.jpg`);
+      await fragFs.promises.writeFile(fragranticaMediaPath("images", `${Number(row.id)}-hd.none`), "fragella");
+    } catch (error) {
+      logger.warn("fragella bottle image failed", { id: Number(row.id), detail: error?.message });
+    }
+  }
+  await getPrisma().$executeRawUnsafe(
+    `UPDATE fragrantica_perfumes SET detail = $2::jsonb, detail_at = now(), detail_error = NULL,
+       gender = CASE WHEN coalesce(gender, '') = '' THEN $3 ELSE gender END, year = coalesce(year, $4), updated_at = now()
+     WHERE id = $1`,
+    Number(row.id), JSON.stringify(detail), gender, year,
+  );
+  logger.info("fragella perfume stored", { id: Number(row.id), brand: row.brand, name: row.name, fragellaId: detail.fragellaId, notes: noteNames.length });
+  return true;
+}
+
 async function fragranticaPerfumeForExport(perfumeId) {
   let row = await readFragranticaPerfume(perfumeId);
   if (!row) {
@@ -166,8 +344,27 @@ async function fragranticaPerfumeForExport(perfumeId) {
     throw error;
   }
   if (!row.detail_at) {
-    await fetchAndStoreFragranticaPerfume(row.url);
-    row = await readFragranticaPerfume(perfumeId);
+    // Fragrantica first (unless it rests after a 403); no page → Fragella; neither → Fragrantica's error
+    let fetchError = null;
+    if (!(fragranticaPagesPausedUntil() > 0 && fragellaKey())) {
+      try {
+        await fetchAndStoreFragranticaPerfume(row.url);
+      } catch (error) {
+        fetchError = error;
+      }
+      row = await readFragranticaPerfume(perfumeId);
+    }
+    if (!row.detail_at && fragellaKey()) {
+      const stored = await fillPerfumeFromFragella(row).catch((error) => {
+        logger.warn("fragella fill failed", { id: Number(perfumeId), detail: error?.message || String(error) });
+        return false;
+      });
+      if (stored) row = await readFragranticaPerfume(perfumeId);
+    }
+    if (!row.detail_at) {
+      if (fetchError) throw fetchError;
+      throw Object.assign(new Error("Нет данных аромата: Фрагрантика закрыта, во Fragella аромат не найден."), { statusCode: 404 });
+    }
   }
   return { ...(row.detail || {}), id: Number(row.id), brand: row.brand, name: row.name, gender: row.gender, year: row.year, url: row.url };
 }
