@@ -353,19 +353,181 @@ async function fillPerfumeFromFragella(row) {
   return true;
 }
 
+// ─── Parfumetrika: open Russian perfume base (parfumetrika.ru, robots «Allow: /») ───
+// Notes per tier, accords with colours, gender and year — in Russian. One polite request at a time (3 s apart,
+// an honest User-Agent). The perfume page is found by its address (brand-name slug) or, failing that, in the
+// brand's list (pages of 20, remembered in parfumetrika_slugs). Bottle photos there are user uploads — not taken.
+
+const PARFUMETRIKA_BASE = "https://parfumetrika.ru";
+const PARFUMETRIKA_UA = "MagicVibesCatalogBot/1.0 (+https://davidsklad.ru; notes lookup, 1 request / 3 s)";
+let parfumetrikaChain = Promise.resolve();
+let parfumetrikaTablesReady = false;
+
+function parfumetrikaRequest(pathname) {
+  const run = parfumetrikaChain.then(async () => {
+    const response = await fetch(`${PARFUMETRIKA_BASE}${pathname}`, { headers: { "User-Agent": PARFUMETRIKA_UA, "Accept-Language": "ru" }, signal: AbortSignal.timeout(25_000) });
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    if (response.status === 404) return null;
+    if (!response.ok) throw Object.assign(new Error(`Parfumetrika ответила ${response.status}`), { statusCode: response.status });
+    return response.text();
+  });
+  parfumetrikaChain = run.catch(() => {});
+  return run;
+}
+
+async function requireParfumetrikaTables() {
+  const prisma = getPrisma();
+  if (!parfumetrikaTablesReady) {
+    await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS parfumetrika_slugs (brand TEXT NOT NULL, slug TEXT NOT NULL, page INTEGER, PRIMARY KEY (brand, slug))`);
+    await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS parfumetrika_brands (brand TEXT PRIMARY KEY, pages INTEGER, scanned_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+    parfumetrikaTablesReady = true;
+  }
+  return prisma;
+}
+
+function parfumetrikaSlug(text) {
+  return String(text || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase()
+    .replace(/&/g, " ").replace(/['’`]/g, "-").replace(/[^a-z0-9]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+}
+
+/** Perfume slugs of a brand: from the cache, else its list pages (scanned once a month). */
+async function parfumetrikaBrandSlugs(brand) {
+  const prisma = await requireParfumetrikaTables();
+  const key = cleanText(brand).toLowerCase();
+  const [seen] = await prisma.$queryRawUnsafe(`SELECT pages FROM parfumetrika_brands WHERE brand = $1 AND scanned_at > now() - interval '30 days'`, key);
+  if (!seen) {
+    const brandPath = `/brands/${encodeURIComponent(cleanText(brand).replace(/\s+/g, "_"))}`;
+    let pages = 0;
+    for (let page = 1; page <= 60; page += 1) {
+      const html = await parfumetrikaRequest(page === 1 ? brandPath : `${brandPath}?page=${page}`);
+      if (!html) break;
+      const slugs = [...new Set([...html.matchAll(/href="\/perfumes\/([^"#?]+)"/g)].map((m) => m[1]))];
+      if (!slugs.length) break;
+      pages = page;
+      for (const slug of slugs) {
+        await prisma.$executeRawUnsafe(`INSERT INTO parfumetrika_slugs (brand, slug, page) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, key, slug, page);
+      }
+      if (!new RegExp(`[?&]page=${page + 1}\\b`).test(html)) break;
+    }
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO parfumetrika_brands (brand, pages, scanned_at) VALUES ($1, $2, now()) ON CONFLICT (brand) DO UPDATE SET pages = EXCLUDED.pages, scanned_at = now()`, key, pages,
+    );
+  }
+  return (await prisma.$queryRawUnsafe(`SELECT slug FROM parfumetrika_slugs WHERE brand = $1`, key)).map((r) => r.slug);
+}
+
+/**
+ * The page's own facts from its schema.org Product block (the page also carries other perfumes' data — only this
+ * block is about the perfume itself): name, brand, year, gender (from its description), tiers, accords; note icons
+ * and accord colours from the markup.
+ */
+function parseParfumetrikaPage(html) {
+  const decode = (text) => String(text || "").replace(/&amp;/g, "&").replace(/&#x27;|&#39;/g, "'").replace(/&quot;/g, '"');
+  let product = null;
+  for (const m of html.matchAll(/<script[^>]*application\/ld\+json[^>]*>([\s\S]*?)<\/script>/g)) {
+    try {
+      const data = JSON.parse(m[1]);
+      if (data?.["@type"] === "Product") { product = data; break; }
+    } catch {
+      // another block
+    }
+  }
+  if (!product) return null;
+  const props = new Map((product.additionalProperty || []).map((p) => [cleanText(p.name).toLowerCase(), String(p.value || "").split(",").map((v) => cleanText(v)).filter(Boolean)]));
+  const prop = (...names) => names.map((n) => props.get(n)).find((v) => v && v.length) || [];
+  const icons = new Map([...html.matchAll(/src="([^"]+note_images[^"]+)"[^>]+alt="Нота ([^"]+)"/g)].map((m) => [decode(m[2]).toLowerCase(), m[1]]));
+  const colors = new Map([...html.matchAll(/background-color:(#[0-9a-fA-F]{3,8});border-radius:12px;padding:4px 12px;font-size:14px;color:(#[0-9a-fA-F]{3,8})[^>]*>([^<]+)</g)]
+    .map((m) => [decode(m[3]).trim().toLowerCase(), { background: m[1], color: m[2] }]));
+  const description = cleanText(product.description);
+  const gender = /женщин и мужчин|мужчин и женщин|унисекс/i.test(description) ? "unisex"
+    : /мужск|для мужчин/i.test(description) ? "male" : /женск|для женщин/i.test(description) ? "female" : "";
+  return {
+    name: decode(product.name), brand: decode(product.brand?.name), year: Number(product.releaseDate) || null, gender,
+    top: prop("топ ноты", "верхние ноты"), middle: prop("средние ноты", "ноты сердца"), base: prop("базовые ноты"), flat: prop("ноты"),
+    accords: prop("аккорды"), icons, colors,
+  };
+}
+
+/** Looks the perfume up on Parfumetrika and stores it as its detail. → true when stored. */
+async function fillPerfumeFromParfumetrika(row) {
+  const parser = require("./lib/perfume-match");
+  const brands = await supplierMatchBrands(getPrisma()).catch(() => null);
+  const guess = parfumetrikaSlug(`${row.brand} ${row.name}`);
+  const genderWord = { male: "men", female: "women", unisex: "unisex" };
+  const want = parser.parsePerfumeName(`${row.brand} ${row.name} ${genderWord[row.gender] || ""} 100 ml`, { brands });
+  const fits = (page) => {
+    if (!page || !(page.top.length + page.middle.length + page.base.length + page.flat.length)) return false;
+    const candidate = parser.parsePerfumeName(`${page.brand || row.brand} ${page.name} ${genderWord[page.gender] || ""} 100 ml`, { brands });
+    const result = parser.comparePerfumes(want, candidate);
+    return result.ok && !result.probable;
+  };
+  let html = await parfumetrikaRequest(`/perfumes/${guess}`);
+  let page = html ? parseParfumetrikaPage(html) : null;
+  if (!fits(page)) {
+    page = null;
+    const slugs = await parfumetrikaBrandSlugs(row.brand);
+    // «guerlain-l-homme-ideal-72724»: the same words plus a number
+    const candidates = slugs.filter((slug) => slug === guess || new RegExp(`^${guess}-\\d+$`).test(slug));
+    for (const slug of candidates.slice(0, 3)) {
+      html = await parfumetrikaRequest(`/perfumes/${slug}`);
+      const parsed = html ? parseParfumetrikaPage(html) : null;
+      if (fits(parsed)) { page = parsed; break; }
+    }
+  }
+  if (!page) {
+    logger.info("parfumetrika perfume not found", { id: Number(row.id), brand: row.brand, name: row.name });
+    return false;
+  }
+  const knownIcons = await fragellaKnownNoteIcons().catch(() => new Map());
+  const palette = await fragellaAccordPalette().catch(() => new Map());
+  const note = (name) => {
+    const ru = cleanText(name).replace(/ё/g, "е");
+    return { name: ru, icon: knownIcons.get(ru.toLowerCase()) || page.icons.get(ru.toLowerCase()) || "" };
+  };
+  const notes = { top: page.top.map(note), middle: page.middle.map(note), base: page.base.map(note) };
+  if (!notes.top.length && !notes.middle.length && !notes.base.length) notes.flat = page.flat.map(note);
+  const accords = page.accords.slice(0, 10).map((name, i) => {
+    const ru = name.toLowerCase().replace(/ё/g, "е");
+    return { name: ru, share: Math.max(40, 100 - i * 10), ...(palette.get(ru) || page.colors.get(ru) || { color: "#000000", background: "#d9d9d9" }) };
+  });
+  const gender = row.gender || page.gender || "";
+  const year = Number(row.year) || page.year || null;
+  const title = `${row.name} ${row.brand}`;
+  const tierText = [["Верхние ноты", notes.top], ["средние ноты", notes.middle], ["базовые ноты", notes.base], ["ноты", notes.flat]]
+    .filter(([, list]) => list && list.length).map(([label, list]) => `${label}: ${list.map((n) => n.name).join(", ")}`).join("; ");
+  const forWhom = { male: "для мужчин", female: "для женщин", unisex: "для мужчин и женщин" }[gender] || "";
+  const detail = {
+    id: Number(row.id), url: row.url, name: row.name, year, brand: row.brand, image: "", notes, title, votes: null, family: "", gender,
+    rating: null, accords, brandSlug: row.brand_slug || "", perfumers: [],
+    description: `${title} — это аромат${forWhom ? ` ${forWhom}` : ""}.${year ? ` ${row.name} выпущен в ${year} году.` : ""} ${tierText}.`,
+    source: "parfumetrika",
+  };
+  await getPrisma().$executeRawUnsafe(
+    `UPDATE fragrantica_perfumes SET detail = $2::jsonb, detail_at = now(), detail_error = NULL,
+       gender = CASE WHEN coalesce(gender, '') = '' THEN $3 ELSE gender END, year = coalesce(year, $4), updated_at = now()
+     WHERE id = $1`,
+    Number(row.id), JSON.stringify(detail), gender, year,
+  );
+  logger.info("parfumetrika perfume stored", { id: Number(row.id), brand: row.brand, name: row.name, notes: Object.values(notes).flat().length });
+  return true;
+}
+
 /**
  * Last resort — neither Fragrantica nor Fragella has the perfume: the text AI names its notes, but only when it
  * knows the perfume («unknown» otherwise). Such notes are marked source «ai»: the card stops at «Ноты подобрал
  * ИИ — проверьте» until a person confirms them (AI notes for 13k warehouse goods were often wrong).
  */
 async function fillPerfumeFromAi(row) {
-  const { data } = await createTextAiJson([
-    { role: "system", content: "Ты парфюмерный эксперт. Называешь ноты аромата только если точно знаешь его официальную пирамиду. Если аромат тебе неизвестен или ты не уверен — верни {\"unknown\": true}. Ничего не придумывай и не угадывай по похожим ароматам." },
-    { role: "user", content: `Аромат: ${row.brand} ${row.name}${row.year ? ` (${row.year})` : ""}. Верни JSON: {"top": ["нота"], "middle": ["нота"], "base": ["нота"], "accords": ["аккорд"], "gender": "male|female|unisex", "year": 2015}. Ноты и аккорды — по-русски, как на русской Фрагрантике (Бергамот, Розовый перец, древесный, цитрусовый).` },
+  const { data, completion } = await createTextAiJson([
+    { role: "system", content: "Ты парфюмерный эксперт с энциклопедическим знанием ароматов. Даёшь официальную пирамиду нот аромата — ту, что публикует производитель и Фрагрантика. Честно оцени уверенность в поле confidence: high — знаешь этот аромат и его пирамиду, medium — знаешь аромат, но в нотах сомневаешься, low — аромат тебе незнаком." },
+    { role: "user", content: `Аромат: ${row.brand} ${row.name}${row.year ? `, ${row.year} год` : ""}${row.gender ? `, ${({ male: "мужской", female: "женский", unisex: "унисекс" })[row.gender] || ""}` : ""}. Верни JSON: {"top": ["нота"], "middle": ["нота"], "base": ["нота"], "accords": ["аккорд"], "gender": "male|female|unisex", "year": 1979, "confidence": "high|medium|low"}. Ноты и аккорды — по-русски, как на русской Фрагрантике (Бергамот, Розовый перец, Ветивер; аккорды: древесный, цитрусовый, пудровый). confidence — насколько ты уверен, что это именно пирамида этого аромата.` },
   ], { temperature: 0 });
   const list = (value) => (Array.isArray(value) ? value : []).map((v) => cleanText(v).replace(/ё/g, "е")).filter(Boolean).slice(0, 12);
   const levels = { top: list(data?.top), middle: list(data?.middle), base: list(data?.base) };
-  if (!data || data.unknown || !Object.values(levels).flat().length) return false;
+  if (!data || data.unknown || data.confidence === "low" || !Object.values(levels).flat().length) {
+    logger.info("ai perfume notes unknown", { id: Number(row.id), brand: row.brand, name: row.name, answer: cleanText(completion?.choices?.[0]?.message?.content).slice(0, 300) });
+    return false;
+  }
   const [knownIcons, palette] = await Promise.all([fragellaKnownNoteIcons(), fragellaAccordPalette()]);
   const notes = Object.fromEntries(Object.entries(levels).map(([level, names]) => [level, names.map((name) => {
     const ru = name.charAt(0).toUpperCase() + name.slice(1);
@@ -415,6 +577,14 @@ async function fragranticaPerfumeForExport(perfumeId) {
     if (!row.detail_at && fragellaAvailable()) {
       const stored = await fillPerfumeFromFragella(row).catch((error) => {
         logger.warn("fragella fill failed", { id: Number(perfumeId), detail: error?.message || String(error) });
+        return false;
+      });
+      if (stored) row = await readFragranticaPerfume(perfumeId);
+    }
+    // Parfumetrika (open Russian base) before the AI: real notes, not a model's memory
+    if (!row.detail_at && fragranticaClosed) {
+      const stored = await fillPerfumeFromParfumetrika(row).catch((error) => {
+        logger.warn("parfumetrika fill failed", { id: Number(perfumeId), detail: error?.message || String(error) });
         return false;
       });
       if (stored) row = await readFragranticaPerfume(perfumeId);
