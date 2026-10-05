@@ -252,6 +252,8 @@ async function buildFragranticaFormData(query = {}) {
     account: { id: cleanText(account.id), name: cleanText(account.name), style: fragranticaCardStyleForAccount(account) },
     types: FRAG_OZON_TYPES,
     typeKey,
+    // only a type the perfume name states — the form starts empty otherwise (no silent «парфюмерная вода»)
+    typeKeyExplicit: fragExplicitTypeKey(perfume),
     typeId: type.typeId,
     volume,
     tester,

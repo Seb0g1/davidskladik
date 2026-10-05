@@ -10,7 +10,9 @@ const FRAG_OZON_CATEGORY_ID = 17028988; // Красота и гигиена / П
 const FRAG_OZON_TYPES = [
   { key: "edp", typeId: 93403, label: "Вода парфюмерная", nameLabel: "Парфюмерная вода" },
   { key: "edt", typeId: 93405, label: "Туалетная вода", nameLabel: "Туалетная вода" },
-  { key: "parfum", typeId: 93397, label: "Духи", nameLabel: "Духи" },
+  // Ozon has one type «Духи» for both; the title says «Духи» for Extrait / exdp and «Парфюм» for a bare Parfum
+  { key: "extrait", typeId: 93397, label: "Духи", nameLabel: "Духи" },
+  { key: "parfum", typeId: 93397, label: "Духи", nameLabel: "Парфюм" },
   { key: "cologne", typeId: 93402, label: "Одеколон", nameLabel: "Одеколон" },
   { key: "oil", typeId: 970674005, label: "Духи-масло", nameLabel: "Духи-масло" },
 ];
@@ -59,7 +61,7 @@ const FRAG_OZON_DEFAULTS = {
 
 // ОКПД2 как в действующих карточках Маркета: духи .110, парфюмерная/туалетная вода .120, одеколон .130.
 function fragOkpd2ForType(typeKey = "edp") {
-  if (typeKey === "parfum" || typeKey === "oil") return "20.42.11.110";
+  if (typeKey === "parfum" || typeKey === "extrait" || typeKey === "oil") return "20.42.11.110";
   if (typeKey === "cologne") return "20.42.11.130";
   return "20.42.11.120";
 }
@@ -124,13 +126,20 @@ function fragOzonTypeById(typeId) {
 
 // «Eau de Toilette» / «Cologne» в названии подсказывают тип; по умолчанию — парфюмерная вода.
 function fragOzonGuessTypeKey(perfume = {}) {
-  const text = `${perfume.name || ""} ${perfume.title || ""}`.toLowerCase();
+  const text = `${perfume.name || ""} ${perfume.title || ""}`.toLowerCase().trim();
   if (/eau de toilette|\bedt\b|туалетн/.test(text)) return "edt";
   if (/eau de cologne|cologne|одеколон/.test(text)) return "cologne";
   // «attar» is not a type: Attar Collection makes eau de parfum
   if (/perfume oil|parfum oil|масло/.test(text)) return "oil";
-  if (/extrait|(^|\s)parfum$|(^|\s)духи/.test(text)) return "parfum";
+  if (/extrait|exdp|экстракт|(^|\s)духи/.test(text)) return "extrait";
+  if (/eau de parfum|edp|парфюмерн/.test(text)) return "edp";
+  if (/(^|\s)parfum$|(^|\s)парфюм$/.test(text)) return "parfum";
   return "edp";
+}
+
+// Extrait, Parfum and perfume oil are one strength for supplier rows: an «Extrait» row fits a «Parfum» card.
+function fragTypeFamily(typeKey = "") {
+  return typeKey === "extrait" || typeKey === "oil" ? "parfum" : typeKey;
 }
 
 function fragFormatVolume(volume) {
@@ -158,12 +167,13 @@ function buildFragranticaOzonName({ perfume = {}, typeKey = "edp", volume, teste
 const FRAG_MARKET_GENDER = {
   edp: { male: "мужская", female: "женская", unisex: "унисекс" },
   edt: { male: "мужская", female: "женская", unisex: "унисекс" },
-  parfum: { male: "мужские", female: "женские", unisex: "унисекс" },
+  extrait: { male: "мужские", female: "женские", unisex: "унисекс" },
+  parfum: { male: "мужской", female: "женский", unisex: "унисекс" },
   cologne: { male: "мужской", female: "женский", unisex: "унисекс" },
   oil: { male: "мужские", female: "женские", unisex: "унисекс" },
 };
 // Концентрация на латинице после аромата — с ней Маркет даёт за название 10 из 10
-const FRAG_MARKET_CONCENTRATION = { edp: "Eau de Parfum", edt: "Eau de Toilette", parfum: "Parfum", cologne: "Eau de Cologne", oil: "Perfume Oil" };
+const FRAG_MARKET_CONCENTRATION = { edp: "Eau de Parfum", edt: "Eau de Toilette", extrait: "Extrait de Parfum", parfum: "Parfum", cologne: "Eau de Cologne", oil: "Perfume Oil" };
 function buildFragranticaMarketName({ perfume = {}, typeKey = "edp", volume, tester = false } = {}) {
   const type = fragOzonTypeByKey(typeKey);
   const vol = fragFormatVolume(volume);
@@ -400,6 +410,7 @@ function buildFragranticaOzonItem(input = {}, categoryAttributes = []) {
 const FRAG_ROW_STOP_WORDS = new Set([
   "ml", "мл", "m", "w", "l", "u", "men", "man", "women", "woman", "lady", "unisex", "унисекс", "муж", "жен", "мужской", "женский",
   "мужская", "женская", "edp", "edt", "edc", "parfum", "perfume", "toilette", "cologne", "туалетная", "парфюмерная",
+  "extrait", "exdp", "extr", "экстракт", "парфюм",
   "вода", "духи", "одеколон", "spray", "vapo", "спрей", "new", "шт", "оригинал", "original", "lux", "люкс", "box", "без", "коробки",
   "коробка", "christian", "c", "for", "pour", "для", "и", "the", "tester", "тестер", "edition", "version", "версия",
 ]);
@@ -439,7 +450,8 @@ function fragRowConcentration(tokens, text) {
   if (t.has("edp") || t.has("парфюмерная") || /eau\s+de\s+parfum/.test(text)) return "edp";
   if (t.has("edt") || t.has("туалетная") || /eau\s+de\s+toilette/.test(text)) return "edt";
   if (t.has("edc") || t.has("cologne") || t.has("одеколон")) return "cologne";
-  if (t.has("extrait") || t.has("духи") || (t.has("parfum") && !t.has("eau"))) return "parfum";
+  if (t.has("extrait") || t.has("exdp") || t.has("extr") || t.has("экстракт") || t.has("духи")) return "extrait";
+  if ((t.has("parfum") || t.has("парфюм")) && !t.has("eau")) return "parfum";
   return "";
 }
 
@@ -458,8 +470,8 @@ function assessFragranticaSupplierRow(rowName, { brand = "", name = "", typeKey 
   const afterShave = /after\s*-?\s*shave|a\s*\/\s*sh(?![a-z])|после\s+бритья/.test(text);
   const notPerfume = afterShave || fragRowTokens(text).some((w) => FRAG_ROW_NOT_PERFUME.has(w) && !(oilAllowed && (w === "oil" || w === "масло")));
   const concentration = fragRowConcentration(outsideTokens, outside);
-  const wanted = typeKey === "oil" ? "parfum" : typeKey;
-  const concentrationOk = !concentration || concentration === wanted;
+  const wanted = fragTypeFamily(typeKey);
+  const concentrationOk = !concentration || fragTypeFamily(concentration) === wanted;
   // brand aliases are part of the brand, not extra words («Thierry Mugler» = Mugler)
   const known = new Set([...brandTokens, ...fragRowTokens(brand), ...nameTokens, ...aliases.flatMap((alias) => fragRowTokens(alias))]);
   // «eau de parfum» is a concentration, a lone «eau» is part of a name (Eau Sauvage ≠ Sauvage)
@@ -679,12 +691,13 @@ function planFragranticaVolumes(rows = [], perfume = {}) {
   if (!typeKey) {
     const counts = new Map();
     for (const r of good) if (r.concentration) counts.set(r.concentration, (counts.get(r.concentration) || 0) + 1);
-    typeKey = [...counts.entries()].sort((a, b) => b[1] - a[1] || (a[0] === "edp" ? -1 : 1))[0]?.[0] || "edp";
+    // nothing names the type → no type: the draft asks a person instead of defaulting to «парфюмерная вода»
+    typeKey = [...counts.entries()].sort((a, b) => b[1] - a[1] || (a[0] === "edp" ? -1 : 1))[0]?.[0] || "";
   }
-  const wanted = typeKey === "oil" ? "parfum" : typeKey;
+  const wanted = fragTypeFamily(typeKey);
   const byVolume = new Map();
   for (const r of good) {
-    if (r.concentration && r.concentration !== wanted) continue;
+    if (r.concentration && fragTypeFamily(r.concentration) !== wanted) continue;
     const key = Math.round(r.volume * 100) / 100;
     byVolume.set(key, (byVolume.get(key) || 0) + 1);
   }

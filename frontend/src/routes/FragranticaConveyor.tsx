@@ -90,7 +90,7 @@ function BuildProgress({ draft, timing }: { draft: Draft; timing: Timing }) {
   );
 }
 
-const TYPES: Array<[string, string]> = [["edp", "Парфюмерная вода"], ["edt", "Туалетная вода"], ["parfum", "Духи"], ["cologne", "Одеколон"], ["oil", "Духи-масло"]];
+const TYPES: Array<[string, string]> = [["edp", "Парфюмерная вода (EDP)"], ["edt", "Туалетная вода (EDT)"], ["extrait", "Духи (Extrait)"], ["parfum", "Парфюм (Parfum)"], ["cologne", "Одеколон"], ["oil", "Духи-масло"]];
 const STAGE: Record<string, string> = {
   start: "начинаем", build: "характеристики, поставщики, фото и описание", volumes: "ищем объёмы в PriceMaster", form: "характеристики Ozon", links: "поставщики и цена", photos: "фото и пирамиды", description: "описание ИИ",
 };
@@ -432,7 +432,8 @@ function DraftRow({ draft, targets, timing }: { draft: Draft; targets: WorkTarge
             {busy ? <Loader2 size={12} className="spin" /> : draft.status === "ready" ? <Check size={12} /> : draft.status === "attention" || draft.status === "failed" ? <AlertTriangle size={12} /> : null}
             {STATUS[draft.status] || draft.status}{draft.status === "working" && draft.stage ? `: ${STAGE[draft.stage] || draft.stage}` : ""}
           </span>
-          <select value={draft.typeKey} disabled={!editable} onChange={(e) => patch.mutate({ typeKey: e.target.value })} aria-label="Тип">
+          <select value={draft.typeKey || ""} disabled={!editable} onChange={(e) => patch.mutate({ typeKey: e.target.value })} aria-label="Тип">
+            <option value="" disabled>— выберите вид —</option>
             {TYPES.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
           </select>
           <b className="fr-conv-vol">{draft.volume} мл{draft.tester ? " · тестер" : ""}</b>

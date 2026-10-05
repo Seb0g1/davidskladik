@@ -211,6 +211,7 @@ function ImproveCard({ item, picked, onPick, onApprove, onSkip, onRestore, onReb
         <div className="ci-note">Фрагрантика просит подождать — соберём сами в {new Date(item.retryAt).toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" })}</div>
       ) : null}
       {item.brandMatched === false && editable ? <BrandPicker item={item} /> : null}
+      {/^(Вид меняется|Не выбран вид)/.test(String(item.error || "")) ? <TypePicker item={item} /> : null}
       {item.exports.length ? (
         <div className="ci-exports">
           {item.exports.map((e, i) => (
@@ -291,6 +292,32 @@ export function ImproveAdd({ compact = false }: { compact?: boolean }) {
       </button>
       {compact ? null : <small>Один товар — это его карточки сразу в Ozon и на Маркете. Сначала самые продаваемые за 90 дней. До одобрения ничего не отправляется.</small>}
     </form>
+  );
+}
+
+// EDP — парфюмерная вода, EDT — туалетная вода, Extrait / exdp — духи, Parfum — парфюм
+const CARD_TYPES: Array<[string, string]> = [["edp", "Парфюмерная вода"], ["edt", "Туалетная вода"], ["extrait", "Духи (Extrait)"], ["parfum", "Парфюм (Parfum)"], ["cologne", "Одеколон"]];
+
+/** «Вид меняется» / «Не выбран вид»: a person picks the type; the card is rebuilt with it and keeps it. */
+function TypePicker({ item }: { item: Item }) {
+  const queryClient = useQueryClient();
+  const pick = useMutation({
+    mutationFn: (typeKey: string) => apiJson(`/api/fragrantica/drafts/${item.id}`, { method: "PATCH", body: JSON.stringify({ typeKey }) }),
+    onSuccess: (_r, typeKey) => {
+      toast.success(`Вид: ${CARD_TYPES.find(([key]) => key === typeKey)?.[1] || typeKey} — карточка пересобирается`);
+      queryClient.invalidateQueries({ queryKey: ["card-improve"] });
+    },
+    onError: (error) => toast.error(errorMessage(error)),
+  });
+  return (
+    <div className="ci-brand">
+      <span className="ci-brand-title"><AlertTriangle size={13} /> Выберите вид — с ним соберётся новое название:</span>
+      <div className="ci-brand-list">
+        {CARD_TYPES.map(([key, label]) => (
+          <button key={key} type="button" className="ci-brand-chip" disabled={pick.isPending} onClick={() => pick.mutate(key)}>{label}</button>
+        ))}
+      </div>
+    </div>
   );
 }
 

@@ -70,3 +70,17 @@ test("uncertain: «probable» with a reason, never «exact»", () => {
   assert.equal(out.length, 2);
   assert.ok(out.every((x) => x.result.confidence === "probable"));
 });
+
+test("Extrait and Parfum: one strength, told apart by the extrait flag", () => {
+  const m = require("../lib/perfume-match");
+  const ex = m.parsePerfumeName("Ex Nihilo Fleur Narcotique Extrait de Parfum 50ml");
+  assert.equal(ex.concentration, "parfum");
+  assert.equal(ex.extrait, true);
+  assert.equal(m.parsePerfumeName("Mancera Red Tobacco Intense Духи 120 мл").extrait, true);
+  assert.equal(m.parsePerfumeName("Lengling El Pasajero No 1 exdp 50ml").extrait, true);
+  const pf = m.parsePerfumeName("Dior Sauvage Parfum 100ml");
+  assert.equal(pf.concentration, "parfum");
+  assert.equal(pf.extrait, false);
+  assert.equal(m.parsePerfumeName("Dior Sauvage Парфюм мужской 100 мл").concentration, "parfum");
+  assert.equal(m.parsePerfumeName("Dior Sauvage Парфюмерная вода 100 мл").concentration, "edp");
+});

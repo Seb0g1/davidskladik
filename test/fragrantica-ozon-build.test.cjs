@@ -14,7 +14,7 @@ const ctx = vm.createContext({});
 vm.runInContext(`${source}
 this.api = { FRAG_OZON_ATTR, buildFragranticaOzonName, buildFragranticaOfferId, fragranticaUniqueOfferId, fragOzonDimensions,
   buildFragranticaCompositionText, matchFragranticaClassification, fragGenderValues, buildFragranticaOzonPrefill,
-  buildFragranticaOzonItem, fragranticaNextOzonLimitReset, isOzonLimitErrorText, fragOzonGuessTypeKey, buildFragranticaHashtags };`, ctx);
+  buildFragranticaOzonItem, fragranticaNextOzonLimitReset, isOzonLimitErrorText, fragOzonGuessTypeKey, fragExplicitTypeKey, buildFragranticaHashtags };`, ctx);
 const b = ctx.api;
 const plain = (value) => JSON.parse(JSON.stringify(value));
 
@@ -148,6 +148,9 @@ test("limit reset: Ozon reset_at, else next 00:05 UTC (03:05 MSK)", () => {
 test("type guess and hashtags", () => {
   assert.equal(b.fragOzonGuessTypeKey({ name: "Sauvage Eau de Toilette" }), "edt");
   assert.equal(b.fragOzonGuessTypeKey({ name: "Sauvage" }), "edp");
+  assert.equal(b.fragOzonGuessTypeKey({ name: "Ombre Nomade Extrait" }), "extrait");
+  assert.equal(b.fragOzonGuessTypeKey({ name: "Sauvage Parfum" }), "parfum");
+  assert.equal(b.fragExplicitTypeKey({ name: "Sauvage" }), "");
   assert.equal(b.buildFragranticaHashtags({ perfume: { brand: "Maison Margiela" }, typeKey: "edp" }), "#парфюмерная_вода #оригинальная_парфюмерия #maison_margiela");
 });
 
@@ -319,7 +322,13 @@ test("conveyor: volumes from PriceMaster rows — type by rows, no testers/sampl
   // the name says EDP → only EDP rows (and rows without a concentration)
   const edp = plain(ctx.conv.planFragranticaVolumes([...rows, { name: "Dior Sauvage Eau de Parfum 60ml" }], { brand: "Dior", name: "Sauvage Eau de Parfum" }));
   assert.equal(edp.typeKey, "edp");
-  assert.deepEqual(plain(ctx.conv.planFragranticaVolumes([], { brand: "Dior", name: "Sauvage" })), { typeKey: "edp", volumes: [] });
+  // nothing names the type → no default «парфюмерная вода»: a person chooses
+  assert.deepEqual(plain(ctx.conv.planFragranticaVolumes([], { brand: "Dior", name: "Sauvage" })), { typeKey: "", volumes: [] });
+  // Extrait rows → «духи», bare Parfum rows → «парфюм»; both fit either card
+  const ex = plain(ctx.conv.planFragranticaVolumes([{ name: "Dior Sauvage Elixir Extrait 60ml" }, { name: "Dior Sauvage Elixir Extrait 100ml" }], { brand: "Dior", name: "Sauvage Elixir" }));
+  assert.equal(ex.typeKey, "extrait");
+  const pf = plain(ctx.conv.planFragranticaVolumes([{ name: "Dior Sauvage Elixir Parfum 60ml" }, { name: "Dior Sauvage Elixir Parfum 100ml" }], { brand: "Dior", name: "Sauvage Elixir" }));
+  assert.equal(pf.typeKey, "parfum");
 });
 
 test("conveyor: volume already in a shop — live export or a warehouse card with that volume", () => {

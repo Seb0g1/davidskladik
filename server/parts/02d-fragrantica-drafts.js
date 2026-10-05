@@ -607,7 +607,7 @@ async function existingCardFacts(offerId) {
     }
     return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
   };
-  const vote = voteBy((p) => (p.type === "oil" ? "oil" : DRAFT_TYPE_BY_CONCENTRATION[p.concentration]));
+  const vote = voteBy((p) => (p.type === "oil" ? "oil" : p.concentration === "parfum" ? (p.extrait ? "extrait" : "parfum") : DRAFT_TYPE_BY_CONCENTRATION[p.concentration]));
   const voteGender = voteBy((p) => ({ men: "male", women: "female", unisex: "unisex" }[p.gender]));
   const links = await prisma.$queryRawUnsafe(
     `SELECT l.exact_name AS name FROM product_links l JOIN warehouse_products w ON w.id = l.product_id
@@ -621,6 +621,7 @@ async function existingCardFacts(offerId) {
   const cardNames = cards.map((r) => r.name);
   return {
     typeKey: vote(linkNames) || vote(ozonNames) || vote(cardNames),
+    ozonTypeKey: vote(ozonNames),
     gender: voteGender(ozonNames) || voteGender(cardNames) || voteGender(linkNames),
   };
 }
@@ -697,10 +698,27 @@ async function buildFragranticaCardDraft(draft) {
     if (facts.gender) perfume = { ...perfume, gender: facts.gender };
   }
   parts.perfume = Date.now() - buildStartedAt;
-  // the type is known before the form: the draft's own; an existing card keeps its product's type; else the guess
-  const existingType = !FRAG_OZON_TYPES.some((t) => t.key === draft.type_key) && draft.data?.existing?.offerId
-    ? await existingCardTypeKey(draft.data.existing.offerId).catch(() => null) : null;
-  const typeKey = FRAG_OZON_TYPES.some((t) => t.key === draft.type_key) ? draft.type_key : existingType || fragOzonGuessTypeKey(perfume);
+  // The type: chosen by hand (typeChosen) wins; an improvement recomputes its product's type on every build (a saved
+  // type_key may be the old «парфюмерная вода» default); a new card takes the type its supplier rows / Fragrantica
+  // name say. Nothing says it → no default: the draft waits for a person (EDT and Extrait became EDP that way).
+  const chosenType = FRAG_OZON_TYPES.some((t) => t.key === draft.type_key) ? draft.type_key : "";
+  const improving = Boolean(draft.data?.existing?.offerId);
+  const cardFacts = improving ? await existingCardFacts(draft.data.existing.offerId).catch(() => ({})) : {};
+  const typeKey = (draft.data?.typeChosen && chosenType) || (improving ? cardFacts.typeKey : "") || chosenType || fragExplicitTypeKey(perfume) || "";
+  if (!typeKey) {
+    return updateFragranticaDraft(draft.id, {
+      status: "attention", stage: null,
+      error: "Не выбран вид: ни поставщики, ни Фрагрантика его не называют. Выберите: парфюмерная вода, туалетная вода, духи (Extrait) или парфюм (Parfum).",
+    });
+  }
+  // the old title on Ozon is the reference: a new title of another type («туалетная» → «парфюмерная») waits for a person
+  if (improving && !draft.data?.typeChosen && cardFacts.ozonTypeKey && fragTypeFamily(cardFacts.ozonTypeKey) !== fragTypeFamily(typeKey)) {
+    const label = (key) => fragOzonTypeByKey(key).nameLabel;
+    return updateFragranticaDraft(draft.id, {
+      status: "attention", stage: null, type_key: typeKey,
+      error: `Вид меняется: на Ozon «${label(cardFacts.ozonTypeKey)}», у поставщиков «${label(typeKey)}». Выберите вид вручную — тогда карточка соберётся с ним.`,
+    });
+  }
   // an improvement of an existing card only for the same perfume; a manual choice (perfumeChosen) is trusted
   if (draft.data?.existing?.offerId && !draft.data?.perfumeChosen) {
     const mismatch = await existingCardPerfumeMismatch(draft.data.existing.offerId, perfume).catch(() => "");
@@ -1309,7 +1327,13 @@ app.patch("/api/fragrantica/drafts/:id", requireAdmin, async (request, response,
       // a shop of a new style needs its «Пирамида аромата» — rebuild only the photos part (cached otherwise)
       if (targets.some((t) => !data.images?.notes?.[t.style])) rebuild = true;
     }
+    // a type picked by hand is final: builds keep it (no recomputation, no Ozon check)
+    if (body.typeKey !== undefined && FRAG_OZON_TYPES.some((t) => t.key === body.typeKey) && !data.typeChosen) {
+      data.typeChosen = true;
+      if (body.typeKey === (draft.type_key || data.typeKey)) rebuild = true;
+    }
     if (body.typeKey !== undefined && FRAG_OZON_TYPES.some((t) => t.key === body.typeKey) && body.typeKey !== (draft.type_key || data.typeKey)) {
+      data.typeChosen = true;
       fields.type_key = body.typeKey;
       rebuild = true;
     }

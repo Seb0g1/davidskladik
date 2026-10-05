@@ -57,6 +57,46 @@ async function listOzonActionProducts(account, actionId) {
   return products;
 }
 
+// Scheduled auto-add: Ozon also books products into an offer from a future date («Участвуют с 14.10» in the
+// cabinet). They are not participants yet — /v1/actions/products shows 0 — so they live in a separate list per
+// auto_add_date and are removed from it with /v1/actions/auto-add/products/delete.
+const OZON_AUTO_ADD_PAGE = 100;
+async function listOzonActionAutoAddProducts(account, actionId, autoAddDate) {
+  const products = [];
+  for (let offset = 0; offset < 20000; offset += OZON_AUTO_ADD_PAGE) {
+    const data = await ozonRequest("/v1/actions/auto-add/products/list", { action_id: actionId, auto_add_date: autoAddDate, limit: OZON_AUTO_ADD_PAGE, offset }, account);
+    const batch = data?.products || data?.result?.products || [];
+    products.push(...batch);
+    if (batch.length < OZON_AUTO_ADD_PAGE) break;
+  }
+  return products;
+}
+
+async function guardOzonActionAutoAdd(account, action, { dryRun }) {
+  const out = [];
+  for (const autoAddDate of Array.isArray(action.auto_add_dates) ? action.auto_add_dates : []) {
+    const entry = { date: autoAddDate, found: 0, removed: 0, modes: {} };
+    try {
+      const products = await listOzonActionAutoAddProducts(account, action.id, autoAddDate);
+      // «produсt_id» with a Cyrillic «с» is how the docs spell it in one example — accept every spelling
+      const ids = products.filter(shouldRemoveFromOzonAction)
+        .map((product) => String(product.product_id ?? product["produсt_id"] ?? product.id ?? "").trim()).filter(Boolean);
+      entry.modes = products.reduce((acc, product) => { const mode = String(product.add_mode || "?"); acc[mode] = (acc[mode] || 0) + 1; return acc; }, {});
+      entry.found = ids.length;
+      if (!dryRun) {
+        for (let i = 0; i < ids.length; i += 1000) {
+          const data = await ozonRequest("/v1/actions/auto-add/products/delete", { action_id: action.id, auto_add_date: autoAddDate, product_ids: ids.slice(i, i + 1000) }, account);
+          entry.removed += (data?.product_ids || data?.result?.product_ids || []).length;
+        }
+      }
+    } catch (error) {
+      entry.error = error?.message || String(error);
+    }
+    if (entry.found || entry.error) out.push(entry);
+  }
+  return out;
+}
+
 async function runOzonActionGuard({ dryRun = false } = {}) {
   if (ozonActionGuardRunning) return { status: "busy" };
   ozonActionGuardRunning = true;
@@ -75,6 +115,16 @@ async function runOzonActionGuard({ dryRun = false } = {}) {
         continue;
       }
       for (const action of actions) {
+        // products booked from a future date first: they are not counted as participants yet
+        const scheduled = await guardOzonActionAutoAdd(account, action, { dryRun }).catch((error) => [{ error: error?.message || String(error) }]);
+        for (const item of scheduled) {
+          result.found += item.found || 0;
+          result.removed += item.removed || 0;
+          accountResult.actions.push({ id: action.id, title: action.title, autoAddDate: item.date, found: item.found || 0, removed: item.removed || 0, modes: item.modes, error: item.error || undefined });
+          if (!dryRun) {
+            logger.info("ozon_action_guard_auto_add", { account: accountResult.account, actionId: action.id, title: action.title, autoAddDate: item.date, found: item.found || 0, removed: item.removed || 0, error: item.error || null });
+          }
+        }
         if (!Number(action.participating_products_count)) continue;
         const entry = { id: action.id, title: action.title, participating: action.participating_products_count, found: 0, removed: 0, rejected: [] };
         try {
@@ -96,7 +146,8 @@ async function runOzonActionGuard({ dryRun = false } = {}) {
         }
         result.removed += entry.removed;
         result.rejected += entry.rejected.length;
-        if (entry.found || entry.error) {
+        // every offer with our products is reported (with add modes): «found 0» alone hid why nothing left an offer
+        if (entry.participating || entry.found || entry.error) {
           accountResult.actions.push({ ...entry, rejected: entry.rejected.slice(0, 20), rejectedTotal: entry.rejected.length });
           if (!dryRun) {
             logger.info("ozon_action_guard_action", {

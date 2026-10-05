@@ -58,7 +58,7 @@ type OzonForm = {
   targets: Target[];
   account: { id: string; name: string };
   types: Array<{ key: string; typeId: number; label: string; nameLabel: string }>;
-  typeKey: string; typeId: number; volume: string; tester: boolean; offerId: string; name: string; vat: string;
+  typeKey: string; typeKeyExplicit?: string; typeId: number; volume: string; tester: boolean; offerId: string; name: string; vat: string;
   dims: { depth: number; width: number; height: number; weight: number };
   attributes: FormAttribute[];
   brandMatched: boolean;
@@ -741,7 +741,8 @@ function AddToShopsForm({ perfume, workShops, onCancel }: { perfume: Perfume; wo
     staleTime: 5 * 60_000,
   });
   useEffect(() => {
-    if (options.data && !typeKey) setTypeKey(options.data.typeKey);
+    // only a type the perfume name states; otherwise the field stays empty and «Далее» waits for a choice
+    if (options.data && !typeKey && options.data.typeKeyExplicit) setTypeKey(options.data.typeKeyExplicit);
   }, [options.data, typeKey]);
 
   const ready = Number(volume.replace(",", ".")) > 0 && Boolean(typeKey);
@@ -765,8 +766,9 @@ function AddToShopsForm({ perfume, workShops, onCancel }: { perfume: Perfume; wo
       {options.isError ? <div className="inline-error">{errorMessage(options.error)}</div> : null}
       <div className="fr-form-grid">
         <div className="fr-field">
-          <span>Тип</span>
+          <span>Тип<span className="fr-req">*</span></span>
           <select value={typeKey} onChange={(e) => setTypeKey(e.target.value)}>
+            <option value="" disabled>— выберите вид —</option>
             {(options.data?.types || []).map((t) => <option key={t.key} value={t.key}>{t.nameLabel}</option>)}
           </select>
         </div>
