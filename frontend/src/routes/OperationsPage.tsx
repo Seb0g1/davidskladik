@@ -653,7 +653,7 @@ export function OperationsPage() {
   const [sendLimit, setSendLimit] = useState(5000);
   const [stock, setStock] = useState(3);
   const [threshold, setThreshold] = useState(40);
-  const [draftLimit, setDraftLimit] = useState(20);
+  const draftLimit = 20;
   const [selectedJobId, setSelectedJobId] = useState("");
   const queryClient = useQueryClient();
   const jobsQuery = useQuery({
@@ -713,37 +713,68 @@ export function OperationsPage() {
         <Stat label="В очереди" value={queuedCount} tone={queuedCount ? "warn" : "success"} icon={<Clock3 size={18} />} />
         <Stat label="Ошибки" value={failedCount} tone={failedCount ? "warn" : "success"} icon={<AlertTriangle size={18} />} />
       </section>
-      <section className="control-grid">
-        <label>Лимит товаров<input type="number" value={limit} onChange={(event) => setLimit(numberValue(event.target.value, 30000))} /></label>
-        <label>Лимит отправки<input type="number" value={sendLimit} onChange={(event) => setSendLimit(numberValue(event.target.value, 5000))} /></label>
-        <label>Остаток восстановления<input type="number" value={stock} onChange={(event) => setStock(numberValue(event.target.value, 3))} /></label>
-        <label>Качество до<input type="number" value={threshold} onChange={(event) => setThreshold(numberValue(event.target.value, 40))} /></label>
-        <label>AI drafts<input type="number" value={draftLimit} onChange={(event) => setDraftLimit(numberValue(event.target.value, 20))} /></label>
-      </section>
-      <section className="action-strip">
-        <button className="primary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate("linked-supplier-recovery")}>Восстановить привязанные</button>
-        <button className="primary-action" disabled={startMutation.isPending} onClick={() => { if (!window.confirm("Операция изменит данные на маркетплейсе. Продолжить?")) return; startMutation.mutate("ozon-linked-unarchive"); }}>Вернуть Ozon автоархив</button>
-        <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate("restore-archived-stock")}>Восстановить архив</button>
-        <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate("initialize-linked-ozon-stock")}>Инициализировать остатки Ozon (привязки)</button>
-        <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate({ type: "scan-and-fix-zero-stock", extraPayload: { dryRun: true } })}>Нулевые остатки: проверить (dry run)</button>
-        <button className="secondary-action" disabled={startMutation.isPending} onClick={() => { if (!window.confirm("Отправить остатки на маркетплейсы для всех привязанных товаров с нулём? Продолжить?")) return; startMutation.mutate({ type: "scan-and-fix-zero-stock", extraPayload: { dryRun: false } }); }}>Нулевые остатки: исправить</button>
-        <button className="secondary-action" disabled={startMutation.isPending} onClick={() => { if (!window.confirm("Принудительная инициализация — включит также товары, у которых ранее исчез поставщик, но сейчас привязка восстановлена. Продолжить?")) return; startMutation.mutate({ type: "initialize-linked-ozon-stock", extraPayload: { force: true } }); }}>Инициализировать Ozon (принудительно)</button>
-        <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate("yandex-card-quality-ai-drafts")}>AI качество карточек</button>
-        <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate("yandex-price-push")}>Отправить новые цены Yandex</button>
-        <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate("sales-automation-run")}>Запустить автоматизацию продаж</button>
-        <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate("brand-index-rebuild")}>Пересобрать бренды</button>
-        <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate({ type: "repair-dalik-disambiguation-links", extraPayload: { dryRun: true } })}>Далик: проверить привязки (dry run)</button>
-        <button className="secondary-action" disabled={startMutation.isPending} onClick={() => { if (!window.confirm("Исправить неверные привязки Далик? Это обновит exactName/sourceRowId в БД.")) return; startMutation.mutate({ type: "repair-dalik-disambiguation-links", extraPayload: { dryRun: false } }); }}>Далик: исправить привязки</button>
-        <button className="secondary-action" disabled={startMutation.isPending} onClick={() => { if (!window.confirm("Операция изменит данные на маркетплейсе. Продолжить?")) return; startMutation.mutate("repair-pricemaster-group-links"); }}>Починить привязки Ozon/Yandex</button>
-        <button
-          className="secondary-action"
-          disabled={bulkStaleRecovery.isPending}
-          onClick={() => { if (!window.confirm("Найти все товары со устаревшими PM-привязками и починить их (обновить source_row_id + пересчитать остатки)? Может занять несколько минут.")) return; bulkStaleRecovery.mutate(); }}
-          title="Ищет товары, у которых source_row_id указывает на неактивную PM-запись, обновляет его до актуального и пересчитывает остатки"
-        >
-          {bulkStaleRecovery.isPending ? <Loader2 className="spin" size={14} /> : null} Починить все стальные привязки (batch)
-        </button>
-        <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate("health-deep")}>Глубокий health</button>
+      <details className="ops-params">
+        <summary>Параметры запуска</summary>
+        <section className="control-grid">
+          <label>Лимит товаров<input type="number" value={limit} onChange={(event) => setLimit(numberValue(event.target.value, 30000))} /></label>
+          <label>Лимит отправки<input type="number" value={sendLimit} onChange={(event) => setSendLimit(numberValue(event.target.value, 5000))} /></label>
+          <label>Остаток восстановления<input type="number" value={stock} onChange={(event) => setStock(numberValue(event.target.value, 3))} /></label>
+          <label>Качество до<input type="number" value={threshold} onChange={(event) => setThreshold(numberValue(event.target.value, 40))} /></label>
+        </section>
+      </details>
+      {/* кнопки по задачам; «проверить» (ничего не меняет) стоит рядом с «исправить» */}
+      <section className="ops-groups">
+        <article className="ops-group">
+          <h3>Остатки и архив</h3>
+          <div className="ops-actions">
+            <button className="primary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate("linked-supplier-recovery")}>Восстановить привязанные</button>
+            <button className="secondary-action" disabled={startMutation.isPending} onClick={() => { if (!window.confirm("Операция изменит данные на маркетплейсе. Продолжить?")) return; startMutation.mutate("ozon-linked-unarchive"); }}>Вернуть из автоархива Ozon</button>
+            <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate("restore-archived-stock")}>Восстановить архив</button>
+          </div>
+          <div className="ops-pair">
+            <span>Нулевые остатки</span>
+            <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate({ type: "scan-and-fix-zero-stock", extraPayload: { dryRun: true } })}>Проверить</button>
+            <button className="secondary-action is-danger" disabled={startMutation.isPending} onClick={() => { if (!window.confirm("Отправить остатки на маркетплейсы для всех привязанных товаров с нулём? Продолжить?")) return; startMutation.mutate({ type: "scan-and-fix-zero-stock", extraPayload: { dryRun: false } }); }}>Исправить</button>
+          </div>
+          <div className="ops-pair">
+            <span>Остатки Ozon по привязкам</span>
+            <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate("initialize-linked-ozon-stock")}>Заполнить</button>
+            <button className="secondary-action is-danger" disabled={startMutation.isPending} onClick={() => { if (!window.confirm("Принудительная инициализация — включит также товары, у которых ранее исчез поставщик, но сейчас привязка восстановлена. Продолжить?")) return; startMutation.mutate({ type: "initialize-linked-ozon-stock", extraPayload: { force: true } }); }}>Принудительно</button>
+          </div>
+        </article>
+        <article className="ops-group">
+          <h3>Привязки</h3>
+          <div className="ops-actions">
+            <button className="secondary-action" disabled={startMutation.isPending} onClick={() => { if (!window.confirm("Операция изменит данные на маркетплейсе. Продолжить?")) return; startMutation.mutate("repair-pricemaster-group-links"); }}>Починить привязки Ozon / Яндекс</button>
+            <button
+              className="secondary-action"
+              disabled={bulkStaleRecovery.isPending}
+              onClick={() => { if (!window.confirm("Найти все товары с устаревшими привязками PriceMaster и починить их (обновить строку и пересчитать остатки)? Может занять несколько минут.")) return; bulkStaleRecovery.mutate(); }}
+              title="Ищет товары, у которых привязка указывает на неактивную строку PriceMaster, переводит на актуальную и пересчитывает остатки"
+            >
+              {bulkStaleRecovery.isPending ? <Loader2 className="spin" size={14} /> : null} Починить устаревшие привязки
+            </button>
+          </div>
+          <div className="ops-pair">
+            <span>Привязки Далика</span>
+            <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate({ type: "repair-dalik-disambiguation-links", extraPayload: { dryRun: true } })}>Проверить</button>
+            <button className="secondary-action is-danger" disabled={startMutation.isPending} onClick={() => { if (!window.confirm("Исправить неверные привязки Далик? Это обновит exactName/sourceRowId в БД.")) return; startMutation.mutate({ type: "repair-dalik-disambiguation-links", extraPayload: { dryRun: false } }); }}>Исправить</button>
+          </div>
+        </article>
+        <article className="ops-group">
+          <h3>Цены и справочники</h3>
+          <div className="ops-actions">
+            <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate("yandex-price-push")}>Отправить новые цены Яндекс</button>
+            <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate("sales-automation-run")}>Запустить автоматизацию продаж</button>
+            <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate("brand-index-rebuild")}>Пересобрать бренды</button>
+          </div>
+        </article>
+        <article className="ops-group">
+          <h3>Служебное</h3>
+          <div className="ops-actions">
+            <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate("health-deep")}>Глубокая проверка системы</button>
+          </div>
+        </article>
       </section>
       {bulkStaleRecovery.data && (
         <div className="success-strip">
@@ -752,15 +783,6 @@ export function OperationsPage() {
       )}
       {bulkStaleRecovery.error && <div className="inline-error">{errorMessage(bulkStaleRecovery.error)}</div>}
       {startMutation.error && <div className="inline-error">{errorMessage(startMutation.error)}</div>}
-      <section className="table-panel supplier-cart-panel">
-        <div className="section-title">
-          <div>
-            <span>Автокорзина PriceMaster</span>
-            <h3>Черновики закупок по заказам вынесены в отдельный раздел</h3>
-          </div>
-          <a className="secondary-action" href="/app/supplier-cart">Открыть автокорзину</a>
-        </div>
-      </section>
       <section className="table-panel">
         {jobsQuery.isLoading && <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю операции...</div>}
         {jobs.map((job) => (
