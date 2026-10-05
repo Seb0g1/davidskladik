@@ -123,6 +123,12 @@ const ReadyToShipLineSchema = z.object({
   orderedAt: z.coerce.string().optional().nullable(),
   status: z.coerce.string().optional().default(""),
   isExpress: z.boolean().optional().default(false),
+  // already sent to a supplier (a live picking row) — shown as ordered, can't be selected again
+  ordered: z.object({
+    status: z.coerce.string().optional().default(""),
+    requestDocId: z.coerce.string().optional().default(""),
+    supplierName: z.coerce.string().optional().default(""),
+  }).optional().nullable(),
 }).passthrough();
 
 const ReadyToShipResponseSchema = z.object({
@@ -214,6 +220,7 @@ function ReadyToShipPanel() {
   const mpOrderMutation = useMutation({
     mutationFn: ({ line, option }: { line: ReadyToShipLine; option: SupplierAltOption }) =>
       fetchJson("/api/ready-to-ship/order", MpOrderResultSchema, mutationBody({
+        key: line.key,
         offerId: line.offerId,
         partnerId: option.partnerId,
         rowId: option.rowId,
@@ -299,6 +306,10 @@ function ReadyToShipPanel() {
         })
       : mpLines;
   }, [q, mpLines]);
+  // only lines not yet sent to a supplier can be ordered (a stale page used to send them a second time)
+  const orderableMpLines = useMemo(() => filteredMpLines.filter((line) => !line.ordered), [filteredMpLines]);
+  const selectedOrderable = orderableMpLines.filter((line) => selectedKeys.has(line.key)).length;
+  const allOrderableSelected = orderableMpLines.length > 0 && selectedOrderable === orderableMpLines.length;
 
   const rows = listQuery.data?.rows || [];
   const filteredRows = useMemo(() => {
@@ -341,23 +352,23 @@ function ReadyToShipPanel() {
         <div><span>Маркетплейсы</span><h3>Заказы ожидающие отгрузки</h3></div>
         {filteredMpLines.length > 0 ? (
           <div className="sc-filter-row">
-            {selectedKeys.size > 0 ? (
+            {selectedOrderable > 0 ? (
               <button
                 className="primary-action"
                 type="button"
                 disabled={batchOrderMutation.isPending}
-                onClick={() => batchOrderMutation.mutate(filteredMpLines.filter((l) => selectedKeys.has(l.key)))}
+                onClick={() => batchOrderMutation.mutate(orderableMpLines.filter((l) => selectedKeys.has(l.key)))}
               >
                 {batchOrderMutation.isPending ? <Loader2 className="spin" size={14} /> : <Package size={14} />}
-                В PM — {selectedKeys.size} шт.
+                В PM — {selectedOrderable} шт.
               </button>
             ) : null}
             <button
               className="secondary-action"
               type="button"
-              onClick={() => setSelectedKeys(selectedKeys.size === filteredMpLines.length ? new Set() : new Set(filteredMpLines.map((l) => l.key)))}
+              onClick={() => setSelectedKeys(allOrderableSelected ? new Set() : new Set(orderableMpLines.map((l) => l.key)))}
             >
-              {selectedKeys.size === filteredMpLines.length ? "Снять всё" : "Выбрать всё"}
+              {allOrderableSelected ? "Снять всё" : "Выбрать всё"}
             </button>
           </div>
         ) : null}
@@ -379,13 +390,15 @@ function ReadyToShipPanel() {
           const isMissingPending = mpMissingMutation.isPending && (mpMissingMutation.variables as ReadyToShipLine)?.key === line.key;
           const missingSuccess = mpMissingMutation.isSuccess && (mpMissingMutation.variables as ReadyToShipLine)?.key === line.key;
           const isOrderPending = mpOrderMutation.isPending && (mpOrderMutation.variables as { line: ReadyToShipLine })?.line?.key === line.key;
-          const isSelected = selectedKeys.has(line.key);
+          const isSelected = selectedKeys.has(line.key) && !line.ordered;
           return (
-            <article className={`supplier-cart-row${isSelected ? " selected" : ""}`} key={line.key}>
+            <article className={`supplier-cart-row${isSelected ? " selected" : ""}${line.ordered ? " is-ordered" : ""}`} key={line.key}>
               <span className="checkline">
                 <input
                   type="checkbox"
                   checked={isSelected}
+                  disabled={Boolean(line.ordered)}
+                  title={line.ordered ? "Уже заказан у поставщика" : undefined}
                   onChange={() => setSelectedKeys((prev) => {
                     const next = new Set(prev);
                     if (next.has(line.key)) next.delete(line.key); else next.add(line.key);
@@ -394,6 +407,11 @@ function ReadyToShipPanel() {
                 />
                 <MarketplaceBadge marketplace={line.marketplace} />
                 {line.isExpress ? <span className="pill warn">Экспресс</span> : null}
+                {line.ordered ? (
+                  <span className="pill ok">
+                    Заказан{line.ordered.supplierName ? ` · ${line.ordered.supplierName}` : ""}{line.ordered.requestDocId ? ` · док ${line.ordered.requestDocId}` : ""}
+                  </span>
+                ) : null}
                 <span>{line.orderId || line.postingNumber || "-"} · {line.offerId}</span>
               </span>
               <strong>{line.productName || line.offerId}</strong>

@@ -28,8 +28,9 @@ async function listSupplierCartSupplierOptions(offerIdInput = "", { now = new Da
   for (const rows of matches.values()) {
     for (const row of rows || []) {
       if (!row) continue;
-      // Another bottle (a 120 ml row for a 60 ml card) is never offered as a replacement.
-      if (supplierRowVolumeMismatch(product.name, row.name || row.nativeName || "")) continue;
+      // Another bottle (a 500 ml row for a 300 ml card) is never picked automatically; here, in the manual
+      // choice, it is listed last and marked, so a person can still order it on purpose (Redken 300 → 500 ml).
+      const otherVolume = supplierRowVolumeMismatch(product.name, row.name || row.nativeName || "") || "";
       const partnerId = cleanText(row.partnerId);
       const rowId = cleanText(row.rowId);
       if (!partnerId && !rowId) continue;
@@ -37,8 +38,9 @@ async function listSupplierCartSupplierOptions(offerIdInput = "", { now = new Da
       if (seen.has(dedupeKey)) continue;
       seen.add(dedupeKey);
       const stockOnly = supplierUsesStockOnlyPricing(null, row);
-      const available = row.available !== false;
       const price = Number(row.price || 0) || 0;
+      // the volume check alone made the row «unavailable» — judge the row itself
+      const available = otherVolume ? row.active !== false && !row.stopped && price > 0 : row.available !== false;
       // Inactive PM row (OfferRows.Active=0) but NOT a hard-stopped managed supplier:
       // still include so the user can manually order from them (like pm-manual-commit).
       const inactivePm = !row.active && !row.stopped;
@@ -62,6 +64,8 @@ async function listSupplierCartSupplierOptions(offerIdInput = "", { now = new Da
         // Stock-only suppliers are always orderable — price=0 is expected (no purchase price).
         orderable: stockOnly ? true : (available && price > 0),
         inactivePm,
+        otherVolume,
+        rowName: cleanText(row.name || row.nativeName || ""),
       });
     }
   }
@@ -71,6 +75,7 @@ async function listSupplierCartSupplierOptions(offerIdInput = "", { now = new Da
   };
   // Rank: -1=«Наш склад», 0=active+orderable, 1=active+blocked/cutoff, 2=inactive PM, 3=stopped/no_price
   const usableRank = (option) => {
+    if (option.otherVolume) return 4;
     if (option.stockOnly && !option.blocked) return -1;
     if (option.inactivePm) return 2;
     return option.orderable && !option.blocked && !option.cutoffPassed ? 0 : (option.orderable && !option.blocked ? 1 : 3);

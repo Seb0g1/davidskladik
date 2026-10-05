@@ -144,6 +144,33 @@ async function readSupplierCartState() {
   }
 }
 
+// Marketplace order lines already sent to a supplier. The cart's «processed» map lives only in the JSON file,
+// which is off in Postgres mode (JSON_FALLBACK_ENABLED=false) — so a line sent once and still shown on the page
+// was ordered again and PriceMaster added the quantity a second time. The durable record is the picking row:
+// its key is the line key (units «:uN», replacements «|retry:…»). Missing / cancelled / returned rows don't
+// count — those lines may be ordered again. → Map(line key → { status, requestDocId, supplierName }).
+const SUPPLIER_CART_ORDERED_STATUSES = ["open", "picked", "reordered", "return_used"];
+async function supplierCartOrderedKeys(keys = []) {
+  const list = [...new Set(keys.map((key) => cleanText(key).toLowerCase()).filter(Boolean))];
+  const out = new Map();
+  const prisma = getPrisma();
+  if (!list.length || !prisma) return out;
+  const rows = await prisma.$queryRawUnsafe(
+    `SELECT k.key, p.status, p.request_doc_id, p.supplier_name
+       FROM unnest($1::text[]) AS k(key)
+       JOIN supplier_picking_rows p
+         ON lower(p.picking_key) = k.key
+         OR left(lower(p.picking_key), length(k.key) + 1) IN (k.key || ':', k.key || '|')
+      WHERE p.status = ANY($2::text[])
+      ORDER BY p.created_at DESC`,
+    list, SUPPLIER_CART_ORDERED_STATUSES,
+  );
+  for (const row of rows) {
+    if (!out.has(row.key)) out.set(row.key, { status: row.status, requestDocId: cleanText(row.request_doc_id), supplierName: cleanText(row.supplier_name) });
+  }
+  return out;
+}
+
 async function writeSupplierCartState(state = {}) {
   const normalized = normalizeSupplierCartState({
     ...state,

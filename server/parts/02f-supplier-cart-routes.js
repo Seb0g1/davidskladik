@@ -694,7 +694,14 @@ app.get("/api/ready-to-ship", requireStaff, async (request, response, next) => {
       wbResult.status === "rejected" ? `WB: ${wbResult.reason?.message || "ошибка"}` : null,
     ].filter(Boolean);
 
-    response.json({ ok: true, lines: lines.slice(0, limit), total: lines.length, errors });
+    // lines already sent to a supplier are marked: the page shows them as ordered and won't select them
+    const shown = lines.slice(0, limit);
+    const ordered = await supplierCartOrderedKeys(shown.map((line) => line.key)).catch(() => new Map());
+    const marked = shown.map((line) => {
+      const hit = ordered.get(cleanText(line.key).toLowerCase());
+      return hit ? { ...line, ordered: hit } : line;
+    });
+    response.json({ ok: true, lines: marked, total: lines.length, errors });
   } catch (error) {
     next(error);
   }
@@ -755,6 +762,16 @@ app.post("/api/ready-to-ship/order", requireStaff, async (request, response, nex
 
     if (!offerId) return response.status(400).json({ ok: false, error: "offerId is required.", code: "missing_offer_id" });
     if (!partnerId || !rowId) return response.status(400).json({ ok: false, error: "partnerId and rowId are required.", code: "missing_supplier" });
+    // the line is already with a supplier: change the supplier on «Сборка» (the old PM row is removed there)
+    const lineKey = cleanText(request.body?.key).toLowerCase();
+    const alreadyOrdered = lineKey ? (await supplierCartOrderedKeys([lineKey])).get(lineKey) : null;
+    if (alreadyOrdered) {
+      return response.status(409).json({
+        ok: false,
+        code: "already_ordered",
+        error: `Этот заказ уже отправлен поставщику «${alreadyOrdered.supplierName || "?"}»${alreadyOrdered.requestDocId ? ` (док ${alreadyOrdered.requestDocId})` : ""}. Сменить поставщика можно на странице «Сборка».`,
+      });
+    }
 
     const { options } = await listSupplierCartSupplierOptions(offerId);
     const option = pickSupplierCartOption(options, partnerId, rowId);
@@ -815,6 +832,7 @@ app.post("/api/ready-to-ship/batch-order", requireStaff, async (request, respons
     const allOfferIds = [...new Set(lines.map((l) => cleanText(l.offerId)).filter(Boolean))];
     const warehouse = await hydrateSupplierCartWarehouse(await readWarehouse(), allOfferIds);
     const state = await readSupplierCartState();
+    const orderedKeys = await supplierCartOrderedKeys(lines.map((line) => line.key));
 
     const cartRows = [];
     const failed = [];
@@ -827,7 +845,7 @@ app.post("/api/ready-to-ship/batch-order", requireStaff, async (request, respons
       const accountName = cleanText(line.accountName || "");
       const lineKey = cleanText(line.key) || `ready-to-ship|${marketplace}|${orderId || Date.now()}|${offerId}`;
       if (!offerId) { failed.push({ key: lineKey, reason: "missing_offer_id" }); continue; }
-      if (state.processed?.[lineKey]) { failed.push({ key: lineKey, offerId, reason: "already_committed" }); continue; }
+      if (state.processed?.[lineKey] || orderedKeys.has(lineKey.toLowerCase())) { failed.push({ key: lineKey, offerId, reason: "already_committed" }); continue; }
 
       const product = findSupplierCartWarehouseProduct(warehouse, { offerId, marketplace, accountId });
       if (!product) { failed.push({ key: lineKey, offerId, reason: "product_not_found" }); continue; }

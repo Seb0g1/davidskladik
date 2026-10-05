@@ -11587,3 +11587,14 @@ span + .bt-cat-id { margin-left: 6px; }
   .cn-money-grid { grid-template-columns: 1fr; }
   .cn-header-group { border-left: 0; padding-left: 0; }
 }
+
+/* lines already sent to a supplier (cart): dimmed, not selectable */
+.supplier-cart-row.is-ordered { opacity: 0.62; }
+
+/* «Товара не было» on a phone: always in view, scrolls inside itself, light backdrop (blur lags on iPhone) */
+.picking-missing-overlay { backdrop-filter: none; -webkit-backdrop-filter: none; }
+.picking-missing-overlay .picking-missing-modal { max-height: calc(100dvh - 40px); overflow-y: auto; }
+@media (max-width: 640px) {
+  .picking-missing-overlay { padding: 12px; place-items: end center; }
+  .picking-missing-overlay .picking-missing-modal { width: 100%; }
+}

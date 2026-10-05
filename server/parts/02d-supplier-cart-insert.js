@@ -152,9 +152,12 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
     }));
   if (!readyRows.length) return { inserted: [], skipped: rows.length, skippedDetails: skippedNotReady, docIds: [] };
   const state = await readSupplierCartState();
-  const freshRows = readyRows.filter((row) => !state.processed?.[row.key]);
+  // already sent to a supplier (a live picking row) — never ordered twice, whatever «processed» says
+  const orderedKeys = await supplierCartOrderedKeys(readyRows.map((row) => row.key));
+  const isOrdered = (row) => Boolean(state.processed?.[row.key] || orderedKeys.has(cleanText(row.key).toLowerCase()));
+  const freshRows = readyRows.filter((row) => !isOrdered(row));
   const staleSkipped = readyRows
-    .filter((row) => state.processed?.[row.key])
+    .filter(isOrdered)
     .map((row) => ({ key: row.key, offerId: row.offerId, productName: row.productName, skipReason: "already_in_state" }));
   const skippedDetails = [...skippedNotReady, ...staleSkipped];
   if (!freshRows.length) return { inserted: [], skipped: readyRows.length, skippedDetails, docIds: [] };

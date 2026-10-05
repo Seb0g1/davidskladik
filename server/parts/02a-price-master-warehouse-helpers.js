@@ -297,7 +297,7 @@ function supplierAlternativesForDiagnostics(suppliers = [], limit = 5) {
         ? "price_outlier"
         : supplier.available
           ? (supplier.stockOnly || supplier.priceEligible === false ? "stock_only_excluded" : null)
-          : (supplier.stopped ? "supplier_stopped" : "not_available"),
+          : (supplier.volumeMismatch ? `другой объём ${supplier.volumeMismatch} мл` : supplier.stopped ? "supplier_stopped" : "not_available"),
     }));
 }
 

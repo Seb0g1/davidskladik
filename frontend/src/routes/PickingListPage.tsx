@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CalendarDays, Check, CheckCircle2, ChevronDown, ClipboardList, Clock, Copy, Database, Download, Info, Loader2, MoreHorizontal, PackageX, Pencil, RefreshCw, Repeat2, RotateCcw, Search, ShoppingBag, Trash2, Users, Wallet, X, Zap } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { DiagnosticValue } from "../components/DiagnosticValue";
@@ -11,6 +12,7 @@ import { SelectField } from "../components/SelectField";
 import { ListSkeleton } from "../components/Skeleton";
 import { Stat } from "../components/Stat";
 import { SupplierAltPicker } from "../components/SupplierAltPicker";
+import { SupplierPicker, setSupplierColorOrder, supplierColor } from "../components/SupplierPicker";
 import { DailyCartTotalSchema, PickerBalanceSchema, PickerBalancesSchema, PickerMyDaySchema, PickerReportSchema, PickerSpendingSchema, SupplierCartCancelSchema, SupplierLedgerPaymentSchema, SupplierPickingInvoiceSchema, SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema, SupplierReplaceResponseSchema } from "../types";
 import { PmSearchPanel } from "./SupplierCartPage";
 import { compactDate, copyPlainText, errorMessage, money, numberValue } from "../lib/common";
@@ -281,6 +283,7 @@ export function PickingListPage() {
   const balancePanelRef = useRef<HTMLDivElement>(null);
   const currentSupplierRef = useRef<string | null>(null);
   const [allKnownSuppliers, setAllKnownSuppliers] = useState<string[]>([]);
+  const [allKnownCounts, setAllKnownCounts] = useState<Record<string, number>>({});
 
   const updateMutation = useMutation({
     mutationFn: ({ key, nextStatus, snoozeDays, permanent, pickedQuantity, pricePaidRub, pricePaid }: { key: string; nextStatus: string; snoozeDays?: number; permanent?: boolean; pickedQuantity?: number; pricePaidRub?: number; pricePaid?: number }) => {
@@ -490,7 +493,13 @@ export function PickingListPage() {
     if (supplier) return;
     const fresh = listQuery.data?.suppliers ?? [];
     if (fresh.length > 0) setAllKnownSuppliers(fresh);
-  }, [listQuery.data?.suppliers, supplier]);
+    const counts: Record<string, number> = {};
+    for (const row of listQuery.data?.rows ?? []) {
+      const name = row.supplierName || "";
+      if (name) counts[name] = (counts[name] || 0) + 1;
+    }
+    setAllKnownCounts(counts);
+  }, [listQuery.data?.suppliers, listQuery.data?.rows, supplier]);
 
   // Auto-reset supplier filter when the selected supplier no longer has open items
   useEffect(() => {
@@ -585,6 +594,13 @@ export function PickingListPage() {
   // When a supplier filter is active, the API only returns that supplier in the list,
   // so use the full snapshot captured during the last unfiltered fetch instead.
   const displaySuppliers = supplier && allKnownSuppliers.length > 0 ? allKnownSuppliers : suppliers;
+  // Colour order follows the full supplier list, so filtering never repaints a supplier.
+  setSupplierColorOrder([...displaySuppliers.map(String), ...rows.map((row) => row.supplierName || "")]);
+  const chooseSupplier = (next: string) => {
+    setSupplier(next);
+    // Start from the top of the chosen supplier, not mid-way through the previous one.
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
   const supplierLedger = listQuery.data?.supplierLedger || {};
   const invoiceRows = invoiceQuery.data?.rows || [];
   const myBalance = myBalanceQuery.data?.total ?? 0;
@@ -1082,14 +1098,7 @@ export function PickingListPage() {
       {/* Mobile: supplier filter + search (shown only on mobile, desktop uses picking-filters below) */}
       {displaySuppliers.length > 0 ? (
         <div className="picking-supplier-mobile-filter">
-          <select
-            className="picking-supplier-mobile-select"
-            value={supplier}
-            onChange={(e) => setSupplier(e.target.value)}
-          >
-            <option value="">Все поставщики</option>
-            {displaySuppliers.map((s) => <option key={String(s)} value={String(s)}>{String(s)}</option>)}
-          </select>
+          <SupplierPicker value={supplier} suppliers={displaySuppliers.map(String)} counts={allKnownCounts} onChange={chooseSupplier} />
         </div>
       ) : null}
       <div className="picking-mobile-search">
@@ -1127,15 +1136,7 @@ export function PickingListPage() {
               { value: "all", label: "Все" },
             ]}
           />
-          <SelectField
-            ariaLabel="Поставщик"
-            value={supplier}
-            onChange={setSupplier}
-            options={[
-              { value: "", label: "Все поставщики" },
-              ...displaySuppliers.map((item) => ({ value: String(item), label: String(item) })),
-            ]}
-          />
+          <SupplierPicker value={supplier} suppliers={displaySuppliers.map(String)} counts={allKnownCounts} onChange={chooseSupplier} />
           <button
             type="button"
             className={`stats-toggle-btn picking-help-btn${helpOpen ? " is-on" : ""}`}
@@ -1647,12 +1648,12 @@ export function PickingListPage() {
                   {suppliers.map(([supplierName, supplierRows]) => {
                     const pickedCurrency = String(supplierRows[0]?.priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD";
                     return (
-                    <article className="picking-supplier-card" key={`${dateKey}||${supplierName}`}>
+                    <article className="picking-supplier-card has-supplier-color" key={`${dateKey}||${supplierName}`} style={{ "--supplier-color": supplierColor(supplierName) } as CSSProperties}>
                       <div className="picking-supplier-toolbar">
                         <div className="picking-supplier-head">
                           <div className="picking-supplier-name-block">
                             <span>Поставщик</span>
-                            <h3>{supplierName}</h3>
+                            <h3><span className="supplier-avatar" aria-hidden="true">{supplierName.trim().charAt(0).toUpperCase() || "?"}</span>{supplierName}</h3>
                           </div>
                           <div className="picking-supplier-head-meta">
                             <span className="picking-supplier-count">{supplierRows.length} поз.</span>
@@ -1712,7 +1713,7 @@ export function PickingListPage() {
                   })}
                 </div>
               ))
-            ) : grouped.map(([supplierName, supplierRows]) => {
+            ) : grouped.map(([supplierName, supplierRows], groupIndex) => {
               const ledger = supplierLedger[supplierName] || {};
               const draftAmount = paymentDrafts[supplierName] || "";
               const draftNote = paymentNotes[supplierName] || "";
@@ -1730,13 +1731,15 @@ export function PickingListPage() {
               const paidNative = Number(ledgerRecord.paidTotal || 0);
               const isOverpaid = balanceNative >= 0.005;
               const isInDebt = balanceNative <= -0.005;
+              const nextSupplierName = grouped[groupIndex + 1]?.[0];
               return (
-                <article className="picking-supplier-card" key={supplierName}>
+                <article className="picking-supplier-card has-supplier-color" key={supplierName} style={{ "--supplier-color": supplierColor(supplierName) } as CSSProperties}>
                   <div className="picking-supplier-toolbar">
                     <div className="picking-supplier-head">
                       <div className="picking-supplier-name-block">
                         <span>Поставщик</span>
                         <h3>
+                          <span className="supplier-avatar" aria-hidden="true">{supplierName.trim().charAt(0).toUpperCase() || "?"}</span>
                           {supplierName}
                           {hasReseller ? (
                             <span className="supplier-reseller-badge" title="Перекупщик — возможно завышенные цены">
@@ -2261,6 +2264,14 @@ export function PickingListPage() {
                       });
                     })()}
                   </div>
+                  <div className="picking-supplier-end">
+                    <span>Конец списка «{supplierName}» · {supplierRows.length} поз.</span>
+                    {nextSupplierName ? (
+                      <span className="picking-supplier-end-next" style={{ "--next-color": supplierColor(nextSupplierName) } as CSSProperties}>
+                        Дальше другой поставщик: <strong>{nextSupplierName}</strong>
+                      </span>
+                    ) : null}
+                  </div>
                 </article>
               );
             })}
@@ -2357,8 +2368,10 @@ export function PickingListPage() {
         </>
       ) : null}
 
-      {missingRow ? (
-        <div className="page-access-overlay" onClick={() => setMissingRow(null)}>
+      {/* in <body>: inside the page (transform / filter on an ancestor) the fixed overlay blurred the screen
+          while the dialog itself sat off-screen on a phone — it had to be scrolled to */}
+      {missingRow ? createPortal(
+        <div className="page-access-overlay picking-missing-overlay" onClick={() => setMissingRow(null)}>
           <div className="picking-missing-modal" onClick={(event) => event.stopPropagation()}>
             <div className="page-access-head">
               <div>
@@ -2400,7 +2413,8 @@ export function PickingListPage() {
             </div>
             {updateMutation.error ? <div className="inline-error">{errorMessage(updateMutation.error)}</div> : null}
           </div>
-        </div>
+        </div>,
+        document.body,
       ) : null}
 
       {pmSearchOpen ? (

@@ -1246,6 +1246,9 @@ export const SupplierAlternativeOptionSchema = z.object({
   score: z.number().optional().default(0),
   orderable: z.boolean().optional().default(false),
   inactivePm: z.boolean().optional().default(false),
+  // another bottle volume («300->500»): never picked automatically, listed last for a deliberate order
+  otherVolume: z.coerce.string().optional().default(""),
+  rowName: z.coerce.string().optional().default(""),
 }).passthrough();
 
 export const SupplierAlternativesSchema = z.object({

@@ -81,6 +81,11 @@ export function SupplierAltPicker({
                 ) : null}
                 {option.inactivePm ? <em style={{ color: "#f59e0b" }}><AlertTriangle size={12} /> неактивен в PM (Active=0)</em> : (!option.available ? <em className="danger-text">нет наличия</em> : null)}
                 {option.cutoffPassed && !option.blocked ? <em><Clock3 size={12} /> приём заказов на сегодня закрыт</em> : null}
+                {option.otherVolume ? (
+                  <em className="danger-text" title={option.rowName || undefined}>
+                    <AlertTriangle size={12} /> другой объём: {option.otherVolume.replace("->", " → ")} мл{option.rowName ? ` · ${option.rowName}` : ""}
+                  </em>
+                ) : null}
                 {option.stockOnly ? <em>Наш склад</em> : null}
                 {option.reseller ? <em>перекупщик</em> : null}
                 {!option.blocked && option.orderable && !option.cutoffPassed && !option.stockOnly ? <em className="success-text"><ShieldCheck size={12} /> можно заказать</em> : null}

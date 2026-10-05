@@ -1914,7 +1914,13 @@ function MarketplaceRows({ products, breakdown = [], canEdit = false, withExtern
               const finalPrice = Number(alt.effectiveFinalPrice || alt.calculatedPrice || 0) || 0;
               const rawPrice = Number(alt.price || 0) || 0;
               const currency = String(alt.priceCurrency || alt.sourceCurrency || "USD");
-              const excluded = String(alt.exclusionReason || "").trim();
+              const excludedCode = String(alt.exclusionReason || "").trim();
+              const excluded = ({
+                not_available: "нет наличия у поставщика",
+                supplier_stopped: "поставщик остановлен",
+                stock_only_excluded: "только остаток, без цены",
+                price_outlier: "цена сильно отличается от других",
+              } as Record<string, string>)[excludedCode] || excludedCode;
               return [name, pmRowName, finalPrice ? money(finalPrice) : "", rawPrice ? `PM ${rawPrice} ${currency}` : "", excluded ? `не выбран: ${excluded}` : ""].filter(Boolean).join(" · ");
             })
             .filter(Boolean);
