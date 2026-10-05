@@ -651,7 +651,10 @@ async function existingCardPerfumeMismatch(offerId, perfume) {
   const linkTruths = parsedOf(links);
   const truths = linkTruths.length ? linkTruths : parsedOf(cards);
   if (!truths.length) return "";
-  const ownConcentration = parser.parsePerfumeName(`${perfume.brand} ${perfume.name}`, { brands }).concentration;
+  // only an explicit concentration in the perfume's name counts («Sauvage Eau de Parfum», «Ombre Nomade Extrait»);
+  // a bare «Cologne» / «Parfum» is part of the name: Gentleman Cologne and Cologne 352 are sold as EDT / EDP
+  const explicitConcentration = /eau\s+de\s+(parfum|toilette|cologne)|extrait|exdp|edp|edt|edc/i.test(String(perfume.name || ""));
+  const ownConcentration = explicitConcentration ? parser.parsePerfumeName(`${perfume.brand} ${perfume.name}`, { brands }).concentration : "";
   const genderWord = { male: "men", female: "women", unisex: "unisex" }[perfume.gender] || "";
   const reasons = new Set();
   for (const t of truths) {
