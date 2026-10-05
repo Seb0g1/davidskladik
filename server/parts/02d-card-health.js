@@ -641,6 +641,8 @@ app.get("/api/card-improve", requireAdmin, async (request, response, next) => {
           missing: Array.isArray(d.missing) ? d.missing : [],
           customPhotos: own,
           onlyCustomPhotos: Boolean(d.onlyCustomPhotos),
+          gender: d.genderChosen || d.gender || "",
+          genderChosen: Boolean(d.genderChosen),
           keptExistingPhotos: Number(d.keptExistingPhotos || 0),
           blurryExistingPhotos: Number(d.blurryExistingPhotos || 0),
           ownBottleOnly: Boolean(d.ownBottleOnly),

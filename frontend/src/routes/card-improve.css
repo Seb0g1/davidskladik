@@ -53,3 +53,10 @@
 .ci-brand-chip:hover:not(:disabled) { border-color: rgba(var(--accent-rgb), .7); background: rgba(var(--accent-rgb), .1); }
 .ci-confirm { display: inline-flex; gap: 8px; align-items: center; font-size: 13px; }
 .ci-pause { display: flex; gap: 8px; align-items: flex-start; margin: 0 0 14px; padding: 10px 14px; border-radius: 10px; border: 1px solid rgba(245, 158, 11, .45); background: rgba(245, 158, 11, .07); font-size: 13px; line-height: 1.45; }
+
+/* «Для кого»: выбор пола карточки — переключатель из трёх кнопок */
+.ci-gender { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 2px 0 8px; font-size: 12.5px; color: var(--muted); }
+.ci-gender-opt { min-height: 28px; padding: 0 12px; border: 1px solid var(--line); border-radius: 99px; background: transparent; color: var(--text); font: inherit; font-weight: 600; cursor: pointer; }
+.ci-gender-opt:hover:not(:disabled) { border-color: rgba(var(--accent-rgb), 0.5); }
+.ci-gender-opt.is-on { border-color: var(--accent); background: rgba(var(--accent-rgb), 0.18); cursor: default; }
+.ci-gender-opt:disabled:not(.is-on) { opacity: 0.6; }

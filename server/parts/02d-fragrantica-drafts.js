@@ -599,10 +599,12 @@ async function existingCardFacts(offerId) {
   const prisma = getPrisma();
   if (!prisma || !cleanText(offerId)) return { typeKey: null, gender: null };
   const parser = require("./lib/perfume-match");
+  // the brand index keeps brand initials out of the gender («M. Micallef» is not «men»)
+  const brands = await supplierMatchBrands(prisma).catch(() => null);
   const voteBy = (pick) => (names) => {
     const counts = new Map();
     for (const name of names) {
-      const key = pick(parser.parsePerfumeName(name));
+      const key = pick(parser.parsePerfumeName(name, { brands }));
       if (key) counts.set(key, (counts.get(key) || 0) + 1);
     }
     return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
@@ -613,7 +615,7 @@ async function existingCardFacts(offerId) {
   const voteGenderClear = (names) => {
     const counts = new Map();
     for (const name of names) {
-      const key = { men: "male", women: "female", unisex: "unisex" }[parser.parsePerfumeName(name).gender];
+      const key = { men: "male", women: "female", unisex: "unisex" }[parser.parsePerfumeName(name, { brands }).gender];
       if (key) counts.set(key, (counts.get(key) || 0) + 1);
     }
     const [first, second] = [...counts.entries()].sort((a, b) => b[1] - a[1]);
@@ -724,7 +726,9 @@ async function buildFragranticaCardDraft(draft) {
   const fragranticaGender = perfume.sourceGender || perfume.gender || "";
   {
     const facts = draft.data?.existing?.offerId ? await existingCardFacts(draft.data.existing.offerId).catch(() => ({})) : {};
-    const gender = facts.ozonGender || facts.linkGender || perfume.sourceGender || perfume.gender || facts.marketGender || "";
+    // a gender picked by hand («Для кого» on the card) wins over everything
+    const chosen = ["male", "female", "unisex"].includes(draft.data?.genderChosen) ? draft.data.genderChosen : "";
+    const gender = chosen || facts.ozonGender || facts.linkGender || perfume.sourceGender || perfume.gender || facts.marketGender || "";
     if (gender) perfume = { ...perfume, gender };
   }
   parts.perfume = Date.now() - buildStartedAt;
@@ -828,6 +832,7 @@ async function buildFragranticaCardDraft(draft) {
   const data = {
     name: form.name,
     offerId: form.offerId,
+    gender: perfume.gender || "",
     typeKey,
     volume,
     tester,
@@ -1384,6 +1389,11 @@ app.patch("/api/fragrantica/drafts/:id", requireAdmin, async (request, response,
     // «Ноты верны»: AI-named notes checked by a person — the card is built with them
     if (body.notesConfirmed === true && !data.notesConfirmed) {
       data.notesConfirmed = true;
+      rebuild = true;
+    }
+    // «Для кого» picked by hand: the card is rebuilt with that gender (name, «Пол», description)
+    if (["male", "female", "unisex"].includes(body.gender) && body.gender !== data.genderChosen) {
+      data.genderChosen = body.gender;
       rebuild = true;
     }
     // a type picked by hand is final: builds keep it (no recomputation, no Ozon check)

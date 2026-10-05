@@ -26,6 +26,7 @@ type Item = {
   volume: number | null; tester: boolean; shop: string; marketplace: string; offerId: string; rating: number | null; price: number;
   yandexPrice: number; sold: number;
   before: Side | null; after: Side; missing: string[]; exports: Array<{ status: string; error: string | null; shop: string }>;
+  gender?: string; genderChosen?: boolean;
   customPhotos?: string[]; onlyCustomPhotos?: boolean; keptExistingPhotos?: number; blurryExistingPhotos?: number; ownBottleOnly?: boolean; notes?: string[];
   brandMatched?: boolean; brandCandidates?: Array<{ id: number; value: string }>; retryAt?: string | null;
 };
@@ -211,6 +212,7 @@ function ImproveCard({ item, picked, onPick, onApprove, onSkip, onRestore, onReb
         <div className="ci-note">Фрагрантика просит подождать — соберём сами в {new Date(item.retryAt).toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" })}</div>
       ) : null}
       {item.brandMatched === false && editable ? <BrandPicker item={item} /> : null}
+      {editable ? <GenderPicker item={item} /> : null}
       {/^(Вид меняется|Не выбран вид)/.test(String(item.error || "")) ? <TypePicker item={item} /> : null}
       {/^Ноты подобрал ИИ/.test(String(item.error || "")) ? <NotesConfirm id={item.id} /> : null}
       {/выберите аромат|другая версия аромата|не совпадает с товаром|Show Me Love/i.test(String(item.error || "")) ? <PerfumePicker item={item} /> : null}
@@ -380,6 +382,34 @@ function NotesConfirm({ id }: { id: number }) {
 }
 
 /** «Вид меняется» / «Не выбран вид»: a person picks the type; the card is rebuilt with it and keeps it. */
+const GENDERS: Array<[string, string]> = [["female", "Женская"], ["male", "Мужская"], ["unisex", "Унисекс"]];
+
+/** «Для кого»: the gender the new card is built with; a pick rebuilds the card (name, «Пол», description). */
+function GenderPicker({ item }: { item: Item }) {
+  const queryClient = useQueryClient();
+  const pick = useMutation({
+    mutationFn: (gender: string) => apiJson(`/api/fragrantica/drafts/${item.id}`, { method: "PATCH", body: JSON.stringify({ gender }) }),
+    onSuccess: (_r, gender) => {
+      toast.success(`Для кого: ${GENDERS.find(([key]) => key === gender)?.[1] || gender} — карточка пересобирается`);
+      queryClient.invalidateQueries({ queryKey: ["card-improve"] });
+    },
+    onError: (error) => toast.error(errorMessage(error)),
+  });
+  // drafts built before the gender was saved: read it from the new name
+  const name = String(item.after?.name || "").toLowerCase();
+  const current = item.gender || (/унисекс/.test(name) ? "unisex" : /женск/.test(name) ? "female" : /мужск/.test(name) ? "male" : "");
+  return (
+    <div className="ci-gender" role="radiogroup" aria-label="Для кого">
+      <span>Для кого{item.genderChosen ? " (выбрано вручную)" : ""}:</span>
+      {GENDERS.map(([key, label]) => (
+        <button key={key} type="button" role="radio" aria-checked={current === key}
+          className={`ci-gender-opt${current === key ? " is-on" : ""}`}
+          disabled={pick.isPending || current === key} onClick={() => pick.mutate(key)}>{label}</button>
+      ))}
+    </div>
+  );
+}
+
 function TypePicker({ item }: { item: Item }) {
   const queryClient = useQueryClient();
   const pick = useMutation({
