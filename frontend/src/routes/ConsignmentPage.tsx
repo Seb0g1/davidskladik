@@ -167,6 +167,8 @@ export function ConsignmentPage() {
   const [pmQuery, setPmQuery] = useState("");
   const [pmOpen, setPmOpen] = useState(false);
   const [pmNomenclatureOpen, setPmNomenclatureOpen] = useState(false);
+  // the «Новый товар» form opens from the header (stays open while its list has unsaved items)
+  const [newItemOpen, setNewItemOpen] = useState(false);
   const [pmNomenclatureQuery, setPmNomenclatureQuery] = useState("");
   const [pmNomenclaturePage, setPmNomenclaturePage] = useState(1);
   const [pmNomenclatureAdding, setPmNomenclatureAdding] = useState<Record<string, { purchasePrice: string; quantity: string }>>({});
@@ -560,7 +562,10 @@ export function ConsignmentPage() {
         subtitle="Товар от спонсора: остатки, продажи с профитом 50/50, списания, возвраты, общий баланс и закупки со свободных денег."
         action={(
           <div className="row-actions cn-header-actions">
-            <button className="primary-action" type="button" onClick={openInvoices} title="Приходные накладные: провести, снять с проводки, исправить">
+            <button className={newItemOpen ? "secondary-action" : "primary-action"} type="button" aria-expanded={newItemOpen} onClick={() => setNewItemOpen((v) => !v)}>
+              <Plus size={16} /> Новый товар
+            </button>
+            <button className="secondary-action" type="button" onClick={openInvoices} title="Приходные накладные: провести, снять с проводки, исправить">
               <FileText size={16} /> Накладные
             </button>
             <button className="secondary-action" type="button" onClick={openOperations}>
@@ -754,6 +759,7 @@ export function ConsignmentPage() {
         <div className="system-card"><span>Выведено моего профита</span><strong>{money(s?.myProfitPaidOut)}</strong></div>
       </div>
 
+      {newItemOpen || draftItems.length ? (
       <section className="settings-panel settings-panel-wide">
         <div className="section-title">
           <div>
@@ -889,8 +895,9 @@ export function ConsignmentPage() {
             {bulkCreate.error ? <div className="inline-error">{errorMessage(bulkCreate.error)}</div> : null}
           </div>
         ) : null}
-        {bulkCreate.isSuccess && !draftItems.length ? <FlashToast>Список загружен: товары добавлены на склад реализации.</FlashToast> : null}
       </section>
+      ) : null}
+      {bulkCreate.isSuccess && !draftItems.length ? <FlashToast>Список загружен: товары добавлены на склад реализации.</FlashToast> : null}
 
       {action ? (
         <section className="settings-panel settings-panel-wide">
@@ -1038,7 +1045,7 @@ export function ConsignmentPage() {
         })}
         {savePrice.error ? <div className="inline-error">{errorMessage(savePrice.error)}</div> : null}
         {!items.data?.items?.length && items.isLoading ? <ListSkeleton rows={5} /> : null}
-        {!items.data?.items?.length && !items.isLoading ? <div className="empty-state">Товаров пока нет — добавьте первый через форму выше.</div> : null}
+        {!items.data?.items?.length && !items.isLoading ? <div className="empty-state">Товаров пока нет — добавьте первый кнопкой «Новый товар».</div> : null}
       </div>
 
       <section className="settings-panel settings-panel-wide">
