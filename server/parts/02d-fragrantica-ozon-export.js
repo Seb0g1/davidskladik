@@ -321,7 +321,9 @@ async function fillPerfumeFromFragella(row) {
     const share = FRAGELLA_SHARE[cleanText(item["Main Accords Percentage"]?.[name]).toLowerCase()] || 50;
     return { name: ru, share, ...colors };
   });
-  const gender = { men: "male", women: "female", unisex: "unisex" }[cleanText(item.Gender).toLowerCase()] || row.gender || "";
+  // the source's own gender comes first (the catalog row may say «unisex» where the source says «for women»)
+  const sourceGender = { men: "male", women: "female", unisex: "unisex" }[cleanText(item.Gender).toLowerCase()] || "";
+  const gender = sourceGender || row.gender || "";
   const year = Number(item.Year) || Number(row.year) || null;
   const title = `${row.name} ${row.brand}`;
   const tierText = [["Верхние ноты", notes.top], ["средние ноты", notes.middle], ["базовые ноты", notes.base], ["ноты", notes.flat]]
@@ -329,7 +331,7 @@ async function fillPerfumeFromFragella(row) {
   const forWhom = { male: "для мужчин", female: "для женщин", unisex: "для мужчин и женщин" }[gender] || "";
   const detail = {
     id: Number(row.id), url: row.url, name: row.name, year, brand: row.brand,
-    image: cleanText(item["Image URL"]), notes, title, votes: null, family: "", gender,
+    image: cleanText(item["Image URL"]), notes, title, votes: null, family: "", gender, sourceGender,
     rating: Number(item.rating) || null, accords, brandSlug: row.brand_slug || "", perfumers: [],
     description: `${title} — это аромат${forWhom ? ` ${forWhom}` : ""}.${year ? ` ${row.name} выпущен в ${year} году.` : ""} ${tierText}.`,
     source: "fragella", fragellaId: cleanText(item._id),
@@ -490,14 +492,15 @@ async function fillPerfumeFromParfumetrika(row) {
     const ru = name.toLowerCase().replace(/ё/g, "е");
     return { name: ru, share: Math.max(40, 100 - i * 10), ...(palette.get(ru) || page.colors.get(ru) || { color: "#000000", background: "#d9d9d9" }) };
   });
-  const gender = row.gender || page.gender || "";
+  const sourceGender = page.gender || "";
+  const gender = sourceGender || row.gender || "";
   const year = Number(row.year) || page.year || null;
   const title = `${row.name} ${row.brand}`;
   const tierText = [["Верхние ноты", notes.top], ["средние ноты", notes.middle], ["базовые ноты", notes.base], ["ноты", notes.flat]]
     .filter(([, list]) => list && list.length).map(([label, list]) => `${label}: ${list.map((n) => n.name).join(", ")}`).join("; ");
   const forWhom = { male: "для мужчин", female: "для женщин", unisex: "для мужчин и женщин" }[gender] || "";
   const detail = {
-    id: Number(row.id), url: row.url, name: row.name, year, brand: row.brand, image: "", notes, title, votes: null, family: "", gender,
+    id: Number(row.id), url: row.url, name: row.name, year, brand: row.brand, image: "", notes, title, votes: null, family: "", gender, sourceGender,
     rating: null, accords, brandSlug: row.brand_slug || "", perfumers: [],
     description: `${title} — это аромат${forWhom ? ` ${forWhom}` : ""}.${year ? ` ${row.name} выпущен в ${year} году.` : ""} ${tierText}.`,
     source: "parfumetrika",
@@ -623,14 +626,15 @@ async function fillPerfumeFromAromo(row) {
     const name = AROMO_GROUP_ACCORD[cleanText(g.name).toLowerCase()] || cleanText(g.name).toLowerCase();
     return { name, share: Math.max(40, 100 - i * 15), ...(palette.get(name) || { color: "#000000", background: "#d9d9d9" }) };
   });
-  const gender = row.gender || { female: "female", male: "male", unisex: "unisex" }[perfume.gender?.code] || "";
+  const sourceGender = { female: "female", male: "male", unisex: "unisex" }[perfume.gender?.code] || "";
+  const gender = sourceGender || row.gender || "";
   const year = Number(row.year) || Number(perfume.produced?.from) || null;
   const title = `${row.name} ${row.brand}`;
   const tierText = [["Верхние ноты", notes.top], ["средние ноты", notes.middle], ["базовые ноты", notes.base]]
     .filter(([, list]) => list.length).map(([label, list]) => `${label}: ${list.map((n) => n.name).join(", ")}`).join("; ");
   const forWhom = { male: "для мужчин", female: "для женщин", unisex: "для мужчин и женщин" }[gender] || "";
   const detail = {
-    id: Number(row.id), url: row.url, name: row.name, year, brand: row.brand, image: "", notes, title, votes: null, family: "", gender,
+    id: Number(row.id), url: row.url, name: row.name, year, brand: row.brand, image: "", notes, title, votes: null, family: "", gender, sourceGender,
     rating: null, accords, brandSlug: row.brand_slug || "", perfumers: [],
     description: `${title} — это аромат${forWhom ? ` ${forWhom}` : ""}.${year ? ` ${row.name} выпущен в ${year} году.` : ""} ${tierText}.`,
     source: "aromo",
@@ -788,14 +792,15 @@ async function fillPerfumeFromParfumo(row) {
     const name = PARFUMO_ACCORDS_RU[a.name.toLowerCase()] || a.name.toLowerCase();
     return { name, share: Math.max(40, 100 - i * 10), ...(palette.get(name) || { color: "#000000", background: a.background }) };
   });
-  const gender = row.gender || page.gender || "";
+  const sourceGender = page.gender || "";
+  const gender = sourceGender || row.gender || "";
   const year = Number(row.year) || page.year || null;
   const title = `${row.name} ${row.brand}`;
   const tierText = [["Верхние ноты", notes.top], ["средние ноты", notes.middle], ["базовые ноты", notes.base], ["ноты", notes.flat]]
     .filter(([, list]) => list && list.length).map(([label, list]) => `${label}: ${list.map((n) => n.name).join(", ")}`).join("; ");
   const forWhom = { male: "для мужчин", female: "для женщин", unisex: "для мужчин и женщин" }[gender] || "";
   const detail = {
-    id: Number(row.id), url: row.url, name: row.name, year, brand: row.brand, image: "", notes, title, votes: null, family: "", gender,
+    id: Number(row.id), url: row.url, name: row.name, year, brand: row.brand, image: "", notes, title, votes: null, family: "", gender, sourceGender,
     rating: null, accords, brandSlug: row.brand_slug || "", perfumers: [],
     description: `${title} — это аромат${forWhom ? ` ${forWhom}` : ""}.${year ? ` ${row.name} выпущен в ${year} году.` : ""} ${tierText}.`,
     source: "parfumo",
@@ -949,7 +954,9 @@ function fragranticaAbsoluteUrl(url) {
 // Описание — общее для всех объёмов аромата (readFragranticaCardDescription), иначе текст Фрагрантики.
 async function buildFragranticaFormData(query = {}) {
   const perfumeId = Number(query.perfumeId);
-  const perfume = await fragranticaPerfumeForExport(perfumeId);
+  let perfume = await fragranticaPerfumeForExport(perfumeId);
+  // a draft passes the gender it settled on (PriceMaster rows → source site → catalog): name and «Пол» follow it
+  if (["male", "female", "unisex"].includes(query.gender)) perfume = { ...perfume, gender: query.gender };
   const account = fragranticaResolveOzonAccount(query.accountId);
   const typeKey = FRAG_OZON_TYPES.some((t) => t.key === query.typeKey) ? query.typeKey : fragOzonGuessTypeKey(perfume);
   const type = fragOzonTypeByKey(typeKey);

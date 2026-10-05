@@ -622,7 +622,11 @@ async function existingCardFacts(offerId) {
   return {
     typeKey: vote(linkNames) || vote(ozonNames) || vote(cardNames),
     ozonTypeKey: vote(ozonNames),
-    gender: voteGender(ozonNames) || voteGender(cardNames) || voteGender(linkNames),
+    // PriceMaster rows decide who the perfume is for when they say it (the user's rule, 2026-10-05); titles only
+    // when nothing else does — a Market title may carry an earlier wrong improvement («Just Cavalli … женская»)
+    linkGender: voteGender(linkNames),
+    titleGender: voteGender(ozonNames) || voteGender(cardNames),
+    gender: voteGender(linkNames) || voteGender(ozonNames) || voteGender(cardNames),
   };
 }
 
@@ -669,7 +673,8 @@ async function existingCardPerfumeMismatch(offerId, perfume) {
     // the perfume written like the product: same volume / concentration / flags, so only brand, name and gender count
     const title = [perfume.brand, perfume.name, genderWord, t.concentration, `${t.volume} ml`, t.tester ? "tester" : ""].filter(Boolean).join(" ");
     const candidate = parser.parsePerfumeName(title, { brands });
-    const res = parser.comparePerfumes(t, { ...candidate, set: t.set, decant: t.decant, sample: t.sample, nonPerfume: t.nonPerfume, type: t.type, defect: false });
+    // the supplier row on the price-list side: its packaging words («NEW BOX», «Шкатулка», «DELUXE») are allowed there
+    const res = parser.comparePerfumes({ ...candidate, set: t.set, decant: t.decant, sample: t.sample, nonPerfume: t.nonPerfume, type: t.type, defect: false }, t);
     if (res.ok) return "";
     reasons.add(res.reason);
   }
@@ -699,13 +704,14 @@ async function buildFragranticaCardDraft(draft) {
   };
   const ozonTarget = targets.find((t) => t.kind === "ozon");
   let perfume = await fragranticaPerfumeForExport(perfumeId);
-  // An improved card keeps who it is for: its Ozon / card titles and supplier rows («WOMAN», «жен») outrank Fragrantica
-  // (Plume Impression Art Nouveau is unisex there, sold as «женская»); Fragrantica decides only when the card says nothing
-  // (the guard below still checks Fragrantica's own gender: «Black XS» for men is not the card's «XS Black for Her»)
-  const fragranticaGender = perfume.gender || "";
-  if (draft.data?.existing?.offerId) {
-    const facts = await existingCardFacts(draft.data.existing.offerId).catch(() => ({}));
-    if (facts.gender) perfume = { ...perfume, gender: facts.gender };
+  // Who the perfume is for: PriceMaster rows («WOMAN», «(m)», «жен») → the site the data came from (aromo, Parfumo…)
+  // → the Fragrantica catalog → the card's own titles. Plume Impression Art Nouveau: catalog «unisex», rows «WOMAN».
+  // The guard below checks the source's gender against the rows: «Black XS» for men is not «XS Black for Her».
+  const fragranticaGender = perfume.sourceGender || perfume.gender || "";
+  {
+    const facts = draft.data?.existing?.offerId ? await existingCardFacts(draft.data.existing.offerId).catch(() => ({})) : {};
+    const gender = facts.linkGender || perfume.sourceGender || perfume.gender || facts.titleGender || "";
+    if (gender) perfume = { ...perfume, gender };
   }
   parts.perfume = Date.now() - buildStartedAt;
   // notes named by the text AI (Fragrantica closed, no Fragella quota): built as usual, flagged for the approver
@@ -762,7 +768,7 @@ async function buildFragranticaCardDraft(draft) {
 
   // Ozon form, supplier links + price, photos and the description don't depend on each other — run together
   const [form, linkPart, photoPart, descriptionPart, existingResult] = await Promise.all([
-    buildFragranticaFormData({ perfumeId, typeKey, volume, tester, accountId: ozonTarget?.id }).then(mark("form")),
+    buildFragranticaFormData({ perfumeId, typeKey, volume, tester, accountId: ozonTarget?.id, gender: perfume.gender }).then(mark("form")),
     (async () => {
       // improvement: the card keeps its own suppliers and price — no new links
       if (existing) return { linkRows: [], selected: [], preview: null, warning: "" };
@@ -795,6 +801,11 @@ async function buildFragranticaCardDraft(draft) {
     description = cleanText((form.attributes.find((a) => a.id === FRAG_OZON_ATTR.annotation)?.values || [])[0]?.value);
     descriptionSource = description ? "fragrantica" : "";
     if (descriptionPart.error) warnings.push(`Описание ИИ не получилось: ${descriptionPart.error?.message || descriptionPart.error}`);
+  }
+  // the description is shared by every draft of the perfume and speaks the catalog's gender: say the product's
+  {
+    const forWhom = { male: "для мужчин", female: "для женщин", unisex: "для мужчин и женщин" }[perfume.gender];
+    if (forWhom) description = description.replace(/(аромат\S*\s+)для\s+(мужчин\s+и\s+женщин|женщин\s+и\s+мужчин|мужчин|женщин)/gi, `$1${forWhom}`);
   }
 
   const data = {
