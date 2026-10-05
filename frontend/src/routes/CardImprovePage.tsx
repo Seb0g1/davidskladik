@@ -321,12 +321,20 @@ function PerfumePicker({ item }: { item: Item }) {
     onSuccess: (_r, perfume) => { toast.success(`Аромат: ${perfume.brand} ${perfume.name} — карточка пересобирается`); queryClient.invalidateQueries({ queryKey: ["card-improve"] }); },
     onError: (error) => toast.error(errorMessage(error)),
   });
+  const confirm = useMutation({
+    mutationFn: () => apiJson(`/api/fragrantica/drafts/${item.id}`, { method: "PATCH", body: JSON.stringify({ perfumeConfirmed: true }) }),
+    onSuccess: () => { toast.success("Аромат подтверждён — карточка пересобирается"); queryClient.invalidateQueries({ queryKey: ["card-improve"] }); },
+    onError: (error) => toast.error(errorMessage(error)),
+  });
   const list = options.data?.items || [];
   if (!open) {
     return (
       <div className="ci-brand">
         <div className="ci-brand-list">
-          <button type="button" className="ci-brand-chip" onClick={() => setOpen(true)}><Search size={13} /> Выбрать аромат</button>
+          <button type="button" className="ci-brand-chip" disabled={confirm.isPending} onClick={() => confirm.mutate()} title="Проверка ошиблась: аромат и фото верные — собрать с ним">
+            <Check size={13} /> Аромат верный
+          </button>
+          <button type="button" className="ci-brand-chip" onClick={() => setOpen(true)}><Search size={13} /> Выбрать другой аромат</button>
         </div>
       </div>
     );

@@ -161,3 +161,57 @@ function scheduleFragranticaCrawl(delayMs = fragranticaCrawlDelayMs) {
   }, Math.max(100, Number(delayMs) || fragranticaCrawlDelayMs));
   fragranticaCrawlTimer.unref?.();
 }
+
+// ─── Parfumetrika filler (worker) ───────────────────────────────────────────────
+// Fragrantica answers our server with Cloudflare 403, so its crawler stands still. This loop fills perfumes without
+// data from Parfumetrika one at a time: first the ones opened in the UI (detail_wanted_at), then the ones found in
+// PriceMaster (pm_rows, most rows first). Every try is remembered (parfumetrika_tried_at) — a miss is retried in
+// 30 days. FRAGRANTICA_PARFUMETRIKA_FILL=false turns it off.
+const parfumetrikaFillEnabled = process.env.FRAGRANTICA_PARFUMETRIKA_FILL !== "false";
+let parfumetrikaFillTimer = null;
+let parfumetrikaFillReady = false;
+const parfumetrikaFillStatus = { filled: 0, missed: 0, errors: 0, lastId: null, lastAt: null };
+
+async function runParfumetrikaFillStep() {
+  const prisma = await requireFragranticaTables();
+  if (!parfumetrikaFillReady) {
+    await prisma.$executeRawUnsafe(`ALTER TABLE fragrantica_perfumes ADD COLUMN IF NOT EXISTS parfumetrika_tried_at TIMESTAMPTZ`);
+    parfumetrikaFillReady = true;
+  }
+  const rows = await prisma.$queryRawUnsafe(
+    `SELECT * FROM fragrantica_perfumes
+      WHERE detail_at IS NULL AND (detail_wanted_at IS NOT NULL OR COALESCE(pm_rows, 0) > 0)
+        AND (parfumetrika_tried_at IS NULL OR parfumetrika_tried_at < now() - interval '30 days')
+      ORDER BY (detail_wanted_at IS NULL), detail_wanted_at, pm_rows DESC NULLS LAST, votes DESC NULLS LAST
+      LIMIT 1`,
+  );
+  const row = rows[0];
+  if (!row) return { step: "idle" };
+  await prisma.$executeRawUnsafe(`UPDATE fragrantica_perfumes SET parfumetrika_tried_at = now() WHERE id = $1`, row.id);
+  const filled = await fillPerfumeFromParfumetrika(row);
+  parfumetrikaFillStatus.lastId = Number(row.id);
+  parfumetrikaFillStatus.lastAt = new Date().toISOString();
+  if (filled) parfumetrikaFillStatus.filled += 1;
+  else parfumetrikaFillStatus.missed += 1;
+  return { step: "parfumetrika", id: Number(row.id), filled };
+}
+
+function scheduleParfumetrikaFill(delayMs = 4000) {
+  if (!parfumetrikaFillEnabled) return;
+  if (parfumetrikaFillTimer) clearTimeout(parfumetrikaFillTimer);
+  parfumetrikaFillTimer = setTimeout(async () => {
+    let next = 4000;
+    try {
+      const result = await runParfumetrikaFillStep();
+      if (result.step === "idle") next = 30 * 60_000;
+      if ((parfumetrikaFillStatus.filled + parfumetrikaFillStatus.missed) % 50 === 0) logger.info("parfumetrika fill progress", parfumetrikaFillStatus);
+    } catch (error) {
+      parfumetrikaFillStatus.errors += 1;
+      next = 5 * 60_000;
+      logger.warn("parfumetrika fill step failed", { detail: error?.message || String(error) });
+    } finally {
+      scheduleParfumetrikaFill(next);
+    }
+  }, Math.max(1000, Number(delayMs) || 4000));
+  parfumetrikaFillTimer.unref?.();
+}

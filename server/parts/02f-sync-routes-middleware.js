@@ -262,6 +262,10 @@ function startBackgroundSchedulers() {
     scheduleFragranticaCrawl(90_000);
     logger.info("fragrantica crawler enabled", { delayMs: fragranticaCrawlDelayMs });
   }
+  if (parfumetrikaFillEnabled) {
+    scheduleParfumetrikaFill(120_000);
+    logger.info("parfumetrika filler enabled");
+  }
   if (fragranticaExportQueueEnabled) {
     scheduleFragranticaExportQueue(2 * 60_000);
   }

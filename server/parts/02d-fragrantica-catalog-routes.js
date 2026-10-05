@@ -59,9 +59,16 @@ app.get("/api/fragrantica/catalog/:id", requireAdmin, async (request, response, 
         await fetchAndStoreFragranticaPerfume(row.url);
         row = await readFragranticaPerfume(id);
       } catch (error) {
-        // Фрагрантика не ответила — отдаём то, что есть, и просим worker докачать.
-        await getPrisma().$executeRawUnsafe(`UPDATE fragrantica_perfumes SET detail_wanted_at = now() WHERE id = $1 AND detail_at IS NULL`, id);
-        if (!row.detail_at) fetchError = error?.message || String(error);
+        // Фрагрантика не ответила — нет данных: Fragella (квота) или Parfumetrika; иначе просим worker докачать.
+        if (!row.detail_at) {
+          const filled = (fragellaAvailable() && await fillPerfumeFromFragella(row).catch(() => false))
+            || await fillPerfumeFromParfumetrika(row).catch(() => false);
+          if (filled) row = await readFragranticaPerfume(id);
+        }
+        if (!row.detail_at) {
+          await getPrisma().$executeRawUnsafe(`UPDATE fragrantica_perfumes SET detail_wanted_at = now() WHERE id = $1 AND detail_at IS NULL`, id);
+          fetchError = error?.message || String(error);
+        }
       }
     }
     await ensureFragranticaPerfumeImage(id).catch((error) => logger.warn("fragrantica image download failed", { id, detail: error?.message }));

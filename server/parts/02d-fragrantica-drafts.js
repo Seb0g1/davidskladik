@@ -1058,9 +1058,9 @@ async function runFragranticaDraftsTick() {
           LIMIT $1
           FOR UPDATE OF d SKIP LOCKED)
        RETURNING *`,
-      // perfumes without a page are built even while Fragrantica rests: Fragella or the text AI names their notes
-      // (FRAGRANTICA_AI_NOTES=false turns the AI fallback off — then they wait for a page)
-      Math.max(0, limit), improve, pagesPaused && !fragellaAvailable() && process.env.FRAGRANTICA_AI_NOTES === "false",
+      // perfumes without a page are built even while Fragrantica rests: Fragella, Parfumetrika or the text AI fill
+      // their notes (FRAGRANTICA_PARFUMETRIKA_FILL=false and no other source → they wait for a page)
+      Math.max(0, limit), improve, pagesPaused && !fragellaAvailable() && process.env.FRAGRANTICA_PARFUMETRIKA_FILL === "false" && process.env.FRAGRANTICA_AI_NOTES === "false",
     );
     const claimed = await claimPool(false, fragranticaDraftsParallel - fragranticaDraftsInFlight);
     for (const draft of claimed) {
@@ -1339,6 +1339,11 @@ app.patch("/api/fragrantica/drafts/:id", requireAdmin, async (request, response,
       fields.perfume_id = Number(body.perfumeId);
       data.perfumeChosen = true;
       delete data.notesConfirmed;
+      rebuild = true;
+    }
+    // «Аромат верный»: a person confirms the current perfume — the guard no longer stops this card
+    if (body.perfumeConfirmed === true && !data.perfumeChosen) {
+      data.perfumeChosen = true;
       rebuild = true;
     }
     // «Ноты верны»: AI-named notes checked by a person — the card is built with them
