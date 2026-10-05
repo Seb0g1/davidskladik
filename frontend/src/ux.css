@@ -1968,3 +1968,14 @@ body:has(.bulk-action-bar) .toast-stack { bottom: 88px; }
 @media (max-width: 760px) {
   .app-content .route-view[data-route="picking-list"] .dashboard-metrics { display: none; }
 }
+
+/* Автокорзина: предложения других поставщиков прямо в пропущенной строке */
+.cart-sugg { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin-top: 4px; font-size: 12.5px; }
+.cart-sugg.is-muted { color: var(--muted); }
+.cart-sugg-title { color: var(--muted); }
+.cart-sugg-opt { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 10px; border: 1px solid rgba(78, 211, 154, 0.4); border-radius: 10px; background: rgba(78, 211, 154, 0.07); color: var(--text); font: inherit; cursor: pointer; text-align: left; }
+.cart-sugg-opt:hover:not(:disabled) { background: rgba(78, 211, 154, 0.16); }
+.cart-sugg-opt b { font-size: 13px; }
+.cart-sugg-opt span { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.cart-sugg-opt em { font-style: normal; font-size: 11px; color: var(--yellow, #f5b942); }
+.cart-sugg-opt.is-other { border-color: rgba(245, 185, 66, 0.45); background: rgba(245, 185, 66, 0.07); }

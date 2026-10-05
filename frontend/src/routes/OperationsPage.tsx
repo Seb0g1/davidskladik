@@ -6,6 +6,7 @@ import { fetchJson, mutationBody, patchBody } from "../api";
 import { OperationCreateSchema, OperationDetailSchema, OperationsSchema, SupplierAlternativesSchema, SupplierCartCommitSchema, SupplierCartHistorySchema, SupplierCartOverrideSchema, SupplierCartPreviewSchema, SupplierCartScheduleSchema } from "../types";
 import { MarketplaceBadge } from "../components/MarketplaceBadge";
 import { SupplierAltPicker } from "../components/SupplierAltPicker";
+import { SupplierAltInline } from "../components/SupplierAltInline";
 import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
 import { Stat } from "../components/Stat";
@@ -564,6 +565,11 @@ export function SupplierCartPanel() {
                   {row.stockOnlyFallback ? <small>Заказ уйдёт через «Наш склад» — цена в PriceMaster будет 0, остаток со склада.</small> : null}
                   {row.skipReason === "supplier_cutoff_passed_no_alternative" ? <small className="danger-text">Все подходящие поставщики уже закрыли прием заказов на сегодня.</small> : null}
                   {!row.ready && !row.alreadyCommitted ? <small className="danger-text">{cartSkipReason(row.skipReason)}</small> : null}
+                  {/* предложения сразу в строке — без «Заменить» */}
+                  {!row.ready && !row.alreadyCommitted && altKey !== row.key ? (
+                    <SupplierAltInline offerId={row.offerId} currentPartnerId={String(row.partnerId || "")} busy={overrideMutation.isPending}
+                      onPick={(option) => overrideMutation.mutate({ key: row.key, partnerId: option.partnerId, rowId: option.rowId })} />
+                  ) : null}
                   {altKey === row.key ? (
                     <SupplierAltPicker
                       offerId={row.offerId}
