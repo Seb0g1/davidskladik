@@ -63,6 +63,7 @@ app.get("/api/fragrantica/catalog/:id", requireAdmin, async (request, response, 
         if (!row.detail_at) {
           const filled = (fragellaAvailable() && await fillPerfumeFromFragella(row).catch(() => false))
             || await fillPerfumeFromParfumetrika(row).catch(() => false)
+            || await fillPerfumeFromAromo(row).catch(() => false)
             || await fillPerfumeFromParfumo(row).catch(() => false);
           if (filled) row = await readFragranticaPerfume(id);
         }

@@ -188,8 +188,8 @@ async function runParfumetrikaFillStep() {
   const row = rows[0];
   if (!row) return { step: "idle" };
   await prisma.$executeRawUnsafe(`UPDATE fragrantica_perfumes SET parfumetrika_tried_at = now() WHERE id = $1`, row.id);
-  // Parfumetrika first, Parfumo when it has no such perfume
-  const filled = await fillPerfumeFromParfumetrika(row) || await fillPerfumeFromParfumo(row).catch((error) => {
+  // Parfumetrika first, then Aromo, then Parfumo
+  const filled = await fillPerfumeFromParfumetrika(row) || await fillPerfumeFromAromo(row).catch(() => false) || await fillPerfumeFromParfumo(row).catch((error) => {
     if (Number(error?.statusCode) === 429) throw error;
     return false;
   });

@@ -512,6 +512,139 @@ async function fillPerfumeFromParfumetrika(row) {
   return true;
 }
 
+// ─── Aromo (aromo.ru — our own site, all use allowed by its owner) ───────────────────────────────────────
+// Russian pyramid (top / middle / bottom), families, gender, year. The page carries its data in window.__NUXT__
+// (read in a vm sandbox). Without an API key only the brand page's first 40 perfumes (most popular) are listed;
+// they are remembered in aromo_items. One request at a time, 3 s apart.
+
+const AROMO_BASE = "https://aromo.ru";
+let aromoChain = Promise.resolve();
+let aromoTablesReady = false;
+const AROMO_GROUP_ACCORD = {
+  "цветочные": "цветочный", "древесные": "древесный", "пряные": "пряный", "восточные": "восточный", "фруктовые": "фруктовый",
+  "цитрусовые": "цитрусовый", "гурманские": "гурманский", "фужерные": "фужерный", "шипровые": "шипровый", "кожаные": "кожаный",
+  "зеленые": "зеленый", "зелёные": "зеленый", "водяные": "водяной", "акватические": "акватический", "мускусные": "мускусный",
+  "пудровые": "пудровый", "свежие": "свежий", "сладкие": "сладкий", "травяные": "травяной", "смолистые": "смолистый", "табачные": "табачный",
+};
+
+function aromoRequest(pathname) {
+  const run = aromoChain.then(async () => {
+    const response = await fetch(`${AROMO_BASE}${pathname}`, { headers: { "User-Agent": PARFUMETRIKA_UA, "Accept-Language": "ru" }, signal: AbortSignal.timeout(30_000) });
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    if (response.status === 404) return null;
+    if (!response.ok) throw Object.assign(new Error(`Aromo ответила ${response.status}`), { statusCode: response.status });
+    return response.text();
+  });
+  aromoChain = run.catch(() => {});
+  return run;
+}
+
+/** window.__NUXT__ of a page, evaluated in an empty sandbox (it is a data function, nothing else). */
+function aromoNuxt(html) {
+  const m = String(html || "").match(/<script>window\.__NUXT__=([\s\S]*?)<\/script>/);
+  if (!m) return null;
+  try {
+    const sandbox = { window: {} };
+    require("vm").runInNewContext(`window.__NUXT__=${m[1]}`, sandbox, { timeout: 2000 });
+    return sandbox.window.__NUXT__ || null;
+  } catch {
+    return null;
+  }
+}
+
+async function requireAromoTables() {
+  const prisma = getPrisma();
+  if (!aromoTablesReady) {
+    await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS aromo_items (brand TEXT NOT NULL, code TEXT NOT NULL, name TEXT NOT NULL, concentration TEXT, PRIMARY KEY (brand, code))`);
+    await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS aromo_brands (brand TEXT PRIMARY KEY, found BOOLEAN, scanned_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+    aromoTablesReady = true;
+  }
+  return prisma;
+}
+
+/** The brand's listed perfumes (first page — the most popular), remembered for a month. */
+async function aromoBrandItems(brand) {
+  const prisma = await requireAromoTables();
+  const key = cleanText(brand).toLowerCase();
+  const [seen] = await prisma.$queryRawUnsafe(`SELECT found FROM aromo_brands WHERE brand = $1 AND scanned_at > now() - interval '30 days'`, key);
+  if (!seen) {
+    const html = await aromoRequest(`/brands/${parfumetrikaSlug(brand)}/`);
+    const items = aromoNuxt(html)?.data?.[0]?.catalogItems || [];
+    for (const item of items) {
+      if (!item?.code || !item?.name) continue;
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO aromo_items (brand, code, name, concentration) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+        key, item.code, item.name, cleanText(item.concentration?.code),
+      );
+    }
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO aromo_brands (brand, found, scanned_at) VALUES ($1, $2, now()) ON CONFLICT (brand) DO UPDATE SET found = EXCLUDED.found, scanned_at = now()`, key, items.length > 0,
+    );
+  }
+  return prisma.$queryRawUnsafe(`SELECT code, name, concentration FROM aromo_items WHERE brand = $1`, key);
+}
+
+/** Looks the perfume up on Aromo and stores it as its detail. → true when stored. */
+async function fillPerfumeFromAromo(row) {
+  const parser = require("./lib/perfume-match");
+  const brands = await supplierMatchBrands(getPrisma()).catch(() => null);
+  const genderWord = { male: "men", female: "women", unisex: "unisex" };
+  const want = parser.parsePerfumeName(`${row.brand} ${row.name} ${genderWord[row.gender] || ""} 100 ml`, { brands });
+  const items = await aromoBrandItems(row.brand);
+  // the same name; one concentration of it is enough (its pyramid is the perfume's)
+  const matches = items.filter((item) => {
+    const candidate = parser.parsePerfumeName(`${row.brand} ${item.name} 100 ml`, { brands });
+    const result = parser.comparePerfumes({ ...want, gender: "" }, { ...candidate, gender: "" });
+    return result.ok && !result.probable;
+  });
+  let perfume = null;
+  for (const item of matches.slice(0, 2)) {
+    const page = aromoNuxt(await aromoRequest(`/fragrance/${item.code}/`))?.data?.[0]?.perfume;
+    if (!page?.olfactoryPyramid) continue;
+    const gender = { female: "female", male: "male", unisex: "unisex" }[page.gender?.code] || "";
+    if (row.gender && gender && row.gender !== gender && gender !== "unisex" && row.gender !== "unisex") continue;
+    perfume = page;
+    break;
+  }
+  if (!perfume) {
+    logger.info("aromo perfume not found", { id: Number(row.id), brand: row.brand, name: row.name, listed: items.length });
+    return false;
+  }
+  const knownIcons = await fragellaKnownNoteIcons().catch(() => new Map());
+  const palette = await fragellaAccordPalette().catch(() => new Map());
+  const note = (n) => {
+    const name = cleanText(n?.name).replace(/ё/g, "е");
+    return { name, icon: knownIcons.get(name.toLowerCase()) || cleanText(n?.picture?.url) };
+  };
+  const pyramid = perfume.olfactoryPyramid || {};
+  const notes = { top: (pyramid.top || []).map(note), middle: (pyramid.middle || []).map(note), base: (pyramid.bottom || pyramid.base || []).map(note) };
+  if (!notes.top.length && !notes.middle.length && !notes.base.length) return false;
+  const accords = (perfume.groups || []).slice(0, 8).map((g, i) => {
+    const name = AROMO_GROUP_ACCORD[cleanText(g.name).toLowerCase()] || cleanText(g.name).toLowerCase();
+    return { name, share: Math.max(40, 100 - i * 15), ...(palette.get(name) || { color: "#000000", background: "#d9d9d9" }) };
+  });
+  const gender = row.gender || { female: "female", male: "male", unisex: "unisex" }[perfume.gender?.code] || "";
+  const year = Number(row.year) || Number(perfume.produced?.from) || null;
+  const title = `${row.name} ${row.brand}`;
+  const tierText = [["Верхние ноты", notes.top], ["средние ноты", notes.middle], ["базовые ноты", notes.base]]
+    .filter(([, list]) => list.length).map(([label, list]) => `${label}: ${list.map((n) => n.name).join(", ")}`).join("; ");
+  const forWhom = { male: "для мужчин", female: "для женщин", unisex: "для мужчин и женщин" }[gender] || "";
+  const detail = {
+    id: Number(row.id), url: row.url, name: row.name, year, brand: row.brand, image: "", notes, title, votes: null, family: "", gender,
+    rating: null, accords, brandSlug: row.brand_slug || "", perfumers: [],
+    description: `${title} — это аромат${forWhom ? ` ${forWhom}` : ""}.${year ? ` ${row.name} выпущен в ${year} году.` : ""} ${tierText}.`,
+    source: "aromo",
+  };
+  await getPrisma().$executeRawUnsafe(
+    `UPDATE fragrantica_perfumes SET detail = $2::jsonb, detail_at = now(), detail_error = NULL,
+       gender = CASE WHEN coalesce(gender, '') = '' THEN $3 ELSE gender END, year = coalesce(year, $4), updated_at = now()
+     WHERE id = $1`,
+    Number(row.id), JSON.stringify(detail), gender, year,
+  );
+  logger.info("aromo perfume stored", { id: Number(row.id), brand: row.brand, name: row.name });
+  return true;
+}
+
 // ─── Parfumo: second open source after Parfumetrika (parfumo.com, perfume pages allowed in robots.txt) ───
 // Its search is closed to robots, so perfume addresses come from its sitemaps (downloaded once a month into
 // parfumo_urls). The page gives the pyramid (Top / Heart / Base), accords with colours, gender and year — in
@@ -750,6 +883,14 @@ async function fragranticaPerfumeForExport(perfumeId) {
     if (!row.detail_at && fragranticaClosed) {
       const stored = await fillPerfumeFromParfumetrika(row).catch((error) => {
         logger.warn("parfumetrika fill failed", { id: Number(perfumeId), detail: error?.message || String(error) });
+        return false;
+      });
+      if (stored) row = await readFragranticaPerfume(perfumeId);
+    }
+    // Aromo (our own site): Russian pyramid, no translation needed
+    if (!row.detail_at && fragranticaClosed) {
+      const stored = await fillPerfumeFromAromo(row).catch((error) => {
+        logger.warn("aromo fill failed", { id: Number(perfumeId), detail: error?.message || String(error) });
         return false;
       });
       if (stored) row = await readFragranticaPerfume(perfumeId);
