@@ -329,32 +329,30 @@ export function ChatsPage() {
           </div>
         )}
       />
-      <section className="dashboard-metrics">
-        <Stat label="Чатов" value={rows.length} tone="accent" icon={<MessageCircle size={18} />} />
-        <Stat label="Непрочитанных" value={unreadTotal} tone={unreadTotal ? "warn" : "success"} icon={<BellRing size={18} />} />
-      </section>
-      <div className="filters-row">
-        <SelectField
-          ariaLabel="Маркетплейс"
-          value={marketplace}
-          onChange={(next) => { setMarketplace(next); setSelected(null); }}
-          options={[
-            { value: "all", label: "Все маркетплейсы" },
-            { value: "ozon", label: "Ozon" },
-            { value: "yandex", label: "Яндекс" },
-            { value: "wb", label: "Wildberries" },
-            { value: "avito", label: "Avito" },
-          ]}
-        />
-        <label className="settings-toggle">
-          <input type="checkbox" checked={unreadOnly} onChange={(event) => { setUnreadOnly(event.target.checked); setSelected(null); }} />
-          Только непрочитанные
-        </label>
-      </div>
       {(chatsQuery.data?.warnings || []).map((warning) => <div className="inline-warn" key={warning}>{warning}</div>)}
 
       <div className="chats-layout">
         <div className={`chats-list${mobileView === "thread" ? " mobile-hidden" : ""}`}>
+          {/* фильтры и счётчик — над списком, как в мессенджере */}
+          <div className="chats-list-head">
+            <SelectField
+              ariaLabel="Маркетплейс"
+              value={marketplace}
+              onChange={(next) => { setMarketplace(next); setSelected(null); }}
+              options={[
+                { value: "all", label: "Все маркетплейсы" },
+                { value: "ozon", label: "Ozon" },
+                { value: "yandex", label: "Яндекс" },
+                { value: "wb", label: "Wildberries" },
+                { value: "avito", label: "Avito" },
+              ]}
+            />
+            <label className="settings-toggle">
+              <input type="checkbox" checked={unreadOnly} onChange={(event) => { setUnreadOnly(event.target.checked); setSelected(null); }} />
+              Только непрочитанные
+            </label>
+            <span className="chats-count">{rows.length} чатов{unreadTotal ? <> · <b>{unreadTotal}</b> непрочитанных</> : null}</span>
+          </div>
           {rows.map((chat) => (
             <button
               type="button"
