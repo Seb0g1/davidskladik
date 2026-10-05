@@ -609,6 +609,16 @@ async function existingCardFacts(offerId) {
   };
   const vote = voteBy((p) => (p.type === "oil" ? "oil" : p.concentration === "parfum" ? (p.extrait ? "extrait" : "parfum") : DRAFT_TYPE_BY_CONCENTRATION[p.concentration]));
   const voteGender = voteBy((p) => ({ men: "male", women: "female", unisex: "unisex" }[p.gender]));
+  // rows decide the gender only by a clear majority: «W» against «unisex» (Sospiro Vibrato) is a tie → the source site decides
+  const voteGenderClear = (names) => {
+    const counts = new Map();
+    for (const name of names) {
+      const key = { men: "male", women: "female", unisex: "unisex" }[parser.parsePerfumeName(name).gender];
+      if (key) counts.set(key, (counts.get(key) || 0) + 1);
+    }
+    const [first, second] = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+    return first && (!second || first[1] > second[1]) ? first[0] : null;
+  };
   const links = await prisma.$queryRawUnsafe(
     `SELECT l.exact_name AS name FROM product_links l JOIN warehouse_products w ON w.id = l.product_id
       WHERE lower(w.offer_id) = lower($1) AND coalesce(l.exact_name, '') <> ''`, cleanText(offerId),
@@ -624,9 +634,9 @@ async function existingCardFacts(offerId) {
     ozonTypeKey: vote(ozonNames),
     // PriceMaster rows decide who the perfume is for when they say it (the user's rule, 2026-10-05); titles only
     // when nothing else does — a Market title may carry an earlier wrong improvement («Just Cavalli … женская»)
-    linkGender: voteGender(linkNames),
+    linkGender: voteGenderClear(linkNames),
     titleGender: voteGender(ozonNames) || voteGender(cardNames),
-    gender: voteGender(linkNames) || voteGender(ozonNames) || voteGender(cardNames),
+    gender: voteGenderClear(linkNames) || voteGender(ozonNames) || voteGender(cardNames),
   };
 }
 
