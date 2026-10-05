@@ -183,6 +183,31 @@ const ManualOrderResultSchema = z.object({
   pickingCreated: z.number().optional().default(0),
 }).passthrough();
 
+// коды причин пропуска строки автокорзины → по-человечески
+const CART_SKIP_REASONS: Record<string, string> = {
+  supplier_not_available: "Нет в наличии ни у одного привязанного поставщика — замените поставщика или привяжите другого.",
+  supplier_volume_mismatch: "У поставщиков только другой объём — проверьте привязку.",
+  supplier_inactive_live: "Поставщик выключен.",
+  supplier_cutoff_passed_no_alternative: "Все подходящие поставщики уже закрыли приём заказов на сегодня.",
+  product_not_found: "Товар не найден на складе.",
+  no_warehouse_product: "Товар не найден на складе.",
+  no_pricemaster_link: "У товара нет привязки к PriceMaster — привяжите поставщика.",
+  link_not_found: "Привязка к поставщику не найдена.",
+  ambiguous_product: "Под этим артикулом несколько товаров — уточните привязку.",
+  own_warehouse_priority: "Товар есть на нашем складе — заказ не нужен.",
+  offer_required: "Нет артикула товара.",
+  missing_offer_id: "Нет артикула товара.",
+  already_in_state: "Уже в работе.",
+  already_committed: "Уже в заявке PriceMaster.",
+  pm_name_mismatch: "В PriceMaster под этим артикулом другой товар.",
+  dalik_article_reuse: "Далик отдал этот артикул другому аромату — проверьте привязку.",
+  picking_missing_snooze: "Поставщик недавно отметил «Товара не было».",
+};
+function cartSkipReason(code?: string | null) {
+  if (!code) return "Не готово к заказу.";
+  return CART_SKIP_REASONS[code] || `Не готово к заказу (${code.replace(/_/g, " ")}).`;
+}
+
 export function SupplierCartPanel() {
   const [marketplace, setMarketplace] = useState("all");
   const [limit, setLimit] = useState(500);
@@ -448,27 +473,20 @@ export function SupplierCartPanel() {
           {manualOrderMutation.error ? <div className="inline-error">{errorMessage(manualOrderMutation.error)}</div> : null}
         </div>
       ) : null}
-      {cartMode === "draft" ? (
-        <div className="soft-empty compact">
-          Планировщик ({(scheduleQuery.data?.settings?.scheduleTimes || []).join(", ") || "09:30, 12:00, 15:00"} МСК) только формирует список.
-          В PriceMaster строки попадают после нажатия «Добавить выбранное в PriceMaster» — там они создают неотправленные документы
-          «Запросы клиентов» (заявка поставщику НЕ отсылается автоматически).
-        </div>
-      ) : (
-        <div className="soft-empty compact">
-          Планировщик сам добавляет готовые строки в PriceMaster (документы «Запросы клиентов», без рассылки поставщикам).
-        </div>
-      )}
+      <p className="cart-hint">
+        {cartMode === "draft"
+          ? <>Список собирается в {(scheduleQuery.data?.settings?.scheduleTimes || []).join(", ") || "09:30, 12:00, 15:00"} МСК. В PriceMaster уходит только то, что вы добавите кнопкой, — как «Запросы клиентов», поставщику ничего не рассылается.</>
+          : <>Готовые строки сами уходят в PriceMaster по расписанию — как «Запросы клиентов», без рассылки поставщикам.</>}
+      </p>
       {scheduleMutation.error ? <div className="inline-error">{errorMessage(scheduleMutation.error)}</div> : null}
       {generatingQuery.data?.error ? <div className="inline-error">{String(generatingQuery.data.error)}</div> : null}
       {previewData ? (
-        <div className="operation-stats">
-          <DiagnosticValue label="Найдено" value={previewData.total} />
-          <DiagnosticValue label="Готово" value={previewData.ready} tone={previewData.ready ? "success" : ""} />
-          <DiagnosticValue label="Уже в PM" value={previewData.alreadyCommitted} />
-          <DiagnosticValue label="Пропущено" value={previewData.skipped} tone={previewData.skipped ? "warning" : ""} />
-          <DiagnosticValue label="Черновик" value={previewData.generatedAt ? compactDate(previewData.generatedAt) : "-"} />
-          {previewData.generatedBy ? <DiagnosticValue label="Кем" value={previewData.generatedBy} /> : null}
+        <div className="cart-summary" role="status">
+          <span><b>{previewData.total}</b> заказов</span>
+          <span className="is-ok"><b>{previewData.ready}</b> готово</span>
+          <span><b>{previewData.alreadyCommitted}</b> уже в PriceMaster</span>
+          <span className={previewData.skipped ? "is-warn" : ""}><b>{previewData.skipped}</b> пропущено</span>
+          <span className="cart-summary-at">список от {previewData.generatedAt ? compactDate(previewData.generatedAt) : "—"}{previewData.generatedBy ? ` · ${previewData.generatedBy === "system" ? "по расписанию" : previewData.generatedBy}` : ""}</span>
         </div>
       ) : null}
       {previewData?.warnings?.length ? (
@@ -494,27 +512,46 @@ export function SupplierCartPanel() {
               const disabled = !row.ready || row.alreadyCommitted;
               return (
                 <article className={`supplier-cart-row ${row.ready ? "ready" : "skipped"}${row.isExpress ? " is-express" : ""}${row.pmNameMismatch ? " pm-name-mismatch" : ""}`} key={row.key}>
-                  <label className="checkline">
-                    <input type="checkbox" disabled={disabled} checked={selected.has(row.key)} onChange={() => toggleRow(row.key)} />
-                    <span><MarketplaceBadge marketplace={row.marketplace} /> · {row.orderId || row.postingNumber || "-"} · {row.offerId}</span>
-                    {row.isExpress ? <span className="express-badge"><Zap size={12} /> Экспресс</span> : null}
-                  </label>
-                  <strong>{row.productName || row.offerId}</strong>
-                  <div className="meta-grid">
-                    <span>Кол-во: {row.quantity}</span>
-                    {row.saleAmount ? <span className="tone-success">Продажа: {money(row.saleAmount)}</span> : null}
-                    <span>Поставщик: {row.supplierName || "-"}</span>
-                    <span>PM row: {row.offerRowId || "-"}</span>
-                    {row.pmName ? <span style={row.pmNameMismatch ? { color: "var(--danger)", fontWeight: 600 } : undefined}>PM: {row.pmName}</span> : null}
-                    <span>Цена PM: {row.price ? `${row.price} ${row.priceCurrency}` : "-"}</span>
-                    <span>Доверие: {row.trustFactor ?? 100}/100</span>
-                    <span>{row.orderCutoffTime ? `Заказы до ${row.orderCutoffTime}` : "Без дедлайна"}</span>
-                    {row.reseller ? <span>Перекупщик</span> : null}
-                    {row.stockOnlyFallback ? <span>Складской fallback</span> : null}
-                    {row.isExpress ? <span className="express-badge"><Zap size={12} /> Экспресс — подтверждение Ozon после «Собрал»</span> : null}
+                  {/* одна строка: что заказали и сколько → у кого и почём; служебное — в «Подробнее» */}
+                  <div className="cart-line">
+                    <input type="checkbox" aria-label="Выбрать строку" disabled={disabled} checked={selected.has(row.key)} onChange={() => toggleRow(row.key)} />
+                    <div className="cart-line-main">
+                      <strong title={row.productName || row.offerId}>{row.productName || row.offerId}</strong>
+                      <span className="cart-line-meta">
+                        <MarketplaceBadge marketplace={row.marketplace} />
+                        <span>{row.offerId}</span>
+                        <span>заказ {row.orderId || row.postingNumber || "—"}</span>
+                        {row.isExpress ? <span className="express-badge"><Zap size={12} /> Экспресс</span> : null}
+                      </span>
+                    </div>
+                    <div className="cart-line-qty"><b>×{row.quantity}</b>{row.saleAmount ? <small>{money(row.saleAmount)}</small> : null}</div>
+                    <div className="cart-line-supplier">
+                      <b>{row.supplierName || "Поставщик не найден"}</b>
+                      <small>
+                        {row.price ? `${row.price} ${row.priceCurrency}` : "—"}
+                        {row.orderCutoffTime ? ` · заказы до ${row.orderCutoffTime}` : ""}
+                        {row.reseller ? " · перекупщик" : ""}
+                      </small>
+                    </div>
+                    {!row.alreadyCommitted ? (
+                      <button className="secondary-action cart-line-swap" type="button" disabled={overrideMutation.isPending}
+                        aria-expanded={altKey === row.key} onClick={() => setAltKey(altKey === row.key ? null : row.key)} title="Заменить поставщика">
+                        <Repeat2 size={14} /> <span>Заменить</span>
+                      </button>
+                    ) : <span />}
                   </div>
+                  <details className="cart-line-more">
+                    <summary>Подробнее</summary>
+                    <div className="meta-grid">
+                      <span>Строка PriceMaster: {row.offerRowId || "—"}</span>
+                      {row.pmName ? <span style={row.pmNameMismatch ? { color: "var(--danger)", fontWeight: 600 } : undefined}>В PriceMaster: {row.pmName}</span> : null}
+                      <span>Доверие поставщику: {row.trustFactor ?? 100}/100</span>
+                      {row.stockOnlyFallback ? <span>Через «Наш склад»</span> : null}
+                      {row.isExpress ? <span>Экспресс — подтверждение Ozon после «Собрал»</span> : null}
+                    </div>
+                  </details>
                   {row.pmNameMismatch ? (
-                    <small className="pm-mismatch-hint">⚠ PM: «{row.pmName}» vs заказ: «{row.productName}»</small>
+                    <small className="pm-mismatch-hint">⚠ В PriceMaster под этим артикулом «{row.pmName}» — проверьте, тот ли это товар.</small>
                   ) : null}
                   {row.alreadyCommitted ? (
                     <div className="op-already-row">
@@ -526,14 +563,7 @@ export function SupplierCartPanel() {
                   ) : null}
                   {row.stockOnlyFallback ? <small>Заказ уйдёт через «Наш склад» — цена в PriceMaster будет 0, остаток со склада.</small> : null}
                   {row.skipReason === "supplier_cutoff_passed_no_alternative" ? <small className="danger-text">Все подходящие поставщики уже закрыли прием заказов на сегодня.</small> : null}
-                  {!row.ready && !row.alreadyCommitted ? <small className="danger-text">Причина: {row.skipReason === "supplier_volume_mismatch" ? "у поставщиков только другой объём — проверьте привязку" : (row.skipReason || "не готово")}</small> : null}
-                  {!row.alreadyCommitted ? (
-                    <div className="supplier-cart-actions">
-                      <button className="secondary-action" type="button" disabled={overrideMutation.isPending} onClick={() => setAltKey(altKey === row.key ? null : row.key)}>
-                        <Repeat2 size={14} /> Заменить поставщика
-                      </button>
-                    </div>
-                  ) : null}
+                  {!row.ready && !row.alreadyCommitted ? <small className="danger-text">{cartSkipReason(row.skipReason)}</small> : null}
                   {altKey === row.key ? (
                     <SupplierAltPicker
                       offerId={row.offerId}
