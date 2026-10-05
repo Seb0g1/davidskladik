@@ -739,7 +739,8 @@ button:disabled {
   display: grid;
   gap: 12px;
   min-width: 0;
-  animation: pageFadeIn 120ms ease-out both;
+  /* backwards: no transform left after the animation (it would trap position: fixed modals inside the section) */
+  animation: pageFadeIn 120ms ease-out backwards;
 }
 @keyframes pageFadeIn {
   from { opacity: 0; transform: translateY(4px); }
