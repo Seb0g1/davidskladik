@@ -653,7 +653,7 @@ async function existingCardPerfumeMismatch(offerId, perfume) {
   if (!truths.length) return "";
   // only an explicit concentration in the perfume's name counts («Sauvage Eau de Parfum», «Ombre Nomade Extrait»);
   // a bare «Cologne» / «Parfum» is part of the name: Gentleman Cologne and Cologne 352 are sold as EDT / EDP
-  const explicitConcentration = /eau\s+de\s+(parfum|toilette|cologne)|extrait|exdp|edp|edt|edc/i.test(String(perfume.name || ""));
+  const explicitConcentration = /eau\s+de\s+(parfum|toilette|cologne)|\bextrait\b|\bexdp\b|\bedp\b|\bedt\b|\bedc\b/i.test(String(perfume.name || ""));
   const ownConcentration = explicitConcentration ? parser.parsePerfumeName(`${perfume.brand} ${perfume.name}`, { brands }).concentration : "";
   const genderWord = { male: "men", female: "women", unisex: "unisex" }[perfume.gender] || "";
   const reasons = new Set();
@@ -722,14 +722,8 @@ async function buildFragranticaCardDraft(draft) {
       error: "Не выбран вид: ни поставщики, ни Фрагрантика его не называют. Выберите: парфюмерная вода, туалетная вода, духи (Extrait) или парфюм (Parfum).",
     });
   }
-  // the old title on Ozon is the reference: a new title of another type («туалетная» → «парфюмерная») waits for a person
-  if (improving && !draft.data?.typeChosen && cardFacts.ozonTypeKey && fragTypeFamily(cardFacts.ozonTypeKey) !== fragTypeFamily(typeKey)) {
-    const label = (key) => fragOzonTypeByKey(key).nameLabel;
-    return updateFragranticaDraft(draft.id, {
-      status: "attention", stage: null, type_key: typeKey,
-      error: `Вид меняется: на Ozon «${label(cardFacts.ozonTypeKey)}», у поставщиков «${label(typeKey)}». Выберите вид вручную — тогда карточка соберётся с ним.`,
-    });
-  }
+  // The supplier rows decide the type (the user's rule, 2026-10-05): what is linked is what is sold. The Ozon title
+  // only speaks when the card has no rows — existingCardFacts votes links → Ozon → other titles.
   // an improvement of an existing card only for the same perfume; a manual choice (perfumeChosen) is trusted
   if (draft.data?.existing?.offerId && !draft.data?.perfumeChosen) {
     const mismatch = await existingCardPerfumeMismatch(draft.data.existing.offerId, perfume).catch(() => "");
@@ -987,7 +981,7 @@ async function processFragranticaDraft(draft) {
   } catch (error) {
     // Фрагрантика занята (429 / проверка Cloudflare): черновик ждёт и пересобирается сам — 1, 2, 4 … 30 мин, до 8 раз
     // Fragrantica busy, or a marketplace rate limit (Market «Hit rate limit», Ozon 429): wait and retry
-    const busy = /ответила (429|403)|too many|challenge|rate limit|METHOD_FAILURE|429/i.test(String(error?.message || ""));
+    const busy = /ответила (429|403)|too many|challenge|rate limit|METHOD_FAILURE|\b429\b/i.test(String(error?.message || ""));
     const tries = Number(draft.data?.fetchRetries || 0);
     if (busy && draft.status !== "sending") {
       // 1, 2, 4 … 30 min; after 8 tries once an hour — a long Cloudflare block never turns into «attention»
