@@ -698,6 +698,14 @@ async function buildFragranticaCardDraft(draft) {
     if (facts.gender) perfume = { ...perfume, gender: facts.gender };
   }
   parts.perfume = Date.now() - buildStartedAt;
+  // notes named by the text AI (no Fragrantica / Fragella data) wait until a person confirms them
+  if (perfume.source === "ai" && !draft.data?.notesConfirmed) {
+    const tier = (list) => (list || []).map((n) => n.name).join(", ") || "—";
+    return updateFragranticaDraft(draft.id, {
+      status: "attention", stage: null,
+      error: `Ноты подобрал ИИ — проверьте. Верх: ${tier(perfume.notes?.top)}. Сердце: ${tier(perfume.notes?.middle)}. База: ${tier(perfume.notes?.base)}. Если верно — «Ноты верны».`,
+    });
+  }
   // The type: chosen by hand (typeChosen) wins; an improvement recomputes its product's type on every build (a saved
   // type_key may be the old «парфюмерная вода» default); a new card takes the type its supplier rows / Fragrantica
   // name say. Nothing says it → no default: the draft waits for a person (EDT and Extrait became EDP that way).
@@ -1327,6 +1335,11 @@ app.patch("/api/fragrantica/drafts/:id", requireAdmin, async (request, response,
       fields.targets = targets.map((t) => t.key);
       // a shop of a new style needs its «Пирамида аромата» — rebuild only the photos part (cached otherwise)
       if (targets.some((t) => !data.images?.notes?.[t.style])) rebuild = true;
+    }
+    // «Ноты верны»: AI-named notes checked by a person — the card is built with them
+    if (body.notesConfirmed === true && !data.notesConfirmed) {
+      data.notesConfirmed = true;
+      rebuild = true;
     }
     // a type picked by hand is final: builds keep it (no recomputation, no Ozon check)
     if (body.typeKey !== undefined && FRAG_OZON_TYPES.some((t) => t.key === body.typeKey) && !data.typeChosen) {

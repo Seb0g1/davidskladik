@@ -529,6 +529,9 @@ function DraftRow({ draft, targets, timing }: { draft: Draft; targets: WorkTarge
         ) : null}
 
         {draft.error && draft.status !== "ready" ? <div className="fr-warn">{draft.error}</div> : null}
+        {/^Ноты подобрал ИИ/.test(String(draft.error || "")) && editable ? (
+          <button className="secondary-action compact" type="button" disabled={patch.isPending} onClick={() => patch.mutate({ notesConfirmed: true })}>Ноты верны</button>
+        ) : null}
         {(d.warnings || []).filter(Boolean).slice(0, 3).map((w) => <div key={w} className="fr-hint">{w}</div>)}
         {draft.exports.length ? (
           <div className="fr-conv-exports">

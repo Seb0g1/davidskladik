@@ -212,6 +212,7 @@ function ImproveCard({ item, picked, onPick, onApprove, onSkip, onRestore, onReb
       ) : null}
       {item.brandMatched === false && editable ? <BrandPicker item={item} /> : null}
       {/^(Вид меняется|Не выбран вид)/.test(String(item.error || "")) ? <TypePicker item={item} /> : null}
+      {/^Ноты подобрал ИИ/.test(String(item.error || "")) ? <NotesConfirm id={item.id} /> : null}
       {item.exports.length ? (
         <div className="ci-exports">
           {item.exports.map((e, i) => (
@@ -297,6 +298,23 @@ export function ImproveAdd({ compact = false }: { compact?: boolean }) {
 
 // EDP — парфюмерная вода, EDT — туалетная вода, Extrait / exdp — духи, Parfum — парфюм
 const CARD_TYPES: Array<[string, string]> = [["edp", "Парфюмерная вода"], ["edt", "Туалетная вода"], ["extrait", "Духи (Extrait)"], ["parfum", "Парфюм (Parfum)"], ["cologne", "Одеколон"]];
+
+/** «Ноты подобрал ИИ»: a person checks the pyramid in the message above and confirms it. */
+function NotesConfirm({ id }: { id: number }) {
+  const queryClient = useQueryClient();
+  const confirm = useMutation({
+    mutationFn: () => apiJson(`/api/fragrantica/drafts/${id}`, { method: "PATCH", body: JSON.stringify({ notesConfirmed: true }) }),
+    onSuccess: () => { toast.success("Ноты подтверждены — карточка пересобирается"); queryClient.invalidateQueries({ queryKey: ["card-improve"] }); },
+    onError: (error) => toast.error(errorMessage(error)),
+  });
+  return (
+    <div className="ci-brand">
+      <div className="ci-brand-list">
+        <button type="button" className="ci-brand-chip" disabled={confirm.isPending} onClick={() => confirm.mutate()}>Ноты верны</button>
+      </div>
+    </div>
+  );
+}
 
 /** «Вид меняется» / «Не выбран вид»: a person picks the type; the card is rebuilt with it and keeps it. */
 function TypePicker({ item }: { item: Item }) {

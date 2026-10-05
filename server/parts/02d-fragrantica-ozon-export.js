@@ -290,7 +290,7 @@ async function fillPerfumeFromFragella(row) {
   const levels = { top: item.Notes?.Top || [], middle: item.Notes?.Middle || [], base: item.Notes?.Base || [] };
   // only a flat list («General Notes»): Fragrantica shows such perfumes with one tier
   if (!levels.top.length && !levels.middle.length && !levels.base.length) {
-    levels.middle = (item["General Notes"] || []).map((name) => ({ name, imageUrl: "" }));
+    levels.flat = (item["General Notes"] || []).map((name) => ({ name, imageUrl: "" }));
   }
   const noteNames = Object.values(levels).flat().map((note) => note.name);
   if (!noteNames.length) return false;
@@ -310,8 +310,8 @@ async function fillPerfumeFromFragella(row) {
   const gender = { men: "male", women: "female", unisex: "unisex" }[cleanText(item.Gender).toLowerCase()] || row.gender || "";
   const year = Number(item.Year) || Number(row.year) || null;
   const title = `${row.name} ${row.brand}`;
-  const tierText = [["Верхние ноты", notes.top], ["средние ноты", notes.middle], ["базовые ноты", notes.base]]
-    .filter(([, list]) => list.length).map(([label, list]) => `${label}: ${list.map((n) => n.name).join(", ")}`).join("; ");
+  const tierText = [["Верхние ноты", notes.top], ["средние ноты", notes.middle], ["базовые ноты", notes.base], ["ноты", notes.flat]]
+    .filter(([, list]) => list && list.length).map(([label, list]) => `${label}: ${list.map((n) => n.name).join(", ")}`).join("; ");
   const forWhom = { male: "для мужчин", female: "для женщин", unisex: "для мужчин и женщин" }[gender] || "";
   const detail = {
     id: Number(row.id), url: row.url, name: row.name, year, brand: row.brand,
@@ -339,6 +339,44 @@ async function fillPerfumeFromFragella(row) {
   return true;
 }
 
+/**
+ * Last resort — neither Fragrantica nor Fragella has the perfume: the text AI names its notes, but only when it
+ * knows the perfume («unknown» otherwise). Such notes are marked source «ai»: the card stops at «Ноты подобрал
+ * ИИ — проверьте» until a person confirms them (AI notes for 13k warehouse goods were often wrong).
+ */
+async function fillPerfumeFromAi(row) {
+  const { data } = await createTextAiJson([
+    { role: "system", content: "Ты парфюмерный эксперт. Называешь ноты аромата только если точно знаешь его официальную пирамиду. Если аромат тебе неизвестен или ты не уверен — верни {\"unknown\": true}. Ничего не придумывай и не угадывай по похожим ароматам." },
+    { role: "user", content: `Аромат: ${row.brand} ${row.name}${row.year ? ` (${row.year})` : ""}. Верни JSON: {"top": ["нота"], "middle": ["нота"], "base": ["нота"], "accords": ["аккорд"], "gender": "male|female|unisex", "year": 2015}. Ноты и аккорды — по-русски, как на русской Фрагрантике (Бергамот, Розовый перец, древесный, цитрусовый).` },
+  ], { temperature: 0 });
+  const list = (value) => (Array.isArray(value) ? value : []).map((v) => cleanText(v).replace(/ё/g, "е")).filter(Boolean).slice(0, 12);
+  const levels = { top: list(data?.top), middle: list(data?.middle), base: list(data?.base) };
+  if (!data || data.unknown || !Object.values(levels).flat().length) return false;
+  const [knownIcons, palette] = await Promise.all([fragellaKnownNoteIcons(), fragellaAccordPalette()]);
+  const notes = Object.fromEntries(Object.entries(levels).map(([level, names]) => [level, names.map((name) => {
+    const ru = name.charAt(0).toUpperCase() + name.slice(1);
+    return { name: ru, icon: knownIcons.get(ru.toLowerCase()) || "" };
+  })]));
+  const accords = list(data?.accords).slice(0, 8).map((name, i) => ({ name: name.toLowerCase(), share: Math.max(40, 100 - i * 10), ...(palette.get(name.toLowerCase()) || { color: "#000000", background: "#d9d9d9" }) }));
+  const gender = ["male", "female", "unisex"].includes(data?.gender) ? data.gender : row.gender || "";
+  const year = Number(row.year) || Number(data?.year) || null;
+  const title = `${row.name} ${row.brand}`;
+  const tierText = [["Верхние ноты", notes.top], ["средние ноты", notes.middle], ["базовые ноты", notes.base]]
+    .filter(([, l]) => l.length).map(([label, l]) => `${label}: ${l.map((n) => n.name).join(", ")}`).join("; ");
+  const detail = {
+    id: Number(row.id), url: row.url, name: row.name, year, brand: row.brand, image: "", notes, title, votes: null,
+    family: "", gender, rating: null, accords, brandSlug: row.brand_slug || "", perfumers: [], description: `${title}. ${tierText}.`, source: "ai",
+  };
+  await getPrisma().$executeRawUnsafe(
+    `UPDATE fragrantica_perfumes SET detail = $2::jsonb, detail_at = now(), detail_error = NULL,
+       gender = CASE WHEN coalesce(gender, '') = '' THEN $3 ELSE gender END, year = coalesce(year, $4), updated_at = now()
+     WHERE id = $1`,
+    Number(row.id), JSON.stringify(detail), gender, year,
+  );
+  logger.info("ai perfume notes stored", { id: Number(row.id), brand: row.brand, name: row.name });
+  return true;
+}
+
 async function fragranticaPerfumeForExport(perfumeId) {
   let row = await readFragranticaPerfume(perfumeId);
   if (!row) {
@@ -360,6 +398,14 @@ async function fragranticaPerfumeForExport(perfumeId) {
     if (!row.detail_at && fragellaKey()) {
       const stored = await fillPerfumeFromFragella(row).catch((error) => {
         logger.warn("fragella fill failed", { id: Number(perfumeId), detail: error?.message || String(error) });
+        return false;
+      });
+      if (stored) row = await readFragranticaPerfume(perfumeId);
+    }
+    // nothing anywhere: the text AI, marked for a person to confirm
+    if (!row.detail_at && fragellaKey()) {
+      const stored = await fillPerfumeFromAi(row).catch((error) => {
+        logger.warn("ai perfume notes failed", { id: Number(perfumeId), detail: error?.message || String(error) });
         return false;
       });
       if (stored) row = await readFragranticaPerfume(perfumeId);
