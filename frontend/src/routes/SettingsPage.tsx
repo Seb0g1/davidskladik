@@ -920,10 +920,9 @@ function ToolsSettingsPanel() {
     { href: "/app/prices", title: "Цены", text: "Автоматизация цен и остатков, retry и причины пропусков." },
     { href: "/app/finance", title: "Финансы", text: "Заказы, ручные закупки, поставщики и чистая прибыль." },
     { href: "/app/operations", title: "Операции", text: "Массовые задачи, прогресс и аварийные запуски." },
-    { href: "/app/recovery-queue", title: "Восстановление", text: "Очередь Ozon autoarchive и дневной лимит разархива." },
-    { href: "/app/no-supplier", title: "Ошибки наличия", text: "Товары без доступного поставщика и риски остатков." },
+    { href: "/app/system?tab=recovery", title: "Восстановление из архива", text: "Очередь Ozon autoarchive и дневной лимит разархива." },
+    { href: "/app/supplier-match?tab=no-supplier", title: "Ошибки наличия", text: "Товары без доступного поставщика и риски остатков." },
     { href: "/app/problem-products", title: "Проблемные товары", text: "Единая диагностика SKU, фото, цен, остатков и связей." },
-    { href: "/app/ai-drafts", title: "AI-черновики", text: "Черновики карточек и генерация контента." },
     { href: "/app/system", title: "Система", text: "Health, очереди, кэши и технический статус." },
   ];
   return (

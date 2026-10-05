@@ -7,6 +7,7 @@ import { fetchJson, mutationBody } from "../api";
 import { errorMessage } from "../lib/common";
 import { toast } from "../lib/toast";
 import { ExcludedSuppliers } from "../components/ExcludedSuppliers";
+import { PageTabsStrip } from "../components/PageTabs";
 import "./supplier-match.css";
 
 // «Подбор поставщиков»: строки PriceMaster, найденные для товаров склада. Привязка — только по кнопке.
@@ -147,6 +148,7 @@ export function SupplierMatchPage() {
           </button>
         </div>
       </header>
+      <div className="page-heading-tabs"><PageTabsStrip /></div>
       {first?.scan.status === "error" ? <div className="inline-error">Проверка не удалась: {first.scan.error}</div> : null}
 
       <nav className="sm2-tabs" role="tablist">

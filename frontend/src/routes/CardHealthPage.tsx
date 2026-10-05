@@ -48,7 +48,7 @@ export function CardHealthPage() {
   const health = useQuery({
     queryKey: ["card-health", status, code, query],
     queryFn: () => apiJson<HealthResponse>(`/api/card-health?status=${status}&code=${encodeURIComponent(code)}&q=${encodeURIComponent(query)}`),
-    refetchInterval: (data) => (data?.state.data?.scan.running ? 5000 : 60_000),
+    refetchInterval: (data) => (data?.state.data?.scan?.running ? 5000 : 60_000),
   });
   useEffect(() => setPicked([]), [status, code, query]);
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["card-health"] });
@@ -83,7 +83,7 @@ export function CardHealthPage() {
   const data = health.data;
   const rules = data?.rules || {};
   const items = data?.items || [];
-  const running = Boolean(data?.scan.running);
+  const running = Boolean(data?.scan?.running);
   const fixable = items.filter((i) => i.fix);
 
   return (
@@ -98,7 +98,7 @@ export function CardHealthPage() {
         }
       />
       <div className="ch-scan">
-        {data?.scan.at ? <>Последняя проверка {new Date(data.scan.at).toLocaleString("ru")}: ошибок {data.scan.issues ?? 0}, исправилось {data.scan.fixed ?? 0}{data.scan.autoApplied ? `, починено само ${data.scan.autoApplied}` : ""}{data.scan.quarantine?.confirmed ? `, из карантина цен выпущено ${data.scan.quarantine.confirmed}` : ""}.</> : "Первая проверка запустится в течение 10 минут после запуска сервера."}
+        {data?.scan?.at ? <>Последняя проверка {new Date(data.scan.at).toLocaleString("ru")}: ошибок {data.scan.issues ?? 0}, исправилось {data.scan.fixed ?? 0}{data.scan.autoApplied ? `, починено само ${data.scan.autoApplied}` : ""}{data.scan.quarantine?.confirmed ? `, из карантина цен выпущено ${data.scan.quarantine.confirmed}` : ""}.</> : "Первая проверка запустится в течение 10 минут после запуска сервера."}
         {running ? <div className="fr-progress-bar is-indeterminate ch-bar"><span /></div> : null}
       </div>
 

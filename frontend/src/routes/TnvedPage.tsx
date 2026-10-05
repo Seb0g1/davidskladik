@@ -308,7 +308,7 @@ export function TnvedPage() {
       />
 
       {/* Отчёт по покрытию */}
-      {report ? (
+      {report?.ozon && report?.yandex ? (
         <div className="settings-grid tnved-status-grid">
           <div className="settings-panel tnved-mp-panel">
             <div className="tnved-mp-label">Ozon</div>

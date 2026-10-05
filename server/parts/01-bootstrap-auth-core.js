@@ -124,19 +124,26 @@ function normalizeAppRole(value, fallback = "manager") {
 // Page keys must match AppRoute keys in frontend/src/App.tsx.
 const APP_PAGE_KEYS = [
   "dashboard", "warehouse", "suppliers", "picking-list", "reviews", "chats",
-  "import", "avito", "statistics", "settings", "questions", "prices", "operations",
-  "supplier-cart", "recovery-queue", "problem-products", "finance",
-  "consignment", "system", "ai-drafts", "no-supplier", "fragrantica",
-  "support", "supplier-match", "shop", "new-products", "card-improve", "card-health",
-  "ozon-card-fix", "ozon-docs", "price-guard", "tnved", "brands-tnved", "brand-bans",
+  "import", "avito", "settings", "questions", "prices", "operations",
+  "supplier-cart", "problem-products", "finance",
+  "consignment", "system", "fragrantica",
+  "support", "supplier-match", "shop", "card-improve", "card-health",
+  "ozon-docs", "tnved", "brand-bans",
 ];
+
+// Former pages that became tabs of a section (2026-10-05): a saved grant keeps working as the section's key.
+const PAGE_KEY_ALIASES = {
+  statistics: "dashboard", "recovery-queue": "system", "no-supplier": "supplier-match", "ozon-card-fix": "card-health",
+  "brands-tnved": "tnved", "price-guard": "prices", "ai-drafts": "card-improve", "new-products": "fragrantica",
+};
 
 const DEFAULT_MANAGER_PAGES = ["warehouse", "picking-list", "chats", "reviews", "questions"];
 
 // null => role defaults apply (admin: everything, manager: warehouse + picking).
 function normalizeAllowedPages(value) {
   if (!Array.isArray(value)) return null;
-  const pages = [...new Set(value.map((page) => cleanText(page).toLowerCase()).filter((page) => APP_PAGE_KEYS.includes(page)))];
+  const pages = [...new Set(value.map((page) => cleanText(page).toLowerCase()).map((page) => PAGE_KEY_ALIASES[page] || page)
+    .filter((page) => APP_PAGE_KEYS.includes(page)))];
   return pages.length ? pages : null;
 }
 
@@ -168,10 +175,11 @@ const API_PREFIX_PAGE_KEYS = [
   ["/api/card-improve", "card-improve"],
   ["/api/card-health", "card-health"],
   ["/api/ozon-docs", "ozon-docs"],
-  ["/api/ozon/card-errors", "ozon-card-fix"],
-  ["/api/price-guard", "price-guard"],
+  ["/api/ozon/card-errors", "card-health"],
+  ["/api/price-guard", "prices"],
   ["/api/tnved", "tnved"],
   ["/api/brand-bans", "brand-bans"],
+  ["/api/catalog/brands-tnved", "tnved"],
 ];
 
 function apiPathPageKey(pathname = "") {

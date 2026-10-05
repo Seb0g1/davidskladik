@@ -1,12 +1,13 @@
 import { ShieldAlert, Activity, FileCheck2, Flower2, AlertCircle, AlertTriangle, BadgeDollarSign, Ban, BarChart3, BookOpen, CirclePlay, ClipboardList, DollarSign, Download, HandCoins, HelpCircle, Home, Link2, MessageCircle, MessageCircleHeart, PackageCheck, PackagePlus, RefreshCcw, Settings, ShoppingCart, Sparkles, Star, Store, Tag, Truck, Upload, Wrench } from "lucide-react";
 import { ComponentType, lazy, LazyExoticComponent, ReactNode } from "react";
+import { TabbedPage } from "../components/PageTabs";
 
-export type AppRoute = "dashboard" | "import" | "avito" | "shop" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "consignment" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier" | "new-products" | "tnved" | "support" | "brand-bans" | "brands-tnved" | "ozon-card-fix" | "fragrantica" | "ozon-docs" | "price-guard" | "card-health" | "card-improve" | "supplier-match";
+export type AppRoute = "dashboard" | "import" | "avito" | "shop" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "prices" | "problem-products" | "finance" | "consignment" | "settings" | "system" | "tnved" | "support" | "brand-bans" | "fragrantica" | "ozon-docs" | "card-health" | "card-improve" | "supplier-match";
 
 export type NavItem = { route: AppRoute; href: string; label: string; icon: ReactNode; keywords?: string };
 
 export const navItems: NavItem[] = [
-  { route: "dashboard", href: "/app/dashboard", label: "Дашборд", icon: <Home size={16} />, keywords: "главная сводка dashboard" },
+  { route: "dashboard", href: "/app/dashboard", label: "Дашборд", icon: <Home size={16} />, keywords: "статистика сотрудники главная сводка dashboard" },
   { route: "warehouse", href: "/app/warehouse", label: "Склад", icon: <PackageCheck size={16} />, keywords: "каталог товары привязки sklad" },
   { route: "picking-list", href: "/app/picking-list", label: "Сборка", icon: <ClipboardList size={16} />, keywords: "лист закупки собрать заказ sborka" },
   { route: "avito", href: "/app/avito", label: "Автозагрузка Avito", icon: <Upload size={16} />, keywords: "авито фид avito" },
@@ -16,28 +17,20 @@ export const navItems: NavItem[] = [
   { route: "questions", href: "/app/questions", label: "Вопросы", icon: <HelpCircle size={16} />, keywords: "вопросы покупателей voprosy" },
   { route: "support", href: "/app/support", label: "Поддержка сайта", icon: <MessageCircleHeart size={16} />, keywords: "сайт чат поддержка" },
   { route: "settings", href: "/app/settings", label: "Настройки", icon: <Settings size={16} />, keywords: "сотрудники доступы ключи nastroyki" },
-  { route: "system", href: "/app/system", label: "Система", icon: <Activity size={16} />, keywords: "здоровье очереди логи" },
-  { route: "ai-drafts", href: "/app/ai-drafts", label: "ИИ-черновики", icon: <Sparkles size={16} />, keywords: "ии черновики ai" },
-  { route: "no-supplier", href: "/app/no-supplier", label: "Ошибки наличия", icon: <AlertCircle size={16} />, keywords: "нет поставщика" },
+  { route: "system", href: "/app/system", label: "Система", icon: <Activity size={16} />, keywords: "восстановление из архива разархив здоровье очереди логи" },
   { route: "operations", href: "/app/operations", label: "Операции", icon: <CirclePlay size={16} />, keywords: "синхронизация запуск" },
-  { route: "recovery-queue", href: "/app/recovery-queue", label: "Восстановление из архива", icon: <RefreshCcw size={16} />, keywords: "очередь восстановления" },
   { route: "suppliers", href: "/app/suppliers", label: "Поставщики", icon: <Truck size={16} />, keywords: "балансы оплаты postavshiki" },
-  { route: "supplier-match", href: "/app/supplier-match", label: "Подбор поставщиков", icon: <Link2 size={16} />, keywords: "подбор поставщиков привязки pricemaster нет поставщика запустить в продажу новые привязки" },
+  { route: "supplier-match", href: "/app/supplier-match", label: "Подбор поставщиков", icon: <Link2 size={16} />, keywords: "ошибки наличия без поставщика подбор поставщиков привязки pricemaster нет поставщика запустить в продажу новые привязки" },
   { route: "shop", href: "/app/shop", label: "Магазин MV", icon: <Store size={16} />, keywords: "magicvibes сайт магазин" },
   { route: "import", href: "/app/import", label: "Импорт на Яндекс", icon: <Download size={16} />, keywords: "яндекс маркет перенос" },
   { route: "supplier-cart", href: "/app/supplier-cart", label: "Автокорзина", icon: <ShoppingCart size={16} />, keywords: "корзина pricemaster заказы avtokorzina" },
-  { route: "prices", href: "/app/prices", label: "Цены", icon: <DollarSign size={16} />, keywords: "наценка курс ceny" },
-  { route: "statistics", href: "/app/statistics", label: "Статистика", icon: <BarChart3 size={16} />, keywords: "продажи графики" },
+  { route: "prices", href: "/app/prices", label: "Цены", icon: <DollarSign size={16} />, keywords: "проверка цен подозрительные карантин наценка курс ceny" },
   { route: "problem-products", href: "/app/problem-products", label: "Проблемные товары", icon: <AlertTriangle size={16} />, keywords: "ошибки товары" },
   { route: "finance", href: "/app/finance", label: "Финансы", icon: <BadgeDollarSign size={16} />, keywords: "расходы закупки деньги" },
-  { route: "new-products", href: "/app/new-products", label: "Новые товары", icon: <PackagePlus size={16} />, keywords: "новинки" },
-  { route: "tnved", href: "/app/tnved", label: "Коды ТН ВЭД", icon: <Tag size={16} />, keywords: "тнвэд коды" },
+  { route: "tnved", href: "/app/tnved", label: "ТН ВЭД", icon: <Tag size={16} />, keywords: "бренды декларации тнвэд коды" },
   { route: "brand-bans", href: "/app/brand-bans", label: "Запрет брендов", icon: <Ban size={16} />, keywords: "бренды запрет бан" },
-  { route: "brands-tnved", href: "/app/brands-tnved", label: "Бренды / ТН ВЭД", icon: <BookOpen size={16} />, keywords: "бренды декларации" },
-  { route: "ozon-card-fix", href: "/app/ozon-card-fix", label: "Карточки Ozon", icon: <Wrench size={16} />, keywords: "озон карточки исправить" },
-  { route: "card-health", href: "/app/card-health", label: "Ошибки карточек", icon: <Wrench size={16} />, keywords: "ошибки карточек маркет починить исправить группа вариантов габариты тн вэд карантин" },
+  { route: "card-health", href: "/app/card-health", label: "Ошибки карточек", icon: <Wrench size={16} />, keywords: "ozon карточки озон модерация на доработку ошибки карточек маркет починить исправить группа вариантов габариты тн вэд карантин" },
   { route: "card-improve", href: "/app/card-improve", label: "Улучшение карточек", icon: <Sparkles size={16} />, keywords: "улучшение карточек старые карточки фото описание рейтинг одобрить было стало" },
-  { route: "price-guard", href: "/app/price-guard", label: "Проверка цен", icon: <ShieldAlert size={16} />, keywords: "цены карантин подозрительные заглушка рубли проверка отправить" },
   { route: "ozon-docs", href: "/app/ozon-docs", label: "Документы Ozon", icon: <FileCheck2 size={16} />, keywords: "декларации сертификаты документы проверка отклонено одобрено озон" },
   { route: "fragrantica", href: "/app/fragrantica", label: "Фрагрантика", icon: <Flower2 size={16} />, keywords: "fragrantica ароматы каталог добавить на озон новые карточки" },
 ];
@@ -47,11 +40,11 @@ export const navItems: NavItem[] = [
 export const NAV_SECTIONS: Array<{ id: string; title?: string; routes: AppRoute[] }> = [
   { id: "daily", routes: ["dashboard", "warehouse", "picking-list", "supplier-cart", "suppliers"] },
   { id: "customers", title: "Покупатели", routes: ["chats", "questions", "reviews", "support"] },
-  { id: "cards", title: "Карточки товаров", routes: ["card-improve", "card-health", "fragrantica", "supplier-match", "ozon-docs", "ozon-card-fix", "new-products", "problem-products", "no-supplier"] },
-  { id: "money", title: "Цены и деньги", routes: ["prices", "price-guard", "finance", "statistics", "consignment"] },
+  { id: "cards", title: "Карточки товаров", routes: ["card-improve", "card-health", "fragrantica", "supplier-match", "ozon-docs", "problem-products"] },
+  { id: "money", title: "Цены и деньги", routes: ["prices", "finance", "consignment"] },
   { id: "channels", title: "Каналы продаж", routes: ["shop", "avito", "import"] },
-  { id: "reference", title: "Справочники", routes: ["tnved", "brands-tnved", "brand-bans"] },
-  { id: "system", title: "Система", routes: ["settings", "operations", "recovery-queue", "system", "ai-drafts"] },
+  { id: "reference", title: "Справочники", routes: ["tnved", "brand-bans"] },
+  { id: "system", title: "Система", routes: ["settings", "operations", "system"] },
 ];
 
 // Порядок важен: более длинные префиксы раньше коротких.
@@ -59,7 +52,30 @@ const ROUTE_PREFIXES: Array<[string, AppRoute]> = navItems
   .map((item) => [item.href, item.route] as [string, AppRoute])
   .sort((a, b) => b[0].length - a[0].length);
 
+// Бывшие отдельные страницы → раздел и вкладка (старые ссылки и закладки продолжают работать).
+const ROUTE_ALIASES: Record<string, [AppRoute, string]> = {
+  "/app/statistics": ["dashboard", "stats"],
+  "/app/recovery-queue": ["system", "recovery"],
+  "/app/no-supplier": ["supplier-match", "no-supplier"],
+  "/app/ozon-card-fix": ["card-health", "ozon"],
+  "/app/brands-tnved": ["tnved", "brands"],
+  "/app/price-guard": ["prices", "guard"],
+  "/app/ai-drafts": ["card-improve", ""],
+  "/app/new-products": ["fragrantica", ""],
+};
+
 export function routeFromPath(path = window.location.pathname): AppRoute {
+  const alias = ROUTE_ALIASES[path.replace(/\/+$/, "")];
+  if (alias) {
+    const [route, tab] = alias;
+    const href = navItems.find((item) => item.route === route)?.href || "/app/dashboard";
+    try {
+      if (window.location.pathname === path) window.history.replaceState(window.history.state, "", tab ? `${href}?tab=${tab}` : href);
+    } catch {
+      // ignore
+    }
+    return route;
+  }
   for (const [prefix, route] of ROUTE_PREFIXES) {
     if (path === prefix || path.startsWith(`${prefix}/`) || path.startsWith(`${prefix}?`)) return route;
   }
@@ -72,7 +88,7 @@ type Loader = { load: () => Promise<PageModule>; exportName: string };
 // Страницы грузятся лениво (свой чанк на раздел). Загрузчик вынесен отдельно, чтобы
 // чанк можно было подтянуть заранее — при наведении на пункт меню или в простое.
 const LOADERS: Record<AppRoute, Loader> = {
-  dashboard: { load: () => import("../routes/DashboardPage"), exportName: "DashboardPage" },
+  dashboard: { load: async () => ({ Page: () => <TabbedPage title="Дашборд" tabs={[{ id: "overview", label: "Обзор", load: () => import("../routes/DashboardPage"), exportName: "DashboardPage" }, { id: "stats", label: "Статистика", load: () => import("../routes/StatisticsPage"), exportName: "StatisticsPage" }]} /> }), exportName: "Page" },
   warehouse: { load: () => import("../routes/WarehousePage"), exportName: "WarehousePage" },
   "picking-list": { load: () => import("../routes/PickingListPage"), exportName: "PickingListPage" },
   avito: { load: () => import("../routes/AvitoPage"), exportName: "AvitoPage" },
@@ -82,30 +98,22 @@ const LOADERS: Record<AppRoute, Loader> = {
   chats: { load: () => import("../routes/ChatsPage"), exportName: "ChatsPage" },
   support: { load: () => import("../routes/SupportChatsPage"), exportName: "SupportChatsPage" },
   settings: { load: () => import("../routes/SettingsPage"), exportName: "SettingsPage" },
-  system: { load: () => import("../routes/SystemPage"), exportName: "SystemPage" },
-  "ai-drafts": { load: () => import("../routes/AiDraftsPage"), exportName: "AiDraftsPage" },
-  "no-supplier": { load: () => import("../routes/NoSupplierPage"), exportName: "NoSupplierPage" },
+  system: { load: async () => ({ Page: () => <TabbedPage title="Система" tabs={[{ id: "health", label: "Состояние", load: () => import("../routes/SystemPage"), exportName: "SystemPage" }, { id: "recovery", label: "Восстановление из архива", load: () => import("../routes/RecoveryQueuePage"), exportName: "RecoveryQueuePage" }]} /> }), exportName: "Page" },
   operations: { load: () => import("../routes/OperationsPage"), exportName: "OperationsPage" },
-  "recovery-queue": { load: () => import("../routes/RecoveryQueuePage"), exportName: "RecoveryQueuePage" },
   suppliers: { load: () => import("../routes/SuppliersPage"), exportName: "SuppliersPage" },
   shop: { load: () => import("../routes/ShopAdminPage"), exportName: "default" },
   import: { load: () => import("../routes/ImportPage"), exportName: "ImportPage" },
   "supplier-cart": { load: () => import("../routes/SupplierCartPage"), exportName: "SupplierCartPage" },
-  prices: { load: () => import("../routes/PricesPage"), exportName: "PricesPage" },
-  statistics: { load: () => import("../routes/StatisticsPage"), exportName: "StatisticsPage" },
+  prices: { load: async () => ({ Page: () => <TabbedPage title="Цены" tabs={[{ id: "send", label: "Отправка цен", load: () => import("../routes/PricesPage"), exportName: "PricesPage" }, { id: "guard", label: "Подозрительные цены", load: () => import("../routes/PriceGuardPage"), exportName: "PriceGuardPage" }]} /> }), exportName: "Page" },
   "problem-products": { load: () => import("../routes/ProblemProductsPage"), exportName: "ProblemProductsPage" },
   finance: { load: () => import("../routes/FinancePage"), exportName: "FinancePage" },
-  "new-products": { load: () => import("../routes/NewProductsPage"), exportName: "NewProductsPage" },
-  tnved: { load: () => import("../routes/TnvedPage"), exportName: "TnvedPage" },
+  tnved: { load: async () => ({ Page: () => <TabbedPage title="ТН ВЭД" tabs={[{ id: "categories", label: "Категории", load: () => import("../routes/TnvedPage"), exportName: "TnvedPage" }, { id: "brands", label: "Бренды", load: () => import("../routes/BrandsTnvedPage"), exportName: "BrandsTnvedPage" }]} /> }), exportName: "Page" },
   "brand-bans": { load: () => import("../routes/BrandBansPage"), exportName: "BrandBansPage" },
-  "brands-tnved": { load: () => import("../routes/BrandsTnvedPage"), exportName: "BrandsTnvedPage" },
-  "ozon-card-fix": { load: () => import("../routes/OzonCardFixPage"), exportName: "OzonCardFixPage" },
   fragrantica: { load: () => import("../routes/FragranticaPage"), exportName: "FragranticaPage" },
   "ozon-docs": { load: () => import("../routes/OzonDocsPage"), exportName: "OzonDocsPage" },
-  "price-guard": { load: () => import("../routes/PriceGuardPage"), exportName: "PriceGuardPage" },
-  "card-health": { load: () => import("../routes/CardHealthPage"), exportName: "CardHealthPage" },
+  "card-health": { load: async () => ({ Page: () => <TabbedPage title="Ошибки карточек" tabs={[{ id: "market", label: "Яндекс Маркет", load: () => import("../routes/CardHealthPage"), exportName: "CardHealthPage" }, { id: "ozon", label: "Ozon", load: () => import("../routes/OzonCardFixPage"), exportName: "OzonCardFixPage" }]} /> }), exportName: "Page" },
   "card-improve": { load: () => import("../routes/CardImprovePage"), exportName: "CardImprovePage" },
-  "supplier-match": { load: () => import("../routes/SupplierMatchPage"), exportName: "SupplierMatchPage" },
+  "supplier-match": { load: async () => ({ Page: () => <TabbedPage title="Подбор поставщиков" tabs={[{ id: "match", label: "Подбор", load: () => import("../routes/SupplierMatchPage"), exportName: "SupplierMatchPage" }, { id: "no-supplier", label: "Ошибки наличия", load: () => import("../routes/NoSupplierPage"), exportName: "NoSupplierPage" }]} /> }), exportName: "Page" },
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

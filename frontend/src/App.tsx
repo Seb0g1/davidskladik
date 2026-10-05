@@ -267,7 +267,8 @@ function AppShell() {
   const visibleNavItems = useMemo(() => {
     const defaultEmployeeRoutes: AppRoute[] = ["warehouse", "picking-list"];
     const allRouteKeys = navItems.map((item) => item.route);
-    const grantedPages = (session?.allowedPages || []).filter((page): page is AppRoute => (allRouteKeys as string[]).includes(page));
+    const merged: Record<string, AppRoute> = { statistics: "dashboard", "recovery-queue": "system", "no-supplier": "supplier-match", "ozon-card-fix": "card-health", "brands-tnved": "tnved", "price-guard": "prices" };
+    const grantedPages = (session?.allowedPages || []).map((page) => merged[page] || page).filter((page): page is AppRoute => (allRouteKeys as string[]).includes(page));
     const allowed = new Set<AppRoute>(isAdmin ? allRouteKeys : (grantedPages.length ? grantedPages : defaultEmployeeRoutes));
     return navItems.filter((item) => allowed.has(item.route));
   }, [isAdmin, session?.allowedPages]);

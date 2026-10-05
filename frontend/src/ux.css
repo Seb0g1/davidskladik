@@ -1711,3 +1711,62 @@ body:has(.bulk-action-bar) .toast-stack { bottom: 88px; }
 @media (max-width: 760px) { .picking-page .picking-supplier-mobile-filter { display: block; } }
 .supplier-picker-search input:focus, .supplier-picker-search input:focus-visible { outline: none !important; border: 0 !important; box-shadow: none !important; }
 .supplier-picker-search:focus-within { color: var(--accent); }
+
+/* ------------------------------------------------------------------ */
+/* Вкладки раздела (TabbedPage): строка под заголовком, на телефоне   */
+/* прокручивается вбок, активная вкладка подчёркнута.                  */
+/* ------------------------------------------------------------------ */
+.app-content .page-heading > .page-tabs {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 2px;
+  margin: 4px 0 0;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.page-tabs::-webkit-scrollbar { display: none; }
+.page-tabs button {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 14px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color var(--motion-fast, .15s) ease;
+}
+.page-tabs button:hover { color: var(--text); }
+.page-tabs button.is-active { color: var(--text); }
+.page-tabs button.is-active::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: -1px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.page-tabs button:focus-visible { outline: 2px solid rgba(var(--accent-rgb), .7); outline-offset: -2px; border-radius: 8px; }
+.page-tabs-badge {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: rgba(var(--accent-rgb), .18);
+  color: var(--accent);
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+/* the tabs of a section whose page draws its own header (Подбор поставщиков) */
+.page-heading-tabs > .page-tabs { display: flex; gap: 2px; margin: 0 0 12px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+.page-heading-tabs:empty { display: none; }
