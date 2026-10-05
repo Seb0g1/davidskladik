@@ -217,6 +217,8 @@ async function fragellaTranslate(kind, names = []) {
   for (const name of missing) {
     let ru = cleanText(data?.[name]);
     if (!ru) continue;
+    // Fragrantica writes «е» («теплый пряный») — «ё» would miss the accord colours and the note icons
+    ru = ru.replace(/ё/g, "е").replace(/Ё/g, "Е");
     ru = kind === "note" ? ru.charAt(0).toUpperCase() + ru.slice(1) : ru.toLowerCase();
     out.set(name, ru);
     await prisma.$executeRawUnsafe(`INSERT INTO fragella_ru (kind, en, ru) VALUES ($1, $2, $3) ON CONFLICT (kind, en) DO UPDATE SET ru = EXCLUDED.ru`, kind, name, ru);
@@ -266,7 +268,8 @@ async function fragellaFindPerfume(row) {
   for (const item of Array.isArray(results) ? results : []) {
     // «Dior Sauvage» by «Christian Dior»: the brand words lead the name — keep only the perfume's own words
     const own = parser.tokensOf(item.Brand || "");
-    const words = parser.tokensOf(item.Name || "");
+    // «Apres l'Ondee for women»: Fragella's «for women / for men» tail is not part of the name
+    const words = parser.tokensOf(String(item.Name || "").replace(/\s+for\s+(women|men|him|her)(\s+and\s+(women|men))?\s*$/i, ""));
     while (words.length && (brandWords.has(words[0]) || own.includes(words[0]))) words.shift();
     const gender = genderWord[{ men: "male", women: "female", unisex: "unisex" }[cleanText(item.Gender).toLowerCase()]] || "";
     const candidate = parser.parsePerfumeName(`${row.brand} ${words.join(" ")} ${gender} 100 ml`, { brands });
