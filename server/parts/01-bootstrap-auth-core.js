@@ -162,6 +162,14 @@ const API_PREFIX_PAGE_KEYS = [
   ["/api/problem-products", "problem-products"],
   ["/api/ozon-yandex-import", "import"],
   ["/api/avito", "avito"],
+  ["/api/supplier-match", "supplier-match"],
+  ["/api/card-improve", "card-improve"],
+  ["/api/card-health", "card-health"],
+  ["/api/ozon-docs", "ozon-docs"],
+  ["/api/ozon/card-errors", "ozon-card-fix"],
+  ["/api/price-guard", "price-guard"],
+  ["/api/tnved", "tnved"],
+  ["/api/brand-bans", "brand-bans"],
 ];
 
 function apiPathPageKey(pathname = "") {

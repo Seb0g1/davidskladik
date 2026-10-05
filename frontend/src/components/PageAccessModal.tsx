@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Activity, AlertCircle, Flower2, AlertTriangle, BadgeDollarSign, BarChart3, Check, CirclePlay, ClipboardList, Eye, HandCoins, HelpCircle, Home, Loader2, MessageCircle, PackageCheck, RefreshCcw, Settings, ShoppingCart, Sparkles, Star, Truck, Upload, X } from "lucide-react";
+import { Activity, AlertCircle, Ban, BookOpen, FileCheck2, Flower2, Link2, MessageCircleHeart, PackagePlus, ShieldAlert, Store, Tag, Wrench, AlertTriangle, BadgeDollarSign, BarChart3, Check, CirclePlay, ClipboardList, Eye, HandCoins, HelpCircle, Home, Loader2, MessageCircle, PackageCheck, RefreshCcw, Settings, ShoppingCart, Sparkles, Star, Truck, Upload, X } from "lucide-react";
 import type { ReactNode } from "react";
 
 export type PageCatalogItem = {
@@ -27,12 +27,24 @@ export const PAGE_CATALOG: PageCatalogItem[] = [
   { key: "prices", label: "Цены", description: "Управление ценами и отправка на МП", href: "/app/prices", icon: <BadgeDollarSign size={15} /> },
   { key: "operations", label: "Операции", description: "Массовые операции по каталогу", href: "/app/operations", icon: <CirclePlay size={15} /> },
   { key: "supplier-cart", label: "Автокорзина", description: "Автосборка корзины поставщиков", href: "/app/supplier-cart", icon: <ShoppingCart size={15} /> },
-  { key: "recovery-queue", label: "Восстановление", description: "Очередь восстановления карточек", href: "/app/recovery-queue", icon: <RefreshCcw size={15} /> },
+  { key: "recovery-queue", label: "Восстановление из архива", description: "Очередь восстановления карточек", href: "/app/recovery-queue", icon: <RefreshCcw size={15} /> },
   { key: "problem-products", label: "Проблемные товары", description: "Карточки с проблемами", href: "/app/problem-products", icon: <AlertTriangle size={15} /> },
   { key: "finance", label: "Финансы", description: "Заказы, расходы, прибыль", href: "/app/finance", icon: <BadgeDollarSign size={15} /> },
   { key: "consignment", label: "Реализация", description: "Товар спонсора: продажи и профит 50/50", href: "/app/consignment", icon: <HandCoins size={15} /> },
   { key: "system", label: "Система", description: "Техническое состояние сервиса", href: "/app/system", icon: <Activity size={15} /> },
-  { key: "ai-drafts", label: "AI drafts", description: "Черновики AI-описаний и фото", href: "/app/ai-drafts", icon: <Sparkles size={15} /> },
+  { key: "support", label: "Поддержка сайта", description: "Чат поддержки magicvibes.ru", href: "/app/support", icon: <MessageCircleHeart size={15} /> },
+  { key: "supplier-match", label: "Подбор поставщиков", description: "Поставщики для товаров без поставщика, прайсы из Excel", href: "/app/supplier-match", icon: <Link2 size={15} /> },
+  { key: "shop", label: "Магазин MV", description: "Сайт magicvibes.ru: товары и заказы", href: "/app/shop", icon: <Store size={15} /> },
+  { key: "new-products", label: "Новые товары", description: "Новинки для заведения карточек", href: "/app/new-products", icon: <PackagePlus size={15} /> },
+  { key: "card-improve", label: "Улучшение карточек", description: "Новые фото, название и описание старых карточек", href: "/app/card-improve", icon: <Sparkles size={15} /> },
+  { key: "card-health", label: "Ошибки карточек", description: "Ошибки карточек Маркета и их исправление", href: "/app/card-health", icon: <Wrench size={15} /> },
+  { key: "ozon-card-fix", label: "Карточки Ozon", description: "Исправление карточек Ozon", href: "/app/ozon-card-fix", icon: <Wrench size={15} /> },
+  { key: "ozon-docs", label: "Документы Ozon", description: "Декларации и сертификаты на Ozon", href: "/app/ozon-docs", icon: <FileCheck2 size={15} /> },
+  { key: "price-guard", label: "Проверка цен", description: "Подозрительные цены, которые ждут проверки", href: "/app/price-guard", icon: <ShieldAlert size={15} /> },
+  { key: "tnved", label: "Коды ТН ВЭД", description: "Справочник кодов ТН ВЭД", href: "/app/tnved", icon: <Tag size={15} /> },
+  { key: "brands-tnved", label: "Бренды / ТН ВЭД", description: "Бренды и декларации", href: "/app/brands-tnved", icon: <BookOpen size={15} /> },
+  { key: "brand-bans", label: "Запрет брендов", description: "Бренды, которые не продаём", href: "/app/brand-bans", icon: <Ban size={15} /> },
+  { key: "ai-drafts", label: "ИИ-черновики", description: "Черновики AI-описаний и фото", href: "/app/ai-drafts", icon: <Sparkles size={15} /> },
   { key: "no-supplier", label: "Ошибки наличия", description: "Товары без поставщика", href: "/app/no-supplier", icon: <AlertCircle size={15} /> },
 ];
 
