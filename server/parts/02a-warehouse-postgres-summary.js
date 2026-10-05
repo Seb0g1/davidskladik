@@ -103,7 +103,8 @@ async function getWarehousePostgresSummaryLight(prisma, rate) {
         }).catch(() => 0),
         getWarehousePostgresSuppliers(prisma),
         prisma.warehouseProduct.count({
-          where: { AND: [enabledWarehouseTargetWhere(), { links: { some: {} } }, { status: { in: ["ok", "price_changed"] } }] },
+          // «ready» = linked and on sale (statuses are active / out_of_stock / archived now; ok / price_changed are gone)
+          where: { AND: [enabledWarehouseTargetWhere(), { links: { some: {} } }, { status: "active" }, { archived: false }] },
         }).catch(() => 0),
       ]);
       const value = {
@@ -114,7 +115,7 @@ async function getWarehousePostgresSummaryLight(prisma, rate) {
         counterStats: {
           ready: readyCount,
           changed: 0,
-          withoutSupplier: Math.max(0, totalAll - readyCount),
+          withoutSupplier: Math.max(0, totalAll - linkedProducts),
           linkedProducts,
           linkedNotReady: Math.max(0, linkedProducts - readyCount),
         },
