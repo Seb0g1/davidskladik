@@ -649,7 +649,11 @@ async function existingCardPerfumeMismatch(offerId, perfume) {
   const parsedOf = (rows) => rows.map((r) => r.name).filter(Boolean)
     .map((name) => parser.parsePerfumeName(name, { brands })).filter((t) => t.brandKey && t.volume);
   const linkTruths = parsedOf(links);
-  const truths = linkTruths.length ? linkTruths : parsedOf(cards);
+  const known = linkTruths.length ? linkTruths : parsedOf(cards);
+  // rows that name who the perfume is for outvote rows that do not: «P.R. XS BLACK 80ml edP» must not let the men's
+  // Black XS through when the other rows say «W», «for HER», «lady»
+  const gendered = known.filter((t) => t.gender);
+  const truths = gendered.length ? gendered : known;
   if (!truths.length) return "";
   // only an explicit concentration in the perfume's name counts («Sauvage Eau de Parfum», «Ombre Nomade Extrait»);
   // a bare «Cologne» / «Parfum» is part of the name: Gentleman Cologne and Cologne 352 are sold as EDT / EDP
@@ -697,6 +701,8 @@ async function buildFragranticaCardDraft(draft) {
   let perfume = await fragranticaPerfumeForExport(perfumeId);
   // An improved card keeps who it is for: its Ozon / card titles and supplier rows («WOMAN», «жен») outrank Fragrantica
   // (Plume Impression Art Nouveau is unisex there, sold as «женская»); Fragrantica decides only when the card says nothing
+  // (the guard below still checks Fragrantica's own gender: «Black XS» for men is not the card's «XS Black for Her»)
+  const fragranticaGender = perfume.gender || "";
   if (draft.data?.existing?.offerId) {
     const facts = await existingCardFacts(draft.data.existing.offerId).catch(() => ({}));
     if (facts.gender) perfume = { ...perfume, gender: facts.gender };
@@ -724,7 +730,7 @@ async function buildFragranticaCardDraft(draft) {
   // only speaks when the card has no rows — existingCardFacts votes links → Ozon → other titles.
   // an improvement of an existing card only for the same perfume; a manual choice (perfumeChosen) is trusted
   if (draft.data?.existing?.offerId && !draft.data?.perfumeChosen) {
-    const mismatch = await existingCardPerfumeMismatch(draft.data.existing.offerId, perfume).catch(() => "");
+    const mismatch = await existingCardPerfumeMismatch(draft.data.existing.offerId, { ...perfume, gender: fragranticaGender || perfume.gender }).catch(() => "");
     if (mismatch) return updateFragranticaDraft(draft.id, { status: "attention", stage: null, type_key: typeKey, error: mismatch });
   }
   const styles = [...new Set(targets.map((t) => t.style))];
