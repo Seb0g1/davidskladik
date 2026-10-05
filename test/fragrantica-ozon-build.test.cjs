@@ -151,7 +151,7 @@ test("type guess and hashtags", () => {
   assert.equal(b.fragOzonGuessTypeKey({ name: "Ombre Nomade Extrait" }), "extrait");
   assert.equal(b.fragOzonGuessTypeKey({ name: "Sauvage Parfum" }), "parfum");
   assert.equal(b.fragExplicitTypeKey({ name: "Sauvage" }), "");
-  assert.equal(b.buildFragranticaHashtags({ perfume: { brand: "Maison Margiela" }, typeKey: "edp" }), "#парфюмерная_вода #оригинальная_парфюмерия #maison_margiela");
+  assert.equal(b.buildFragranticaHashtags({ perfume: { brand: "Maison Margiela" }, typeKey: "edp" }), "#парфюмерная_вода #оригинальная_парфюмерия #парфюм");
 });
 
 test("supplier row assessment: clones, non-perfume, concentration, flankers (real PriceMaster names)", () => {

@@ -260,7 +260,8 @@ function fragHashtag(text) {
 
 function buildFragranticaHashtags({ perfume = {}, typeKey = "edp" } = {}) {
   const type = fragOzonTypeByKey(typeKey);
-  return [...new Set([fragHashtag(type.nameLabel), "#оригинальная_парфюмерия", fragHashtag(perfume.brand)].filter(Boolean))].join(" ");
+  // no brand tag: Ozon moderation flags it as «название бренда, не связанного с товаром» (BR_hashtag)
+  return [...new Set([fragHashtag(type.nameLabel), "#оригинальная_парфюмерия", "#парфюм"].filter(Boolean))].join(" ");
 }
 
 function fragNormalizeWord(text) {

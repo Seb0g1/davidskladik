@@ -1,5 +1,8 @@
 module.exports = {
   app,
+  // maintenance scripts (node -e with SERVER_ROLE=script) call marketplaces through the app's own client
+  getOzonAccounts,
+  ozonRequest,
   startServer,
   recordSweepHeartbeat,
   readSweepHeartbeats,
