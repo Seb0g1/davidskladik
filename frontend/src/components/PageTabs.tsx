@@ -16,11 +16,11 @@ export function PageTabsStrip() {
   const state = useContext(PageTabsContext);
   if (!state || state.tabs.length < 2) return null;
   return (
-    <nav className="page-tabs" role="tablist" aria-label={state.title}>
+    <nav className="section-tabs" role="tablist" aria-label={state.title}>
       {state.tabs.map((tab) => (
         <button key={tab.id} type="button" role="tab" aria-selected={state.active === tab.id}
           className={state.active === tab.id ? "is-active" : ""} onClick={() => state.setActive(tab.id)}>
-          {tab.label}{tab.badge ? <span className="page-tabs-badge">{tab.badge}</span> : null}
+          {tab.label}{tab.badge ? <span className="section-tabs-badge">{tab.badge}</span> : null}
         </button>
       ))}
     </nav>

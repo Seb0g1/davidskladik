@@ -1716,7 +1716,7 @@ body:has(.bulk-action-bar) .toast-stack { bottom: 88px; }
 /* Вкладки раздела (TabbedPage): строка под заголовком, на телефоне   */
 /* прокручивается вбок, активная вкладка подчёркнута.                  */
 /* ------------------------------------------------------------------ */
-.app-content .page-heading > .page-tabs {
+.app-content .page-heading > .section-tabs {
   flex: 1 1 100%;
   display: flex;
   flex-wrap: nowrap;
@@ -1726,8 +1726,8 @@ body:has(.bulk-action-bar) .toast-stack { bottom: 88px; }
   overflow-x: auto;
   scrollbar-width: none;
 }
-.page-tabs::-webkit-scrollbar { display: none; }
-.page-tabs button {
+.section-tabs::-webkit-scrollbar { display: none; }
+.section-tabs button {
   position: relative;
   flex: none;
   display: inline-flex;
@@ -1744,9 +1744,9 @@ body:has(.bulk-action-bar) .toast-stack { bottom: 88px; }
   cursor: pointer;
   transition: color var(--motion-fast, .15s) ease;
 }
-.page-tabs button:hover { color: var(--text); }
-.page-tabs button.is-active { color: var(--text); }
-.page-tabs button.is-active::after {
+.section-tabs button:hover { color: var(--text); }
+.section-tabs button.is-active { color: var(--text); }
+.section-tabs button.is-active::after {
   content: "";
   position: absolute;
   left: 10px;
@@ -1756,8 +1756,8 @@ body:has(.bulk-action-bar) .toast-stack { bottom: 88px; }
   border-radius: 2px;
   background: var(--accent);
 }
-.page-tabs button:focus-visible { outline: 2px solid rgba(var(--accent-rgb), .7); outline-offset: -2px; border-radius: 8px; }
-.page-tabs-badge {
+.section-tabs button:focus-visible { outline: 2px solid rgba(var(--accent-rgb), .7); outline-offset: -2px; border-radius: 8px; }
+.section-tabs-badge {
   min-width: 18px;
   padding: 0 5px;
   border-radius: 9px;
@@ -1768,7 +1768,7 @@ body:has(.bulk-action-bar) .toast-stack { bottom: 88px; }
   text-align: center;
 }
 /* the tabs of a section whose page draws its own header (Подбор поставщиков) */
-.page-heading-tabs > .page-tabs { display: flex; gap: 2px; margin: 0 0 12px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+.page-heading-tabs > .section-tabs { display: flex; gap: 2px; margin: 0 0 12px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
 .page-heading-tabs:empty { display: none; }
 
 /* ------------------------------------------------------------------ */
@@ -1875,4 +1875,19 @@ body:has(.bulk-action-bar) .toast-stack { bottom: 88px; }
 .chats-page .chat-thread { height: 100%; }
 @media (max-width: 900px) {
   .chats-page .chats-layout { grid-template-columns: 1fr; height: calc(100vh - 120px); }
+}
+
+/* Плитки с цифрами на телефоне — сетка в две колонки, без обрезанных карточек сбоку
+   (склад остаётся лентой: таблица товаров не должна уезжать вниз) */
+@media (max-width: 760px) {
+  .app-content .summary-grid,
+  .app-content .dashboard-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: visible; margin: 0 0 10px; padding: 0; gap: 6px; }
+  .app-content .summary-grid > *,
+  .app-content .dashboard-metrics > * { min-width: 0; min-height: 0; padding: 8px 10px; }
+  .app-content .summary-grid > * strong,
+  .app-content .dashboard-metrics .stat strong { font-size: 17px; }
+  .app-content .route-view[data-route="warehouse"] .summary-grid,
+  .app-content .route-view[data-route="warehouse"] .dashboard-metrics { display: flex; overflow-x: auto; margin: 0 -12px 10px; padding: 0 12px; }
+  .app-content .route-view[data-route="warehouse"] .summary-grid > *,
+  .app-content .route-view[data-route="warehouse"] .dashboard-metrics > * { flex: 0 0 auto; min-width: 118px; }
 }
