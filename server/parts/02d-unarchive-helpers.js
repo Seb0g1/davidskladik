@@ -13,7 +13,8 @@ function ozonUnarchiveQuotaProbeAllowed(target) {
   const dateKey = ozonUnarchiveDateKey();
   const state = ozonUnarchiveQuotaProbeState.get(target);
   if (!state || state.dateKey !== dateKey) return true;
-  if (state.rejected) return false;
+  // a refusal is not the end of the day: Ozon frees slots during the window, the probe comes back after a pause
+  if (state.rejected) return Date.now() - (state.rejectedAt || state.lastProbeAt || 0) >= OZON_UNARCHIVE_PROBE_PAUSE_SECONDS * 1000;
   return Date.now() - (state.lastProbeAt || 0) >= ozonUnarchiveQuotaProbeIntervalMs;
 }
 
@@ -262,6 +263,7 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
             const state = ozonUnarchiveQuotaProbeState.get(target);
             return !(state && state.dateKey === todayKey && state.rejected);
           });
+        // even a refused probe comes back after the pause (not at the next window): slots free up during the day
         // Probe allowed → короткий интервал (≤45 мин): позволяет пробе запуститься до полуночи.
         // Probe отклонён Ozon-ом → откладываем до следующего сброса суточного окна (03:00 МСК),
         // а не на now+5h: иначе позиции становятся due после полуночи, когда link-активации
@@ -271,7 +273,7 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
             new Date(nextOzonUnarchiveRetryAt()).getTime(),
             Date.now() + ozonUnarchiveQuotaProbeIntervalMs,
           )).toISOString()
-          : nextOzonUnarchiveScheduledRunAt().toISOString();
+          : nextOzonUnarchiveProbeAt().toISOString();
         let deferQueue = await readOzonUnarchiveQueue();
         deferQueue = queueOzonUnarchiveItems(deferQueue, quotaExhaustedItems, {
           nextRetryAt: deferRetryAt,
@@ -350,7 +352,7 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
       // разрешаем следующую пробу сразу — 1-секундный планировщик дочерпает очередь.
       const probeRejected = Number(result.queuedByDailyLimit || 0) > 0;
       for (const target of quotaProbeTargets) {
-        markOzonUnarchiveQuotaProbe(target, probeRejected ? { rejected: true } : { lastProbeAt: 0 });
+        markOzonUnarchiveQuotaProbe(target, probeRejected ? { rejected: true, rejectedAt: Date.now() } : { lastProbeAt: 0, rejected: false });
       }
       logger.info("ozon_unarchive_quota_probe", {
         targets: Array.from(quotaProbeTargets),

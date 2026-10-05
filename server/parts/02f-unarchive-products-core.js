@@ -80,15 +80,17 @@ async function unarchiveProductsOnMarketplaces(products = [], options = {}) {
       const windowClosed = Number.isFinite(ozonUnarchiveDailyLimit) && ozonUnarchiveWindowClosed(queueState, target);
       const regularArchiveItems = resolvedItems.filter((item) => item.marketplaceState?.isAutoArchived === false);
       const limitedItems = resolvedItems.filter((item) => item.marketplaceState?.isAutoArchived !== false);
+      // the counter at the limit is not the end of the day: a few are probed (Ozon may still take them —
+      // the seller restored 2–5 by hand after our «limit»); Ozon's refusal closes the window for the probe pause
       const availableToday = windowClosed
         ? 0
-        : (enforceDailyLimit ? Math.max(0, ozonUnarchiveDailyLimit - usedToday) : limitedItems.length);
+        : (enforceDailyLimit ? (ozonUnarchiveDailyLimit - usedToday > 0 ? ozonUnarchiveDailyLimit - usedToday : OZON_UNARCHIVE_PROBE_SIZE) : limitedItems.length);
       const runnableLimited = limitedItems.slice(0, availableToday);
       const overflowItems = limitedItems.slice(runnableLimited.length);
       const deferToNextWindow = async (items, { attempted = false, error = "" } = {}) => {
         if (!items.length) return;
         const nextRetryAt = windowClosed || attempted
-          ? nextOzonUnarchiveScheduledRunAt().toISOString()
+          ? nextOzonUnarchiveProbeAt().toISOString()
           : nextOzonUnarchiveRetryAt();
         queueState = queueOzonUnarchiveItems(queueState, items, {
           nextRetryAt,
@@ -215,7 +217,7 @@ async function unarchiveProductsOnMarketplaces(products = [], options = {}) {
           await closeOzonUnarchiveWindow(target, detail).catch((closeError) => {
             logger.warn("ozon unarchive window close failed", { detail: closeError?.message || String(closeError) });
           });
-          const nextRetryAt = nextOzonUnarchiveScheduledRunAt().toISOString();
+          const nextRetryAt = nextOzonUnarchiveProbeAt().toISOString();
           queueState = queueOzonUnarchiveItems(queueState, items, { nextRetryAt, warning: "ozon_unarchive_daily_limit_queued", attempted: false, error: detail });
           await writeOzonUnarchiveQueueDelta(queueState, { upsertProducts: items });
           rescheduleOzonUnarchiveQueueAutoSoon("api_limit_queue").catch((rescheduleError) => {

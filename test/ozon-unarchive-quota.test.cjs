@@ -35,6 +35,8 @@ function setup({ remaining = 100, localUsed = 0, closed = false } = {}) {
     ozonNumericProductId: (value) => String(value || ""),
     nextOzonUnarchiveRetryAt: () => "later",
     nextOzonUnarchiveScheduledRunAt: () => new Date("2026-09-28T00:00:00Z"),
+    nextOzonUnarchiveProbeAt: () => new Date("2026-09-27T14:00:00Z"),
+    OZON_UNARCHIVE_PROBE_SIZE: 3,
     nextOzonUnarchiveVisibilityRetryAt: () => "soon",
     rescheduleOzonUnarchiveQueueAutoSoon: async () => {},
     ozonUnarchiveQueuedActions: (items) => items.map((item) => ({ id: item.id, ok: true, pending: true, queuedByDailyLimit: true })),
@@ -116,4 +118,10 @@ this.api = { ozonUnarchiveDateKey };`, ctx);
   assert.equal(key(new Date("2026-09-27T23:30:00Z")), "2026-09-27");
   assert.equal(key(new Date("2026-09-28T00:00:00Z")), "2026-09-28");
   assert.equal(key(new Date("2026-09-27T21:10:00Z")), "2026-09-27");
+});
+
+test("counter at the limit, window not closed: a probe of 3 goes (Ozon frees slots during the day)", async () => {
+  const { unarchive, ozon } = setup({ remaining: 5, localUsed: 100 });
+  await unarchive(autoArchived(10));
+  assert.equal(ozon.accepted.length, 3);
 });

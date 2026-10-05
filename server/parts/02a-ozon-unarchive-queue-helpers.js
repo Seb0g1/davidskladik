@@ -101,6 +101,19 @@ function normalizeOzonUnarchiveQueue(queue = {}) {
 // (set when Ozon itself answers "restore limit exceeded" — the only reliable end-of-day signal).
 // daily[windowKey][target] = used (or the limit once closed), daily[windowKey]["<target>#closed"].
 const ozonUnarchiveUsageTtlSeconds = 3 * 24 * 60 * 60;
+// Ozon's «restore limit exceeded» is not the end of the day: slots free up during the window (the seller could still
+// restore 2–5 by hand later). A closed window therefore reopens for a probe after this pause.
+const OZON_UNARCHIVE_PROBE_PAUSE_SECONDS = 2 * 60 * 60;
+// Items sent per probe once the local counter has reached the limit.
+const OZON_UNARCHIVE_PROBE_SIZE = 3;
+
+/** Retry time of an item deferred by the limit: the next probe or the next window, whichever is first. */
+function nextOzonUnarchiveProbeAt(date = new Date()) {
+  const base = date instanceof Date ? date : new Date(date);
+  const probe = new Date(base.getTime() + OZON_UNARCHIVE_PROBE_PAUSE_SECONDS * 1000 + 60_000);
+  const window = nextOzonUnarchiveScheduledRunAt(base);
+  return probe < window ? probe : window;
+}
 let ozonUnarchiveUsageRedisClient = null;
 
 function ozonUnarchiveUsageRedis() {
@@ -188,7 +201,7 @@ async function closeOzonUnarchiveWindow(target = "", detail = "") {
   if (redis) {
     try {
       const keys = ozonUnarchiveUsageRedisKeys(target, windowKey);
-      await redis.set(keys.closed, "1", "EX", ozonUnarchiveUsageTtlSeconds);
+      await redis.set(keys.closed, "1", "EX", OZON_UNARCHIVE_PROBE_PAUSE_SECONDS);
       return;
     } catch (error) {
       logger.warn("ozon unarchive window close redis failed", { detail: error?.message || String(error) });
@@ -197,7 +210,7 @@ async function closeOzonUnarchiveWindow(target = "", detail = "") {
   const daily = await readOzonUnarchiveUsageFile();
   const targetKey = cleanText(target) || "default";
   daily[windowKey] = daily[windowKey] && typeof daily[windowKey] === "object" ? daily[windowKey] : {};
-  daily[windowKey][`${targetKey}#closed`] = true;
+  daily[windowKey][`${targetKey}#closed`] = new Date().toISOString();
   await writeOzonUnarchiveUsageFile(daily);
 }
 
@@ -229,6 +242,11 @@ async function readOzonUnarchiveDailyState() {
   const daily = await readOzonUnarchiveUsageFile();
   const day = { ...(daily[windowKey] || {}) };
   for (const key of Object.keys(day)) {
+    // a close older than the probe pause no longer blocks (file fallback; Redis expires the key itself)
+    if (key.endsWith("#closed") && typeof day[key] === "string" && Date.now() - Date.parse(day[key]) > OZON_UNARCHIVE_PROBE_PAUSE_SECONDS * 1000) {
+      delete day[key];
+      continue;
+    }
     if (key.endsWith("#closed") && day[key]) {
       const target = key.slice(0, -"#closed".length);
       day[target] = Math.max(Number(day[target]) || 0, limit);
