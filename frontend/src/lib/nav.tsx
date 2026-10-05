@@ -17,10 +17,10 @@ export const navItems: NavItem[] = [
   { route: "support", href: "/app/support", label: "Поддержка сайта", icon: <MessageCircleHeart size={16} />, keywords: "сайт чат поддержка" },
   { route: "settings", href: "/app/settings", label: "Настройки", icon: <Settings size={16} />, keywords: "сотрудники доступы ключи nastroyki" },
   { route: "system", href: "/app/system", label: "Система", icon: <Activity size={16} />, keywords: "здоровье очереди логи" },
-  { route: "ai-drafts", href: "/app/ai-drafts", label: "AI drafts", icon: <Sparkles size={16} />, keywords: "ии черновики ai" },
+  { route: "ai-drafts", href: "/app/ai-drafts", label: "ИИ-черновики", icon: <Sparkles size={16} />, keywords: "ии черновики ai" },
   { route: "no-supplier", href: "/app/no-supplier", label: "Ошибки наличия", icon: <AlertCircle size={16} />, keywords: "нет поставщика" },
   { route: "operations", href: "/app/operations", label: "Операции", icon: <CirclePlay size={16} />, keywords: "синхронизация запуск" },
-  { route: "recovery-queue", href: "/app/recovery-queue", label: "Восстановление", icon: <RefreshCcw size={16} />, keywords: "очередь восстановления" },
+  { route: "recovery-queue", href: "/app/recovery-queue", label: "Восстановление из архива", icon: <RefreshCcw size={16} />, keywords: "очередь восстановления" },
   { route: "suppliers", href: "/app/suppliers", label: "Поставщики", icon: <Truck size={16} />, keywords: "балансы оплаты postavshiki" },
   { route: "supplier-match", href: "/app/supplier-match", label: "Подбор поставщиков", icon: <Link2 size={16} />, keywords: "подбор поставщиков привязки pricemaster нет поставщика запустить в продажу новые привязки" },
   { route: "shop", href: "/app/shop", label: "Магазин MV", icon: <Store size={16} />, keywords: "magicvibes сайт магазин" },
@@ -42,13 +42,16 @@ export const navItems: NavItem[] = [
   { route: "fragrantica", href: "/app/fragrantica", label: "Фрагрантика", icon: <Flower2 size={16} />, keywords: "fragrantica ароматы каталог добавить на озон новые карточки" },
 ];
 
-// Сайдбар: первые пункты — без заголовка, дальше сворачиваемые группы.
+// Сайдбар по ходу работы CRM: сверху — то, чем пользуются каждый день (без заголовка), дальше группы по
+// задачам: покупатели → карточки → деньги → каналы продаж → справочники → система.
 export const NAV_SECTIONS: Array<{ id: string; title?: string; routes: AppRoute[] }> = [
-  { id: "main", routes: ["dashboard", "warehouse", "picking-list", "supplier-cart", "consignment"] },
-  { id: "clients", title: "Работа с клиентами", routes: ["reviews", "chats", "questions", "support"] },
-  { id: "marketplace", title: "Маркетплейсы", routes: ["suppliers", "supplier-match", "avito", "import", "fragrantica", "ozon-docs", "prices", "price-guard", "card-health", "card-improve", "finance", "statistics"] },
-  { id: "admin", title: "Настройки", routes: ["settings", "system", "ai-drafts", "operations"] },
-  { id: "tools", title: "Инструменты", routes: ["tnved", "brand-bans", "brands-tnved", "ozon-card-fix", "no-supplier", "recovery-queue", "new-products", "problem-products", "shop"] },
+  { id: "daily", routes: ["dashboard", "warehouse", "picking-list", "supplier-cart", "suppliers"] },
+  { id: "customers", title: "Покупатели", routes: ["chats", "questions", "reviews", "support"] },
+  { id: "cards", title: "Карточки товаров", routes: ["card-improve", "card-health", "fragrantica", "supplier-match", "ozon-docs", "ozon-card-fix", "new-products", "problem-products", "no-supplier"] },
+  { id: "money", title: "Цены и деньги", routes: ["prices", "price-guard", "finance", "statistics", "consignment"] },
+  { id: "channels", title: "Каналы продаж", routes: ["shop", "avito", "import"] },
+  { id: "reference", title: "Справочники", routes: ["tnved", "brands-tnved", "brand-bans"] },
+  { id: "system", title: "Система", routes: ["settings", "operations", "recovery-queue", "system", "ai-drafts"] },
 ];
 
 // Порядок важен: более длинные префиксы раньше коротких.

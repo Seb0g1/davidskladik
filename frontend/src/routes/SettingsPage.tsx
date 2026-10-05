@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckSquare, Download, Eye, Loader2, Percent, RefreshCw, Save, Search, Square, Trash2, Upload, UserX } from "lucide-react";
+import { Bell, CheckSquare, Download, Eye, History, Loader2, Percent, RefreshCw, RotateCcw, Save, Search, Sparkles, Square, Store, Trash2, Upload, Users, UserX, Wrench } from "lucide-react";
+import type { ReactNode } from "react";
+import { createPortal } from "react-dom";
+import "./settings-shell.css";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { AuditLogSchema, PriceHistorySchema, PriceRetryQueueSchema, SettingsResponseSchema, SuppliersResponseSchema, SyncStatusSchema, UsersResponseSchema, UsersStatsResponseSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
@@ -8,37 +11,12 @@ import { SelectField } from "../components/SelectField";
 import { DiagnosticValue } from "../components/DiagnosticValue";
 import { PageAccessModal } from "../components/PageAccessModal";
 import { MarketplaceAccountsPanel } from "../components/MarketplaceAccountsPanel";
+import { SiteMarkupRules } from "../components/SiteMarkupRules";
+import { ShopPricingPanel } from "../components/ShopPricingPanel";
 import { asRecord, compactDate, errorMessage, numberValue } from "../lib/common";
 import { readNotificationSoundSettings, writeNotificationSoundSettings, playNotificationSound, NotificationSoundSettings } from "../components/NotificationsBell";
 
 
-
-function SettingsHubPanel() {
-  const sections: Array<{ href: string; title: string; note: string }> = [
-    { href: "/app/suppliers", title: "Поставщики", note: "Стоп-склады, активность, импорт из PriceMaster" },
-    { href: "/app/prices", title: "Цены", note: "Коэффициенты, правила наценки, отправка" },
-    { href: "/app/operations", title: "Операции", note: "Журнал операций и запуски" },
-    { href: "/app/no-supplier", title: "Ошибки наличия", note: "Товары без доступного поставщика" },
-    { href: "/app/problem-products", title: "Проблемные товары", note: "Ошибки карточек и низкие оценки" },
-    { href: "/app/recovery-queue", title: "Восстановление", note: "Очередь разархива Ozon + Яндекс" },
-    { href: "/app/system", title: "Система", note: "Диагностика, фоновые процессы" },
-    { href: "/app/ai-drafts", title: "AI", note: "Черновики контента и AI-фото" },
-    { href: "/app/finance", title: "Финансы", note: "Заказы, себестоимость, прибыль" },
-  ];
-  return (
-    <section className="settings-panel settings-panel-wide">
-      <div className="section-title"><div><span>Разделы</span><h3>Все настройки и операции</h3></div></div>
-      <div className="settings-hub-grid">
-        {sections.map((section) => (
-          <a className="settings-hub-card" key={section.href} href={section.href}>
-            <strong>{section.title}</strong>
-            <small>{section.note}</small>
-          </a>
-        ))}
-      </div>
-    </section>
-  );
-}
 
 function NotificationSettingsPanel() {
   const [settings, setSettings] = useState<NotificationSoundSettings>(() => readNotificationSoundSettings());
@@ -97,17 +75,50 @@ type AvailabilityRuleDraft = {
   targetStock: number;
 };
 
-type SettingsTab = "prices" | "marketplaces" | "ai" | "tools" | "users" | "audit" | "system";
+type SettingsTab = "prices" | "marketplaces" | "ai" | "tools" | "users" | "notifications" | "audit" | "system";
 
-const settingsTabs: Array<{ id: SettingsTab; label: string }> = [
-  { id: "prices", label: "Цены" },
-  { id: "marketplaces", label: "Маркетплейсы" },
-  { id: "ai", label: "AI" },
-  { id: "tools", label: "Инструменты" },
-  { id: "users", label: "Сотрудники" },
-  { id: "audit", label: "Аудит" },
-  { id: "system", label: "Система" },
+// Разделы настроек по задачам: что продаём и почём → контент → команда → система.
+const SETTINGS_GROUPS: Array<{ title: string; items: Array<{ id: SettingsTab; label: string; note: string; icon: ReactNode; keywords: string }> }> = [
+  {
+    title: "Продажи",
+    items: [
+      { id: "prices", label: "Цены и наценки", note: "Курс, коэффициенты, правила наценки и остатков", icon: <Percent size={16} />, keywords: "курс наценка коэффициент правила остатки доступность реализация спонсор" },
+      { id: "marketplaces", label: "Маркетплейсы и склады", note: "Кабинеты Ozon и Маркета, склады, экспресс, логотипы", icon: <Store size={16} />, keywords: "ozon яндекс маркет кабинет склад экспресс логотип заглушки фото" },
+    ],
+  },
+  {
+    title: "Контент",
+    items: [
+      { id: "ai", label: "ИИ-тексты", note: "Провайдер и модели для описаний и отзывов", icon: <Sparkles size={16} />, keywords: "ai ии deepseek openai описание модель провайдер" },
+    ],
+  },
+  {
+    title: "Команда",
+    items: [
+      { id: "users", label: "Сотрудники и доступы", note: "Логины, роли, доступ к страницам", icon: <Users size={16} />, keywords: "сотрудник пользователь роль доступ пароль логин" },
+      { id: "notifications", label: "Уведомления", note: "Звук и события", icon: <Bell size={16} />, keywords: "звук уведомление колокольчик событие" },
+      { id: "audit", label: "Журнал действий", note: "Кто что менял и когда", icon: <History size={16} />, keywords: "аудит журнал история действия" },
+    ],
+  },
+  {
+    title: "Система",
+    items: [
+      { id: "system", label: "Синхронизация", note: "Синк, очередь повторов цен, история отправок", icon: <RefreshCw size={16} />, keywords: "синхронизация очередь повтор история отправка цен" },
+      { id: "tools", label: "Инструменты", note: "Служебные операции и исправления", icon: <Wrench size={16} />, keywords: "инструмент операция исправление" },
+    ],
+  },
 ];
+const SETTINGS_ITEMS = SETTINGS_GROUPS.flatMap((group) => group.items);
+
+function initialSettingsTab(): SettingsTab {
+  try {
+    const value = new URLSearchParams(window.location.search).get("section") as SettingsTab | null;
+    if (value && SETTINGS_ITEMS.some((item) => item.id === value)) return value;
+  } catch {
+    // no window / bad URL
+  }
+  return "prices";
+}
 
 const defaultAvailabilityRule: AvailabilityRuleDraft = {
   marketplace: "all",
@@ -586,8 +597,6 @@ function UsersSettingsPanel() {
   };
   return (
     <div className="settings-stack">
-    <SettingsHubPanel />
-    <NotificationSettingsPanel />
     <section className="settings-panel settings-panel-wide">
       <div className="section-title"><div><span>Доступ</span><h3>Сотрудники и роли</h3></div></div>
       <div className="settings-form-row">
@@ -940,7 +949,20 @@ export function SettingsPage() {
   const markups = asRecord(settings.defaultMarkups);
   const [draft, setDraft] = useState<Record<string, unknown>>({});
   const isDirtyRef = useRef(false);
-  const [activeTab, setActiveTab] = useState<SettingsTab>("prices");
+  const [dirty, setDirty] = useState(false);
+  const [activeTab, setActiveTabState] = useState<SettingsTab>(initialSettingsTab);
+  const [sectionQuery, setSectionQuery] = useState("");
+  // the section lives in the address (?section=…): a link opens the right page, reload keeps it
+  const setActiveTab = (tab: SettingsTab) => {
+    setActiveTabState(tab);
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set("section", tab);
+      window.history.replaceState(window.history.state, "", url.toString());
+    } catch {
+      // ignore
+    }
+  };
   const [adjustMarketplace, setAdjustMarketplace] = useState("all");
   const [adjustDirection, setAdjustDirection] = useState("decrease");
   const [adjustPercent, setAdjustPercent] = useState(2);
@@ -966,8 +988,13 @@ export function SettingsPage() {
   const availabilityRules = readAvailabilityRules(draft.availabilityRules);
   const save = useMutation({
     mutationFn: () => fetchJson("/api/settings", SettingsResponseSchema, mutationBody(settingsSavePayload(draft))),
-    onSuccess: () => { isDirtyRef.current = false; queryClient.invalidateQueries({ queryKey: ["settings"] }); },
+    onSuccess: () => { isDirtyRef.current = false; setDirty(false); queryClient.invalidateQueries({ queryKey: ["settings"] }); },
   });
+  const discard = () => {
+    isDirtyRef.current = false;
+    setDirty(false);
+    setDraft(settingsQuery.data?.settings || {});
+  };
   const adjustPricing = useMutation({
     mutationFn: () => fetchJson("/api/settings/pricing/adjust-percent", SettingsResponseSchema, mutationBody({
       marketplace: adjustMarketplace,
@@ -984,7 +1011,7 @@ export function SettingsPage() {
   const testAi = useMutation({
     mutationFn: () => fetchJson("/api/settings/ai/test", SettingsResponseSchema, mutationBody({ ai: draftAi })),
   });
-  const update = (patch: Record<string, unknown>) => { isDirtyRef.current = true; setDraft((current) => ({ ...current, ...patch })); };
+  const update = (patch: Record<string, unknown>) => { isDirtyRef.current = true; setDirty(true); setDraft((current) => ({ ...current, ...patch })); };
   const updateAi = (patch: Record<string, unknown>) => update({ ai: { ...draftAi, ...patch } });
   const updateMarkups = (patch: Record<string, unknown>) => update({ defaultMarkups: { ...draftMarkups, ...patch } });
   const setMarkupRules = (rules: MarkupRuleDraft[]) => update({ markupRules: rules });
@@ -1009,14 +1036,45 @@ export function SettingsPage() {
     </button>
   );
 
+  const active = SETTINGS_ITEMS.find((item) => item.id === activeTab) || SETTINGS_ITEMS[0];
+  const sectionWords = sectionQuery.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const sectionMatches = (item: (typeof SETTINGS_ITEMS)[number]) => {
+    const text = `${item.label} ${item.note} ${item.keywords}`.toLowerCase();
+    return sectionWords.every((word) => text.includes(word));
+  };
+
   return (
     <>
-      <PageHeader title="Настройки" subtitle="Курс, наценки, правила доступности, маркетплейсы и AI-провайдер в новом интерфейсе." action={saveButton} />
-      <nav className="settings-tabs" aria-label="settings sections">
-        {settingsTabs.map((tab) => (
-          <button key={tab.id} className={activeTab === tab.id ? "is-active" : ""} type="button" onClick={() => setActiveTab(tab.id)}>{tab.label}</button>
-        ))}
-      </nav>
+      <PageHeader title="Настройки" subtitle="Цены, маркетплейсы, ИИ, команда и система — всё в одном месте." />
+      <div className="stg-shell">
+      <aside className="stg-nav" aria-label="Разделы настроек">
+        <label className="stg-nav-search">
+          <Search size={15} />
+          <input value={sectionQuery} onChange={(event) => setSectionQuery(event.target.value)} placeholder="Найти настройку" aria-label="Найти настройку" />
+        </label>
+        {SETTINGS_GROUPS.map((group) => {
+          const items = group.items.filter(sectionMatches);
+          if (!items.length) return null;
+          return (
+            <div className="stg-nav-group" key={group.title}>
+              <span className="stg-nav-group-title">{group.title}</span>
+              {items.map((item) => (
+                <button key={item.id} type="button" className={`stg-nav-item${activeTab === item.id ? " is-active" : ""}`}
+                  aria-current={activeTab === item.id ? "page" : undefined} onClick={() => setActiveTab(item.id)}>
+                  <span className="stg-nav-icon">{item.icon}</span>
+                  <span className="stg-nav-text"><strong>{item.label}</strong><small>{item.note}</small></span>
+                </button>
+              ))}
+            </div>
+          );
+        })}
+        {!SETTINGS_ITEMS.some(sectionMatches) ? <div className="stg-nav-empty">Ничего не нашлось — попробуйте другое слово.</div> : null}
+      </aside>
+      <div className="stg-body">
+      <div className="stg-body-head">
+        <span className="stg-body-icon">{active.icon}</span>
+        <div><h2>{active.label}</h2><p>{active.note}</p></div>
+      </div>
       {settingsQuery.isLoading && <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю настройки...</div>}
       {activeTab === "prices" && <section className="settings-grid pricing-settings-grid">
         <div className="settings-panel settings-panel-wide">
@@ -1091,7 +1149,7 @@ export function SettingsPage() {
         <div className="settings-panel settings-panel-wide">
           <div className="section-title">
             <div><span>Наценки</span><h3>Гибкие правила наценки</h3></div>
-            <div className="section-title-actions">
+            {rulesTab !== "site" && <div className="section-title-actions">
               {(() => {
                 const copyOptions = [
                   { value: "ozon", label: "Ozon" },
@@ -1119,7 +1177,7 @@ export function SettingsPage() {
               <button className="secondary-action" type="button" onClick={() => setMarkupRules([...markupRules, { marketplace: rulesTab, minUsd: 0, coefficient: 1 }])}>
                 Добавить правило {rulesTab === "all" ? "для всех" : marketplaceLabel(rulesTab)}
               </button>
-            </div>
+            </div>}
           </div>
           <p className="settings-hint">Правила применяются по цене поставщика в USD и разложены по маркетплейсам — каждая вкладка отсортирована по цене «от». Пустой список допустим: тогда используются базовые наценки.</p>
           <nav className="rules-marketplace-tabs" aria-label="Маркетплейс правил">
@@ -1129,16 +1187,25 @@ export function SettingsPage() {
               { value: "avito", label: "Avito" },
               { value: "wb", label: "Wildberries" },
               { value: "all", label: "Общие (все МП)" },
+              { value: "site", label: "Сайт Magic Vibes" },
             ].map((tab) => {
-              const count = markupRules.filter((rule) => rule.marketplace === tab.value).length;
+              const count = tab.value === "site" ? null : markupRules.filter((rule) => rule.marketplace === tab.value).length;
               return (
                 <button key={tab.value} type="button" className={rulesTab === tab.value ? "is-active" : ""} onClick={() => setRulesTab(tab.value)}>
                   {tab.label}
-                  <span className="rules-tab-count">{count}</span>
+                  {count !== null && <span className="rules-tab-count">{count}</span>}
                 </button>
               );
             })}
           </nav>
+          {rulesTab === "site" ? (
+            <SiteMarkupRules copySources={[
+              { label: "Ozon", rules: markupRules.filter((r) => r.marketplace === "ozon") },
+              { label: "Yandex Market", rules: markupRules.filter((r) => r.marketplace === "yandex") },
+              { label: "Wildberries", rules: markupRules.filter((r) => r.marketplace === "wb") },
+              { label: "Общие", rules: markupRules.filter((r) => r.marketplace === "all") },
+            ]} />
+          ) : (
           <div className="settings-rule-table markup-rule-table">
             <div className="settings-rule-head"><span>От цены, USD</span><span>Коэффициент</span><span></span></div>
             {markupRules
@@ -1160,8 +1227,11 @@ export function SettingsPage() {
               </div>
             )}
           </div>
+          )}
           <p className="settings-hint">Avito использует эти же правила: цена объявления = закупка у привязанного поставщика × коэффициент Avito. Дополнительная тонкая подстройка — на странице «Импорт на Avito».</p>
         </div>
+
+        <ShopPricingPanel />
 
         <div className="settings-panel settings-panel-wide">
           <div className="section-title">
@@ -1354,6 +1424,7 @@ export function SettingsPage() {
 
       {activeTab === "tools" && <ToolsSettingsPanel />}
       {activeTab === "users" && <UsersSettingsPanel />}
+      {activeTab === "notifications" && <div className="settings-stack"><NotificationSettingsPanel /></div>}
       {activeTab === "audit" && <AuditSettingsPanel />}
       {activeTab === "system" && <SystemSettingsPanel />}
 
@@ -1367,7 +1438,17 @@ export function SettingsPage() {
               : "Настройки сохранены. Ценовые правила не менялись, пересчет не нужен."}
         </div>
       )}
-      <div className="settings-save-footer">{saveButton}</div>
+      </div>
+      </div>
+      {/* changes are saved from one bar that appears only when something changed */}
+      {dirty ? createPortal(
+        <div className="stg-savebar" role="region" aria-label="Несохранённые изменения">
+          <span className="stg-savebar-text"><span className="stg-savebar-dot" aria-hidden="true" /> Есть несохранённые изменения</span>
+          <button className="secondary-action" type="button" onClick={discard} disabled={save.isPending}><RotateCcw size={15} /> Отменить</button>
+          {saveButton}
+        </div>,
+        document.body,
+      ) : null}
     </>
   );
 }

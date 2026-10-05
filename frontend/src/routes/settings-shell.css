@@ -1,0 +1,257 @@
+/* Settings shell: section menu on the left (grouped, searchable), the section on the right, a save bar that
+   appears only when something changed. The panels inside keep their own styles (.settings-panel …). */
+
+.stg-shell {
+  display: grid;
+  grid-template-columns: 272px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.stg-nav {
+  position: sticky;
+  top: 72px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  max-height: calc(100vh - 96px);
+  overflow-y: auto;
+}
+
+.stg-nav-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--field-bg, rgba(255, 255, 255, .04));
+  color: var(--muted);
+}
+
+.stg-nav-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  outline: none;
+  font: inherit;
+}
+
+.stg-nav-search:focus-within {
+  border-color: rgba(var(--accent-rgb), .6);
+}
+
+.stg-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stg-nav-group-title {
+  padding: 0 8px 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.stg-nav-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--motion-fast, .15s) ease, border-color var(--motion-fast, .15s) ease;
+}
+
+.stg-nav-item:hover {
+  background: rgba(var(--accent-rgb), .08);
+}
+
+.stg-nav-item:focus-visible {
+  outline: 2px solid rgba(var(--accent-rgb), .7);
+  outline-offset: 1px;
+}
+
+.stg-nav-item.is-active {
+  border-color: rgba(var(--accent-rgb), .45);
+  background: rgba(var(--accent-rgb), .14);
+}
+
+.stg-nav-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: rgba(var(--accent-rgb), .12);
+  color: var(--accent);
+}
+
+.stg-nav-item.is-active .stg-nav-icon {
+  background: rgba(var(--accent-rgb), .25);
+}
+
+.stg-nav-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.stg-nav-text strong {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.stg-nav-text small {
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--muted);
+}
+
+.stg-nav-empty {
+  padding: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.stg-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-bottom: 84px;
+}
+
+.stg-body-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 2px 6px;
+}
+
+.stg-body-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: rgba(var(--accent-rgb), .16);
+  color: var(--accent);
+}
+
+.stg-body-head h2 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.stg-body-head p {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* the panels were laid out for a full-width page: inside the shell two columns read better than three */
+.stg-body .settings-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.stg-savebar {
+  position: fixed;
+  right: 24px;
+  bottom: 20px;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px 10px 16px;
+  border: 1px solid rgba(var(--accent-rgb), .45);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .35);
+  animation: stg-savebar-in var(--motion-med, .22s) var(--ease-soft, ease-out);
+}
+
+.stg-savebar-text {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.stg-savebar-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--yellow, #f5b942);
+}
+
+@keyframes stg-savebar-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stg-savebar { animation: none; }
+}
+
+@media (max-width: 1100px) {
+  .stg-body .settings-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* phone / narrow: the menu becomes a scrollable strip of sections, notes hidden */
+@media (max-width: 860px) {
+  .stg-shell { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .stg-nav {
+    position: static;
+    flex-direction: row;
+    align-items: center;
+    max-height: none;
+    overflow-x: auto;
+    padding: 8px;
+    gap: 6px;
+  }
+  .stg-nav-search { min-width: 180px; }
+  .stg-nav-group { flex-direction: row; gap: 6px; }
+  .stg-nav-group-title, .stg-nav-text small { display: none; }
+  .stg-nav-item { width: auto; white-space: nowrap; align-items: center; padding: 6px 10px; }
+  .stg-nav-icon { width: 26px; height: 26px; }
+  .stg-savebar { left: 12px; right: 12px; bottom: 12px; flex-wrap: wrap; justify-content: flex-end; }
+  .stg-savebar-text { flex: 1 1 100%; }
+}
+
+/* checkboxes inside settings panels: the generic field style stretched them into huge squares */
+.stg-body .settings-panel input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  padding: 0;
+  flex: none;
+  accent-color: var(--accent);
+}
+
+.stg-body .settings-panel label:has(> input[type="checkbox"]) {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  text-transform: none;
+  letter-spacing: normal;
+}
