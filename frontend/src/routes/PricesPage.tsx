@@ -39,19 +39,19 @@ const reasonLabel = (reason: unknown) => {
     no_supplier: "нет поставщика",
     no_price: "нет расчетной цены",
     api_error: "ошибка API",
-    in_retry: "в retry",
+    in_retry: "ждёт повтора",
     ozon_limit: "лимит Ozon",
     stock_only_manual_price_missing: "нужна ручная цена склада",
-    no_pricemaster_link: "нет PM-привязки",
+    no_pricemaster_link: "нет привязки PriceMaster",
     not_ready: "поставщик не готов",
     unchanged_verified: "цена уже проверена",
     queued: "в очереди",
-    api_accepted: "API принял",
+    api_accepted: "маркетплейс принял",
     verification_pending: "ждем проверку",
     verified: "проверено",
     ozon_price_not_applied: "Ozon не применил цену",
     ozon_price_delayed: "Ozon отложил цену",
-    pm_live_timeout: "PM timeout",
+    pm_live_timeout: "PriceMaster не ответил",
   };
   return labels[value] || value || "-";
 };
@@ -106,12 +106,12 @@ export function PricesPage() {
   const reasons = summary.data?.reasons || {};
   const reasonOptions = useMemo(() => Object.entries(reasons).sort((a, b) => b[1] - a[1]), [reasons]);
   const quickFilters = [
-    { label: "в retry", reason: "in_retry", status: "all" },
+    { label: "Ждут повтора", reason: "in_retry", status: "all" },
     { label: "Ozon не применил", reason: "ozon_price_not_applied", status: "all" },
-    { label: "PM timeout", reason: "pm_live_timeout", status: "all" },
+    { label: "PriceMaster не ответил", reason: "pm_live_timeout", status: "all" },
     { label: "нет поставщика", reason: "no_supplier", status: "all" },
-    { label: "нет PM-привязки", reason: "no_pricemaster_link", status: "all" },
-    { label: "верифицировано", reason: "all", status: "verified" },
+    { label: "Нет привязки PriceMaster", reason: "no_pricemaster_link", status: "all" },
+    { label: "Подтверждено", reason: "all", status: "verified" },
   ];
   const rawItems = itemsQuery.data?.items || [];
   const okReasons = ["ok", "unchanged", "unchanged_verified", "verified"];
@@ -144,7 +144,7 @@ export function PricesPage() {
     <section className="page-section price-control-page">
       <PageHeader
         title="Цены и остатки"
-        subtitle="Автоматизация цен и остатков Ozon/Yandex: что отправлено, что в retry и что требует внимания."
+        subtitle="Что ушло в Ozon и Маркет, что ждёт повтора и какие товары требуют внимания."
         action={(
           <button className="secondary-action" type="button" onClick={() => { void summary.refetch(); void itemsQuery.refetch(); }} disabled={summary.isFetching || itemsQuery.isFetching}>
             {summary.isFetching || itemsQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCcw size={16} />} Обновить контроль
@@ -152,26 +152,19 @@ export function PricesPage() {
         )}
       />
 
-      <div className="price-automation-hero">
-        <div>
-          <span className="eyebrow">Автоматический режим включен</span>
-          <h3>Цены и остатки отправляются фоном после изменений PriceMaster, курса, наценок и привязок.</h3>
-          <p>
-            Эта страница не нужна для ежедневного ручного клика. Она показывает, что ушло в Ozon/Yandex, что стоит в retry, где лимит Ozon, и какие SKU требуют внимания.
-          </p>
-        </div>
-        <div className="price-automation-badge">
-          <CheckCircle2 size={22} />
-          <strong>{summary.data?.autoEnabled ? "авто вкл" : "авто выкл"}</strong>
-          <span>последний расчет: {formatDate(summary.data?.updatedAt)}</span>
-        </div>
+      {/* цены уходят сами — страница для контроля; одна строка вместо баннера */}
+      <div className={`price-auto-line${summary.data?.autoEnabled ? " is-on" : ""}`} role="status">
+        <CheckCircle2 size={16} />
+        <strong>{summary.data?.autoEnabled ? "Автоотправка включена" : "Автоотправка выключена"}</strong>
+        <span>Цены и остатки уходят сами после изменений PriceMaster, курса, наценок и привязок.</span>
+        <small>последний расчёт {formatDate(summary.data?.updatedAt)}</small>
       </div>
 
       <section className="dashboard-metrics">
-        <Stat label="SKU под контролем" value={summary.data?.total ?? 0} tone="accent" icon={<BadgeDollarSign size={18} />} />
-        <Stat label="Retry цен" value={summary.data?.retryTotal ?? 0} tone={summary.data?.retryTotal ? "warn" : "success"} icon={<AlertTriangle size={18} />} />
-        <Stat label="Ozon авто-архив" value={summary.data?.ozonUnarchiveQueued ?? 0} tone={summary.data?.ozonUnarchiveQueued ? "warn" : "success"} icon={<Zap size={18} />} />
-        <Stat label="Проблем Ozon / Yandex" value={`${ozonIssues} / ${yandexIssues}`} tone={ozonIssues || yandexIssues ? "warn" : "success"} icon={<AlertTriangle size={18} />} />
+        <Stat label="Товаров под контролем" value={summary.data?.total ?? 0} tone="accent" icon={<BadgeDollarSign size={18} />} />
+        <Stat label="Ждут повтора" value={summary.data?.retryTotal ?? 0} tone={summary.data?.retryTotal ? "warn" : "success"} icon={<AlertTriangle size={18} />} />
+        <Stat label="В автоархиве Ozon" value={summary.data?.ozonUnarchiveQueued ?? 0} tone={summary.data?.ozonUnarchiveQueued ? "warn" : "success"} icon={<Zap size={18} />} />
+        <Stat label="Проблемы Ozon / Маркет" value={`${ozonIssues} / ${yandexIssues}`} tone={ozonIssues || yandexIssues ? "warn" : "success"} icon={<AlertTriangle size={18} />} />
       </section>
 
       <div className="control-grid price-controls">
@@ -182,9 +175,9 @@ export function PricesPage() {
             value={marketplace}
             onChange={setMarketplace}
             options={[
-              { value: "all", label: "Ozon + Yandex" },
+              { value: "all", label: "Ozon + Маркет" },
               { value: "ozon", label: "Только Ozon" },
-              { value: "yandex", label: "Только Yandex" },
+              { value: "yandex", label: "Только Маркет" },
             ]}
           />
         </label>
@@ -211,26 +204,29 @@ export function PricesPage() {
               { value: "queued", label: "В очереди" },
               { value: "verification_pending", label: "Ждем проверку" },
               { value: "verified", label: "Подтверждено Ozon" },
-              { value: "api_accepted", label: "API принял" },
+              { value: "api_accepted", label: "Маркетплейс принял" },
               { value: "ozon_price_not_applied", label: "Ozon не применил" },
               { value: "ozon_price_delayed", label: "Ozon отложил" },
             ]}
           />
         </label>
-        <button className="primary-action danger-action" type="button" onClick={() => run.mutate({ marketplace, force: true, onlyChanged: false, reason: "sales_automation_reprice_selected" })} disabled={run.isPending}>
-          {run.isPending ? <Loader2 className="spin" size={16} /> : <Send size={16} />} Пересчитать выбранное
+      </div>
+      <div className="price-manual-row">
+        <span>Отправить вручную:</span>
+        <button className="secondary-action" type="button" onClick={() => run.mutate({ marketplace, force: true, onlyChanged: false, reason: "sales_automation_retry_errors" })} disabled={run.isPending}>
+          <RefreshCcw size={15} /> Повторить ошибки
         </button>
-        <button className="primary-action danger-action" type="button" onClick={() => { if (window.confirm("Отправить цены по ВСЕМ товарам прямо сейчас? Это перезапишет цены на маркетплейсах.")) run.mutate({ marketplace: "all", force: true, onlyChanged: false, reason: "force_all_immediate" }); }} disabled={run.isPending}>
-          {run.isPending ? <Loader2 className="spin" size={16} /> : <Zap size={16} />} ОТПРАВИТЬ ВСЕ СЕЙЧАС
+        <button className="secondary-action" type="button" onClick={() => run.mutate({ marketplace, force: true, onlyChanged: false, reason: "sales_automation_reprice_selected" })} disabled={run.isPending}>
+          {run.isPending ? <Loader2 className="spin" size={15} /> : <Send size={15} />} Пересчитать по фильтру
         </button>
-        <button className="secondary-action danger-action" type="button" onClick={() => run.mutate({ marketplace: "ozon", force: true, onlyChanged: false, reason: "sales_automation_force_ozon" })} disabled={run.isPending}>
-          <BadgeDollarSign size={16} /> Force Ozon
+        <button className="secondary-action" type="button" onClick={() => run.mutate({ marketplace: "ozon", force: true, onlyChanged: false, reason: "sales_automation_force_ozon" })} disabled={run.isPending}>
+          <BadgeDollarSign size={15} /> Все цены Ozon
         </button>
         <button className="secondary-action" type="button" onClick={() => run.mutate({ marketplace: "yandex", force: true, onlyChanged: false, reason: "sales_automation_force_yandex" })} disabled={run.isPending}>
-          <BadgeDollarSign size={16} /> Force Yandex
+          <BadgeDollarSign size={15} /> Все цены Маркета
         </button>
-        <button className="secondary-action" type="button" onClick={() => run.mutate({ marketplace, force: true, onlyChanged: false, reason: "sales_automation_retry_errors" })} disabled={run.isPending}>
-          <RefreshCcw size={16} /> Retry ошибки
+        <button className="secondary-action is-danger" type="button" onClick={() => { if (window.confirm("Отправить цены по ВСЕМ товарам прямо сейчас? Это перезапишет цены на маркетплейсах.")) run.mutate({ marketplace: "all", force: true, onlyChanged: false, reason: "force_all_immediate" }); }} disabled={run.isPending}>
+          <Zap size={15} /> Всё и сразу
         </button>
       </div>
 
@@ -239,8 +235,8 @@ export function PricesPage() {
       {runResult ? (
         <div className="success-strip">
           {runResult.accepted
-            ? `Пересчет поставлен в очередь: ${numberValue(runResult.queued)} SKU · ${numberValue(runResult.queuedBatches)} batch · intent ${text(runResult.priceIntentId) || "new"}.`
-            : `Отправлено: ${numberValue(runResult.sent)} · Ozon ${numberValue(runResult.ozonSent)} · Yandex ${numberValue(runResult.yandexSent)} · ошибок ${numberValue(runResult.failed)}`}
+            ? `Пересчёт поставлен в очередь: ${numberValue(runResult.queued)} товаров.`
+            : `Отправлено: ${numberValue(runResult.sent)} · Ozon ${numberValue(runResult.ozonSent)} · Маркет ${numberValue(runResult.yandexSent)} · ошибок ${numberValue(runResult.failed)}`}
         </div>
       ) : null}
 
