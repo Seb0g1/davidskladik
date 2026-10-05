@@ -165,7 +165,8 @@ async function runFastYandexBulkUnarchive({ source = "schedule" } = {}) {
     }
 
     if (!okIds.size) {
-      logger.warn("yandex fast unarchive: nothing accepted", { source, products: products.length, failedSample: failed.slice(0, 10) });
+      // only archived-on-purpose duplicates («Дубль варианта») were selected: nothing to do, nothing to report
+      if (toUnarchive.length) logger.warn("yandex fast unarchive: nothing accepted", { source, products: toUnarchive.length, failedSample: failed.slice(0, 10) });
       return { status: "ok", products: products.length, unarchived: 0, failed: failed.length };
     }
 
