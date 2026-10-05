@@ -62,7 +62,8 @@ app.get("/api/fragrantica/catalog/:id", requireAdmin, async (request, response, 
         // Фрагрантика не ответила — нет данных: Fragella (квота) или Parfumetrika; иначе просим worker докачать.
         if (!row.detail_at) {
           const filled = (fragellaAvailable() && await fillPerfumeFromFragella(row).catch(() => false))
-            || await fillPerfumeFromParfumetrika(row).catch(() => false);
+            || await fillPerfumeFromParfumetrika(row).catch(() => false)
+            || await fillPerfumeFromParfumo(row).catch(() => false);
           if (filled) row = await readFragranticaPerfume(id);
         }
         if (!row.detail_at) {

@@ -512,6 +512,171 @@ async function fillPerfumeFromParfumetrika(row) {
   return true;
 }
 
+// ─── Parfumo: second open source after Parfumetrika (parfumo.com, perfume pages allowed in robots.txt) ───
+// Its search is closed to robots, so perfume addresses come from its sitemaps (downloaded once a month into
+// parfumo_urls). The page gives the pyramid (Top / Heart / Base), accords with colours, gender and year — in
+// English: accords map through a fixed dictionary, notes through the cached translation (fragella_ru; the text
+// AI translates a note once). One polite request at a time, 3 s apart. Bottle photos are not taken.
+
+const PARFUMO_BASE = "https://www.parfumo.com";
+let parfumoChain = Promise.resolve();
+let parfumoTablesReady = false;
+let parfumoIndexPromise = null;
+const PARFUMO_ACCORDS_RU = {
+  floral: "цветочный", oriental: "восточный", spicy: "пряный", woody: "древесный", fresh: "свежий", citrus: "цитрусовый",
+  sweet: "сладкий", powdery: "пудровый", green: "зеленый", fruity: "фруктовый", gourmand: "гурманский", aquatic: "акватический",
+  leathery: "кожаный", leather: "кожаный", smoky: "дымный", resinous: "смолистый", animal: "животный", animalic: "животный",
+  chypre: "шипровый", fougere: "фужерный", "fougère": "фужерный", creamy: "кремовый", synthetic: "синтетический", earthy: "землистый",
+  aromatic: "ароматический", herbal: "травяной", musky: "мускусный", balsamic: "бальзамический", tobacco: "табачный", boozy: "алкогольный",
+};
+
+function parfumoRequest(pathname) {
+  const run = parfumoChain.then(async () => {
+    const response = await fetch(pathname.startsWith("http") ? pathname : `${PARFUMO_BASE}${pathname}`, {
+      headers: { "User-Agent": PARFUMETRIKA_UA, "Accept-Language": "en" }, signal: AbortSignal.timeout(60_000), redirect: "follow",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    if (response.status === 404) return null;
+    if (!response.ok) throw Object.assign(new Error(`Parfumo ответила ${response.status}`), { statusCode: response.status });
+    return pathname.endsWith(".gz") ? Buffer.from(await response.arrayBuffer()) : response.text();
+  });
+  parfumoChain = run.catch(() => {});
+  return run;
+}
+
+async function requireParfumoTables() {
+  const prisma = getPrisma();
+  if (!parfumoTablesReady) {
+    await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS parfumo_urls (path TEXT PRIMARY KEY, brand_key TEXT NOT NULL, name_key TEXT NOT NULL)`);
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS parfumo_urls_brand_idx ON parfumo_urls (brand_key)`);
+    await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS parfumo_state (key TEXT PRIMARY KEY, value JSONB, updated_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+    parfumoTablesReady = true;
+  }
+  return prisma;
+}
+
+function parfumoKey(text) {
+  return String(text || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/&/g, " ").replace(/[^a-z0-9]+/g, "");
+}
+
+/** Perfume addresses from Parfumo's sitemaps, refreshed once a month (one download at a time). */
+async function ensureParfumoIndex() {
+  const prisma = await requireParfumoTables();
+  const [state] = await prisma.$queryRawUnsafe(`SELECT updated_at FROM parfumo_state WHERE key = 'index' AND updated_at > now() - interval '30 days'`);
+  if (state) return;
+  if (!parfumoIndexPromise) {
+    parfumoIndexPromise = (async () => {
+      const zlib = require("zlib");
+      const root = await parfumoRequest("/sitemap_en.xml");
+      const files = [...String(root || "").matchAll(/<loc>([^<]+perfum[^<]+\.xml(?:\.gz)?)<\/loc>/g)].map((m) => m[1]);
+      let total = 0;
+      for (const file of files) {
+        const body = await parfumoRequest(file);
+        if (!body) continue;
+        const xml = Buffer.isBuffer(body) ? zlib.gunzipSync(body).toString("utf8") : String(body);
+        const rows = [];
+        for (const m of xml.matchAll(/<loc>https:\/\/www\.parfumo\.com(\/Perfumes\/([^/<]+)\/([^/<]+))<\/loc>/g)) {
+          rows.push([decodeURIComponent(m[1]), parfumoKey(decodeURIComponent(m[2]).replace(/_/g, " ")), parfumoKey(decodeURIComponent(m[3]).replace(/_/g, " "))]);
+        }
+        for (let i = 0; i < rows.length; i += 1000) {
+          const chunk = rows.slice(i, i + 1000);
+          await prisma.$executeRawUnsafe(
+            `INSERT INTO parfumo_urls (path, brand_key, name_key)
+             SELECT * FROM unnest($1::text[], $2::text[], $3::text[]) ON CONFLICT (path) DO NOTHING`,
+            chunk.map((r) => r[0]), chunk.map((r) => r[1]), chunk.map((r) => r[2]),
+          );
+        }
+        total += rows.length;
+      }
+      await prisma.$executeRawUnsafe(`INSERT INTO parfumo_state (key, value, updated_at) VALUES ('index', $1::jsonb, now()) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`, JSON.stringify({ files: files.length, urls: total }));
+      logger.info("parfumo index loaded", { files: files.length, urls: total });
+    })().finally(() => { parfumoIndexPromise = null; });
+  }
+  await parfumoIndexPromise;
+}
+
+/** Pyramid, accords (+ colours), gender, year, title from a Parfumo perfume page. */
+function parseParfumoPage(html) {
+  const decode = (text) => String(text || "").replace(/&amp;/g, "&").replace(/&#039;|&#39;|&apos;/g, "'").replace(/&quot;/g, '"').trim();
+  const tier = (code) => [...html.matchAll(new RegExp(`data-nt="${code}"[^>]*>\\s*<span[^>]*>\\s*<img src="([^"]+)" alt="([^"]+)"`, "g"))]
+    .map((m) => ({ name: decode(m[2]), icon: m[1].replace(/\?.*$/, "?width=160&aspect_ratio=1:1") }));
+  const accords = [...html.matchAll(/<div class="s-circle[^"]*" style="background: (#[0-9a-fA-F]{3,8})"><\/div><div class="text-xs grey">([^<]+)<\/div>/g)]
+    .map((m) => ({ name: decode(m[2]), background: m[1] }));
+  const og = decode((html.match(/<meta property="og:description" content="([^"]*)"/) || [])[1]);
+  const title = decode((html.match(/<title>([^<]*)<\/title>/) || [])[1]).replace(/\s*».*$/, "");
+  const gender = /for women and men|unisex/i.test(og) ? "unisex" : /for men/i.test(og) ? "male" : /for women/i.test(og) ? "female" : "";
+  const year = Number((og.match(/released in ((?:18|19|20)\d{2})/) || [])[1]) || null;
+  return { top: tier("t"), middle: tier("m"), base: tier("b"), flat: tier("n"), accords, gender, year, title };
+}
+
+/** Looks the perfume up on Parfumo and stores it as its detail. → true when stored. */
+async function fillPerfumeFromParfumo(row) {
+  await ensureParfumoIndex();
+  const prisma = getPrisma();
+  const parser = require("./lib/perfume-match");
+  const brands = await supplierMatchBrands(prisma).catch(() => null);
+  const brandKey = parfumoKey(row.brand);
+  const nameKey = parfumoKey(row.name);
+  if (!brandKey || !nameKey) return false;
+  // the same brand; the name exactly, else the name plus a concentration / flanker tail («Nahema_Eau_de_Parfum»)
+  const urls = await prisma.$queryRawUnsafe(
+    `SELECT path, name_key FROM parfumo_urls WHERE brand_key = $1 AND (name_key = $2 OR name_key LIKE $2 || '%')
+      ORDER BY (name_key = $2) DESC, length(name_key) LIMIT 4`, brandKey, nameKey,
+  );
+  const genderWord = { male: "men", female: "women", unisex: "unisex" };
+  const want = parser.parsePerfumeName(`${row.brand} ${row.name} ${genderWord[row.gender] || ""} 100 ml`, { brands });
+  let page = null;
+  for (const url of urls) {
+    const html = await parfumoRequest(url.path);
+    const parsed = html ? parseParfumoPage(html) : null;
+    if (!parsed || !(parsed.top.length + parsed.middle.length + parsed.base.length + parsed.flat.length)) continue;
+    // «Nahema by Guerlain (Parfum)»: the name before «by»; the concentration in brackets is not part of it
+    const name = parsed.title.replace(/\s+by\s+.+$/i, "").replace(/\s*\([^)]*\)\s*$/, "");
+    const candidate = parser.parsePerfumeName(`${row.brand} ${name} ${genderWord[parsed.gender] || ""} 100 ml`, { brands });
+    const result = parser.comparePerfumes(want, candidate);
+    if (result.ok && !result.probable) { page = parsed; break; }
+  }
+  if (!page) {
+    logger.info("parfumo perfume not found", { id: Number(row.id), brand: row.brand, name: row.name, candidates: urls.length });
+    return false;
+  }
+  const allNotes = [...page.top, ...page.middle, ...page.base, ...page.flat];
+  const ru = await fragellaTranslate("note", allNotes.map((n) => n.name));
+  if (allNotes.some((n) => !ru.has(cleanText(n.name)))) throw Object.assign(new Error("Перевод нот Parfumo не удался (текстовый AI занят, rate limit)"), { statusCode: 429 });
+  const knownIcons = await fragellaKnownNoteIcons().catch(() => new Map());
+  const palette = await fragellaAccordPalette().catch(() => new Map());
+  const note = (n) => {
+    const name = ru.get(cleanText(n.name));
+    return { name, icon: knownIcons.get(name.toLowerCase()) || n.icon };
+  };
+  const notes = { top: page.top.map(note), middle: page.middle.map(note), base: page.base.map(note) };
+  if (!notes.top.length && !notes.middle.length && !notes.base.length) notes.flat = page.flat.map(note);
+  const accords = page.accords.slice(0, 10).map((a, i) => {
+    const name = PARFUMO_ACCORDS_RU[a.name.toLowerCase()] || a.name.toLowerCase();
+    return { name, share: Math.max(40, 100 - i * 10), ...(palette.get(name) || { color: "#000000", background: a.background }) };
+  });
+  const gender = row.gender || page.gender || "";
+  const year = Number(row.year) || page.year || null;
+  const title = `${row.name} ${row.brand}`;
+  const tierText = [["Верхние ноты", notes.top], ["средние ноты", notes.middle], ["базовые ноты", notes.base], ["ноты", notes.flat]]
+    .filter(([, list]) => list && list.length).map(([label, list]) => `${label}: ${list.map((n) => n.name).join(", ")}`).join("; ");
+  const forWhom = { male: "для мужчин", female: "для женщин", unisex: "для мужчин и женщин" }[gender] || "";
+  const detail = {
+    id: Number(row.id), url: row.url, name: row.name, year, brand: row.brand, image: "", notes, title, votes: null, family: "", gender,
+    rating: null, accords, brandSlug: row.brand_slug || "", perfumers: [],
+    description: `${title} — это аромат${forWhom ? ` ${forWhom}` : ""}.${year ? ` ${row.name} выпущен в ${year} году.` : ""} ${tierText}.`,
+    source: "parfumo",
+  };
+  await prisma.$executeRawUnsafe(
+    `UPDATE fragrantica_perfumes SET detail = $2::jsonb, detail_at = now(), detail_error = NULL,
+       gender = CASE WHEN coalesce(gender, '') = '' THEN $3 ELSE gender END, year = coalesce(year, $4), updated_at = now()
+     WHERE id = $1`,
+    Number(row.id), JSON.stringify(detail), gender, year,
+  );
+  logger.info("parfumo perfume stored", { id: Number(row.id), brand: row.brand, name: row.name, notes: allNotes.length });
+  return true;
+}
+
 /**
  * Last resort — neither Fragrantica nor Fragella has the perfume: the text AI names its notes, but only when it
  * knows the perfume («unknown» otherwise). Such notes are marked source «ai»: the card stops at «Ноты подобрал
@@ -581,13 +746,24 @@ async function fragranticaPerfumeForExport(perfumeId) {
       });
       if (stored) row = await readFragranticaPerfume(perfumeId);
     }
-    // Parfumetrika (open Russian base) before the AI: real notes, not a model's memory
+    // Parfumetrika (open Russian base), then Parfumo, before the AI: real notes, not a model's memory
     if (!row.detail_at && fragranticaClosed) {
       const stored = await fillPerfumeFromParfumetrika(row).catch((error) => {
         logger.warn("parfumetrika fill failed", { id: Number(perfumeId), detail: error?.message || String(error) });
         return false;
       });
       if (stored) row = await readFragranticaPerfume(perfumeId);
+    }
+    if (!row.detail_at && fragranticaClosed) {
+      let parfumoError = null;
+      const stored = await fillPerfumeFromParfumo(row).catch((error) => {
+        parfumoError = error;
+        logger.warn("parfumo fill failed", { id: Number(perfumeId), detail: error?.message || String(error) });
+        return false;
+      });
+      if (stored) row = await readFragranticaPerfume(perfumeId);
+      // the note translation waits for the text AI («rate limit»): the draft asks again later
+      else if (parfumoError && Number(parfumoError.statusCode) === 429) throw parfumoError;
     }
     if (!row.detail_at && fragranticaClosed && process.env.FRAGRANTICA_AI_NOTES !== "false") {
       let aiError = null;
