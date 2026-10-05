@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, CreditCard, Loader2, Package, Plus, RefreshCw, ShoppingCart, TrendingUp } from "lucide-react";
+import { Check, CreditCard, Loader2, Package, Pencil, Plus, RefreshCw, ShoppingCart, TrendingUp } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { FinanceExpenseCreateSchema, FinanceExpensesSchema, FinanceOrderSchema, FinanceOrdersSchema, FinanceSummarySchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
@@ -61,6 +61,9 @@ export function FinancePage() {
   const [expenseSuccess, setExpenseSuccess] = useState(false);
   const [expenseError, setExpenseError] = useState("");
   const [savingId, setSavingId] = useState<string | null>(null);
+  // one order at a time is edited; the manual purchase form opens from the header
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [expenseOpen, setExpenseOpen] = useState(false);
   useEffect(() => { setOrderDrafts({}); }, [period, linkedOnly]);
   const summary = useQuery({
     queryKey: ["finance", "summary", period, linkedOnly],
@@ -94,7 +97,7 @@ export function FinancePage() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["finance"] });
     },
-    onSettled: () => setSavingId(null),
+    onSettled: () => { setSavingId(null); setEditingId(null); },
   });
   const s = summary.data?.summary || {};
   const supplierOwesUsd = Number(s.supplierOwedUsd || 0);
@@ -131,6 +134,9 @@ export function FinancePage() {
             <button className="secondary-action" type="button" onClick={refresh}>
               <RefreshCw size={16} /> Обновить
             </button>
+            <button className={expenseOpen ? "secondary-action" : "primary-action"} type="button" aria-expanded={expenseOpen} onClick={() => setExpenseOpen((v) => !v)}>
+              <Plus size={16} /> Ручная закупка
+            </button>
           </div>
         )}
       />
@@ -149,8 +155,9 @@ export function FinancePage() {
         <SummaryCard label="Оплачено поставщикам" value={dualCurrency(Number(s.supplierPaidUsd || 0), Number(s.supplierPaidRub || 0))} />
       </div>
 
+      {expenseOpen ? (
       <section className="settings-panel settings-panel-wide">
-        <div className="section-title"><div><span>Ручная закупка</span><h3>Добавить парфюм не из marketplace-заказа</h3></div></div>
+        <div className="section-title"><div><span>Ручная закупка</span><h3>Парфюм, купленный не под заказ маркетплейса</h3></div></div>
         <div className="settings-form-row">
           <input placeholder="Поставщик" value={form.supplierName} onChange={(event) => setForm({ ...form, supplierName: event.target.value })} />
           <input placeholder="SKU / offerId" value={form.offerId} onChange={(event) => setForm({ ...form, offerId: event.target.value })} />
@@ -164,9 +171,10 @@ export function FinancePage() {
         <input placeholder="Комментарий" value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} />
         {expenseError ? <div className="inline-error">{expenseError}</div> : null}
         {createExpense.error ? <div className="inline-error">{errorMessage(createExpense.error)}</div> : null}
-        {updateOrder.error ? <div className="inline-error">{errorMessage(updateOrder.error)}</div> : null}
-        {expenseSuccess ? <FlashToast>Закупка добавлена в финансы и историю поставщика.</FlashToast> : null}
       </section>
+      ) : null}
+      {expenseSuccess ? <FlashToast>Закупка добавлена в финансы и историю поставщика.</FlashToast> : null}
+      {updateOrder.error ? <div className="inline-error">{errorMessage(updateOrder.error)}</div> : null}
 
       <div className="table-panel price-table finance-orders-table">
         <div className="table-head"><span>Дата</span><span>Заказ/SKU</span><span>Товар</span><span>Поставщик</span><span>Закупка</span><span>Прибыль</span></div>
@@ -187,15 +195,24 @@ export function FinancePage() {
             <span data-label="Поставщик">{order.supplierName || "-"}</span>
             <span data-label="Закупка">{money(order.purchaseCost)}</span>
             <span data-label="Прибыль">{money(order.profitAmount)}</span>
-            <span data-label="Редактировать" className="finance-inline-edit">
-              <input type="number" placeholder="Продажа" value={valueOf("saleAmount", order.saleAmount)} onChange={(event) => setOrderDrafts((current) => ({ ...current, [order.id]: { ...(current[order.id] || {}), saleAmount: event.target.value } }))} />
-              <input type="number" placeholder="Выплата" value={valueOf("payoutAmount", order.payoutAmount)} onChange={(event) => setOrderDrafts((current) => ({ ...current, [order.id]: { ...(current[order.id] || {}), payoutAmount: event.target.value } }))} />
-              <input type="number" placeholder="Комиссия" value={valueOf("feesAmount", order.feesAmount)} onChange={(event) => setOrderDrafts((current) => ({ ...current, [order.id]: { ...(current[order.id] || {}), feesAmount: event.target.value } }))} />
-              <input type="number" placeholder="Налог" value={valueOf("taxAmount", order.taxAmount)} onChange={(event) => setOrderDrafts((current) => ({ ...current, [order.id]: { ...(current[order.id] || {}), taxAmount: event.target.value } }))} />
-              <button className="secondary-action" type="button" disabled={savingId === order.id} onClick={() => { setSavingId(order.id); updateOrder.mutate({ id: order.id, patch }); }}>
-                {savingId === order.id ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Сохранить
-              </button>
-            </span>
+            {editingId === order.id ? (
+              <span data-label="Изменить" className="finance-inline-edit">
+                <label>Продажа<input type="number" value={valueOf("saleAmount", order.saleAmount)} onChange={(event) => setOrderDrafts((current) => ({ ...current, [order.id]: { ...(current[order.id] || {}), saleAmount: event.target.value } }))} /></label>
+                <label>Выплата<input type="number" value={valueOf("payoutAmount", order.payoutAmount)} onChange={(event) => setOrderDrafts((current) => ({ ...current, [order.id]: { ...(current[order.id] || {}), payoutAmount: event.target.value } }))} /></label>
+                <label>Комиссия<input type="number" value={valueOf("feesAmount", order.feesAmount)} onChange={(event) => setOrderDrafts((current) => ({ ...current, [order.id]: { ...(current[order.id] || {}), feesAmount: event.target.value } }))} /></label>
+                <label>Налог<input type="number" value={valueOf("taxAmount", order.taxAmount)} onChange={(event) => setOrderDrafts((current) => ({ ...current, [order.id]: { ...(current[order.id] || {}), taxAmount: event.target.value } }))} /></label>
+                <button className="primary-action" type="button" disabled={savingId === order.id} onClick={() => { setSavingId(order.id); updateOrder.mutate({ id: order.id, patch }); }}>
+                  {savingId === order.id ? <Loader2 className="spin" size={15} /> : <Check size={15} />} Сохранить
+                </button>
+                <button className="secondary-action" type="button" onClick={() => setEditingId(null)}>Отмена</button>
+              </span>
+            ) : (
+              <span data-label="" className="finance-row-edit">
+                <button className="secondary-action" type="button" title="Изменить продажу, выплату, комиссию и налог" onClick={() => setEditingId(order.id)}>
+                  <Pencil size={14} /> Изменить
+                </button>
+              </span>
+            )}
           </div>
           );
         })}

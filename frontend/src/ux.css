@@ -1934,3 +1934,32 @@ body:has(.bulk-action-bar) .toast-stack { bottom: 88px; }
 .ch-improve-fold-title { color: var(--text); font-weight: 700; }
 .ch-improve-fold > summary > a { margin-left: auto; min-height: 30px; }
 .ch-improve-fold > .ch-improve { margin: 0; border: 0; border-top: 1px solid var(--line); border-radius: 0 0 12px 12px; }
+
+/* Финансы: правка заказа — по кнопке «Изменить», поля открываются строкой под заказом */
+.app-content .finance-orders-table .table-head,
+.app-content .finance-orders-table .table-row {
+  grid-template-columns: minmax(82px, 0.5fr) minmax(110px, 0.7fr) minmax(220px, 2fr) minmax(110px, 0.8fr) minmax(82px, 0.5fr) minmax(82px, 0.5fr) 112px;
+  min-width: 0;
+}
+.app-content .finance-orders-table .table-head::after { content: ""; }
+.finance-row-edit { display: flex; justify-content: flex-end; }
+.finance-row-edit .secondary-action { min-height: 30px; padding: 0 10px; font-size: 12.5px; }
+.app-content .finance-orders-table .finance-inline-edit {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+  margin: 6px 0 2px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(var(--accent-rgb), 0.05);
+}
+.app-content .finance-inline-edit label { display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; color: var(--muted); text-transform: none; letter-spacing: 0; }
+.app-content .finance-inline-edit input { width: 120px; min-height: 32px; }
+.app-content .finance-inline-edit button { min-height: 32px; min-width: 0; }
+@media (max-width: 900px) {
+  .app-content .finance-orders-table .table-row { grid-template-columns: 1fr; }
+  .finance-row-edit { justify-content: flex-start; }
+}
