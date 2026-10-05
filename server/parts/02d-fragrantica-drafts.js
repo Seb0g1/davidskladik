@@ -1065,7 +1065,7 @@ async function runFragranticaDraftsTick() {
           FOR UPDATE OF d SKIP LOCKED)
        RETURNING *`,
       // Fragella fills perfumes without a page: with its key they are built even while Fragrantica rests
-      Math.max(0, limit), improve, pagesPaused && !fragellaKey(),
+      Math.max(0, limit), improve, pagesPaused && !fragellaAvailable(),
     );
     const claimed = await claimPool(false, fragranticaDraftsParallel - fragranticaDraftsInFlight);
     for (const draft of claimed) {

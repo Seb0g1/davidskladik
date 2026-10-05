@@ -175,12 +175,26 @@ function fragellaKey() {
   return cleanText(process.env.FRAGELLA_API_KEY);
 }
 
+// The plan's monthly quota (free: 20 requests) runs out → Fragella rests a day and perfumes without a page wait
+// for it (or for Fragrantica) instead of failing as «not found».
+let fragellaRestUntil = 0;
+function fragellaAvailable() {
+  return Boolean(fragellaKey()) && Date.now() >= fragellaRestUntil;
+}
+
 // the plan allows 60 requests a minute — one at a time, 1.1 s apart, for every caller of the process
 function fragellaRequest(pathname) {
   const run = fragellaChain.then(async () => {
     const response = await fetch(`${FRAGELLA_API}${pathname}`, { headers: { "x-api-key": fragellaKey() }, signal: AbortSignal.timeout(20_000) });
     await new Promise((resolve) => setTimeout(resolve, 1100));
-    if (!response.ok) throw Object.assign(new Error(`Fragella ответила ${response.status}`), { statusCode: response.status });
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      if (response.status === 429 && /quota/i.test(body)) {
+        fragellaRestUntil = Date.now() + 24 * 3_600_000;
+        logger.warn("fragella monthly quota exhausted", { detail: body.slice(0, 200) });
+      }
+      throw Object.assign(new Error(`Fragella ответила ${response.status}${/quota/i.test(body) ? " (месячный лимит тарифа исчерпан)" : ""}`), { statusCode: response.status });
+    }
     return response.json();
   });
   fragellaChain = run.catch(() => {});
@@ -387,7 +401,7 @@ async function fragranticaPerfumeForExport(perfumeId) {
   if (!row.detail_at) {
     // Fragrantica first (unless it rests after a 403); no page → Fragella; neither → Fragrantica's error
     let fetchError = null;
-    if (!(fragranticaPagesPausedUntil() > 0 && fragellaKey())) {
+    if (!(fragranticaPagesPausedUntil() > 0 && fragellaAvailable())) {
       try {
         await fetchAndStoreFragranticaPerfume(row.url);
       } catch (error) {
@@ -395,20 +409,30 @@ async function fragranticaPerfumeForExport(perfumeId) {
       }
       row = await readFragranticaPerfume(perfumeId);
     }
-    if (!row.detail_at && fragellaKey()) {
+    // Fragella: false = it answered «no such perfume»; an error (quota, 429, network) means «ask again later»
+    let fragellaError = null;
+    let fragellaMissing = false;
+    if (!row.detail_at && fragellaAvailable()) {
       const stored = await fillPerfumeFromFragella(row).catch((error) => {
+        fragellaError = error;
         logger.warn("fragella fill failed", { id: Number(perfumeId), detail: error?.message || String(error) });
         return false;
       });
       if (stored) row = await readFragranticaPerfume(perfumeId);
+      else if (!fragellaError) fragellaMissing = true;
     }
-    // nothing anywhere: the text AI, marked for a person to confirm
-    if (!row.detail_at && fragellaKey()) {
+    if (!row.detail_at && fragellaError) throw fragellaError;
+    // nothing anywhere: the text AI, marked for a person to confirm — only after Fragella said it has no such perfume
+    if (!row.detail_at && fragellaMissing) {
+      let aiError = null;
       const stored = await fillPerfumeFromAi(row).catch((error) => {
+        aiError = error;
         logger.warn("ai perfume notes failed", { id: Number(perfumeId), detail: error?.message || String(error) });
         return false;
       });
       if (stored) row = await readFragranticaPerfume(perfumeId);
+      // «Слишком частые сообщения»: the draft waits and asks again
+      else if (aiError) throw Object.assign(new Error(`Текстовый AI занят (rate limit): ${aiError.message}`), { statusCode: 429 });
     }
     if (!row.detail_at) {
       if (fetchError) throw fetchError;
