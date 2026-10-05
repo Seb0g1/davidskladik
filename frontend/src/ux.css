@@ -1963,3 +1963,8 @@ body:has(.bulk-action-bar) .toast-stack { bottom: 88px; }
   .app-content .finance-orders-table .table-row { grid-template-columns: 1fr; }
   .finance-row-edit { justify-content: flex-start; }
 }
+
+/* Сборка на телефоне: счётчики уже в кнопках-фильтрах — плитки не дублируют их и не толкают список вниз */
+@media (max-width: 760px) {
+  .app-content .route-view[data-route="picking-list"] .dashboard-metrics { display: none; }
+}
