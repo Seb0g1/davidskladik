@@ -363,44 +363,67 @@ function scheduleSupplierMatch(delayMs = 60_000) {
 // ─── Одобрение: привязать строку ко всем карточкам товара ────────────────────
 
 async function addSupplierMatchLinks(productIds = [], rows = [], username = "supplier-match") {
+  const [changed] = await addSupplierMatchLinksBatch([{ productIds, rows }], username);
+  return changed || [];
+}
+
+/**
+ * Links for several products in one pass. One product at a time used to read the whole warehouse, write it,
+ * drop the warehouse page cache and start an activation per product — «approve all exact» did that hundreds of
+ * times in the API process and the site crawled (663 cache drops on 2026-10-05). Now: the warehouse is read
+ * once, one lock, one write, one cache drop and one activation per batch. groups: [{ productIds, rows }] →
+ * changed product ids per group (same order).
+ */
+async function addSupplierMatchLinksBatch(groups = [], username = "supplier-match") {
   const settings = await readAppSettings();
   const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
-  const changed = [];
-  for (const productId of productIds) {
-    await withWarehouseProductMutationLock([productId], async () => {
-      const current = await findWarehouseProductById(productId);
-      if (!current) return;
-      await hydrateWarehouseProductsForIds([productId], { expandGroups: true });
-      const warehouse = await readWarehouse();
-      const context = normalizeWarehouseProduct(current);
-      const now = new Date().toISOString();
-      current.links = Array.isArray(current.links) ? current.links : [];
-      let added = 0;
-      for (const row of rows) {
-        let link = normalizeWarehouseLink(fragranticaLinkDraft(row));
-        link = await resolvePriceMasterLinkForSave(link, usdRate, warehouse.suppliers, { live: true, timeoutMs: 2500, cacheEmpty: false, productContext: context });
-        if (current.links.some((item) => warehouseLinksEqualForSave(item, link))) continue;
-        current.links.push(normalizeWarehouseLink({ ...link, raw: { ...(link.raw || {}), createdBy: "supplier_match" }, createdAt: now, updatedAt: now, createdBy: username, updatedBy: username }));
-        added += 1;
+  const allIds = [...new Set(groups.flatMap((g) => g.productIds || []))];
+  const changedByGroup = groups.map(() => []);
+  if (!allIds.length) return changedByGroup;
+  const allChanged = new Set();
+  await withWarehouseProductMutationLock(allIds, async () => {
+    await hydrateWarehouseProductsForIds(allIds, { expandGroups: true });
+    const warehouse = await readWarehouse();
+    const patched = new Map();
+    for (const [i, group] of groups.entries()) {
+      for (const productId of group.productIds || []) {
+        const current = patched.get(productId) || await findWarehouseProductById(productId);
+        if (!current) continue;
+        const context = normalizeWarehouseProduct(current);
+        const now = new Date().toISOString();
+        current.links = Array.isArray(current.links) ? current.links : [];
+        let added = 0;
+        for (const row of group.rows || []) {
+          let link = normalizeWarehouseLink(fragranticaLinkDraft(row));
+          link = await resolvePriceMasterLinkForSave(link, usdRate, warehouse.suppliers, { live: true, timeoutMs: 2500, cacheEmpty: false, productContext: context });
+          if (current.links.some((item) => warehouseLinksEqualForSave(item, link))) continue;
+          current.links.push(normalizeWarehouseLink({ ...link, raw: { ...(link.raw || {}), createdBy: "supplier_match" }, createdAt: now, updatedAt: now, createdBy: username, updatedBy: username }));
+          added += 1;
+        }
+        if (!added) continue;
+        current.links = compactWarehouseLinks(current.links);
+        current.autoPriceEnabled = true;
+        current.everHadLinks = true;
+        current.updatedAt = now;
+        current.userUpdatedAt = now;
+        patched.set(productId, current);
+        changedByGroup[i].push(productId);
+        allChanged.add(productId);
       }
-      if (!added) return;
-      current.links = compactWarehouseLinks(current.links);
-      current.autoPriceEnabled = true;
-      current.everHadLinks = true;
-      current.updatedAt = now;
-      current.userUpdatedAt = now;
+    }
+    if (patched.size) {
       await withWarehouseMutation(async () => {
-        await writeWarehouseProductPatch([current], { reason: "warehouse_link_save" });
+        await writeWarehouseProductPatch([...patched.values()], { reason: "warehouse_link_save" });
       });
-      changed.push(productId);
-    });
-  }
+    }
+  });
+  const changed = [...allChanged];
   if (changed.length) {
     await queueLinkedProductActivation(changed, "supplier_match_link", warehouseLinkActivationRequestMeta(changed, { username }))
       .catch((error) => logger.warn("supplier match activation failed", { detail: error?.message }));
     void triggerLinkedProductStockSync(changed, "supplier_match_link").catch(() => {});
   }
-  return changed;
+  return changedByGroup;
 }
 
 /** Approves suggestions (grouped per product): links, then marks them linked / failed. */
@@ -416,21 +439,24 @@ async function approveSupplierMatchIds(ids = [], username = "supplier-match", on
     byOffer.get(r.offer_key).items.push(r);
   }
   const result = { linked: 0, failed: 0, products: 0 };
-  for (const group of byOffer.values()) {
-    const groupIds = group.items.map((r) => String(r.id));
+  // 25 products per pass: one warehouse write / cache drop each, and the lock is never held for long
+  const all = [...byOffer.values()];
+  for (let start = 0; start < all.length; start += 25) {
+    const batch = all.slice(start, start + 25);
+    const batchIds = batch.flatMap((group) => group.items.map((r) => String(r.id)));
     try {
-      const changed = await addSupplierMatchLinks(group.productIds, group.items.map((r) => r.row_data), username);
+      const changedByGroup = await addSupplierMatchLinksBatch(batch.map((group) => ({ productIds: group.productIds, rows: group.items.map((r) => r.row_data) })), username);
       await prisma.$executeRawUnsafe(
         `UPDATE supplier_match_suggestions SET status = 'linked', decided_at = now(), decided_by = $2, error = NULL WHERE id = ANY($1::bigint[])`,
-        groupIds, username,
+        batchIds, username,
       );
-      result.linked += group.items.length;
-      if (changed.length) result.products += 1;
+      result.linked += batchIds.length;
+      result.products += changedByGroup.filter((changed) => changed.length).length;
     } catch (error) {
-      result.failed += group.items.length;
+      result.failed += batchIds.length;
       await prisma.$executeRawUnsafe(
         `UPDATE supplier_match_suggestions SET status = 'failed', error = $2 WHERE id = ANY($1::bigint[])`,
-        groupIds, String(error?.message || error).slice(0, 300),
+        batchIds, String(error?.message || error).slice(0, 300),
       );
     }
     onProgress(result);
