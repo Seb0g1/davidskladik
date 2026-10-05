@@ -647,7 +647,7 @@ app.get("/api/card-improve", requireAdmin, async (request, response, next) => {
           brandMatched: d.brandMatched !== false,
           brandCandidates: Array.isArray(d.brandCandidates) ? d.brandCandidates.slice(0, 10) : [],
           retryAt: d.retryAt || null,
-          notes: (Array.isArray(d.warnings) ? d.warnings : []).filter((w) => /нет — /.test(w)),
+          notes: (Array.isArray(d.warnings) ? d.warnings : []).filter((w) => /нет — |^Ноты подобрал ИИ/.test(w)),
           exports: (Array.isArray(r.export_ids) ? r.export_ids : []).map((id) => exportsById.get(Number(id))).filter(Boolean),
           updatedAt: r.updated_at,
         };

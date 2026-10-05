@@ -399,9 +399,11 @@ async function fragranticaPerfumeForExport(perfumeId) {
     throw error;
   }
   if (!row.detail_at) {
-    // Fragrantica first (unless it rests after a 403); no page → Fragella; neither → Fragrantica's error
+    // Sources in order: the Fragrantica page (unless it rests after a 403) → Fragella (while its quota lasts) →
+    // the text AI (DeepSeek). A network hiccup on Fragrantica is retried later, never answered by the AI.
     let fetchError = null;
-    if (!(fragranticaPagesPausedUntil() > 0 && fragellaAvailable())) {
+    const pagesPaused = fragranticaPagesPausedUntil() > 0;
+    if (!pagesPaused) {
       try {
         await fetchAndStoreFragranticaPerfume(row.url);
       } catch (error) {
@@ -409,21 +411,15 @@ async function fragranticaPerfumeForExport(perfumeId) {
       }
       row = await readFragranticaPerfume(perfumeId);
     }
-    // Fragella: false = it answered «no such perfume»; an error (quota, 429, network) means «ask again later»
-    let fragellaError = null;
-    let fragellaMissing = false;
+    const fragranticaClosed = pagesPaused || /\b(403|429)\b|challenge|Cloudflare/i.test(String(fetchError?.message || ""));
     if (!row.detail_at && fragellaAvailable()) {
       const stored = await fillPerfumeFromFragella(row).catch((error) => {
-        fragellaError = error;
         logger.warn("fragella fill failed", { id: Number(perfumeId), detail: error?.message || String(error) });
         return false;
       });
       if (stored) row = await readFragranticaPerfume(perfumeId);
-      else if (!fragellaError) fragellaMissing = true;
     }
-    if (!row.detail_at && fragellaError) throw fragellaError;
-    // nothing anywhere: the text AI, marked for a person to confirm — only after Fragella said it has no such perfume
-    if (!row.detail_at && fragellaMissing) {
+    if (!row.detail_at && fragranticaClosed && process.env.FRAGRANTICA_AI_NOTES !== "false") {
       let aiError = null;
       const stored = await fillPerfumeFromAi(row).catch((error) => {
         aiError = error;
@@ -433,10 +429,11 @@ async function fragranticaPerfumeForExport(perfumeId) {
       if (stored) row = await readFragranticaPerfume(perfumeId);
       // «Слишком частые сообщения»: the draft waits and asks again
       else if (aiError) throw Object.assign(new Error(`Текстовый AI занят (rate limit): ${aiError.message}`), { statusCode: 429 });
+      else throw Object.assign(new Error("Нет данных аромата: Фрагрантика закрыта, ИИ этот аромат не знает — выберите аромат вручную."), { statusCode: 404 });
     }
     if (!row.detail_at) {
       if (fetchError) throw fetchError;
-      throw Object.assign(new Error("Нет данных аромата: Фрагрантика закрыта, во Fragella аромат не найден."), { statusCode: 404 });
+      throw Object.assign(new Error("Нет данных аромата."), { statusCode: 404 });
     }
   }
   return { ...(row.detail || {}), id: Number(row.id), brand: row.brand, name: row.name, gender: row.gender, year: row.year, url: row.url };

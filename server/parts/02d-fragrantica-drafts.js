@@ -701,13 +701,10 @@ async function buildFragranticaCardDraft(draft) {
     if (facts.gender) perfume = { ...perfume, gender: facts.gender };
   }
   parts.perfume = Date.now() - buildStartedAt;
-  // notes named by the text AI (no Fragrantica / Fragella data) wait until a person confirms them
-  if (perfume.source === "ai" && !draft.data?.notesConfirmed) {
+  // notes named by the text AI (Fragrantica closed, no Fragella quota): built as usual, flagged for the approver
+  if (perfume.source === "ai") {
     const tier = (list) => (list || []).map((n) => n.name).join(", ") || "—";
-    return updateFragranticaDraft(draft.id, {
-      status: "attention", stage: null,
-      error: `Ноты подобрал ИИ — проверьте. Верх: ${tier(perfume.notes?.top)}. Сердце: ${tier(perfume.notes?.middle)}. База: ${tier(perfume.notes?.base)}. Если верно — «Ноты верны».`,
-    });
+    warnings.push(`Ноты подобрал ИИ (DeepSeek) — проверьте перед одобрением. Верх: ${tier(perfume.notes?.top)}. Сердце: ${tier(perfume.notes?.middle)}. База: ${tier(perfume.notes?.base)}.`);
   }
   // The type: chosen by hand (typeChosen) wins; an improvement recomputes its product's type on every build (a saved
   // type_key may be the old «парфюмерная вода» default); a new card takes the type its supplier rows / Fragrantica
@@ -1061,8 +1058,9 @@ async function runFragranticaDraftsTick() {
           LIMIT $1
           FOR UPDATE OF d SKIP LOCKED)
        RETURNING *`,
-      // Fragella fills perfumes without a page: with its key they are built even while Fragrantica rests
-      Math.max(0, limit), improve, pagesPaused && !fragellaAvailable(),
+      // perfumes without a page are built even while Fragrantica rests: Fragella or the text AI names their notes
+      // (FRAGRANTICA_AI_NOTES=false turns the AI fallback off — then they wait for a page)
+      Math.max(0, limit), improve, pagesPaused && !fragellaAvailable() && process.env.FRAGRANTICA_AI_NOTES === "false",
     );
     const claimed = await claimPool(false, fragranticaDraftsParallel - fragranticaDraftsInFlight);
     for (const draft of claimed) {
