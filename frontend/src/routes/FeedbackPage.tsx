@@ -168,6 +168,17 @@ function QuestionCard({ question, templates, onReplied }: { question: QuestionRo
   );
 }
 
+// marketplace API errors → what the operator should know; an unknown error is shown as is
+function feedbackWarning(text: string) {
+  const mp = /^(ozon|yandex|wb|wildberries|avito)\b/i.exec(text)?.[1] || "";
+  const name = { ozon: "Ozon", yandex: "Яндекс Маркет", wb: "Wildberries", wildberries: "Wildberries", avito: "Avito" }[mp.toLowerCase()] || "Маркетплейс";
+  if (/not available with existing subscription|PermissionDenied/i.test(text)) return `${name}: отзывы и вопросы по API доступны только с подпиской Premium Plus — с этого кабинета они сюда не загружаются.`;
+  if (/\b(401|403)\b|unauthori[sz]ed|forbidden|invalid api key|api-key/i.test(text)) return `${name}: ключ API не подходит или без доступа к отзывам — проверьте кабинет в Настройках.`;
+  if (/\b429\b|too many requests|rate limit|\b420\b/i.test(text)) return `${name}: маркетплейс просит подождать (много запросов) — список обновится сам.`;
+  if (/timeout|timed out|ETIMEDOUT|ECONNRESET|5\d\d/i.test(text)) return `${name}: маркетплейс не ответил — попробуйте обновить через минуту.`;
+  return text;
+}
+
 export function FeedbackPage({ defaultTab }: { defaultTab: "reviews" | "questions" }) {
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<"reviews" | "questions">(defaultTab);
@@ -289,7 +300,7 @@ export function FeedbackPage({ defaultTab }: { defaultTab: "reviews" | "question
         {!isReviews ? <small className="review-author">Вопросы приходят с Ozon и Wildberries — у Яндекс.Маркета нет API вопросов.</small> : null}
       </div>
 
-      {warnings.map((w) => <div className="inline-warn" key={w}>{w}</div>)}
+      {warnings.map((w) => <div className="inline-warn" key={w}>{feedbackWarning(w)}</div>)}
       {activeQuery.error ? <div className="inline-error">{String((activeQuery.error as Error).message)}</div> : null}
 
       {isReviews ? (

@@ -1891,3 +1891,9 @@ body:has(.bulk-action-bar) .toast-stack { bottom: 88px; }
   .app-content .route-view[data-route="warehouse"] .summary-grid > *,
   .app-content .route-view[data-route="warehouse"] .dashboard-metrics > * { flex: 0 0 auto; min-width: 118px; }
 }
+
+/* Склад: пока товар не выбран, таблица занимает всю ширину (пустая панель «Выберите товар» не нужна) */
+@media (min-width: 981px) {
+  .app-content .workspace:not(.detail-open) { grid-template-columns: minmax(0, 1fr); }
+  .app-content .workspace:not(.detail-open) > .detail-panel.empty-panel { display: none; }
+}
