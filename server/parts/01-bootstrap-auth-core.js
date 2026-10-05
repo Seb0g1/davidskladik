@@ -127,6 +127,8 @@ const APP_PAGE_KEYS = [
   "import", "avito", "statistics", "settings", "questions", "prices", "operations",
   "supplier-cart", "recovery-queue", "problem-products", "finance",
   "consignment", "system", "ai-drafts", "no-supplier", "fragrantica",
+  "support", "supplier-match", "shop", "new-products", "card-improve", "card-health",
+  "ozon-card-fix", "ozon-docs", "price-guard", "tnved", "brands-tnved", "brand-bans",
 ];
 
 const DEFAULT_MANAGER_PAGES = ["warehouse", "picking-list", "chats", "reviews", "questions"];
