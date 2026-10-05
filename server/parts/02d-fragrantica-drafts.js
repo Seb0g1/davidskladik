@@ -635,6 +635,8 @@ async function existingCardFacts(offerId) {
     // PriceMaster rows decide who the perfume is for when they say it (the user's rule, 2026-10-05); titles only
     // when nothing else does — a Market title may carry an earlier wrong improvement («Just Cavalli … женская»)
     linkGender: voteGenderClear(linkNames),
+    ozonGender: voteGender(ozonNames),
+    marketGender: voteGender(cards.filter((r) => r.marketplace !== "ozon").map((r) => r.name)),
     titleGender: voteGender(ozonNames) || voteGender(cardNames),
     gender: voteGenderClear(linkNames) || voteGender(ozonNames) || voteGender(cardNames),
   };
@@ -715,13 +717,14 @@ async function buildFragranticaCardDraft(draft) {
   };
   const ozonTarget = targets.find((t) => t.kind === "ozon");
   let perfume = await fragranticaPerfumeForExport(perfumeId);
-  // Who the perfume is for: PriceMaster rows («WOMAN», «(m)», «жен») → the site the data came from (aromo, Parfumo…)
-  // → the Fragrantica catalog → the card's own titles. Plume Impression Art Nouveau: catalog «unisex», rows «WOMAN».
+  // Who the perfume is for: the Ozon title (an improvement never rewrites it; Plume «женская», Wild Roses «унисекс»)
+  // → PriceMaster rows by a clear majority (suppliers mark unisex perfumes «W» too) → the site the data came from
+  // (aromo, Parfumo…) → the Fragrantica catalog → the Market title (an earlier improvement may have rewritten it).
   // The guard below checks the source's gender against the rows: «Black XS» for men is not «XS Black for Her».
   const fragranticaGender = perfume.sourceGender || perfume.gender || "";
   {
     const facts = draft.data?.existing?.offerId ? await existingCardFacts(draft.data.existing.offerId).catch(() => ({})) : {};
-    const gender = facts.linkGender || perfume.sourceGender || perfume.gender || facts.titleGender || "";
+    const gender = facts.ozonGender || facts.linkGender || perfume.sourceGender || perfume.gender || facts.marketGender || "";
     if (gender) perfume = { ...perfume, gender };
   }
   parts.perfume = Date.now() - buildStartedAt;
