@@ -303,15 +303,18 @@ const CARD_TYPES: Array<[string, string]> = [["edp", "Парфюмерная в�
 type PerfumeOption = { id: number; brand: string; name: string; year: number | null; gender: string; hasPage: boolean; hits: number };
 const GENDER_LABEL: Record<string, string> = { male: "муж.", female: "жен.", unisex: "унисекс" };
 
-/** «Выбрать аромат»: perfumes matching the card's supplier rows first, or a catalog search; the card is rebuilt. */
+/** «Выбрать аромат»: perfumes matching the card's supplier rows first, or a catalog search; the card is rebuilt.
+ *  Loaded only when opened — every held card asking at once tripped the nginx connection limit (429). */
 function PerfumePicker({ item }: { item: Item }) {
   const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const query = useDebounced(q, 350).trim();
   const options = useQuery({
     queryKey: ["card-improve", "perfume-options", item.id, query],
     queryFn: () => apiJson<{ items: PerfumeOption[] }>(`/api/fragrantica/drafts/${item.id}/perfume-options?q=${encodeURIComponent(query)}`),
     staleTime: 5 * 60_000,
+    enabled: open,
   });
   const pick = useMutation({
     mutationFn: (perfume: PerfumeOption) => apiJson(`/api/fragrantica/drafts/${item.id}`, { method: "PATCH", body: JSON.stringify({ perfumeId: perfume.id }) }),
@@ -319,6 +322,15 @@ function PerfumePicker({ item }: { item: Item }) {
     onError: (error) => toast.error(errorMessage(error)),
   });
   const list = options.data?.items || [];
+  if (!open) {
+    return (
+      <div className="ci-brand">
+        <div className="ci-brand-list">
+          <button type="button" className="ci-brand-chip" onClick={() => setOpen(true)}><Search size={13} /> Выбрать аромат</button>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="ci-brand">
       <span className="ci-brand-title"><AlertTriangle size={13} /> Выберите аромат — {query ? "результаты поиска" : "подходят по строкам поставщиков"}:</span>
