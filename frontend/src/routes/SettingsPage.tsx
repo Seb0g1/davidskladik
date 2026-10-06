@@ -1135,14 +1135,16 @@ export function SettingsPage() {
           {adjustPricing.error && <div className="inline-error">{errorMessage(adjustPricing.error)}</div>}
           {adjustPricing.isSuccess && <div className="success-strip">Настройки изменены, пересчет цен поставлен в очередь.</div>}
         </div>
-        <div className="settings-panel">
+        <div className="settings-panel settings-panel-wide">
           <div className="section-title"><div><span>Цены</span><h3>Базовые цены</h3></div></div>
+          <div className="settings-base-prices">
           <label>Курс USD/RUB<input type="number" min="0.0001" step="0.0001" value={String(draft.fixedUsdRate ?? settings.fixedUsdRate ?? "")} onChange={(event) => update({ fixedUsdRate: numberValue(event.target.value) })} /></label>
-          <label>Базовая наценка Ozon <span className="settings-field-unit">×</span><input type="number" min="0.0001" step="0.0001" value={String(draftMarkups.ozon ?? markups.ozon ?? "")} onChange={(event) => updateMarkups({ ozon: numberValue(event.target.value) })} /></label>
-          <label>Базовая наценка Yandex Market <span className="settings-field-unit">×</span><input type="number" min="0.0001" step="0.0001" value={String(draftMarkups.yandex ?? markups.yandex ?? "")} onChange={(event) => updateMarkups({ yandex: numberValue(event.target.value) })} /></label>
-          <label>Базовая наценка Avito <span className="settings-field-unit">×</span><input type="number" min="0.0001" step="0.0001" value={String(draftMarkups.avito ?? markups.avito ?? "")} onChange={(event) => updateMarkups({ avito: numberValue(event.target.value) })} /></label>
-          <label>Базовая наценка Wildberries <span className="settings-field-unit">×</span><input type="number" min="0.0001" step="0.0001" value={String(draftMarkups.wb ?? markups.wb ?? "")} onChange={(event) => updateMarkups({ wb: numberValue(event.target.value) })} /></label>
-          <div className="soft-empty compact">После изменения курса или наценки backend ставит пересчет цен в очередь.</div>
+          <label>Наценка Ozon, ×<input type="number" min="0.0001" step="0.0001" value={String(draftMarkups.ozon ?? markups.ozon ?? "")} onChange={(event) => updateMarkups({ ozon: numberValue(event.target.value) })} /></label>
+          <label>Наценка Маркет, ×<input type="number" min="0.0001" step="0.0001" value={String(draftMarkups.yandex ?? markups.yandex ?? "")} onChange={(event) => updateMarkups({ yandex: numberValue(event.target.value) })} /></label>
+          <label>Наценка Avito, ×<input type="number" min="0.0001" step="0.0001" value={String(draftMarkups.avito ?? markups.avito ?? "")} onChange={(event) => updateMarkups({ avito: numberValue(event.target.value) })} /></label>
+          <label>Наценка WB, ×<input type="number" min="0.0001" step="0.0001" value={String(draftMarkups.wb ?? markups.wb ?? "")} onChange={(event) => updateMarkups({ wb: numberValue(event.target.value) })} /></label>
+          </div>
+          <p className="form-hint">После изменения курса или наценки цены пересчитываются в фоне.</p>
         </div>
 
         <div className="settings-panel settings-panel-wide">

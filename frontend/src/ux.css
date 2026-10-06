@@ -2235,3 +2235,40 @@ body:has(.bulk-action-bar) .toast-stack { bottom: 88px; }
   .finance-orders-table .finance-order-row > .finance-row-edit { justify-self: end; margin-top: 2px !important; }
   .finance-orders-table .finance-order-row > .finance-row-edit .secondary-action { height: 30px; padding: 0 10px; font-size: 12.5px; }
 }
+
+/* Система: a verdict, service dots, six work numbers; the technical detail folded */
+.system-page .sys-verdict { display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px; border-radius: var(--ux-radius, 12px); border: 1px solid var(--ux-border, rgba(255,255,255,.1)); margin: 4px 0 12px; }
+.system-page .sys-verdict strong { display: block; font-size: 16px; }
+.system-page .sys-verdict span { color: var(--muted); font-size: 13px; }
+.system-page .sys-verdict ul { margin: 6px 0 0; padding-left: 18px; font-size: 13.5px; display: grid; gap: 3px; }
+.system-page .sys-verdict.is-ok { border-color: rgba(52, 211, 153, .4); background: rgba(52, 211, 153, .07); }
+.system-page .sys-verdict.is-ok > svg { color: #34d399; }
+.system-page .sys-verdict.is-warn { border-color: rgba(255, 176, 32, .45); background: rgba(255, 176, 32, .07); }
+.system-page .sys-verdict.is-warn > svg { color: #ffbe45; }
+.system-page .sys-services { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.system-page .sys-service { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--ux-border, rgba(255,255,255,.1)); font-size: 13px; }
+.system-page .sys-service i { width: 8px; height: 8px; border-radius: 50%; background: #34d399; box-shadow: 0 0 0 3px rgba(52, 211, 153, .15); }
+.system-page .sys-service.is-bad { border-color: rgba(255, 92, 92, .5); }
+.system-page .sys-service.is-bad i { background: #ff5c5c; box-shadow: 0 0 0 3px rgba(255, 92, 92, .18); }
+.system-page .sys-service small { color: #ff9b9b; }
+.system-page .sys-work, .system-page .sys-tech-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
+.system-page .sys-tech { margin-top: 16px; border: 1px solid var(--ux-border, rgba(255,255,255,.1)); border-radius: var(--ux-radius, 12px); }
+.system-page .sys-tech > summary { padding: 12px 14px; cursor: pointer; font-size: 14px; font-weight: 600; list-style: none; }
+.system-page .sys-tech > summary::-webkit-details-marker { display: none; }
+.system-page .sys-tech > summary small { font-weight: 400; color: var(--muted); margin-left: 8px; }
+.system-page .sys-tech > summary:focus-visible { outline: 2px solid rgb(var(--accent-rgb)); outline-offset: -2px; border-radius: var(--ux-radius, 12px); }
+.system-page .sys-tech-body { padding: 0 14px 14px; display: grid; gap: 12px; }
+.system-page .sys-quiet { margin: 0; color: var(--muted); font-size: 13px; }
+@media (max-width: 720px) {
+  .system-page .sys-work, .system-page .sys-tech-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .system-page .sys-tech > summary small { display: block; margin: 2px 0 0; }
+}
+.system-page :is(.sys-work, .sys-tech-grid) .system-card > span { font-size: 12.5px; color: var(--muted); }
+.system-page :is(.sys-work, .sys-tech-grid) .system-card > strong { font-size: 20px; font-variant-numeric: tabular-nums; }
+/* Настройки → Базовые цены: the five numbers in one row on a PC, two per row on a phone */
+.settings-base-prices { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px 14px; }
+.settings-base-prices > label { display: grid; gap: 6px; margin: 0; font-size: 12.5px; color: var(--muted); }
+.settings-base-prices > label input { width: 100%; }
+@media (max-width: 900px) { .settings-base-prices { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.settings-base-prices > label { grid-template-rows: 1fr auto; align-items: end; }
+.settings-panel .settings-base-prices + .form-hint { font-size: 12.5px; color: var(--muted); margin: 10px 0 0; }

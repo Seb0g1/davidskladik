@@ -1,9 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, AlertCircle, AlertTriangle, CheckCircle, Database, HeartPulse, ListChecks, RefreshCcw, RotateCcw, Sparkles } from "lucide-react";
+import { Activity, AlertCircle, AlertTriangle, CheckCircle, Database, RefreshCcw, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { fetchJson } from "../api";
 import { PageHeader } from "../components/PageHeader";
-import { Stat } from "../components/Stat";
 import { SystemStatusSchema } from "../types";
 
 const asRecord = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -20,6 +19,8 @@ const STATE_WARNING_DESCRIPTIONS: Record<string, string> = {
   warehouse_postgres_write: "Запись состояния склада в PostgreSQL",
   event_loop_blocked: "Блокировка event loop (порог 200 мс)",
 };
+const COMPONENT_LABELS: Record<string, string> = { ozon: "Ozon", yandex: "Яндекс Маркет", wb: "Wildberries", avito: "Avito", telegram: "Telegram", ai: "ИИ", textAi: "ИИ-тексты", storage: "Хранилище", queue: "Очередь" };
+const DAILY_LABELS: Record<string, string> = { ok: "прошла", completed: "прошла", running: "идёт", failed: "ошибка", skipped: "пропущена", idle: "ждёт" };
 const text = (value: unknown) => String(value ?? "").trim();
 const list = (value: unknown): Array<Record<string, unknown>> => Array.isArray(value) ? value.filter((item) => item && typeof item === "object") as Array<Record<string, unknown>> : [];
 const dateText = (value: unknown) => {
@@ -65,6 +66,22 @@ export function SystemPage() {
   const stateWarnings = list(status.data?.stateWarnings);
   const postgresTables = asRecord(status.data?.postgresTables || asRecord(components.postgresTables));
   const missingTables = Array.isArray(postgresTables.missing) ? postgresTables.missing.map(String) : [];
+  const serviceList = [
+    { key: "postgres", label: "База данных", ok: asRecord(components.postgres).ok !== false && !missingTables.length, detail: missingTables.length ? `нет таблиц: ${missingTables.length}` : text(asRecord(components.postgres).error) },
+    { key: "redis", label: "Очереди", ok: asRecord(components.redis).ok !== false, detail: text(asRecord(components.redis).error) },
+    { key: "pricemaster", label: "PriceMaster", ok: asRecord(components.pricemaster).ok !== false, detail: text(asRecord(components.pricemaster).error) },
+    ...Object.entries(components)
+      .filter(([name]) => !["postgres", "redis", "pricemaster", "runtime", "postgresTables"].includes(name))
+      .map(([name, value]) => ({ key: name, label: COMPONENT_LABELS[name] || name, ok: asRecord(value).ok !== false, detail: text(asRecord(value).error) })),
+  ];
+  const problems = [
+    ...serviceList.filter((service) => !service.ok).map((service) => `${service.label}: ${service.detail || "не отвечает"}`),
+    failed.length ? `Ошибки фоновых задач: ${failed.length}` : "",
+    Number(marketplaceQueue.failed || 0) ? `Упавшие задачи очереди маркетплейсов: ${Number(marketplaceQueue.failed || 0)}` : "",
+    Number(salesAutomation.pmTimeout || 0) ? `PriceMaster не ответил: ${Number(salesAutomation.pmTimeout || 0)}` : "",
+    Number(runtimeMemory.heapUsedMb || 0) > 1200 ? `Память процесса ${Number(runtimeMemory.heapUsedMb || 0)} MB` : "",
+    stateWarnings.length ? `Предупреждения записи состояния: ${stateWarnings.length}` : "",
+  ].filter(Boolean);
   return (
     <section className="page-section system-page">
       <PageHeader
@@ -77,71 +94,87 @@ export function SystemPage() {
         )}
       />
       {status.error ? <div className="inline-error">{String((status.error as Error).message || status.error)}</div> : null}
-      <section className="dashboard-metrics">
-        <Stat label="Health" value={status.data?.ok ? "ok" : "check"} tone={status.data?.ok ? "success" : "warn"} icon={<HeartPulse size={18} />} />
-        <Stat label="Активные задачи" value={active.length} tone={active.length ? "warn" : "success"} icon={<ListChecks size={18} />} />
-        <Stat label="Ошибки операций" value={failed.length} tone={failed.length ? "warn" : "success"} icon={<AlertTriangle size={18} />} />
-        <Stat label="Retry цен" value={Number(priceRetry.total || 0)} tone={Number(priceRetry.total || 0) ? "warn" : "success"} icon={<RotateCcw size={18} />} />
+
+      {/* one verdict first: is anything broken, and what */}
+      <section className={`sys-verdict${problems.length ? " is-warn" : status.data ? " is-ok" : ""}`}>
+        {problems.length ? <AlertTriangle size={20} /> : <CheckCircle size={20} />}
+        <div>
+          <strong>{!status.data ? "Проверяю…" : problems.length ? `Требует внимания: ${problems.length}` : "Всё работает"}</strong>
+          {problems.length
+            ? <ul>{problems.map((problem) => <li key={problem}>{problem}</li>)}</ul>
+            : <span>Проверено {dateText(status.data?.time)}</span>}
+        </div>
       </section>
-      <div className="summary-grid">
-        <StatusCard label="Health" value={status.data?.ok ? "green" : "check"} tone={status.data?.ok ? "success" : "warn"} detail={dateText(status.data?.time)} />
-        <StatusCard label="PostgreSQL" value={asRecord(components.postgres).ok === false ? "error" : "ok"} tone={asRecord(components.postgres).ok === false ? "danger" : "success"} detail={missingTables.length ? `missing: ${missingTables.length}` : "tables ok"} />
-        <StatusCard label="Redis/BullMQ" value={asRecord(components.redis).ok === false ? "error" : "ok"} tone={asRecord(components.redis).ok === false ? "danger" : "success"} />
-        <StatusCard label="PriceMaster" value={asRecord(components.pricemaster).ok === false ? "error" : "ok"} tone={asRecord(components.pricemaster).ok === false ? "danger" : "success"} />
-        <StatusCard label="Memory" value={`${Number(runtimeMemory.heapUsedMb || 0)} MB`} detail={`rss: ${Number(runtimeMemory.rssMb || 0)} MB uptime: ${Number(runtime.uptimeSec || 0)}s`} tone={Number(runtimeMemory.heapUsedMb || 0) > 1200 ? "warn" : "neutral"} />
-        <StatusCard label="BullMQ jobs" value={Number(marketplaceQueue.active || 0)} detail={`waiting: ${Number(marketplaceQueue.waiting || 0)} delayed: ${Number(marketplaceQueue.delayed || 0)} failed: ${Number(marketplaceQueue.failed || 0)}`} tone={Number(marketplaceQueue.failed || 0) ? "warn" : "neutral"} />
-        <StatusCard label="Daily sync" value={text(daily.status) || "-"} detail={dateText(daily.lastRunAt)} />
-        <StatusCard label="Auto prices" value={Number(salesAutomation.total || 0)} detail={`queued: ${Number(salesAutomation.queued || 0)} verify: ${Number(salesAutomation.verificationPending || 0)}`} />
-        <StatusCard label="PM timeout" value={Number(salesAutomation.pmTimeout || 0)} tone={Number(salesAutomation.pmTimeout || 0) ? "warn" : "success"} />
-        <StatusCard label="Retry цен" value={Number(priceRetry.total || 0)} />
-        <StatusCard
-          label="Ozon recovery"
-          value={numberValue(ozonQueue.total)}
-          detail={`due: ${numberValue(ozonQueue.due)} verify: ${numberValue(ozonQueue.verificationPending)} limit: ${ozonQueue.dailyLimit == null ? "off" : numberValue(ozonQueue.availableToday)}`}
-          tone={numberValue(ozonQueue.verificationPending) || numberValue(ozonQueue.due) ? "warn" : "success"}
-        />
-        <StatusCard label="Slow requests" value={slowRequests.length} detail={`threshold: ${numberValue(slowEndpoints.thresholdMs)} ms`} tone={slowRequests.length ? "warn" : "success"} />
-        <StatusCard label="State warnings" value={stateWarnings.length} tone={stateWarnings.length ? "warn" : "success"} />
-      </div>
 
-      <div className="table-panel system-table">
-        <div className="table-head"><span>Компонент</span><span>Статус</span><span>Детали</span></div>
-        {Object.entries(components).map(([name, value]) => {
-          const row = asRecord(value);
-          const missing = Array.isArray(row.missing) ? row.missing.join(", ") : "";
-          return (
-            <div className="table-row" key={name}>
-              <span data-label="Компонент"><Database size={14} /> {name}</span>
-              <span data-label="Статус">{row.ok === false ? <AlertCircle size={14} /> : <Activity size={14} />} {row.ok === false ? "error" : "ok"}</span>
-              <span data-label="Детали">{missing || text(row.error || row.mode || row.queueMode || row.accounts || row.shops) || "-"}</span>
+      <section className="sys-services" aria-label="Сервисы">
+        {serviceList.map((service) => (
+          <span key={service.key} className={`sys-service${service.ok ? " is-ok" : " is-bad"}`} title={service.detail || undefined}>
+            <i aria-hidden="true" /> {service.label}{service.ok ? null : <small>{service.detail || "ошибка"}</small>}
+          </span>
+        ))}
+      </section>
+
+      <section className="sys-work">
+        <StatusCard label="Фоновые задачи" value={active.length} detail={active.length ? "идут сейчас" : "очередь пуста"} tone={active.length ? "neutral" : "success"} />
+        <StatusCard label="Ошибки задач" value={failed.length} detail="за последние запуски" tone={failed.length ? "warn" : "success"} />
+        <StatusCard label="Повторы отправки цен" value={Number(priceRetry.total || 0)} tone={Number(priceRetry.total || 0) ? "warn" : "success"} />
+        <StatusCard label="Автоцены" value={Number(salesAutomation.total || 0).toLocaleString("ru-RU")} detail={`в очереди ${Number(salesAutomation.queued || 0)} · ждут проверки ${Number(salesAutomation.verificationPending || 0)}`} />
+        <StatusCard label="Разархивация Ozon" value={numberValue(ozonQueue.total).toLocaleString("ru-RU")} detail={`готово ${numberValue(ozonQueue.due)} · проверка ${numberValue(ozonQueue.verificationPending)}${ozonQueue.dailyLimit == null ? "" : ` · сегодня можно ${numberValue(ozonQueue.availableToday)}`}`} tone={numberValue(ozonQueue.verificationPending) || numberValue(ozonQueue.due) ? "warn" : "success"} />
+        <StatusCard label="Ежедневная синхронизация" value={DAILY_LABELS[text(daily.status)] || text(daily.status) || "—"} detail={dateText(daily.lastRunAt)} />
+      </section>
+
+      <details className="sys-tech">
+        <summary>Технические подробности <small>память, очереди, медленные запросы, предупреждения</small></summary>
+        <div className="sys-tech-body">
+          <div className="sys-tech-grid">
+            <StatusCard label="Память процесса" value={`${Number(runtimeMemory.heapUsedMb || 0)} MB`} detail={`rss ${Number(runtimeMemory.rssMb || 0)} MB · работает ${Math.round(Number(runtime.uptimeSec || 0) / 60)} мин`} tone={Number(runtimeMemory.heapUsedMb || 0) > 1200 ? "warn" : "neutral"} />
+            <StatusCard label="Очередь маркетплейсов" value={Number(marketplaceQueue.active || 0)} detail={`ждут ${Number(marketplaceQueue.waiting || 0)} · отложено ${Number(marketplaceQueue.delayed || 0)} · упало ${Number(marketplaceQueue.failed || 0)}`} tone={Number(marketplaceQueue.failed || 0) ? "warn" : "neutral"} />
+            <StatusCard label="Таймауты PriceMaster" value={Number(salesAutomation.pmTimeout || 0)} tone={Number(salesAutomation.pmTimeout || 0) ? "warn" : "success"} />
+            <StatusCard label="Медленные запросы" value={slowRequests.length} detail={`порог ${numberValue(slowEndpoints.thresholdMs)} мс`} tone={slowRequests.length ? "warn" : "success"} />
+          </div>
+
+          <div className="table-panel system-table">
+            <div className="table-head"><span>Компонент</span><span>Статус</span><span>Детали</span></div>
+            {Object.entries(components).map(([name, value]) => {
+              const row = asRecord(value);
+              const missing = Array.isArray(row.missing) ? row.missing.join(", ") : "";
+              return (
+                <div className="table-row" key={name}>
+                  <span data-label="Компонент"><Database size={14} /> {name}</span>
+                  <span data-label="Статус">{row.ok === false ? <AlertCircle size={14} /> : <Activity size={14} />} {row.ok === false ? "ошибка" : "ok"}</span>
+                  <span data-label="Детали">{missing || text(row.error || row.mode || row.queueMode || row.accounts || row.shops) || "-"}</span>
+                </div>
+              );
+            })}
+          </div>
+
+          {slowByPath.length ? (
+            <div className="table-panel system-table">
+              <div className="table-head"><span>Медленный endpoint</span><span>Сколько</span><span>Последний / максимум</span></div>
+              {slowByPath.map((row) => (
+                <div className="table-row" key={text(row.path)}>
+                  <span data-label="Endpoint">{text(row.method)} {text(row.path)}</span>
+                  <span data-label="Сколько">{numberValue(row.count)}</span>
+                  <span data-label="Время">{numberValue(row.lastMs)} ms / {numberValue(row.maxMs)} ms · {dateText(row.lastAt)}</span>
+                </div>
+              ))}
             </div>
-          );
-        })}
-      </div>
+          ) : <p className="sys-quiet">Медленных запросов нет.</p>}
 
-      <div className="table-panel system-table">
-        <div className="table-head"><span>Медленный endpoint</span><span>Сколько</span><span>Последний / максимум</span></div>
-        {slowByPath.map((row) => (
-          <div className="table-row" key={text(row.path)}>
-            <span data-label="Endpoint">{text(row.method)} {text(row.path)}</span>
-            <span data-label="Сколько">{numberValue(row.count)}</span>
-            <span data-label="Время">{numberValue(row.lastMs)} ms / {numberValue(row.maxMs)} ms · {dateText(row.lastAt)}</span>
-          </div>
-        ))}
-        {!slowByPath.length ? <div className="empty-state">Медленных запросов сейчас нет.</div> : null}
-      </div>
-
-      <div className="table-panel system-table">
-        <div className="table-head"><span>State warning</span><span>Когда</span><span>Детали</span></div>
-        {stateWarnings.slice().reverse().map((row, index) => (
-          <div className="table-row" key={`${text(row.source)}-${index}`}>
-            <span data-label="Источник" title={STATE_WARNING_DESCRIPTIONS[text(row.source)] || text(row.source)}>{text(row.source)}</span>
-            <span data-label="Когда">{dateText(row.at)}</span>
-            <span data-label="Детали">{text(row.detail) || "-"}</span>
-          </div>
-        ))}
-        {!stateWarnings.length ? <div className="empty-state">Переходов на fallback и таймаутов записи состояния нет.</div> : null}
-      </div>
+          {stateWarnings.length ? (
+            <div className="table-panel system-table">
+              <div className="table-head"><span>Предупреждение</span><span>Когда</span><span>Детали</span></div>
+              {stateWarnings.slice().reverse().map((row, index) => (
+                <div className="table-row" key={`${text(row.source)}-${index}`}>
+                  <span data-label="Источник" title={text(row.source)}>{STATE_WARNING_DESCRIPTIONS[text(row.source)] || text(row.source)}</span>
+                  <span data-label="Когда">{dateText(row.at)}</span>
+                  <span data-label="Детали">{text(row.detail) || "-"}</span>
+                </div>
+              ))}
+            </div>
+          ) : <p className="sys-quiet">Переходов на запасной режим и таймаутов записи нет.</p>}
+        </div>
+      </details>
 
       {status.data?.supplierLedger ? (
         <div className="card sys-card-mt">
