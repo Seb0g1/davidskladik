@@ -923,10 +923,10 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
           </div>
         )}
 
-        <div className="section-subtitle">Ручная привязка</div>
-        <div className="info-strip compact">
-          Лучше выбирать строку из поиска: тогда сохраняется rowId, partnerId и точное название PriceMaster. Ручная привязка нужна только как запасной вариант.
-        </div>
+        {/* the manual form is a fallback: folded, so the search and the draft stay in view */}
+        <details className="manual-link-fold" open={draftIsFilled || undefined}>
+          <summary>Ручная привязка <small>если строки нет в поиске</small></summary>
+        <p className="form-hint">Строка из поиска надёжнее: сохраняются rowId, partnerId и точное название PriceMaster.</p>
         <div className="draft-grid manual-link-grid">
           <input value={draft.article} onChange={(event) => setDraft({ ...draft, article: event.target.value })} placeholder="Артикул PriceMaster" disabled={readOnly} />
           <input value={draft.keyword} onChange={(event) => setDraft({ ...draft, keyword: event.target.value })} placeholder="Ключевое слово" disabled={readOnly} />
@@ -942,27 +942,36 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
           />
         </div>
         <div className="draft-actions">
-          <button className="secondary-action" type="button" onClick={() => addDraft(draft)} disabled={readOnly}>
+          <button className="secondary-action" type="button" onClick={() => addDraft(draft)} disabled={readOnly || !draftIsFilled}>
             <Link2 size={16} /> Добавить в черновик
           </button>
-          <button className="secondary-action" type="button" onClick={() => { setDrafts([]); setDraft(emptyLinkDraft(draft.priceCurrency)); }} disabled={readOnly || !pendingDrafts.length}>
-            <X size={16} /> Очистить черновик
-          </button>
-          <button className="primary-action" disabled={readOnly || !pendingDrafts.length || saveMutation.isPending} type="button" onClick={() => saveMutation.mutate()}>
-            {saveMutation.isPending ? <Loader2 className="spin" size={16} /> : <Save size={16} />} Сохранить {pendingDrafts.length} привязок
-          </button>
         </div>
-        <div className="draft-preview">
-          <strong>Черновик: {pendingDrafts.length}</strong>
-          {drafts.length ? drafts.map((item, index) => (
-            <button className="draft-chip draft-chip-rich" type="button" key={`${item.article || item.sourceRowId || item.exactName}-${index}`} onClick={() => setDrafts(drafts.filter((_, itemIndex) => itemIndex !== index))} title="Убрать из черновика">
-              <span><b>{draftTitle(item)}</b>{draftSubtitle(item)}</span>
-              {draftMeta(item) && <small>{draftMeta(item)}</small>}
-              <X size={12} />
-            </button>
-          )) : <span>Новые привязки появятся здесь до сохранения.</span>}
-          {draftIsFilled && <span className="draft-chip is-current">{draft.article || "текущий ввод"} · {draft.keyword || draft.priceCurrency}</span>}
-        </div>
+        </details>
+
+        {/* the draft shows up once something is picked; on a phone it sticks to the bottom of the sheet */}
+        {drafts.length || draftIsFilled ? (
+          <div className="draft-bar">
+            <div className="draft-preview">
+              <strong>Черновик: {pendingDrafts.length}</strong>
+              {drafts.map((item, index) => (
+                <button className="draft-chip draft-chip-rich" type="button" key={`${item.article || item.sourceRowId || item.exactName}-${index}`} onClick={() => setDrafts(drafts.filter((_, itemIndex) => itemIndex !== index))} title="Убрать из черновика">
+                  <span><b>{draftTitle(item)}</b>{draftSubtitle(item)}</span>
+                  {draftMeta(item) && <small>{draftMeta(item)}</small>}
+                  <X size={12} />
+                </button>
+              ))}
+              {draftIsFilled && <span className="draft-chip is-current">{draft.article || "текущий ввод"} · {draft.keyword || draft.priceCurrency}</span>}
+            </div>
+            <div className="draft-bar-actions">
+              <button className="secondary-action" type="button" onClick={() => { setDrafts([]); setDraft(emptyLinkDraft(draft.priceCurrency)); }} disabled={readOnly || (!pendingDrafts.length && !draftIsFilled)}>
+                <X size={16} /> Очистить
+              </button>
+              <button className="primary-action" disabled={readOnly || !pendingDrafts.length || saveMutation.isPending} type="button" onClick={() => saveMutation.mutate()}>
+                {saveMutation.isPending ? <Loader2 className="spin" size={16} /> : <Save size={16} />} Сохранить {pendingDrafts.length} {pendingDrafts.length === 1 ? "привязку" : pendingDrafts.length >= 2 && pendingDrafts.length <= 4 ? "привязки" : "привязок"}
+              </button>
+            </div>
+          </div>
+        ) : null}
         {(saveMutation.error || deleteMutation.error || bulkDeleteMutation.error || syncMutation.error) && <div className="inline-error">
           {errorMessage(saveMutation.error || deleteMutation.error || bulkDeleteMutation.error || syncMutation.error)}
           {failedLinks.length ? (

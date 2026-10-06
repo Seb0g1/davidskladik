@@ -2317,3 +2317,24 @@ body:has(.bulk-action-bar) .toast-stack { bottom: 88px; }
 @media (max-width: 1180px) {
   .app-content .detail-panel .mobile-close { display: inline-grid !important; place-items: center; width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--ux-border, rgba(255,255,255,.12)); background: transparent; color: var(--text); }
 }
+
+/* Карточка товара → привязки: ручная форма свёрнута, черновик появляется только когда есть что сохранить */
+.app-content .detail-panel .manual-link-fold { margin-top: 12px; border-top: 1px solid var(--ux-border, rgba(255,255,255,.08)); padding-top: 8px; }
+.app-content .detail-panel .manual-link-fold > summary { cursor: pointer; list-style: none; font-size: 13px; font-weight: 600; padding: 6px 0; }
+.app-content .detail-panel .manual-link-fold > summary::-webkit-details-marker { display: none; }
+.app-content .detail-panel .manual-link-fold > summary::before { content: "+ "; color: rgb(var(--accent-rgb)); }
+.app-content .detail-panel .manual-link-fold[open] > summary::before { content: "− "; }
+.app-content .detail-panel .manual-link-fold > summary small { font-weight: 400; color: var(--muted); margin-left: 4px; }
+.app-content .detail-panel .manual-link-fold .form-hint { font-size: 12px; color: var(--muted); margin: 2px 0 8px; }
+.app-content .detail-panel .draft-bar { margin-top: 12px; padding: 10px 12px; border-radius: 12px; border: 1px solid rgba(var(--accent-rgb), .45); background: rgba(var(--accent-rgb), .08); display: grid; gap: 8px; }
+.app-content .detail-panel .draft-bar .draft-preview { margin: 0; }
+.app-content .detail-panel .draft-bar-actions { display: flex; gap: 8px; justify-content: flex-end; }
+@media (max-width: 1180px) {
+  .app-content .detail-panel .detail-head-actions { flex-direction: column; }
+  .app-content .detail-panel .draft-bar { position: sticky; bottom: 8px; z-index: 6; background: var(--panel, #0b1426); box-shadow: 0 -8px 24px rgba(0,0,0,.35); }
+  .app-content .detail-panel .draft-bar-actions .primary-action { flex: 1; justify-content: center; height: 44px; }
+  .app-content .detail-panel .draft-bar-actions .secondary-action { height: 44px; }
+  .app-content .detail-panel .manual-link-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 90px !important; gap: 6px; }
+  .app-content .detail-panel .pm-result { padding: 10px; }
+  .app-content .detail-panel .pm-result small { font-size: 11px; line-height: 1.35; }
+}
