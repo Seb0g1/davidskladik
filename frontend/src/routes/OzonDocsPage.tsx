@@ -78,7 +78,7 @@ export function OzonDocsPage() {
     refetchInterval: (query) => (query.state.data?.pages[0]?.sync?.running ? 5000 : 60_000),
   });
   const first = list.data?.pages[0];
-  const items = list.data?.pages.flatMap((p) => p.items) ?? [];
+  const items = list.data?.pages.flatMap((p) => p.items || []) ?? [];
   const sync = first?.sync || {};
 
   const sum = (s: string) => (first?.counts || []).filter((c) => c.status === s && (!account || c.accountId === account)).reduce((a, c) => a + c.n, 0);

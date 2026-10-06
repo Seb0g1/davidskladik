@@ -130,7 +130,7 @@ function DashboardTab() {
 
       <div className="section-title"><div><h3>Последние заказы</h3></div></div>
 
-      {!ordersData?.orders.length ? (
+      {!ordersData?.orders?.length ? (
         <div className="soft-empty"><Package size={18} /> Заказов пока нет</div>
       ) : (
         <div className="sa-scroll-x">
@@ -138,7 +138,7 @@ function DashboardTab() {
             <div className="table-head sa-grid-orders">
               <span>Заказ / Дата</span><span>Покупатель</span><span>Товары</span><span>Сумма</span><span>Статус</span>
             </div>
-            {ordersData.orders.map((o) => (
+            {(ordersData.orders || []).map((o) => (
               <div key={o.id} className="table-row sa-grid-orders">
                 <span>
                   <div className="sa-mono-id">{o.id}</div>
@@ -203,7 +203,7 @@ function OrdersTab() {
 
       {isLoading ? (
         <div className="list-loading"><Loader2 size={16} className="spin" /> Загружаю заказы…</div>
-      ) : !data?.orders.length ? (
+      ) : !data?.orders?.length ? (
         <div className="soft-empty"><ShoppingBag size={18} /> Заказов нет</div>
       ) : (
         <div className="sa-scroll-x">
@@ -212,7 +212,7 @@ function OrdersTab() {
             <span>Заказ / Дата</span><span>Покупатель</span><span>Позиций</span><span>Сумма</span><span>Статус</span>
           </div>
 
-          {data.orders.map((o) => (
+          {(data.orders || []).map((o) => (
             <div key={o.id}>
               <button
                 type="button"
@@ -1841,25 +1841,58 @@ function PushTab() {
 
 type Tab = "dashboard" | "orders" | "customers" | "banners" | "categories" | "news" | "reviews" | "unboxings" | "blog" | "emails" | "push" | "promocodes" | "subscribers" | "settings";
 
-const TABS: { id: Tab; label: string; icon: React.ComponentType<{ size?: number }> }[] = [
-  { id: "dashboard", label: "Обзор", icon: LayoutDashboard },
-  { id: "orders", label: "Заказы", icon: ClipboardList },
-  { id: "customers", label: "Покупатели", icon: UserCheck },
-  { id: "banners", label: "Баннеры", icon: Image },
-  { id: "categories", label: "Категории", icon: Tag },
-  { id: "promocodes", label: "Промокоды", icon: Percent },
-  { id: "subscribers", label: "Подписчики", icon: Mail },
-  { id: "news", label: "Новости", icon: Newspaper },
-  { id: "reviews", label: "Отзывы", icon: Star },
-  { id: "unboxings", label: "Анбоксинг", icon: Video },
-  { id: "blog", label: "Блог", icon: BookOpen },
-  { id: "emails", label: "Email-цепочки", icon: MessageSquare },
-  { id: "push", label: "Push", icon: Bell },
-  { id: "settings", label: "Настройки", icon: Settings },
+type TabDef = { id: Tab; label: string; icon: React.ComponentType<{ size?: number }> };
+
+// 15 sections in groups by what the shop owner is doing: selling, the storefront, content, mailings
+const TAB_GROUPS: { label: string; tabs: TabDef[] }[] = [
+  { label: "Продажи", tabs: [
+    { id: "dashboard", label: "Обзор", icon: LayoutDashboard },
+    { id: "orders", label: "Заказы", icon: ClipboardList },
+    { id: "customers", label: "Покупатели", icon: UserCheck },
+    { id: "promocodes", label: "Промокоды", icon: Percent },
+  ] },
+  { label: "Витрина", tabs: [
+    { id: "banners", label: "Баннеры", icon: Image },
+    { id: "categories", label: "Категории", icon: Tag },
+    { id: "reviews", label: "Отзывы", icon: Star },
+    { id: "unboxings", label: "Анбоксинг", icon: Video },
+  ] },
+  { label: "Контент", tabs: [
+    { id: "news", label: "Новости", icon: Newspaper },
+    { id: "blog", label: "Блог", icon: BookOpen },
+  ] },
+  { label: "Рассылки", tabs: [
+    { id: "subscribers", label: "Подписчики", icon: Mail },
+    { id: "emails", label: "Email-цепочки", icon: MessageSquare },
+    { id: "push", label: "Push", icon: Bell },
+  ] },
+  { label: "Магазин", tabs: [
+    { id: "settings", label: "Настройки", icon: Settings },
+  ] },
 ];
+const TAB_IDS = new Set<string>(TAB_GROUPS.flatMap((g) => g.tabs.map((t) => t.id)));
+
+function readTabFromUrl(): Tab {
+  try {
+    const value = new URLSearchParams(window.location.search).get("tab") || "";
+    return (TAB_IDS.has(value) ? value : "dashboard") as Tab;
+  } catch {
+    return "dashboard";
+  }
+}
 
 export default function ShopAdminPage() {
-  const [tab, setTab] = useState<Tab>("dashboard");
+  const [tab, setTabState] = useState<Tab>(readTabFromUrl);
+  // the open section lives in the address (?tab=): reload and «back» keep it
+  const setTab = (next: Tab) => {
+    setTabState(next);
+    try {
+      const url = new URL(window.location.href);
+      if (next === "dashboard") url.searchParams.delete("tab");
+      else url.searchParams.set("tab", next);
+      window.history.replaceState(window.history.state, "", url);
+    } catch { /* address is a convenience only */ }
+  };
 
   return (
     <section className="page-section mv-shop-page">
@@ -1873,18 +1906,24 @@ export default function ShopAdminPage() {
         }
       />
 
-      <div className="settings-tabs">
-        {TABS.map(({ id, label, icon: Icon }) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => setTab(id)}
-            className={`secondary-action${tab === id ? " is-active" : ""}`}
-          >
-            <Icon size={15} /> {label}
-          </button>
+      <nav className="shop-tabs" aria-label="Разделы магазина">
+        {TAB_GROUPS.map((group) => (
+          <div className="shop-tab-group" key={group.label} role="group" aria-label={group.label}>
+            <span className="shop-tab-group-label">{group.label}</span>
+            {group.tabs.map(({ id, label, icon: Icon }) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setTab(id)}
+                aria-current={tab === id ? "page" : undefined}
+                className={`shop-tab${tab === id ? " is-active" : ""}`}
+              >
+                <Icon size={15} /> {label}
+              </button>
+            ))}
+          </div>
         ))}
-      </div>
+      </nav>
 
       {tab === "dashboard" && <DashboardTab />}
       {tab === "orders" && <OrdersTab />}
