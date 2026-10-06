@@ -141,6 +141,44 @@ app.get("/api/questions", requireAdmin, async (request, response, next) => {
   }
 });
 
+// ─── AI draft answer to a buyer's question ───────────────────────────────────
+// Signed by the cabinet's store like review answers (feedbackStoreName in 02f-reviews-routes.js).
+app.post("/api/questions/ai-draft", requireAdmin, async (request, response, next) => {
+  try {
+    const aiSettings = await readEffectiveAiSettings();
+    assertTextGenerationConfigured(aiSettings);
+    const questionText = cleanText(request.body?.questionText || "");
+    const productName = cleanText(request.body?.productName || "");
+    const marketplace = cleanText(request.body?.marketplace || "ozon");
+    const storeName = feedbackStoreName(marketplace, request.body?.target);
+    if (!questionText) return response.status(400).json({ error: "Нет текста вопроса." });
+
+    const systemPrompt = `Ты — консультант магазина парфюмерии и косметики «${storeName}» на маркетплейсе ${feedbackMarketplaceLabel(marketplace)}. Ответь на вопрос покупателя о товаре.
+
+Правила:
+- Пиши только по-русски, тепло и по делу, 1–4 предложения.
+- Отвечай на сам вопрос. Используй общеизвестные факты о товаре (аромат, ноты, тип, объём, применение), если уверен в них.
+- Ничего не выдумывай: если не знаешь наличия, сроков, партии, маркировки или комплектации конкретного экземпляра — так и скажи и предложи уточнить в чате с продавцом.
+- Мы продаём только оригинальную продукцию — на вопрос о подлинности ответь уверенно, без обещаний документов, которых не знаешь.
+- Не упоминай другие магазины, сайты и ссылки, не обещай скидок.
+- Последней строкой подпись: «С уважением, команда ${storeName}».
+- Верни только текст ответа.`;
+    const userPrompt = `${productName ? `Товар: «${productName}». ` : ""}Вопрос покупателя: «${questionText}»`;
+
+    const completion = await createTextAiChat([
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ], { json: false, temperature: 0.5, maxTokens: 350, aiSettings });
+
+    const draft = cleanText(completion.choices?.[0]?.message?.content || "");
+    if (!draft) return response.status(502).json({ error: "AI не вернул текст." });
+    response.json({ ok: true, draft, storeName });
+  } catch (error) {
+    if (error.statusCode) return response.status(error.statusCode).json({ error: error.message });
+    next(error);
+  }
+});
+
 app.post("/api/questions/reply", requireAdmin, async (request, response, next) => {
   try {
     // marketplace по умолчанию ozon — обратная совместимость со старым фронтом.

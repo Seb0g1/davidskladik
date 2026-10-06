@@ -77,6 +77,7 @@ function ReviewCard({ review, templates, onReplied }: { review: ReviewRow; templ
       method: "POST",
       body: JSON.stringify({
         marketplace: review.marketplace,
+        target: review.target,
         rating: review.rating,
         reviewText: review.text,
         advantages: review.advantages,
@@ -135,6 +136,14 @@ function QuestionCard({ question, templates, onReplied }: { question: QuestionRo
     }),
     onSuccess: () => { setOpen(false); setText(""); onReplied(); },
   });
+  // the answer is drafted by AI and signed by the cabinet's store (Magic Stick / AURA / Parfumerius)
+  const aiDraft = useMutation({
+    mutationFn: () => fetchJson("/api/questions/ai-draft", z.unknown(), {
+      method: "POST",
+      body: JSON.stringify({ marketplace: question.marketplace, target: question.target, questionText: question.text, productName: question.productName }),
+    }) as Promise<{ ok: boolean; draft: string }>,
+    onSuccess: (data) => { if (data.draft) setText(data.draft); setOpen(true); },
+  });
   return (
     <div className={`review-card fb-card is-question${question.needsAnswer ? " needs-reply" : " is-answered"}`}>
       <div className="review-head">
@@ -150,6 +159,10 @@ function QuestionCard({ question, templates, onReplied }: { question: QuestionRo
         <button className="secondary-action" type="button" onClick={() => setOpen((v) => !v)}>
           <MessageSquareReply size={15} /> {open ? "Скрыть" : "Ответить"}
         </button>
+        <button className="secondary-action" type="button" disabled={aiDraft.isPending || !question.text} onClick={() => aiDraft.mutate()} title="Сгенерировать ответ с помощью AI">
+          {aiDraft.isPending ? <Loader2 className="spin" size={15} /> : <BotMessageSquare size={15} />} AI-ответ
+        </button>
+        {aiDraft.error ? <span className="inline-error" style={{ fontSize: 11 }}>{String((aiDraft.error as Error).message)}</span> : null}
       </div>
       {open ? (
         <ReplyBox

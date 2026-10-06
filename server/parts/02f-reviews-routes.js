@@ -247,6 +247,22 @@ app.post("/api/reviews/reply", requireAdmin, async (request, response, next) => 
 });
 
 // ─── AI draft reply ──────────────────────────────────────────────────────────
+// The buyer sees the store of the cabinet, not our site: answers are signed by its team.
+// Ozon main cabinet — Magic Stick, Ozon ozon-3d10ec43 — AURA, Яндекс Маркет — Parfumerius (the owner's names, 2026-10-06).
+const FEEDBACK_STORE_NAMES = { "ozon-3d10ec43": "AURA" };
+
+function feedbackStoreName(marketplace = "", target = "") {
+  const key = cleanText(target).toLowerCase();
+  if (FEEDBACK_STORE_NAMES[key]) return FEEDBACK_STORE_NAMES[key];
+  if (cleanText(marketplace).toLowerCase() === "yandex") return "Parfumerius";
+  return "Magic Stick";
+}
+
+function feedbackMarketplaceLabel(marketplace = "") {
+  const mp = cleanText(marketplace).toLowerCase();
+  return mp === "ozon" ? "Ozon" : mp === "wb" ? "Wildberries" : "Яндекс Маркет";
+}
+
 app.post("/api/reviews/ai-draft", requireAdmin, async (request, response, next) => {
   try {
     const aiSettings = await readEffectiveAiSettings();
@@ -258,6 +274,7 @@ app.post("/api/reviews/ai-draft", requireAdmin, async (request, response, next) 
     const disadvantages = cleanText(request.body?.disadvantages || "");
     const productName = cleanText(request.body?.productName || "");
     const marketplace = cleanText(request.body?.marketplace || "ozon");
+    const storeName = feedbackStoreName(marketplace, request.body?.target);
 
     const ratingLabel = rating >= 4 ? "положительный" : rating === 3 ? "нейтральный" : "отрицательный";
     const productPart = productName ? `Товар: «${productName}».` : "";
@@ -267,7 +284,7 @@ app.post("/api/reviews/ai-draft", requireAdmin, async (request, response, next) 
       disadvantages && `Минусы: ${disadvantages}`,
     ].filter(Boolean).join(" ");
 
-    const systemPrompt = `Ты — представитель службы заботы о клиентах премиального магазина парфюмерии Magic Vibes (magicvibes.ru). Тебе нужно написать ответ на отзыв покупателя на маркетплейсе ${marketplace === "ozon" ? "Ozon" : marketplace === "wb" ? "Wildberries" : "Яндекс.Маркете"}.
+    const systemPrompt = `Ты — представитель службы заботы о клиентах магазина парфюмерии и косметики «${storeName}» на маркетплейсе ${feedbackMarketplaceLabel(marketplace)}. Тебе нужно написать ответ на отзыв покупателя.
 
 Правила:
 - Пиши только по-русски.
@@ -277,7 +294,8 @@ app.post("/api/reviews/ai-draft", requireAdmin, async (request, response, next) 
 - Если нейтральный или отрицательный: признай проблему, принеси извинения, предложи написать в поддержку для решения.
 - Не упоминай конкурентов. Не обещай скидок. Не используй клише «Спасибо за обратную связь».
 - Если знаешь название товара — упомяни его естественно.
-- В конце можно добавить «Команда Magic Vibes» или аналог.
+- Не упоминай другие магазины, сайты и ссылки — покупатель на маркетплейсе.
+- Последней строкой подпись: «С уважением, команда ${storeName}».
 - Не добавляй ничего лишнего — только текст ответа.`;
 
     const userPrompt = `${productPart} Рейтинг: ${rating}/5 (${ratingLabel}). ${reviewBody || "Текст отзыва отсутствует."}`;

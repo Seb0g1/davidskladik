@@ -815,7 +815,10 @@ async function findShopProductByOfferId(offerId, { fast = false } = {}) {
   const usable = products.filter((pr) => !shopNameMasked(pr.name) && !_shopPlaceholderImgs.has(shopFirstImage(pr)));
   const p = usable.find((pr) => pr.marketplace === "ozon") || usable[0] || products.find((pr) => pr.marketplace === "ozon") || products[0];
   // fast (YCP, 5 s budget): only already-known image hashes, no downloads
-  const images = await stripMarketplaceOnlyImages(extractImages(p), { fetchMissing: !fast });
+  const perfumeId = await shopPerfumeIdForOffer(p.offerId).catch(() => 0);
+  const images = await stripGeneratedPerfumeSlides(
+    await stripMarketplaceOnlyImages(extractImages(p), { fetchMissing: !fast }), perfumeId, { fetchMissing: !fast },
+  );
 
   let description = "";
   try {
@@ -1414,6 +1417,13 @@ app.get("/api/shop/product-notes", shopCors, async (request, response, next) => 
     const brand = cleanText(request.query.brand || "");
     const name = cleanText(request.query.name || "");
     const offerId = cleanText(request.query.offerId || "");
+    // 0. Our perfume catalog (FR cards and improved cards): full pyramid, accords, facts
+    if (offerId) {
+      const catalog = await shopCatalogNotes(await shopPerfumeIdForOffer(offerId).catch(() => 0)).catch(() => null);
+      if (catalog && (catalog.topNotes.length || catalog.middleNotes.length || catalog.baseNotes.length || catalog.facts.family)) {
+        return response.json({ ok: true, data: catalog, source: "catalog" });
+      }
+    }
     if (!brand || !name) return response.json({ ok: true, data: null });
 
     // 1. Try DB (fast, always available)
@@ -4381,6 +4391,104 @@ async function stripMarketplaceOnlyImages(images, { fetchMissing = true } = {}) 
     if (h != null && refs.some((r) => _hamming(r, h) <= 8)) drop.add(tailStart + i);
   }));
   return images.filter((_, i) => !drop.has(i));
+}
+
+// ── Our own perfume slides (the card pipeline renders them per perfume and per marketplace store) ─────────────
+// «Пирамида аромата», tiers, «Характеристики», «Аккорды» carry the store's logo (Magic Stick, AURA, Parfumerius):
+// they belong to the marketplace card, not to magicvibes.ru — the site shows the same facts in its own layout.
+const _shopPerfumeIdCache = new Map(); // offerId → { id, at }
+
+/** The Fragrantica perfume behind a shop offer: FR<id>-<ml> cards, else the card-improvement draft of that offer. */
+async function shopPerfumeIdForOffer(offerId) {
+  const key = cleanText(offerId).toLowerCase();
+  if (!key) return 0;
+  const fr = /^fr(\d+)-\d+/.exec(key);
+  if (fr) return Number(fr[1]);
+  const hit = _shopPerfumeIdCache.get(key);
+  if (hit && Date.now() - hit.at < 10 * 60 * 1000) return hit.id;
+  let id = 0;
+  try {
+    const prisma = getPrisma();
+    const rows = prisma ? await prisma.$queryRawUnsafe(
+      `SELECT perfume_id FROM fragrantica_drafts WHERE lower(data->'existing'->>'offerId') = $1 AND kind = 'card'
+        ORDER BY (status = 'sent') DESC, updated_at DESC LIMIT 1`, key,
+    ) : [];
+    id = Number(rows[0]?.perfume_id || 0);
+  } catch (_) { id = 0; }
+  if (_shopPerfumeIdCache.size > 20000) _shopPerfumeIdCache.clear();
+  _shopPerfumeIdCache.set(key, { id, at: Date.now() });
+  return id;
+}
+
+const _shopGeneratedHashes = new Map(); // perfumeId → { hashes, at }
+async function shopGeneratedSlideHashes(perfumeId) {
+  if (!perfumeId) return [];
+  const hit = _shopGeneratedHashes.get(perfumeId);
+  if (hit && Date.now() - hit.at < 60 * 60 * 1000) return hit.hashes;
+  const fs = require("fs");
+  const dir = require("path").join(publicDir, "uploads", "fragrantica", "cards");
+  const re = new RegExp(`^${perfumeId}-(notes|specs|accords|tier-[a-z]+|about|line|features?)-.*\\.(jpe?g|png|webp)$`, "i");
+  const hashes = [];
+  let files = [];
+  try { files = fs.readdirSync(dir).filter((f) => re.test(f)); } catch (_) { files = []; }
+  for (const f of files) {
+    try { hashes.push(await _dHashFromBuffer(fs.readFileSync(require("path").join(dir, f)))); } catch (_) { /* unreadable */ }
+  }
+  if (_shopGeneratedHashes.size > 5000) _shopGeneratedHashes.clear();
+  _shopGeneratedHashes.set(perfumeId, { hashes, at: Date.now() });
+  return hashes;
+}
+
+/** Drops our store-branded perfume slides from a gallery (never the first photo). */
+// our slides served from our own storage are recognised by their file name — no hashing, no perfume lookup
+const OWN_PERFUME_SLIDE_URL_RE = /\/uploads\/fragrantica\/cards\/\d+-(notes|specs|accords|tier-[a-z]+|about|line|features?)-/i;
+
+async function stripGeneratedPerfumeSlides(images, perfumeId, { fetchMissing = true } = {}) {
+  if (!Array.isArray(images)) return [];
+  // the same photo twice (main image repeated by the card pipeline) and our own slides by URL
+  images = [...new Set(images)].filter((url, i) => i === 0 || !OWN_PERFUME_SLIDE_URL_RE.test(String(url)));
+  if (!perfumeId || images.length < 2) return images;
+  const refs = await shopGeneratedSlideHashes(perfumeId).catch(() => []);
+  if (!refs.length) return images;
+  const drop = new Set();
+  await Promise.all(images.slice(1).map(async (url, i) => {
+    const h = fetchMissing ? await _imageHash(url) : (_mpOnlyHashCache.get(url) ?? null);
+    if (h != null && refs.some((r) => _hamming(r, h) <= 10)) drop.add(i + 1);
+  }));
+  return images.filter((_, i) => !drop.has(i));
+}
+
+/** Catalog facts of the perfume for the product page: pyramid, accords with shares, gender, year, family, perfumers. */
+async function shopCatalogNotes(perfumeId) {
+  if (!perfumeId) return null;
+  const prisma = getPrisma();
+  if (!prisma) return null;
+  const rows = await prisma.$queryRawUnsafe(`SELECT brand, name, gender, year, detail FROM fragrantica_perfumes WHERE id = $1`, Number(perfumeId)).catch(() => []);
+  const row = rows[0];
+  const d = row?.detail && typeof row.detail === "object" ? row.detail : null;
+  if (!row || !d) return null;
+  const names = (list) => (Array.isArray(list) ? list : []).map((n) => cleanText(typeof n === "string" ? n : n?.name)).filter(Boolean);
+  const notes = d.notes || {};
+  const top = names(notes.top), middle = names(notes.middle), base = names(notes.base), flat = names(notes.flat);
+  const accordBars = (Array.isArray(d.accords) ? d.accords : []).slice(0, 8)
+    .map((a) => ({ name: cleanText(a?.name || a), share: Math.max(10, Math.min(100, Number(a?.share) || 50)), background: cleanText(a?.background || ""), color: cleanText(a?.color || "") }))
+    .filter((a) => a.name);
+  const gender = cleanText(d.sourceGender || row.gender || d.gender || "");
+  return {
+    topNotes: top.length || middle.length || base.length ? top : [],
+    middleNotes: top.length || middle.length || base.length ? middle : flat,
+    baseNotes: base,
+    accords: accordBars.map((a) => a.name),
+    accordBars,
+    gender,
+    facts: {
+      brand: cleanText(row.brand), aroma: cleanText(row.name), gender,
+      year: Number(row.year || d.year) || null,
+      family: cleanText(d.family || ""),
+      perfumers: (Array.isArray(d.perfumers) ? d.perfumers : []).map((x) => cleanText(typeof x === "string" ? x : x?.name)).filter(Boolean).slice(0, 4),
+    },
+    source: "catalog",
+  };
 }
 
 // Marketplace descriptions come with HTML (<br/>, <p>, <li>, &nbsp; — sometimes HTML-escaped twice).
