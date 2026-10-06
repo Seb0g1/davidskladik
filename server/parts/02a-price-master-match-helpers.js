@@ -410,7 +410,20 @@ function priceMasterRowMatchesLink(row = {}, link = {}) {
     return exactPriceMasterNameMatches(fields.name, link.exactName || link.article);
   }
   const article = cleanText(link.article).toLowerCase();
-  return Boolean(article && cleanText(fields.article).toLowerCase() === article);
+  if (article && cleanText(fields.article).toLowerCase() === article) return true;
+  return priceMasterRowIsRenamedArticleOfLink(fields, link);
+}
+
+// A supplier may change the article of a row in place (Инна 05.10: XJV.OPR.50 -> SOS.023.OPR.50,
+// same RowID, same name): an article link then found nothing and the product was zeroed while
+// the supplier still had it. The remembered row still counts when it is the same row of the
+// same partner with exactly the remembered name.
+function priceMasterRowIsRenamedArticleOfLink(fields = {}, link = {}) {
+  const rowId = cleanText(link.sourceRowId);
+  if (!rowId || String(fields.rowId || "") !== rowId) return false;
+  if (link.partnerId && String(fields.partnerId || "") !== String(link.partnerId)) return false;
+  const pinnedName = cleanText(link.exactName);
+  return Boolean(pinnedName && exactPriceMasterNameMatches(fields.name, pinnedName));
 }
 
 function hasObjectData(value) {

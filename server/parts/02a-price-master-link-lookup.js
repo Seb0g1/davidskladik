@@ -322,6 +322,7 @@ async function getBatchPriceMasterMatchesForLinks(links, managedSuppliers = [], 
       rowsByArticle.get(article).push(row);
     }
   }
+  const renamedCandidates = [];
   for (let index = 0; index < articleLinks.length; index += 1) {
     if (index > 0 && index % 500 === 0) await new Promise((resolve) => setImmediate(resolve));
     const link = articleLinks[index];
@@ -329,6 +330,32 @@ async function getBatchPriceMasterMatchesForLinks(links, managedSuppliers = [], 
       .filter((row) => priceMasterRowMatchesLink(row, link))
       .map((row) => livePriceMasterMatchFromRow(link, row, ctx));
     map.set(link.id, filterSelectedRowMatchesToBestPin(link, matches));
+    if (!matches.length && /^\d+$/.test(cleanText(link.sourceRowId)) && cleanText(link.exactName)) renamedCandidates.push(link);
+  }
+  // Nothing under the article: the remembered row may carry a new article (changed in place by the supplier).
+  if (renamedCandidates.length) {
+    const rowIds = Array.from(new Set(renamedCandidates.map((link) => cleanText(link.sourceRowId))));
+    const rowsById = new Map();
+    // only rows of the partner's latest price list: an old list's row must not come back to life
+    const latestCte = await pmLatestDocsCteSql();
+    for (const batch of chunkArray(rowIds, 1000)) {
+      const [rows] = await pool.query({
+        sql: `${latestCte}
+          SELECT ${livePriceMasterRowColumns}
+          FROM pm_latest_docs ld
+          JOIN OfferDocs d ON d.DocID = ld.DocID
+          JOIN OfferRows r ON r.DocID = d.DocID
+          LEFT JOIN Partners p ON p.PartnerID = d.PartnerID
+          WHERE r.RowID IN (${batch.map(() => "?").join(",")}) AND r.Ignored = 0 AND r.Active != 0${activeDocFilter}`,
+        values: batch,
+        timeout: queryTimeout,
+      });
+      for (const row of rows || []) rowsById.set(String(row.rowId), row);
+    }
+    for (const link of renamedCandidates) {
+      const row = rowsById.get(cleanText(link.sourceRowId));
+      if (row && priceMasterRowMatchesLink(row, link)) map.set(link.id, [livePriceMasterMatchFromRow(link, row, ctx)]);
+    }
   }
   return map;
 }

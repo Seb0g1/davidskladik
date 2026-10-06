@@ -207,3 +207,17 @@ test("pin moved by the stale-row repair and then cleared is restored too (ADW100
   assert.equal(link.matchType, "selected_row");
   assert.equal(link.sourceRowId, "2331634");
 });
+
+const articleLink = { matchType: "article", article: "XJV.OPR.50", partnerId: "60", supplierName: "Инна", sourceRowId: "2238892", exactName: "XERJOFF Xerjoff V Opera EDP 50 ml - парфюмерная вода" };
+const innaRow = (extra = {}) => ({ rowId: 2238892, article: "SOS.023.OPR.50", name: "XERJOFF Xerjoff V Opera EDP 50 ml - парфюмерная вода", partnerId: 60, partnerName: "Инна", active: true, ...extra });
+
+test("article link: the remembered row still counts after the supplier changed its article in place", () => {
+  assert.equal(priceMasterRowMatchesLink(innaRow(), articleLink), true);
+});
+
+test("article link: a renamed row of another product, partner or row id does not count", () => {
+  assert.equal(priceMasterRowMatchesLink(innaRow({ name: "XERJOFF Xerjoff V Opera EDP 100 ml" }), articleLink), false);
+  assert.equal(priceMasterRowMatchesLink(innaRow({ partnerId: 61 }), articleLink), false);
+  assert.equal(priceMasterRowMatchesLink(innaRow({ rowId: 2238893 }), articleLink), false);
+  assert.equal(priceMasterRowMatchesLink(innaRow(), { ...articleLink, exactName: "" }), false);
+});

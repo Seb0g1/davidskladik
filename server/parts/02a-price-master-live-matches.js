@@ -11,6 +11,12 @@ async function getPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRa
     let candidateRows = [];
     if (link.matchType === "article") {
       candidateRows = snapshotIndexes.byArticle.get(link.article) || [];
+      // the remembered row too: its article may have been changed in place (priceMasterRowIsRenamedArticleOfLink)
+      const pinnedRows = link.sourceRowId ? (snapshotIndexes.byRowId.get(cleanText(link.sourceRowId)) || []) : [];
+      if (pinnedRows.length) {
+        const seen = new Set(candidateRows);
+        candidateRows = [...candidateRows, ...pinnedRows.filter((row) => !seen.has(row))];
+      }
     } else if (link.matchType === "selected_row" && link.article) {
       // Self-heal: a pinned row gets deactivated when the supplier re-uploads its offer
       // (new RowID, same partner+article). Select by article so the current active row is a
