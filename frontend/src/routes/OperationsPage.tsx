@@ -204,7 +204,9 @@ const CART_SKIP_REASONS: Record<string, string> = {
   pm_name_mismatch: "В PriceMaster под этим артикулом другой товар.",
   dalik_article_reuse: "Далик отдал этот артикул другому аромату — проверьте привязку.",
   picking_missing_snooze: "Поставщик недавно отметил «Товара не было».",
+  supplier_price_above_sale: "Закуп у всех поставщиков дороже продажи — автоматически не заказываем. Выберите поставщика вручную или отмените заказ.",
 };
+const rub = (n?: number | null) => `${Math.round(Number(n || 0)).toLocaleString("ru-RU")} ₽`;
 function cartSkipReason(code?: string | null) {
   if (!code) return "Не готово к заказу.";
   return CART_SKIP_REASONS[code] || `Не готово к заказу (${code.replace(/_/g, " ")}).`;
@@ -567,6 +569,9 @@ export function SupplierCartPanel() {
                   {row.stockOnlyFallback ? <small>Заказ уйдёт через «Наш склад» — цена в PriceMaster будет 0, остаток со склада.</small> : null}
                   {row.skipReason === "supplier_cutoff_passed_no_alternative" ? <small className="danger-text">Все подходящие поставщики уже закрыли прием заказов на сегодня.</small> : null}
                   {!row.ready && !row.alreadyCommitted ? <small className="danger-text">{cartSkipReason(row.skipReason)}</small> : null}
+                  {row.skipReason === "supplier_price_above_sale" && Number(row.purchaseUnitRub) > 0 ? (
+                    <small className="danger-text">Самый дешёвый закуп {rub(Number(row.purchaseUnitRub))} за шт. при продаже {rub(Number(row.saleUnitRub))}.</small>
+                  ) : null}
                   {/* предложения сразу в строке — без «Заменить» */}
                   {!row.ready && !row.alreadyCommitted && altKey !== row.key ? (
                     <SupplierAltInline offerId={row.offerId} currentPartnerId={String(row.partnerId || "")} busy={overrideMutation.isPending}
@@ -613,6 +618,7 @@ export function SupplierCartPanel() {
               if (r === "supplier_inactive_live") return "поставщик неактивен в PM (Active=0 или NativePrice=0)";
               if (r === "no_offer_row_id") return "нет строки в PM";
               if (r === "no_partner_id") return "нет ID поставщика";
+              if (r === "supplier_price_above_sale") return "закуп дороже продажи (прайс изменился) — выберите поставщика вручную";
               return r;
             };
             return (

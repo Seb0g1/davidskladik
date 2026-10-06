@@ -91,10 +91,43 @@ function normalizeSupplierCartPreviewRow(input = {}) {
     manualNote: cleanText(input.manualNote || ""),
     pmName: cleanText(input.pmName || ""),
     pmNameMismatch: Boolean(input.pmNameMismatch),
+    manualSupplier: Boolean(input.manualSupplier),
+    purchaseUnitRub: Number(input.purchaseUnitRub || 0) || 0,
+    saleUnitRub: Number(input.saleUnitRub || 0) || 0,
   };
 }
 
-function selectSupplierCartSupplierFromMatches(matches = new Map(), blockedPartnerIds = new Set(), usdRate = 95, now = new Date()) {
+// Rule (2026-10-06): the purchase must never cost more than the sale. Price lists arrive once in
+// the morning, so a supplier can be dearer than our marketplace price by the time an order comes.
+/** Pure: sale price of one unit in RUB, or 0 when the order carries no price. */
+function supplierCartSaleUnitRub(line = {}) {
+  const total = computeMarketplaceSaleAmountRub(line);
+  const quantity = Math.max(1, Math.round(Number(line.quantity || 1) || 1));
+  return total > 0 ? Number((total / quantity).toFixed(2)) : 0;
+}
+
+/** Pure: purchase price of one unit in RUB (0 when unknown). */
+function supplierCartPurchaseUnitRub(row = {}, usdRate = 95) {
+  const rub = warehouseSupplierPurchaseRubPrice(row, usdRate);
+  return Number.isFinite(rub) && rub > 0 && rub < Number.MAX_SAFE_INTEGER ? Number(rub.toFixed(2)) : 0;
+}
+
+/** Pure: true when the purchase is known and dearer than the known sale price. */
+function supplierCartPurchaseAboveSale(purchaseUnitRub = 0, saleUnitRub = 0) {
+  return purchaseUnitRub > 0 && saleUnitRub > 0 && purchaseUnitRub > saleUnitRub;
+}
+
+function selectSupplierCartSupplierFromMatches(matches = new Map(), blockedPartnerIds = new Set(), usdRate = 95, now = new Date(), { saleUnitRub = 0 } = {}) {
+  // suppliers dearer than the sale are never picked automatically; the cheapest of them is reported
+  let aboveSale = 0;
+  let cheapestAboveSaleRub = 0;
+  const dearerThanSale = (row) => {
+    const purchase = supplierCartPurchaseUnitRub(row, usdRate);
+    if (!supplierCartPurchaseAboveSale(purchase, saleUnitRub)) return false;
+    aboveSale += 1;
+    if (!cheapestAboveSaleRub || purchase < cheapestAboveSaleRub) cheapestAboveSaleRub = purchase;
+    return true;
+  };
   const isSorinSupplier = (row) => /сорин/i.test(cleanText(row.partnerName || row.supplierName || ""));
   const isInnaSupplier = (row) => /инна/i.test(cleanText(row.partnerName || row.supplierName || ""));
 
@@ -127,6 +160,7 @@ function selectSupplierCartSupplierFromMatches(matches = new Map(), blockedPartn
         if (Number(row.price || 0) <= 0) continue;
         const partnerId = cleanText(row.partnerId).toLowerCase();
         if (blockedPartnerIds.has(partnerId)) continue;
+        if (dearerThanSale(row)) continue;
         return {
           selected: { ...row, linkId },
           stockOnlyFallback: false,
@@ -156,6 +190,7 @@ function selectSupplierCartSupplierFromMatches(matches = new Map(), blockedPartn
         cutoffPassedAvailable += 1;
         continue;
       }
+      if (dearerThanSale(row)) continue;
       rawCandidates.push({ ...row, linkId });
     }
   }
@@ -241,9 +276,13 @@ function selectSupplierCartSupplierFromMatches(matches = new Map(), blockedPartn
     stockOnlyFallback: false,
     blockedAvailable,
     cutoffPassedAvailable,
-    skipReason: blockedAvailable
-      ? "supplier_blocked_no_alternative"
-      : (cutoffPassedAvailable ? "supplier_cutoff_passed_no_alternative" : "supplier_not_available"),
+    aboveSale,
+    cheapestAboveSaleRub,
+    skipReason: aboveSale
+      ? "supplier_price_above_sale"
+      : blockedAvailable
+        ? "supplier_blocked_no_alternative"
+        : (cutoffPassedAvailable ? "supplier_cutoff_passed_no_alternative" : "supplier_not_available"),
   };
 }
 
@@ -757,14 +796,18 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { p
     }
   }
   const blockedPartnerIds = activeSupplierBlocksForOffer(state, normalizedLine.offerId);
+  const saleUnitRub = supplierCartSaleUnitRub(normalizedLine);
   const {
     selected,
     stockOnlyFallback,
     skipReason: selectionSkipReason,
-  } = selectSupplierCartSupplierFromMatches(matches, blockedPartnerIds, usdRate);
+    cheapestAboveSaleRub,
+  } = selectSupplierCartSupplierFromMatches(matches, blockedPartnerIds, usdRate, new Date(), { saleUnitRub });
   if (!selected) {
     return normalizeSupplierCartPreviewRow({
       ...normalizedLine,
+      saleUnitRub,
+      purchaseUnitRub: selectionSkipReason === "supplier_price_above_sale" ? cheapestAboveSaleRub : 0,
       warehouseProductId: product.id,
       groupKey: warehouseProductPageGroupKey(product),
       groupOfferId: product.offerId,
@@ -836,6 +879,8 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { p
     orderCutoffTime: selected.orderCutoffTime,
     reseller: selected.reseller,
     supplierScore: supplierCartOrderScore(selected, usdRate),
+    saleUnitRub,
+    purchaseUnitRub: stockOnlyFallback ? 0 : supplierCartPurchaseUnitRub(selected, usdRate),
     available: true,
     ready: true,
     stockOnlyFallback,

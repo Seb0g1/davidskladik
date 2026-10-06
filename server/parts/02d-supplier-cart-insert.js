@@ -184,6 +184,7 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
   // may intentionally be Active=0 (price comes from our own warehouse stock).
   // If the pool is unavailable we fail open and proceed with snapshot data.
   let liveInactiveRowIds = new Set();
+  const liveNativePrice = new Map();
   // inactivePm rows were explicitly chosen by the user despite Active=0 — skip live validation,
   // same as stock-only rows. Otherwise the user-selected inactive supplier gets silently rejected.
   const rowsNeedingValidation = pmRows.filter((row) => !row.stockOnlyFallback && !row.inactivePm && row.offerRowId);
@@ -192,10 +193,11 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
       const rowIdsToCheck = [...new Set(rowsNeedingValidation.map((row) => Number(row.offerRowId)).filter((id) => id > 0))];
       if (rowIdsToCheck.length) {
         const [liveRows] = await pool.query(
-          "SELECT RowID FROM OfferRows WHERE RowID IN (?) AND Active = 1 AND NativePrice > 0",
+          "SELECT RowID, NativePrice FROM OfferRows WHERE RowID IN (?) AND Active = 1 AND NativePrice > 0",
           [rowIdsToCheck],
         );
         const liveActiveIds = new Set((liveRows || []).map((r) => Number(r.RowID)));
+        for (const r of liveRows || []) liveNativePrice.set(Number(r.RowID), Number(r.NativePrice || 0));
         liveInactiveRowIds = new Set(rowIdsToCheck.filter((id) => !liveActiveIds.has(id)));
       }
     } catch (liveValidationError) {
@@ -203,10 +205,30 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
     }
   }
 
+  // Purchase never dearer than the sale (2026-10-06): the price list may have changed since the draft,
+  // so the draft's purchase is scaled by the live PM price. A supplier the operator chose by hand is
+  // their decision and is not checked.
+  const usdRateForSaleCheck = Number((await getUsdRate().catch(() => ({})))?.rate || process.env.DEFAULT_USD_RATE || 95);
+  const purchaseAboveSale = (row) => {
+    if (row.stockOnlyFallback || row.manualSupplier || row.inactivePm) return null;
+    const saleUnitRub = row.saleUnitRub || supplierCartSaleUnitRub(row);
+    let purchaseUnitRub = supplierCartPurchaseUnitRub(row, usdRateForSaleCheck);
+    const live = liveNativePrice.get(Number(row.offerRowId));
+    const draftNative = Number(row.originalPrice || 0);
+    if (live > 0 && draftNative > 0 && purchaseUnitRub > 0) purchaseUnitRub = Number((purchaseUnitRub * (live / draftNative)).toFixed(2));
+    return supplierCartPurchaseAboveSale(purchaseUnitRub, saleUnitRub) ? { purchaseUnitRub, saleUnitRub } : null;
+  };
+
   // Split pmRows into validated (will be inserted) and live-inactive (will be skipped).
   const validatedPmRows = [];
   const liveInactiveSkipped = [];
   for (const row of pmRows) {
+    const dearer = purchaseAboveSale(row);
+    if (dearer) {
+      logger.warn("supplier_cart_purchase_above_sale", { offerId: row.offerId, partnerId: row.partnerId, rowId: row.offerRowId, ...dearer });
+      liveInactiveSkipped.push({ key: row.key, offerId: row.offerId, productName: row.productName, skipReason: "supplier_price_above_sale", ...dearer });
+      continue;
+    }
     if (!row.stockOnlyFallback && row.offerRowId && liveInactiveRowIds.has(Number(row.offerRowId))) {
       logger.warn("supplier_cart_live_validation_skip", {
         rowId: row.offerRowId,

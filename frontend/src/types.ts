@@ -741,6 +741,8 @@ export const SupplierCartRowSchema = z.object({
   pmNameMismatch: z.boolean().optional().default(false),
   photos: z.array(z.string()).optional().default([]),
   photoSources: z.array(z.string()).optional().default([]),
+  purchaseUnitRub: z.number().optional().default(0),
+  saleUnitRub: z.number().optional().default(0),
 }).passthrough();
 
 export const SupplierCartPreviewSchema = z.object({

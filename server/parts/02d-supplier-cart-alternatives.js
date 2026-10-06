@@ -160,6 +160,7 @@ app.post("/api/supplier-cart/draft/:key/supplier", requireAdmin, async (request,
       ready: true,
       stockOnlyFallback: chosen.stockOnly,
       inactivePm: chosen.inactivePm || false,
+      manualSupplier: true,
       skipReason: "",
     });
     const draftRows = state.draft.rows;
@@ -315,6 +316,7 @@ app.post("/api/supplier-picking-list/:key/replace-supplier", requireStaff, async
       ready: true,
       stockOnlyFallback: chosen.stockOnly,
       inactivePm: chosen.inactivePm || false,
+      manualSupplier: true,
     });
     const commit = await insertSupplierCartRowsIntoPriceMaster([newCartRow], request);
     // processed должен остаться под исходным ключом заказа, иначе следующий прогон
