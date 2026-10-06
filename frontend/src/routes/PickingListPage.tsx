@@ -1784,11 +1784,11 @@ export function PickingListPage() {
                         </button>
                       </div>
                     </div>
-                    <div className="supplier-ledger-row">
+                    {debtNative > 0 || paidNative > 0 ? <div className="supplier-ledger-row">
                       <DiagnosticValue label="Общий долг" value={debtNative > 0 ? moneyAmount(debtNative, supplierCurrency, isUsdSupplier ? 2 : 0) : "—"} tone={debtNative > 0 ? "danger" : ""} />
                       <DiagnosticValue label="Оплачено" value={paidNative > 0 ? moneyAmount(paidNative, supplierCurrency, isUsdSupplier ? 2 : 0) : "—"} tone={paidNative > 0 ? "success" : ""} />
                       <DiagnosticValue label="Сборка" value={supplierCurrency === "RUB" ? moneyAmount(total, "RUB") : `${moneyAmount(total, "USD")} / ≈${moneyAmount(totalRub, "RUB")}`} />
-                    </div>
+                    </div> : null}
                   </div>
                   {paymentOpen.has(supplierName) || draftAmount ? <div className="supplier-payment-row">
                     <div className="payment-amount-field">

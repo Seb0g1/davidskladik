@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Archive, CheckCircle2, ClipboardList, HelpCircle, MessageCircle, PackageCheck, RefreshCw, ShoppingCart, Star, TrendingUp, Truck } from "lucide-react";
+import { AlertTriangle, Archive, ChevronRight, ClipboardList, HelpCircle, MessageCircle, PackageX, RefreshCw, Star, Tag, TrendingUp, Truck, Wallet } from "lucide-react";
 import { fetchJson } from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
@@ -14,46 +14,20 @@ type SalesAnalytics = { ok: boolean; period: string; totalOrders: number; byDay:
 
 const MP_LABELS: Record<string, string> = { ozon: "Ozon", yandex: "Яндекс", wb: "WB", avito: "Avito", other: "Прочие" };
 
-function SalesBarChart({ days, metric }: { days: DayStat[]; metric: "income" | "profit" }) {
-  const values = days.map((d) => d[metric]);
-  const maxVal = Math.max(...values, 1);
-  const color = metric === "income" ? "var(--accent)" : "var(--success, #10b981)";
-  return (
-    <div
-      aria-label="График продаж по дням"
-      style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 60, width: "100%" }}
-    >
-      {days.map((d) => (
-        <div
-          key={d.date}
-          title={`${d.date}: ${Math.round(d[metric]).toLocaleString("ru-RU")} ₽ (${d.orders} заказ.)`}
-          style={{
-            flex: 1,
-            minWidth: 0,
-            height: `${Math.max(3, Math.round((d[metric] / maxVal) * 100))}%`,
-            background: color,
-            opacity: 0.72,
-            borderRadius: "2px 2px 0 0",
-          }}
-        />
-      ))}
-    </div>
-  );
-}
-
-const warehouseUrl = "/api/warehouse/products/page?page=1&pageSize=8&q=&marketplace=all&linked=all&state=all&autoOnly=false&grouped=true";
+// Counts only: the warehouse page call is used for its totals (ready / without supplier), not for items
+const warehouseUrl = "/api/warehouse/products/page?page=1&pageSize=1&q=&marketplace=all&linked=all&state=all&autoOnly=false&grouped=true";
 
 const money = (value: unknown) => {
   const n = Number(value || 0);
-  return n ? `${Math.round(n).toLocaleString("ru-RU")} ₽` : "-";
+  return `${Math.round(n).toLocaleString("ru-RU")} ₽`;
 };
 
 const statusText = (value: unknown) => ({
-  queued: "Ожидает",
-  running: "В работе",
-  completed: "Готово",
-  failed: "Ошибка",
-}[String(value || "")] || String(value || "-"));
+  queued: "ждёт",
+  running: "идёт",
+  completed: "готово",
+  failed: "ошибка",
+}[String(value || "")] || String(value || "—"));
 
 const JOB_TITLES: Record<string, string> = {
   "yandex-import-send": "Импорт Ozon → Яндекс",
@@ -86,45 +60,51 @@ function supplierActive(supplier: { active?: boolean; stopped?: boolean }) {
   return supplier.active !== false && supplier.stopped !== true;
 }
 
-function MiniTrend({ tone = "" }: { tone?: "success" | "warn" | "danger" | "" }) {
+/** Income bars with the profit part inside each bar; one column per day, the day under the cursor is described. */
+function SalesChart({ days }: { days: DayStat[] }) {
+  const max = Math.max(...days.map((d) => d.income), 1);
+  const [hover, setHover] = useState<number | null>(null);
+  const active = hover === null ? null : days[hover];
   return (
-    <svg className={`mini-trend ${tone}`} viewBox="0 0 120 36" aria-hidden="true">
-      <path d="M3 30 L18 24 L31 28 L45 17 L58 20 L73 11 L88 15 L101 6 L117 10" />
-    </svg>
+    <div className="dash-chart">
+      <div className="dash-chart-readout" aria-live="polite">
+        {active
+          ? <><b>{new Date(active.date).toLocaleDateString("ru-RU", { day: "numeric", month: "long" })}</b> · {active.orders} заказ. · выручка {money(active.income)} · прибыль {money(active.profit)}</>
+          : <span>Выберите день на графике</span>}
+      </div>
+      <div className="dash-chart-bars" role="img" aria-label="Выручка и прибыль по дням" onMouseLeave={() => setHover(null)}>
+        {days.map((d, i) => (
+          <div key={d.date} className={`dash-chart-col${hover === i ? " is-hover" : ""}`} onMouseEnter={() => setHover(i)} onClick={() => setHover(i)}>
+            <div className="dash-chart-bar" style={{ height: `${Math.max(2, (d.income / max) * 100)}%` }}>
+              <div className="dash-chart-profit" style={{ height: `${d.income ? Math.max(0, Math.min(100, (d.profit / d.income) * 100)) : 0}%` }} />
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="dash-chart-axis">
+        {days.length >= 2 ? (
+          <>
+            <span>{days[0].date.slice(8, 10)}.{days[0].date.slice(5, 7)}</span>
+            <span>{days[Math.floor(days.length / 2)].date.slice(8, 10)}.{days[Math.floor(days.length / 2)].date.slice(5, 7)}</span>
+            <span>{days[days.length - 1].date.slice(8, 10)}.{days[days.length - 1].date.slice(5, 7)}</span>
+          </>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
+type AttentionItem = { key: string; icon: ReactNode; label: string; count: number; hint?: string; href: string; tone?: "warn" | "danger" };
+
 export function DashboardPage() {
   const [analyticsPeriod, setAnalyticsPeriod] = useState<"7d" | "30d">("30d");
-  const warehouse = useQuery({
-    queryKey: ["dashboard", "warehouse"],
-    queryFn: () => fetchJson(warehouseUrl, WarehousePageSchema),
-  });
-  const suppliers = useQuery({
-    queryKey: ["dashboard", "suppliers"],
-    queryFn: () => fetchJson("/api/suppliers", SuppliersResponseSchema),
-  });
-  const picking = useQuery({
-    queryKey: ["dashboard", "picking"],
-    queryFn: () => fetchJson("/api/supplier-picking-list?status=open&limit=60", SupplierPickingListSchema),
-  });
-  const finance = useQuery({
-    queryKey: ["dashboard", "finance"],
-    queryFn: () => fetchJson("/api/finance/summary?period=30d&linkedOnly=true", FinanceSummarySchema),
-  });
-  const sales = useQuery({
-    queryKey: ["dashboard", "sales"],
-    queryFn: () => fetchJson("/api/sales-automation/summary", SalesAutomationSummarySchema),
-  });
-  const operations = useQuery({
-    queryKey: ["dashboard", "operations"],
-    queryFn: () => fetchJson("/api/operations?limit=8", OperationsSchema),
-    refetchInterval: 5000,
-  });
-  const summary = useQuery({
-    queryKey: ["dashboard", "summary"],
-    queryFn: () => fetchJson("/api/dashboard/summary", DashboardSummarySchema),
-  });
+  const warehouse = useQuery({ queryKey: ["dashboard", "warehouse"], queryFn: () => fetchJson(warehouseUrl, WarehousePageSchema) });
+  const suppliers = useQuery({ queryKey: ["dashboard", "suppliers"], queryFn: () => fetchJson("/api/suppliers", SuppliersResponseSchema) });
+  const picking = useQuery({ queryKey: ["dashboard", "picking"], queryFn: () => fetchJson("/api/supplier-picking-list?status=open&limit=60", SupplierPickingListSchema) });
+  const finance = useQuery({ queryKey: ["dashboard", "finance"], queryFn: () => fetchJson("/api/finance/summary?period=30d&linkedOnly=true", FinanceSummarySchema) });
+  const sales = useQuery({ queryKey: ["dashboard", "sales"], queryFn: () => fetchJson("/api/sales-automation/summary", SalesAutomationSummarySchema) });
+  const operations = useQuery({ queryKey: ["dashboard", "operations"], queryFn: () => fetchJson("/api/operations?limit=8", OperationsSchema), refetchInterval: 5000 });
+  const summary = useQuery({ queryKey: ["dashboard", "summary"], queryFn: () => fetchJson("/api/dashboard/summary", DashboardSummarySchema) });
   const analyticsQuery = useQuery({
     queryKey: ["dashboard", "analytics", analyticsPeriod],
     queryFn: async () => {
@@ -137,260 +117,162 @@ export function DashboardPage() {
   const activeSuppliers = supplierList.filter(supplierActive).length;
   const financeSummary = asRecord(finance.data?.summary);
   const jobs = operations.data?.jobs || [];
-  const rows = picking.data?.rows || [];
+  const pickingRows = picking.data?.rows || [];
   const analytics = analyticsQuery.data;
   const analyticsReady = Boolean(analytics?.ok);
   const analyticsDays = useMemo(() => analytics?.byDay || [], [analytics]);
-  const analyticsMaxIncome = useMemo(() => Math.max(...analyticsDays.map((d) => d.income), 1), [analyticsDays]);
   const salesToday = summary.data?.salesToday || { orders: 0, income: 0, profit: 0 };
   const salesWeek = summary.data?.salesWeek || { orders: 0, income: 0, profit: 0 };
   const topSuppliers = summary.data?.topSuppliers || [];
   const archiveBacklog = summary.data?.archiveBacklog || { yandex: 0, ozon: 0, ozonDue: 0 };
-  const notifications = summary.data?.notifications || { unread: 0, byType: {} };
+  const notifications = summary.data?.notifications || { unread: 0, byType: {} as Record<string, number> };
   const priceHealth = summary.data?.priceHealth || { stalePriceLinked: 0, staleHours: 1, alertThreshold: 50, alert: false, oldestPriceJobAgeMs: 0, oldestPriceJobAlertThresholdMs: 10 * 60_000, oldestPriceJobAlert: false };
+  const withoutSupplier = Number(warehouse.data?.withoutSupplier || 0);
   const error = warehouse.error || suppliers.error || picking.error || finance.error || sales.error || operations.error || summary.error;
+
+  // What needs a person today, most urgent first; zero counts are not shown
+  const attention: AttentionItem[] = [
+    { key: "reviews", icon: <Star size={16} />, label: "Отзывы ждут ответа", count: Number(notifications.byType.review || 0), href: "/app/reviews" },
+    { key: "questions", icon: <HelpCircle size={16} />, label: "Вопросы покупателей", count: Number(notifications.byType.question || 0), href: "/app/questions" },
+    { key: "chats", icon: <MessageCircle size={16} />, label: "Непрочитанные чаты", count: Number(notifications.byType.chat || 0), href: "/app/chats" },
+    { key: "prices", icon: <Tag size={16} />, label: `Цены не сходятся дольше ${priceHealth.staleHours} ч`, count: Number(priceHealth.stalePriceLinked || 0), href: "/app/price-guard", tone: priceHealth.alert ? "danger" : "warn" },
+    { key: "price-queue", icon: <Tag size={16} />, label: "Цены в очереди на отправку", count: Number(summary.data?.priceQueue || 0), hint: priceHealth.oldestPriceJobAlert ? `старейшая ${Math.round(priceHealth.oldestPriceJobAgeMs / 60000)} мин` : undefined, href: "/app/prices", tone: priceHealth.oldestPriceJobAlert ? "danger" : undefined },
+    { key: "no-supplier", icon: <PackageX size={16} />, label: "Товары без поставщика", count: withoutSupplier, href: "/app/no-supplier" },
+    { key: "ozon-archive", icon: <Archive size={16} />, label: "Ozon: ждут разархивации", count: Number(archiveBacklog.ozon || 0), hint: archiveBacklog.ozonDue ? `готово ${archiveBacklog.ozonDue}` : undefined, href: "/app/recovery-queue" },
+    { key: "yandex-archive", icon: <Archive size={16} />, label: "Яндекс: привязанные в архиве", count: Number(archiveBacklog.yandex || 0), href: "/app/recovery-queue" },
+    { key: "retries", icon: <RefreshCw size={16} />, label: "Повторы отправки цены", count: Number(sales.data?.retryTotal || 0), href: "/app/prices" },
+  ].filter((item) => item.count > 0) as AttentionItem[];
+
   const refresh = () => {
-    void warehouse.refetch();
-    void suppliers.refetch();
-    void picking.refetch();
-    void finance.refetch();
-    void sales.refetch();
-    void operations.refetch();
-    void summary.refetch();
-    void analyticsQuery.refetch();
+    for (const q of [warehouse, suppliers, picking, finance, sales, operations, summary, analyticsQuery]) void q.refetch();
   };
+  const loadingSummary = summary.isLoading || warehouse.isLoading;
 
   return (
-    <section className="page-section dashboard-page">
+    <section className="page-section dashboard-page dash2">
       <PageHeader
         title="Дашборд"
-        subtitle="Общая картина склада: товары, поставщики, сборка, автоматизация и финансы."
+        subtitle="Что продали, что ждёт людей и как идут фоновые задачи."
         action={<button className="secondary-action" type="button" onClick={refresh}><RefreshCw size={16} /> Обновить</button>}
       />
 
-      <section className="dashboard-metrics">
-        <Stat label="Активных товаров" value={warehouse.data?.groupTotal || warehouse.data?.total || 0} tone="accent" icon={<PackageCheck size={18} />} trend={<MiniTrend />} />
-        <Stat label="Готовы к продаже" value={warehouse.data?.ready || 0} tone="success" icon={<CheckCircle2 size={18} />} trend={<MiniTrend tone="success" />} />
-        <Stat label="Продажи сегодня" value={salesToday.income ? money(salesToday.income) : "0 ₽"} tone="success" icon={<TrendingUp size={18} />} trend={<MiniTrend tone="success" />} delta={`${salesToday.orders} заказ(ов), прибыль ${salesToday.profit ? money(salesToday.profit) : "0 ₽"}`} />
-        <Stat label="Очередь сборки" value={picking.data?.total || rows.length || 0} icon={<ClipboardList size={18} />} trend={<MiniTrend />} delta="в работе" />
-        <Stat label="Нужны действия" value={warehouse.data?.withoutSupplier || sales.data?.retryTotal || 0} tone="warn" icon={<AlertTriangle size={18} />} trend={<MiniTrend tone="warn" />} delta="проверить" />
+      <section className="dashboard-metrics dash-kpis">
+        <Stat label="Сегодня" value={money(salesToday.income)} tone="success" icon={<TrendingUp size={18} />} delta={`${salesToday.orders} заказ. · прибыль ${money(salesToday.profit)}`} />
+        <Stat label="За 7 дней" value={money(salesWeek.profit)} tone="accent" icon={<Wallet size={18} />} delta={`прибыль · ${salesWeek.orders} заказ. · выручка ${money(salesWeek.income)}`} />
+        <Stat label="Сборка" value={Number(picking.data?.total || pickingRows.length || 0).toLocaleString("ru-RU")} icon={<ClipboardList size={18} />} delta="открытых строк" />
+        <Stat label="Без поставщика" value={withoutSupplier.toLocaleString("ru-RU")} tone={withoutSupplier ? "warn" : "success"} icon={<AlertTriangle size={18} />} delta={`готовы к продаже ${Number(warehouse.data?.ready || 0).toLocaleString("ru-RU")}`} />
       </section>
 
-      <section className="dashboard-layout">
-        <div className="dashboard-main">
-          <section className="table-panel dashboard-panel">
+      <section className="dash-grid">
+        <div className="dash-main">
+          <section className="table-panel dash-panel">
             <div className="section-title">
-              <div><span>Склад</span><h3>Последние карточки каталога</h3></div>
-              <a className="secondary-action" href="/app/warehouse">Открыть склад</a>
+              <div><span>Сегодня</span><h3>Требует внимания</h3></div>
             </div>
-            <div className="dashboard-product-list">
-              {(warehouse.data?.items || []).slice(0, 6).map((item) => {
-                const row = asRecord(item);
-                const primary = asRecord(row.primary || (Array.isArray(row.products) ? row.products[0] : row));
-                return (
-                  <a className="dashboard-product-row" href={`/app/warehouse/${encodeURIComponent(String(row.groupKey || primary.offerId || primary.id || ""))}`} key={String(row.groupKey || primary.id || primary.offerId)}>
-                    <span className="dashboard-product-thumb">
-                      {primary.imageUrl ? <img src={String(primary.imageUrl)} alt="" loading="lazy" /> : <PackageCheck size={16} />}
-                    </span>
-                    <span>
-                      <strong>{String(primary.name || primary.offerId || "Товар")}</strong>
-                      <small>{String(primary.offerId || primary.sku || "-")} · {String(primary.brand || "без бренда")}</small>
-                    </span>
-                    <b>{money(primary.currentPrice || primary.targetPrice || primary.newPrice)}</b>
-                  </a>
-                );
-              })}
-              {warehouse.isLoading ? <div className="soft-empty"><RefreshCw className="spin" size={16} /> Загружаю товары...</div> : null}
+            {loadingSummary ? <div className="soft-empty"><RefreshCw className="spin" size={16} /> Считаю…</div> : null}
+            {!loadingSummary && !attention.length ? <div className="dash-all-clear">Всё разобрано — ни ответов, ни очередей не ждёт.</div> : null}
+            <div className="dash-attention">
+              {attention.map((item) => (
+                <a key={item.key} href={item.href} className={`dash-attention-row${item.tone ? ` is-${item.tone}` : ""}`}>
+                  <span className="dash-attention-icon">{item.icon}</span>
+                  <span className="dash-attention-label">{item.label}{item.hint ? <small>{item.hint}</small> : null}</span>
+                  <b>{item.count.toLocaleString("ru-RU")}</b>
+                  <ChevronRight size={16} className="dash-attention-go" />
+                </a>
+              ))}
             </div>
           </section>
 
-          <section className="table-panel dashboard-panel">
+          <section className="table-panel dash-panel">
             <div className="section-title">
-              <div><span>Операции</span><h3>Последние фоновые задачи</h3></div>
-              <a className="secondary-action" href="/app/operations">Все операции</a>
+              <div><span>Продажи</span><h3>{analyticsPeriod === "7d" ? "За 7 дней" : "За 30 дней"}</h3></div>
+              <div className="dash-period" role="group" aria-label="Период">
+                <button type="button" className={analyticsPeriod === "7d" ? "is-on" : ""} aria-pressed={analyticsPeriod === "7d"} onClick={() => setAnalyticsPeriod("7d")}>7 дней</button>
+                <button type="button" className={analyticsPeriod === "30d" ? "is-on" : ""} aria-pressed={analyticsPeriod === "30d"} onClick={() => setAnalyticsPeriod("30d")}>30 дней</button>
+              </div>
             </div>
-            {jobs.slice(0, 5).map((job) => (
-              <article className="dashboard-job-row" key={String(job.id)}>
-                <div>
-                  <strong>{localizeJobTitle(String(job.title || ""), String(job.type || ""))}</strong>
-                  <span>{statusText(job.status)} · {compactDate(String(job.createdAt || ""))}</span>
+            {analyticsQuery.isLoading ? (
+              <div className="soft-empty"><RefreshCw className="spin" size={14} /> Загружаю продажи…</div>
+            ) : !analyticsReady || !analyticsDays.length ? (
+              <div className="soft-empty">Продаж за период нет.</div>
+            ) : (
+              <>
+                <div className="dash-sales-totals">
+                  <span><small>Выручка</small><b>{money(analyticsDays.reduce((s, d) => s + d.income, 0))}</b></span>
+                  <span><small>Прибыль</small><b className="is-profit">{money(analyticsDays.reduce((s, d) => s + d.profit, 0))}</b></span>
+                  <span><small>Заказов</small><b>{analytics!.totalOrders}</b></span>
                 </div>
-                <div className="progress-pill">{Math.round(numberValue(job.progress, 0))}%</div>
-              </article>
-            ))}
-            {!operations.isLoading && !jobs.length ? <div className="soft-empty">Операций пока нет.</div> : null}
+                <SalesChart days={analyticsDays} />
+                <div className="dash-sales-split">
+                  <div>
+                    <div className="dash-label">По каналам</div>
+                    {(analytics!.byMarketplace || []).map((mp, _i, arr) => {
+                      const max = Math.max(...arr.map((m) => m.income), 1);
+                      return (
+                        <div className="dash-mp-row" key={mp.marketplace}>
+                          <span>{MP_LABELS[mp.marketplace] || mp.marketplace}</span>
+                          <div className="dash-mp-bar"><i style={{ width: `${Math.round((mp.income / max) * 100)}%` }} /></div>
+                          <b>{money(mp.profit)}</b>
+                          <small>{mp.orders} шт.</small>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div>
+                    <div className="dash-label">Топ товаров по прибыли</div>
+                    <ol className="dash-top">
+                      {(analytics!.topProducts || []).slice(0, 7).map((p) => (
+                        <li key={p.offerId}>
+                          <span title={`${p.name} (${p.offerId})`}>{p.name || p.offerId}</span>
+                          <small>{p.orders} шт.</small>
+                          <b>{money(p.profit)}</b>
+                        </li>
+                      ))}
+                    </ol>
+                    {!(analytics!.topProducts || []).length ? <div className="soft-empty">Нет данных</div> : null}
+                  </div>
+                </div>
+              </>
+            )}
           </section>
         </div>
 
-        <aside className="dashboard-side">
-          <section className="dashboard-summary-card">
-            <div className="section-title compact-title">
-              <div><span>Поставщики</span><h3>Состояние сети</h3></div>
-              <Truck size={18} />
-            </div>
-            <div className="summary-grid compact-summary">
-              <div><span>Активные</span><strong>{activeSuppliers}</strong></div>
-              <div><span>Остановлены</span><strong>{Math.max(0, supplierList.length - activeSuppliers)}</strong></div>
-              <div><span>Всего</span><strong>{supplierList.length}</strong></div>
-            </div>
+        <aside className="dash-side">
+          <section className="dashboard-summary-card dash-card">
+            <div className="section-title compact-title"><div><span>Финансы</span><h3>30 дней</h3></div><Wallet size={18} /></div>
+            <div className="dashboard-money"><strong>{money(financeSummary.netProfit)}</strong><span>чистая прибыль</span></div>
+            <dl className="dash-dl">
+              <div><dt>Выручка</dt><dd>{money(financeSummary.orderIncome)}</dd></div>
+              <div><dt>Закупка</dt><dd>{money(financeSummary.purchaseCost)}</dd></div>
+              <div><dt>Заказов</dt><dd>{String(financeSummary.orders || 0)}</dd></div>
+            </dl>
           </section>
 
-          <section className="dashboard-summary-card">
-            <div className="section-title compact-title">
-              <div><span>Финансы</span><h3>30 дней</h3></div>
-              <ShoppingCart size={18} />
-            </div>
-            <div className="dashboard-money">
-              <strong>{money(financeSummary.netProfit)}</strong>
-              <span>чистая прибыль</span>
-            </div>
-            <div className="dashboard-kpis">
-              <span>Выручка <b>{money(financeSummary.orderIncome)}</b></span>
-              <span>Заказов <b>{String(financeSummary.orders || 0)}</b></span>
-              <span>Закупка <b>{money(financeSummary.purchaseCost)}</b></span>
-            </div>
-          </section>
-
-          <section className="dashboard-summary-card">
-            <div className="section-title compact-title">
-              <div><span>Маркетплейсы</span><h3>Отзывы и продажи</h3></div>
-              <Star size={18} />
-            </div>
-            <div className="dashboard-kpis">
-              <span>Автоматизация <b>{sales.data?.autoEnabled ? "активна" : "выключена"}</b></span>
-              <span>Повторов цены <b>{sales.data?.retryTotal || 0}</b></span>
-              <span>Восстановление Ozon <b>{sales.data?.ozonUnarchiveQueued || 0}</b></span>
-            </div>
-          </section>
-
-          <section className="dashboard-summary-card">
-            <div className="section-title compact-title">
-              <div><span>Продажи</span><h3>За неделю</h3></div>
-              <TrendingUp size={18} />
-            </div>
-            <div className="dashboard-money">
-              <strong>{money(salesWeek.profit)}</strong>
-              <span>чистая прибыль за 7 дней</span>
-            </div>
-            <div className="dashboard-kpis">
-              <span>Заказов <b>{salesWeek.orders}</b></span>
-              <span>Выручка <b>{money(salesWeek.income)}</b></span>
-            </div>
+          <section className="dashboard-summary-card dash-card">
+            <div className="section-title compact-title"><div><span>Поставщики</span><h3>Прибыль за неделю</h3></div><Truck size={18} /></div>
             {topSuppliers.length ? (
-              <div className="dashboard-kpis">
-                {topSuppliers.slice(0, 5).map((supplier) => (
-                  <span key={supplier.supplierName}>
-                    {supplier.supplierName} <b>{money(supplier.profit)}</b>
-                  </span>
-                ))}
+              <dl className="dash-dl">
+                {topSuppliers.slice(0, 5).map((s) => <div key={s.supplierName}><dt>{s.supplierName}</dt><dd>{money(s.profit)}</dd></div>)}
+              </dl>
+            ) : <div className="soft-empty">Продаж за неделю нет.</div>}
+            <div className="dash-foot">Работают {activeSuppliers} из {supplierList.length}{supplierList.length - activeSuppliers ? ` · остановлены ${supplierList.length - activeSuppliers}` : ""}</div>
+          </section>
+
+          <section className="dashboard-summary-card dash-card">
+            <div className="section-title compact-title"><div><span>Фон</span><h3>Задачи</h3></div><a className="dash-link" href="/app/operations">все</a></div>
+            {jobs.slice(0, 5).map((job) => (
+              <div className={`dash-job is-${String(job.status || "")}`} key={String(job.id)}>
+                <span className="dash-job-title">{localizeJobTitle(String(job.title || ""), String(job.type || ""))}</span>
+                <small>{statusText(job.status)} · {compactDate(String(job.createdAt || ""))}</small>
+                {String(job.status) === "running"
+                  ? <div className="dash-job-progress"><i style={{ width: `${Math.round(numberValue(job.progress, 0))}%` }} /></div>
+                  : null}
               </div>
-            ) : <div className="soft-empty">Нет продаж за неделю.</div>}
-          </section>
-
-          <section className="dashboard-summary-card">
-            <div className="section-title compact-title">
-              <div><span>Очередь и архив</span><h3>Требует внимания</h3></div>
-              <Archive size={18} />
-            </div>
-            <div className="dashboard-kpis">
-              <span>Очередь цен <b>{summary.data?.priceQueue ?? 0}</b></span>
-              <span>Архив Яндекс (привязано) <b>{archiveBacklog.yandex}</b></span>
-              <span>Очередь восстановления Ozon <b>{archiveBacklog.ozon}</b> (готово {archiveBacklog.ozonDue})</span>
-              <span className={priceHealth.alert ? "dashboard-kpi-alert" : undefined}>
-                Цены не сходятся &gt;{priceHealth.staleHours} ч <b>{priceHealth.stalePriceLinked}</b>
-              </span>
-              <span className={priceHealth.oldestPriceJobAlert ? "dashboard-kpi-alert" : undefined}>
-                Старейшая задача цены <b>{Math.round(priceHealth.oldestPriceJobAgeMs / 60000)} мин</b>
-              </span>
-            </div>
-          </section>
-
-          <section className="dashboard-summary-card">
-            <div className="section-title compact-title">
-              <div><span>Уведомления</span><h3>Непрочитанные</h3></div>
-              <Star size={18} />
-            </div>
-            <div className="dashboard-kpis">
-              <span><MessageCircle size={14} /> Чаты <b>{notifications.byType.chat || 0}</b></span>
-              <span><HelpCircle size={14} /> Вопросы <b>{notifications.byType.question || 0}</b></span>
-              <span><Star size={14} /> Отзывы <b>{notifications.byType.review || 0}</b></span>
-              <span>Всего <b>{notifications.unread}</b></span>
-            </div>
+            ))}
+            {!operations.isLoading && !jobs.length ? <div className="soft-empty">Задач нет.</div> : null}
+            <div className="dash-foot">Автоматизация продаж {sales.data?.autoEnabled ? "включена" : "выключена"}</div>
           </section>
         </aside>
-      </section>
-
-      {/* Аналитика продаж */}
-      <section className="dashboard-analytics">
-        <div className="section-title">
-          <div><span>Аналитика</span><h3>Продажи по дням и каналам</h3></div>
-          <div className="row-actions">
-            <button className={`secondary-action${analyticsPeriod === "7d" ? " active" : ""}`} type="button" onClick={() => setAnalyticsPeriod("7d")}>7 дней</button>
-            <button className={`secondary-action${analyticsPeriod === "30d" ? " active" : ""}`} type="button" onClick={() => setAnalyticsPeriod("30d")}>30 дней</button>
-          </div>
-        </div>
-
-        {analyticsQuery.isLoading ? (
-          <div className="table-note"><RefreshCw className="spin" size={14} /> Загружаю аналитику…</div>
-        ) : !analyticsReady ? (
-          <div className="table-note">Нет данных о продажах за период.</div>
-        ) : (
-          <div className="analytics-grid">
-            {/* График по дням */}
-            <div className="analytics-chart-panel">
-              <div className="analytics-chart-legend">
-                <span className="legend-income">Выручка</span>
-                <span className="legend-profit">Прибыль</span>
-                <span className="analytics-total">{analytics!.totalOrders} заказ(ов) · выручка {money(analytics!.byDay.reduce((s, d) => s + d.income, 0))} · прибыль {money(analytics!.byDay.reduce((s, d) => s + d.profit, 0))}</span>
-              </div>
-              <div className="analytics-chart-scroll">
-                {analyticsDays.length ? <SalesBarChart days={analyticsDays} metric="income" /> : <div className="soft-empty">Нет данных</div>}
-              </div>
-              <div className="analytics-chart-dates">
-                {analyticsDays.length >= 2 ? (
-                  <>
-                    <span>{analyticsDays[0].date.slice(5)}</span>
-                    <span>{analyticsDays[Math.floor(analyticsDays.length / 2)].date.slice(5)}</span>
-                    <span>{analyticsDays[analyticsDays.length - 1].date.slice(5)}</span>
-                  </>
-                ) : null}
-              </div>
-            </div>
-
-            {/* Каналы продаж */}
-            <div className="analytics-mp-panel">
-              <div className="analytics-section-label">По каналу</div>
-              {(analytics!.byMarketplace || []).map((mp, _i, arr) => {
-                const maxMpIncome = Math.max(...arr.map((m) => m.income), 1);
-                const pct = Math.round((mp.income / maxMpIncome) * 100);
-                return (
-                  <div className="analytics-mp-row" key={mp.marketplace}>
-                    <span className="analytics-mp-name">{MP_LABELS[mp.marketplace] || mp.marketplace}</span>
-                    <div className="analytics-mp-bar-wrap">
-                      <div className="analytics-mp-bar" style={{ width: `${pct}%` }} />
-                    </div>
-                    <span className="analytics-mp-val">{money(mp.profit)}</span>
-                    <span className="analytics-mp-orders">{mp.orders} шт.</span>
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Топ товаров */}
-            <div className="analytics-top-panel">
-              <div className="analytics-section-label">Топ товаров по прибыли</div>
-              {(analytics!.topProducts || []).slice(0, 10).map((p, i) => (
-                <div className="analytics-product-row" key={p.offerId}>
-                  <span className="analytics-product-rank">{i + 1}</span>
-                  <span className="analytics-product-name" title={`${p.name} (${p.offerId})`}>{p.name || p.offerId}</span>
-                  <span className="analytics-product-orders">{p.orders} шт.</span>
-                  <span className="analytics-product-profit">{money(p.profit)}</span>
-                </div>
-              ))}
-              {!(analytics!.topProducts || []).length ? <div className="soft-empty">Нет данных</div> : null}
-            </div>
-          </div>
-        )}
       </section>
 
       {error ? <div className="inline-error">{errorMessage(error)}</div> : null}

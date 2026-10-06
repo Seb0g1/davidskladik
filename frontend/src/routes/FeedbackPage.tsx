@@ -86,16 +86,16 @@ function ReviewCard({ review, templates, onReplied }: { review: ReviewRow; templ
     }) as Promise<{ ok: boolean; draft: string }>,
     onSuccess: (data) => { if (data.draft) setText(data.draft); setOpen(true); },
   });
+  const tone = review.rating <= 2 ? " is-neg" : review.rating === 3 ? " is-mid" : " is-pos";
   return (
-    <div className={`review-card${review.needsReply ? " needs-reply" : ""}`}>
+    <div className={`review-card fb-card${tone}${review.needsReply ? " needs-reply" : " is-answered"}`}>
       <div className="review-head">
         <MarketplaceBadge marketplace={review.marketplace} />
         <Stars rating={review.rating} />
-        {review.needsReply ? <span className="pill warn">ждёт ответа</span> : <span className="pill ok">отвечено</span>}
-        <small className="review-date">{formatDate(review.createdAt)}</small>
+        {review.needsReply ? null : <span className="pill ok">отвечено</span>}
+        <small className="review-date">{[review.authorName, formatDate(review.createdAt)].filter(Boolean).join(" · ")}</small>
       </div>
       <strong className="review-product">{review.productName || review.offerId || "товар"}</strong>
-      {review.authorName ? <small className="review-author">{review.authorName}</small> : null}
       {review.text ? <p className="review-text">{review.text}</p> : null}
       {review.advantages ? <p className="review-pros"><b>Плюсы</b>{review.advantages}</p> : null}
       {review.disadvantages ? <p className="review-cons"><b>Минусы</b>{review.disadvantages}</p> : null}
@@ -136,16 +136,15 @@ function QuestionCard({ question, templates, onReplied }: { question: QuestionRo
     onSuccess: () => { setOpen(false); setText(""); onReplied(); },
   });
   return (
-    <div className={`review-card${question.needsAnswer ? " needs-reply" : ""}`}>
+    <div className={`review-card fb-card is-question${question.needsAnswer ? " needs-reply" : " is-answered"}`}>
       <div className="review-head">
         <MarketplaceBadge marketplace={question.marketplace} />
-        <HelpCircle size={15} color="#c792ea" />
         {question.needsAnswer ? <span className="pill warn">ждёт ответа</span> : <span className="pill ok">отвечено ({question.answersCount})</span>}
-        <small className="review-date">{formatDate(question.createdAt)}</small>
+        <small className="review-date">{[question.authorName, formatDate(question.createdAt)].filter(Boolean).join(" · ")}</small>
       </div>
-      <strong className="review-product">{question.productName || question.sku || "товар"}</strong>
-      {question.productUrl ? <a href={question.productUrl} target="_blank" rel="noreferrer" style={{fontSize: 12}}>↗ Товар</a> : null}
-      {question.authorName ? <small className="review-author">{question.authorName}</small> : null}
+      {question.productUrl
+        ? <a className="review-product fb-product-link" href={question.productUrl} target="_blank" rel="noreferrer">{question.productName || question.sku || "товар"}</a>
+        : <strong className="review-product">{question.productName || question.sku || "товар"}</strong>}
       {question.text ? <p className="review-text review-question-text">{question.text}</p> : null}
       <div className="review-actions">
         <button className="secondary-action" type="button" onClick={() => setOpen((v) => !v)}>
@@ -184,11 +183,13 @@ export function FeedbackPage({ defaultTab }: { defaultTab: "reviews" | "question
   const [tab, setTab] = useState<"reviews" | "questions">(defaultTab);
   const [marketplace, setMarketplace] = useState("all");
   const [unanswered, setUnanswered] = useState(true);
+  const [negativeOnly, setNegativeOnly] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
 
   function switchTab(next: "reviews" | "questions") {
     setTab(next);
     setMarketplace("all");
+    setNegativeOnly(false);
   }
 
   const reviewsQuery = useQuery({
@@ -225,8 +226,16 @@ export function FeedbackPage({ defaultTab }: { defaultTab: "reviews" | "question
   const reviewCounters = useMemo(() => ({
     total: reviewRows.length,
     needsReply: reviewRows.filter((r) => r.needsReply).length,
-    avg: reviewRows.length ? (reviewRows.reduce((s, r) => s + r.rating, 0) / reviewRows.length).toFixed(1) : "-",
+    negative: reviewRows.filter((r) => r.rating <= 3).length,
+    avg: reviewRows.length ? (reviewRows.reduce((s, r) => s + r.rating, 0) / reviewRows.length).toFixed(1) : "–",
   }), [reviewRows]);
+  // 1–3★ first among the ones waiting: they hurt the rating and need the answer soonest
+  const shownReviews = useMemo(() => {
+    const list = negativeOnly ? reviewRows.filter((r) => r.rating <= 3) : reviewRows;
+    return [...list].sort((a, b) => Number(Boolean(b.needsReply)) - Number(Boolean(a.needsReply))
+      || Number(b.rating <= 3) - Number(a.rating <= 3)
+      || String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  }, [reviewRows, negativeOnly]);
 
   const questionCounters = useMemo(() => ({
     total: questionRows.length,
@@ -261,19 +270,23 @@ export function FeedbackPage({ defaultTab }: { defaultTab: "reviews" | "question
         </button>
       </nav>
 
-      {isReviews ? (
-        <section className="dashboard-metrics">
-          <Stat label="Показано" value={reviewCounters.total} tone="accent" icon={<Star size={18} />} />
-          <Stat label="Ждут ответа" value={reviewCounters.needsReply} tone={reviewCounters.needsReply ? "warn" : "success"} icon={<AlertCircle size={18} />} />
-          <Stat label="Средняя оценка" value={reviewCounters.avg} tone="success" icon={<Star size={18} />} />
-        </section>
-      ) : (
-        <section className="dashboard-metrics">
-          <Stat label="Показано" value={questionCounters.total} tone="accent" icon={<HelpCircle size={18} />} />
-          <Stat label="Ждут ответа" value={questionCounters.needsAnswer} tone={questionCounters.needsAnswer ? "warn" : "success"} icon={<AlertCircle size={18} />} />
-        </section>
-      )}
-
+      <div className="fb-toolbar">
+        {isReviews ? (
+          <div className="fb-summary" role="group" aria-label="Сводка по отзывам">
+            <span className={`fb-chip${reviewCounters.needsReply ? " is-warn" : ""}`}><AlertCircle size={14} /> Ждут ответа <b>{reviewCounters.needsReply}</b></span>
+            <button type="button" className={`fb-chip is-button${reviewCounters.negative ? " is-neg" : ""}${negativeOnly ? " is-on" : ""}`}
+              aria-pressed={negativeOnly} onClick={() => setNegativeOnly((v) => !v)} title="Показать только оценки 1–3">
+              <Star size={14} /> 1–3★ <b>{reviewCounters.negative}</b>
+            </button>
+            <span className="fb-chip"><Star size={14} fill="#ffb020" color="#ffb020" /> Средняя <b>{reviewCounters.avg}</b></span>
+            <span className="fb-chip is-muted">показано {reviewCounters.total}</span>
+          </div>
+        ) : (
+          <div className="fb-summary" role="group" aria-label="Сводка по вопросам">
+            <span className={`fb-chip${questionCounters.needsAnswer ? " is-warn" : ""}`}><AlertCircle size={14} /> Ждут ответа <b>{questionCounters.needsAnswer}</b></span>
+            <span className="fb-chip is-muted">показано {questionCounters.total}</span>
+          </div>
+        )}
       <div className="filters-row">
         <SelectField
           ariaLabel="Маркетплейс"
@@ -297,15 +310,16 @@ export function FeedbackPage({ defaultTab }: { defaultTab: "reviews" | "question
           <input type="checkbox" checked={unanswered} onChange={(e) => setUnanswered(e.target.checked)} />
           {isReviews ? "Только без ответа" : "Только без ответа"}
         </label>
-        {!isReviews ? <small className="review-author">Вопросы приходят с Ozon и Wildberries — у Яндекс.Маркета нет API вопросов.</small> : null}
       </div>
+      </div>
+      {!isReviews ? <small className="review-author fb-note">Вопросы приходят с Ozon и Wildberries — у Яндекс Маркета нет API вопросов.</small> : null}
 
       {warnings.map((w) => <div className="inline-warn" key={w}>{feedbackWarning(w)}</div>)}
       {activeQuery.error ? <div className="inline-error">{String((activeQuery.error as Error).message)}</div> : null}
 
       {isReviews ? (
         <div className="reviews-grid">
-          {reviewRows.map((review) => (
+          {shownReviews.map((review) => (
             <ReviewCard
               key={review.id}
               review={review}
@@ -313,7 +327,7 @@ export function FeedbackPage({ defaultTab }: { defaultTab: "reviews" | "question
               onReplied={() => void queryClient.invalidateQueries({ queryKey: ["reviews"] })}
             />
           ))}
-          {!reviewRows.length && !reviewsQuery.isFetching ? <div className="empty-state">Отзывов по фильтру нет.</div> : null}
+          {!shownReviews.length && !reviewsQuery.isFetching ? <div className="empty-state">{negativeOnly ? "Отзывов с оценкой 1–3 нет." : unanswered ? "Все отзывы с ответом." : "Отзывов по фильтру нет."}</div> : null}
         </div>
       ) : (
         <div className="reviews-grid">
@@ -325,7 +339,7 @@ export function FeedbackPage({ defaultTab }: { defaultTab: "reviews" | "question
               onReplied={() => void queryClient.invalidateQueries({ queryKey: ["questions"] })}
             />
           ))}
-          {!questionRows.length && !questionsQuery.isFetching ? <div className="empty-state">Вопросов по фильтру нет.</div> : null}
+          {!questionRows.length && !questionsQuery.isFetching ? <div className="empty-state">{unanswered ? "На все вопросы ответили." : "Вопросов по фильтру нет."}</div> : null}
         </div>
       )}
 
