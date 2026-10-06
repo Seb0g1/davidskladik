@@ -166,6 +166,29 @@ async function feedbackAutopilotQuestions() {
       }
     } catch (error) { logger.warn("feedback autopilot: wb questions", { account: account.id, detail: error?.message }); }
   }
+  // Yandex Market: questions without an answer, one business at a time; names come from our warehouse
+  const seenBusinesses = new Set();
+  const yandexStart = out.length;
+  for (const shop of getYandexShops()) {
+    if (!shop.businessId || seenBusinesses.has(String(shop.businessId))) continue;
+    seenBusinesses.add(String(shop.businessId));
+    try {
+      const data = await yandexRequest(shop, "POST", `/v1/businesses/${shop.businessId}/goods-questions?limit=50`, { needAnswer: true, sort: "CREATED_AT_DESC" });
+      for (const q of data?.result?.questions || []) {
+        const ids = q.questionIdentifiers || {};
+        out.push({ marketplace: "yandex", target: shop.id || "yandex", externalId: cleanText(ids.id), sku: "", offerId: cleanText(ids.offerId),
+          productName: "", text: cleanText(q.text), createdAt: cleanText(q.createdAt || "") });
+      }
+    } catch (error) { logger.warn("feedback autopilot: yandex questions", { shop: shop.id, detail: error?.message }); }
+  }
+  const yandexRows = out.slice(yandexStart);
+  const prisma = getPrisma();
+  if (prisma && yandexRows.length) {
+    const offerIds = [...new Set(yandexRows.map((q) => q.offerId).filter(Boolean))];
+    const products = await prisma.warehouseProduct.findMany({ where: { offerId: { in: offerIds } }, select: { offerId: true, name: true } }).catch(() => []);
+    const nameByOffer = new Map(products.filter((p) => cleanText(p.name) && p.name !== p.offerId).map((p) => [p.offerId, cleanText(p.name)]));
+    for (const q of yandexRows) q.productName = nameByOffer.get(q.offerId) || "";
+  }
   return out.filter((q) => q.externalId && q.text);
 }
 
