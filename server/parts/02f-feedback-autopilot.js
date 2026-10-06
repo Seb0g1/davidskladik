@@ -101,6 +101,12 @@ async function sendReviewReply({ marketplace, target, externalId, text }) {
 }
 
 async function sendQuestionAnswer({ marketplace, target, externalId, sku, text }) {
+  if (marketplace === "yandex") {
+    const shop = getYandexShopByTarget(target) || getYandexShops()[0];
+    if (!shop?.businessId) throw new Error("Yandex кабинет не найден");
+    return yandexRequest(shop, "POST", `/v1/businesses/${shop.businessId}/goods-questions/update`,
+      { operationType: "CREATE", parentEntityId: { id: Number(externalId), type: "QUESTION" }, text: text.slice(0, 5000) });
+  }
   if (marketplace === "wb") {
     const account = getWbAccountByTarget(target) || getWbAccounts()[0];
     if (!account) throw new Error("Кабинет WB не найден");
@@ -271,7 +277,7 @@ async function buildOriginalityAnswer(question, aiSettings) {
 
 async function buildQuestionAnswerWithFacts(question, facts, aiSettings) {
   const storeName = feedbackStoreName(question.marketplace, question.target);
-  const completion = await createTextAiChat([
+  const messages = [
     { role: "system", content: `Ты — консультант магазина парфюмерии и косметики «${storeName}» на маркетплейсе ${feedbackMarketplaceLabel(question.marketplace)}. Ответь на вопрос покупателя о товаре.
 Правила:
 - Только по-русски, тепло и по делу, 1–4 предложения.
@@ -282,11 +288,20 @@ async function buildQuestionAnswerWithFacts(question, facts, aiSettings) {
 - Если точного факта о товаре нет, дай полезный общеизвестный факт по теме (например, где указана дата изготовления и обычный срок годности такого средства) или нейтрально скажи, от чего это зависит (партия производителя). Ничего не утверждай о конкретном экземпляре.
 - Не придумывай причин и объяснений, которых нет в данных (почему отличаются карточки, цены, упаковка).
 - Добавляй о товаре только то, что относится к вопросу: ноты — если спрашивают об аромате, страну — если о производстве.
+- Ответь на каждую часть вопроса. Спрашивают «оригинал?» — подтверди, что это оригинальная продукция.
+- Никогда не пиши, что маркировка «Честный знак» не требуется или отсутствует.
 - Не упоминай другие магазины, сайты и ссылки, не обещай скидок.
 - Последней строкой: «С уважением, команда ${storeName}». Верни только текст ответа.` },
     { role: "user", content: `Товар: «${question.productName || "—"}».\nДанные о товаре:\n${facts.length ? facts.join("\n") : "(нет данных)"}${(question.mentioned || []).map((m) => `\n\nДанные о втором товаре (${m.ref}) «${m.name}»:\n${m.facts.join("\n") || "(нет данных)"}`).join("")}\n\nВопрос покупателя: «${question.text}»` },
-  ], { json: false, temperature: 0.4, maxTokens: 400, aiSettings });
-  return cleanText(completion.choices?.[0]?.message?.content || "");
+  ];
+  // the provider now and then hands back a JSON object (another request's answer) instead of the text: ask once more
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const completion = await createTextAiChat(messages, { json: false, temperature: 0.4, maxTokens: 400, aiSettings });
+    const text = cleanText(completion.choices?.[0]?.message?.content || "");
+    if (text && !/^\s*[{\[]/.test(text)) return text;
+    logger.warn("question answer: AI returned JSON instead of text", { attempt, sample: text.slice(0, 120) });
+  }
+  return "";
 }
 
 /** Second pass: does the answer only state what the product data supports, and does it answer the question? */

@@ -34,6 +34,7 @@ type QuestionRow = {
   target: string;
   externalId: string;
   sku?: string;
+  offerId?: string;
   productName?: string;
   text?: string;
   authorName?: string;
@@ -141,7 +142,7 @@ function QuestionCard({ question, templates, onReplied }: { question: QuestionRo
   const aiDraft = useMutation({
     mutationFn: () => fetchJson("/api/questions/ai-draft", z.unknown(), {
       method: "POST",
-      body: JSON.stringify({ marketplace: question.marketplace, target: question.target, sku: question.sku, questionText: question.text, productName: question.productName }),
+      body: JSON.stringify({ marketplace: question.marketplace, target: question.target, sku: question.sku, offerId: question.offerId, questionText: question.text, productName: question.productName }),
     }) as Promise<{ ok: boolean; draft: string }>,
     onSuccess: (data) => { if (data.draft) setText(data.draft); setOpen(true); },
   });
@@ -153,8 +154,8 @@ function QuestionCard({ question, templates, onReplied }: { question: QuestionRo
         <small className="review-date">{[question.authorName, formatDate(question.createdAt)].filter(Boolean).join(" · ")}</small>
       </div>
       {question.productUrl
-        ? <a className="review-product fb-product-link" href={question.productUrl} target="_blank" rel="noreferrer">{question.productName || question.sku || "товар"}</a>
-        : <strong className="review-product">{question.productName || question.sku || "товар"}</strong>}
+        ? <a className="review-product fb-product-link" href={question.productUrl} target="_blank" rel="noreferrer">{question.productName || question.sku || question.offerId || "товар"}</a>
+        : <strong className="review-product">{question.productName || question.sku || question.offerId || "товар"}</strong>}
       {question.text ? <p className="review-text review-question-text">{question.text}</p> : null}
       <div className="review-actions">
         <button className="secondary-action" type="button" onClick={() => setOpen((v) => !v)}>
@@ -318,6 +319,7 @@ export function FeedbackPage({ defaultTab }: { defaultTab: "reviews" | "question
             : [
                 { value: "all", label: "Все маркетплейсы" },
                 { value: "ozon", label: "Ozon" },
+                { value: "yandex", label: "Яндекс" },
                 { value: "wb", label: "Wildberries" },
               ]
           }
@@ -328,7 +330,6 @@ export function FeedbackPage({ defaultTab }: { defaultTab: "reviews" | "question
         </label>
       </div>
       </div>
-      {!isReviews ? <small className="review-author fb-note">Вопросы приходят с Ozon и Wildberries — у Яндекс Маркета нет API вопросов.</small> : null}
 
       {warnings.map((w) => <div className="inline-warn" key={w}>{feedbackWarning(w)}</div>)}
       {activeQuery.error ? <div className="inline-error">{String((activeQuery.error as Error).message)}</div> : null}

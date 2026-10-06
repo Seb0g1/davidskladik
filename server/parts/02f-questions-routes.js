@@ -1,4 +1,7 @@
-// Customer questions (Ozon + WB — Yandex has no questions API).
+// Customer questions (Ozon, WB, Yandex Market).
+// Yandex: list POST /v1/businesses/{businessId}/goods-questions (pageToken, ≤1 month back),
+//   answer POST /v1/businesses/{businessId}/goods-questions/update
+//   { operationType: "CREATE", parentEntityId: { id, type: "QUESTION" }, text }.
 // Ozon: list POST /v1/question/list, answer POST /v1/question/answer/create.
 // WB (feedbacks-api): list GET /api/v1/questions?isAnswered=&take=&skip=,
 //   answer PATCH /api/v1/questions { id, answer: { text }, state: "wbRu" }.
@@ -134,6 +137,67 @@ app.get("/api/questions", requireAdmin, async (request, response, next) => {
       }
     }
     elapsed.wbMs = Date.now() - startedAt - elapsed.ozonMs;
+    if (marketplace === "all" || marketplace === "yandex") {
+      const seenBusinesses = new Set();
+      const yandexQuestions = [];
+      for (const shop of getYandexShops()) {
+        if (!shop.businessId || seenBusinesses.has(String(shop.businessId))) continue;
+        seenBusinesses.add(String(shop.businessId));
+        try {
+          // «все вопросы»: сначала ждущие ответа, потом остальные — needAnswer у остальных неизвестен из списка
+          const byId = new Map();
+          for (const needAnswer of onlyNew ? [true] : [true, null]) {
+            let pageToken = "";
+            for (let pageIndex = 0; pageIndex < 10 && byId.size < limit; pageIndex += 1) {
+              const tokenPart = pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : "";
+              const data = await yandexRequest(shop, "POST", `/v1/businesses/${shop.businessId}/goods-questions?limit=50${tokenPart}`,
+                { sort: "CREATED_AT_DESC", ...(needAnswer ? { needAnswer: true } : {}) });
+              const batch = data?.result?.questions || [];
+              for (const question of batch) {
+                const id = cleanText(question.questionIdentifiers?.id);
+                if (id && !byId.has(id)) byId.set(id, { question, needAnswer: Boolean(needAnswer) });
+              }
+              pageToken = cleanText(data?.result?.paging?.nextPageToken || "");
+              if (!batch.length || !pageToken) break;
+            }
+          }
+          for (const { question, needAnswer } of byId.values()) {
+            const ids = question.questionIdentifiers || {};
+            yandexQuestions.push({
+              id: `yandex:${cleanText(ids.id)}`,
+              marketplace: "yandex",
+              target: shop.id || "yandex",
+              externalId: cleanText(ids.id),
+              sku: "",
+              offerId: cleanText(ids.offerId),
+              productName: "",
+              productUrl: "",
+              text: cleanText(question.text || ""),
+              authorName: cleanText(question.author?.name || ""),
+              createdAt: cleanText(question.createdAt || ""),
+              status: needAnswer ? "NEW" : "",
+              answersCount: needAnswer ? 0 : 1,
+              needsAnswer: needAnswer,
+            });
+          }
+        } catch (error) {
+          warnings.push(`Yandex ${shop.id}: ${error?.message || "ошибка"}`);
+        }
+      }
+      // Yandex questions carry only offerId — the name comes from our warehouse
+      const offerIds = [...new Set(yandexQuestions.map((question) => question.offerId).filter(Boolean))];
+      const prisma = getPrisma();
+      if (prisma && offerIds.length) {
+        const products = await prisma.warehouseProduct.findMany({ where: { offerId: { in: offerIds } }, select: { offerId: true, name: true } }).catch(() => []);
+        const nameByOffer = new Map();
+        for (const product of products) {
+          const name = cleanText(product.name);
+          if (name && name !== product.offerId && !nameByOffer.has(product.offerId)) nameByOffer.set(product.offerId, name);
+        }
+        for (const question of yandexQuestions) question.productName = nameByOffer.get(question.offerId) || question.offerId;
+      }
+      questions.push(...yandexQuestions);
+    }
     questions.sort((a, b) => cleanText(b.createdAt).localeCompare(cleanText(a.createdAt)));
     response.json({ ok: true, rows: questions.slice(0, limit), warnings, ...(process.env.NODE_ENV !== "production" ? { elapsed } : {}) });
   } catch (error) {
@@ -180,6 +244,18 @@ app.post("/api/questions/reply", requireAdmin, async (request, response, next) =
     const target = cleanText(request.body?.target);
     const text = cleanText(request.body?.text);
     if (!externalId || !text) return response.status(400).json({ error: "Нужны externalId и text." });
+
+    if (marketplace === "yandex") {
+      const shop = getYandexShopByTarget(target) || getYandexShops()[0];
+      if (!shop?.businessId) return response.status(400).json({ error: "Yandex кабинет не найден." });
+      const result = await yandexRequest(shop, "POST", `/v1/businesses/${shop.businessId}/goods-questions/update`, {
+        operationType: "CREATE",
+        parentEntityId: { id: Number(externalId), type: "QUESTION" },
+        text: text.slice(0, 5000),
+      });
+      await appendAudit(request, "questions.reply", { entityType: "question", entityId: `yandex:${externalId}` });
+      return response.json({ ok: true, result });
+    }
 
     if (marketplace === "wb") {
       const account = getWbAccountByTarget(target) || getWbAccounts()[0];
