@@ -2338,3 +2338,8 @@ body:has(.bulk-action-bar) .toast-stack { bottom: 88px; }
   .app-content .detail-panel .pm-result { padding: 10px; }
   .app-content .detail-panel .pm-result small { font-size: 11px; line-height: 1.35; }
 }
+/* Реализация: на телефоне меню PriceMaster — шторка снизу во всю ширину, а не выпадашка за край экрана */
+@media (max-width: 720px) {
+  .consignment-page .cn-more-menu { position: fixed; left: 12px; right: 12px; top: auto; bottom: calc(12px + env(safe-area-inset-bottom)); min-width: 0; z-index: 70; padding: 8px; }
+  .consignment-page .cn-more-menu button { padding: 13px 12px; font-size: 15px; }
+}

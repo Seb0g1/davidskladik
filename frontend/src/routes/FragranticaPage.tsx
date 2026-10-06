@@ -305,7 +305,7 @@ export function FragranticaPage() {
     queryClient.invalidateQueries({ queryKey: ["fragrantica"] });
   });
 
-  const items = list.data?.pages.flatMap((page) => page.items) ?? [];
+  const items = list.data?.pages.flatMap((page) => page.items || []) ?? [];
   const total = list.data?.pages[0]?.total ?? 0;
   const stats = crawler.data?.stats;
   const shops = crawler.data?.shops ?? [];

@@ -177,7 +177,7 @@ export function TnvedPage() {
     setLocalCodes(codes);
   }, [categories]);
 
-  useEffect(() => { if (report?.yandex.defaultCode) setDefaultCode((c) => c || (report?.yandex.defaultCode ?? "")); }, [report]);
+  useEffect(() => { if (report?.yandex?.defaultCode) setDefaultCode((c) => c || (report?.yandex?.defaultCode ?? "")); }, [report]);
 
   const saveAssignments = useMutation({
     mutationFn: () => {
@@ -313,15 +313,15 @@ export function TnvedPage() {
           <div className="settings-panel tnved-mp-panel">
             <div className="tnved-mp-label">Ozon</div>
             <div className="tnved-mp-status">
-              {report.ozon.assignedCategories > 0
+              {report.ozon?.assignedCategories > 0
                 ? <CheckCircle2 size={14} className="tnved-mp-icon-ok" />
                 : <XCircle size={14} className="tnved-mp-icon-fail" />}
-              <strong>{report.ozon.assignedCategories} / {report.ozon.totalCategories} категорий с кодом</strong>
-              <span className="muted tnved-mp-count">· {report.ozon.totalProducts} товаров</span>
+              <strong>{report.ozon?.assignedCategories} / {report.ozon?.totalCategories} категорий с кодом</strong>
+              <span className="muted tnved-mp-count">· {report.ozon?.totalProducts} товаров</span>
             </div>
-            {report.ozon.lastApplied ? (
+            {report.ozon?.lastApplied ? (
               <div className="muted tnved-mp-note">
-                Последнее применение: {new Date(report.ozon.lastApplied).toLocaleString("ru-RU")}
+                Последнее применение: {new Date(report.ozon?.lastApplied).toLocaleString("ru-RU")}
               </div>
             ) : (
               <div className="muted tnved-mp-note">Ещё не применялось</div>
@@ -330,23 +330,23 @@ export function TnvedPage() {
           <div className="settings-panel tnved-mp-panel">
             <div className="tnved-mp-label">Яндекс.Маркет</div>
             <div className="tnved-mp-status">
-              {report.yandex.defaultCode
+              {report.yandex?.defaultCode
                 ? <CheckCircle2 size={14} className="tnved-mp-icon-ok" />
                 : <XCircle size={14} className="tnved-mp-icon-fail" />}
-              <strong>{report.yandex.defaultCode ? `Код по умолчанию: ${report.yandex.defaultCode}` : "Код не задан"}</strong>
-              <span className="muted tnved-mp-count">· {report.yandex.totalProducts} товаров</span>
+              <strong>{report.yandex?.defaultCode ? `Код по умолчанию: ${report.yandex?.defaultCode}` : "Код не задан"}</strong>
+              <span className="muted tnved-mp-count">· {report.yandex?.totalProducts} товаров</span>
             </div>
-            {report.yandex.lastApplied ? (
+            {report.yandex?.lastApplied ? (
               <>
                 <div className="muted tnved-mp-note">
-                  Последнее применение: {new Date(report.yandex.lastApplied).toLocaleString("ru-RU")}
-                  {report.yandex.updatedCount != null ? ` · Отправлено: ${report.yandex.updatedCount}` : ""}
+                  Последнее применение: {new Date(report.yandex?.lastApplied).toLocaleString("ru-RU")}
+                  {report.yandex?.updatedCount != null ? ` · Отправлено: ${report.yandex?.updatedCount}` : ""}
                 </div>
-                {(report.yandex.withCategory != null || report.yandex.withFallback != null) ? (
+                {(report.yandex?.withCategory != null || report.yandex?.withFallback != null) ? (
                   <div className="muted tnved-mp-note">
-                    {report.yandex.withCategory != null ? `По категории: ${report.yandex.withCategory}` : ""}
-                    {report.yandex.withFallback != null ? ` · По умолчанию: ${report.yandex.withFallback}` : ""}
-                    {report.yandex.skipped != null && report.yandex.skipped > 0 ? ` · Без кода: ${report.yandex.skipped}` : ""}
+                    {report.yandex?.withCategory != null ? `По категории: ${report.yandex?.withCategory}` : ""}
+                    {report.yandex?.withFallback != null ? ` · По умолчанию: ${report.yandex?.withFallback}` : ""}
+                    {report.yandex?.skipped != null && report.yandex?.skipped > 0 ? ` · Без кода: ${report.yandex?.skipped}` : ""}
                   </div>
                 ) : null}
               </>
@@ -613,7 +613,7 @@ export function TnvedPage() {
           </div>
           <p className="form-hint">
             Код определяется по категории Ozon (если товар связан). Для остальных — код по умолчанию.
-            Яндекс.Маркет товаров: {report?.yandex.totalProducts ?? "…"}
+            Яндекс.Маркет товаров: {report?.yandex?.totalProducts ?? "…"}
           </p>
           <div className="tnved-yandex-input-row">
             <input
@@ -651,7 +651,7 @@ export function TnvedPage() {
               type="button"
               disabled={isYandexApplying || yandexPreviewMutation.isPending}
               onClick={() => {
-                if (window.confirm(`Отправить коды ТН ВЭД на ${report?.yandex.totalProducts ?? "все"} товаров Яндекс.Маркет?`)) {
+                if (window.confirm(`Отправить коды ТН ВЭД на ${report?.yandex?.totalProducts ?? "все"} товаров Яндекс.Маркет?`)) {
                   yandexApplyMutation.mutate();
                 }
               }}

@@ -142,7 +142,7 @@ export function CardHealthPage() {
       <div className="ch-tabs" role="tablist">
         {STATUSES.map(([key, label]) => (
           <button key={key} type="button" role="tab" aria-selected={status === key} className={status === key ? "is-on" : ""} onClick={() => setStatus(key)}>
-            {label}{data?.statuses[key] ? <b>{data.statuses[key]}</b> : null}
+            {label}{data?.statuses?.[key] ? <b>{data.statuses?.[key]}</b> : null}
           </button>
         ))}
       </div>
