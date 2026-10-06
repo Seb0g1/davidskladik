@@ -2468,3 +2468,6 @@ body:has(.bulk-action-bar) .toast-stack { bottom: 88px; }
   .ap-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ap-actions > :last-child { grid-column: 1 / -1; grid-row: 1; }
 }
+/* Сборка: заказ отменён маркетплейсом после того, как товар собран */
+.picking-mp-cancelled { display: inline-block; margin-top: 4px; padding: 3px 8px; border-radius: 8px; background: rgba(255, 92, 92, .14); border: 1px solid rgba(255, 92, 92, .45); color: #ffb4b4; font-size: 12px; font-weight: 600; line-height: 1.35; }
+.picking-row:has(.picking-mp-cancelled) { border-left: 3px solid #ff5c5c; }

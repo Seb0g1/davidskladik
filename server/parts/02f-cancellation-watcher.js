@@ -38,7 +38,7 @@ function cancellationEmailHtml(row) {
 async function markPickingRowCancelledBySystem(key, { cancelledBy = "system", notifiedEmail = "" } = {}) {
   const state = await readSupplierPickingState();
   const row = state.rows[key];
-  if (!row || row.status !== "open") return null;
+  if (!row || (row.status !== "open" && row.status !== "missing")) return null;
   const now = new Date().toISOString();
 
   // Cart cleanup before picking write: if this fails we haven't committed the
@@ -78,18 +78,35 @@ async function markPickingRowCancelledBySystem(key, { cancelledBy = "system", no
   return nextRow;
 }
 
+/** A picked row whose order the marketplace cancelled: it keeps its status and gets a visible mark. */
+async function markPickingRowMarketplaceCancelled(key) {
+  const state = await readSupplierPickingState();
+  const row = state.rows[key];
+  if (!row || row.status !== "picked" || row.marketplaceCancelledAt) return null;
+  const nextRow = normalizeSupplierPickingRow({ ...row, marketplaceCancelledAt: new Date().toISOString() });
+  state.rows[key] = nextRow;
+  await writeSupplierPickingState(state);
+  return nextRow;
+}
+
 async function checkAndHandleCancelledOrders() {
   const pickingState = await readSupplierPickingState();
-  const openRows = Object.values(pickingState.rows).filter((r) => r.status === "open");
-  if (!openRows.length) return;
+  // open — not bought yet (cancel + tell the supplier); missing — nothing to buy (cancel);
+  // picked — already with us (mark only). Yandex rows are usually picked within hours, so «open only» missed them all.
+  const watchedRows = Object.values(pickingState.rows).filter((r) => r.status === "open" || r.status === "missing"
+    || (r.status === "picked" && !r.marketplaceCancelledAt));
+  if (!watchedRows.length) return;
+  const openRows = watchedRows;
 
+  // one order or posting has a row per item and per unit (:u0, :u1…) — every one of them is cancelled
   const byPostingNumber = new Map();
   const byOrderId = new Map();
+  const addTo = (map, key, row) => { if (!map.has(key)) map.set(key, []); map.get(key).push(row); };
   for (const row of openRows) {
     if (row.marketplace === "ozon" && row.postingNumber) {
-      byPostingNumber.set(row.postingNumber, row);
+      addTo(byPostingNumber, row.postingNumber, row);
     } else if (row.orderId) {
-      byOrderId.set(`${row.marketplace}:${row.orderId}`, row);
+      addTo(byOrderId, `${row.marketplace}:${row.orderId}`, row);
     }
   }
 
@@ -114,7 +131,7 @@ async function checkAndHandleCancelledOrders() {
           const postings = Array.isArray(data?.result?.postings) ? data.result.postings : [];
           for (const posting of postings) {
             const pn = cleanText(posting.posting_number || "");
-            if (pn && byPostingNumber.has(pn)) cancelledRows.push(byPostingNumber.get(pn));
+            if (pn && byPostingNumber.has(pn)) cancelledRows.push(...byPostingNumber.get(pn));
           }
           if (postings.length < 1000) break;
           offset += postings.length;
@@ -139,15 +156,15 @@ async function checkAndHandleCancelledOrders() {
           const data = await yandexRequest(shop, "POST", `/v1/businesses/${shop.businessId}/orders?${query.toString()}`, {
             ...(campaignIds.length ? { campaignIds } : {}),
             statuses: ["CANCELLED"],
-            dates: { fromDate: since.toISOString().slice(0, 10), toDate: to.toISOString().slice(0, 10) },
+            dates: { updateDateFrom: since.toISOString(), updateDateTo: to.toISOString() },
             fake: false,
             sourcePlatforms: ["MARKET"],
           });
           const orders = Array.isArray(data?.orders) ? data.orders : (Array.isArray(data?.result?.orders) ? data.result.orders : []);
           for (const order of orders) {
-            const orderId = String(order.id || "");
+            const orderId = String(order.orderId || order.id || "") // business orders API: orderId;
             const lookupKey = `yandex:${orderId}`;
-            if (orderId && byOrderId.has(lookupKey)) cancelledRows.push(byOrderId.get(lookupKey));
+            if (orderId && byOrderId.has(lookupKey)) cancelledRows.push(...byOrderId.get(lookupKey));
           }
           pageToken = cleanText(data?.paging?.nextPageToken || data?.result?.paging?.nextPageToken || "");
           if (!pageToken) break;
@@ -169,7 +186,7 @@ async function checkAndHandleCancelledOrders() {
         for (const order of orders) {
           const orderId = String(order.id || "");
           const lookupKey = `wb:${orderId}`;
-          if (orderId && byOrderId.has(lookupKey)) cancelledRows.push(byOrderId.get(lookupKey));
+          if (orderId && byOrderId.has(lookupKey)) cancelledRows.push(...byOrderId.get(lookupKey));
         }
       }
     } catch (e) {
@@ -183,6 +200,19 @@ async function checkAndHandleCancelledOrders() {
 
   for (const row of unique) {
     try {
+      if (row.status === "picked") {
+        if (await markPickingRowMarketplaceCancelled(row.key)) {
+          logger.info("picked row: order cancelled by the marketplace", { key: row.key, marketplace: row.marketplace, offerId: row.offerId });
+        }
+        continue;
+      }
+      // «не было»: the supplier had nothing — no letter, the row is simply cancelled
+      if (row.status === "missing") {
+        if (await markPickingRowCancelledBySystem(row.key, { cancelledBy: "system:marketplace_poll", notifiedEmail: "" })) {
+          logger.info("missing row cancelled by marketplace poll", { key: row.key, marketplace: row.marketplace });
+        }
+        continue;
+      }
       // Mark as cancelled FIRST — prevents double-send if the server restarts or the
       // email call throws after the message is queued but before the state write lands.
       // markPickingRowCancelledBySystem returns null when the row is already cancelled,

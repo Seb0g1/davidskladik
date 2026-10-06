@@ -1257,10 +1257,16 @@ app.get("/api/fragrantica/drafts/volume-plan", requireAdmin, async (request, res
     const perfumeId = Number(request.query.perfumeId);
     if (!perfumeId) return response.status(400).json({ error: "perfumeId обязателен" });
     const targets = fragranticaDraftTargets(cleanText(request.query.targets).split(",").filter(Boolean));
+    // volumes need only the brand and the name: a new perfume without notes anywhere still gets its plan
     const perfume = await Promise.race([
       fragranticaPerfumeForExport(perfumeId),
       new Promise((_, reject) => setTimeout(() => reject(new Error("Фрагрантика не ответила за минуту")), FRAG_PAGE_FETCH_TIMEOUT_MS).unref?.()),
-    ]);
+    ]).catch(async (error) => {
+      const row = await readFragranticaPerfume(perfumeId);
+      if (!row) throw error;
+      logger.warn("fragrantica volume plan without perfume details", { id: perfumeId, detail: error?.message || String(error) });
+      return { id: Number(row.id), brand: row.brand, name: row.name, gender: row.gender, year: row.year, url: row.url };
+    });
     const { rows } = await fragranticaPerfumePmRows(perfume);
     const plan = planFragranticaVolumes(rows, perfume);
     const presence = await fragranticaPerfumePresence(perfumeId);

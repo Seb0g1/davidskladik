@@ -654,8 +654,11 @@ export function AvitoPage() {
                   <input value={rules.feedDefaults.adType} onChange={(event) => updateFeedDefaults({ adType: event.target.value })} />
                 </label>
                 <label className="field-label">
-                  Состояние
-                  <input value={rules.feedDefaults.condition} onChange={(event) => updateFeedDefaults({ condition: event.target.value })} />
+                  Состояние (для всех объявлений)
+                  <select value={rules.feedDefaults.condition} onChange={(event) => updateFeedDefaults({ condition: event.target.value })}>
+                    <option value="Новое">Новое</option>
+                    <option value="Б/у">Б/у</option>
+                  </select>
                 </label>
               </div>
               <div className="settings-form-row">

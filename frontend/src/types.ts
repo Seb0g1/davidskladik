@@ -824,6 +824,7 @@ export const SupplierCartScheduleSchema = z.object({
 
 export const SupplierPickingRowSchema = z.object({
   key: z.coerce.string(),
+  marketplaceCancelledAt: z.coerce.string().nullable().optional(),
   marketplace: z.coerce.string().optional().default(""),
   accountName: z.coerce.string().optional().default(""),
   orderId: z.coerce.string().optional().default(""),

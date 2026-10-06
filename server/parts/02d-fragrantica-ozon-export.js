@@ -876,7 +876,9 @@ async function fragranticaPerfumeForExport(perfumeId) {
       }
       row = await readFragranticaPerfume(perfumeId);
     }
-    const fragranticaClosed = pagesPaused || /\b(403|429)\b|challenge|Cloudflare/i.test(String(fetchError?.message || ""));
+    // «closed» also when the page opened but gave no notes (a perfume new on Fragrantica): the other sources may know it
+    const fragranticaClosed = pagesPaused || /\b(403|429)\b|challenge|Cloudflare/i.test(String(fetchError?.message || ""))
+      || (!fetchError && !row.detail_at);
     if (!row.detail_at && fragellaAvailable()) {
       const stored = await fillPerfumeFromFragella(row).catch((error) => {
         logger.warn("fragella fill failed", { id: Number(perfumeId), detail: error?.message || String(error) });
@@ -1624,8 +1626,25 @@ async function sendFragranticaYandexVatPrice(shop, offerId, price) {
   }
 }
 
-function submitFragranticaTargetExport(row) {
-  return row.marketplace === "yandex" ? submitFragranticaYandexExport(row) : submitFragranticaExport(row);
+// A network failure or a timeout (Ozon «fetch failed», Market «timeout 20s») is not a verdict on the card:
+// it is sent again in 5, 10, 15… minutes through the limit queue, up to 5 attempts, then it stays failed.
+const FRAG_TRANSIENT_ERROR_RE = /fetch failed|timeout|timed out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN|socket hang up|network|rate limit|internal server error|\b50[0234]\b/i;
+const FRAG_NET_RETRY_PREFIX = "Сбой связи";
+
+async function submitFragranticaTargetExport(row) {
+  const updated = await (row.marketplace === "yandex" ? submitFragranticaYandexExport(row) : submitFragranticaExport(row));
+  const attempts = Number(updated?.attempts || 0);
+  if (updated?.status === "failed" && FRAG_TRANSIENT_ERROR_RE.test(String(updated.error || "")) && attempts < 5) {
+    const at = new Date(Date.now() + attempts * 5 * 60_000);
+    const when = at.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", timeZone: "Europe/Moscow" });
+    logger.warn("fragrantica export: transient failure, retry later", { id: Number(row.id), offerId: row.offer_id, attempts, detail: updated.error });
+    return updateFragranticaExport(row.id, {
+      status: "queued_limit",
+      error: `${FRAG_NET_RETRY_PREFIX} (${String(updated.error).slice(0, 200)}) — повторим в ${when}, попытка ${attempts + 1} из 5.`,
+      next_attempt_at: at,
+    });
+  }
+  return updated;
 }
 
 async function generateFragranticaBarcode(row, account) {
@@ -2125,7 +2144,8 @@ async function runFragranticaExportQueueTick() {
     try {
       if (row.status === "queued_limit") {
         const updated = await submitFragranticaTargetExport(row);
-        if (updated.status === "queued_limit") break; // лимит всё ещё исчерпан — остальные ждут
+        // лимит всё ещё исчерпан — остальные ждут (сбой связи у одной карточки очередь не держит)
+        if (updated.status === "queued_limit" && !String(updated.error || "").startsWith(FRAG_NET_RETRY_PREFIX)) break;
         sent += 1;
       } else {
         await refreshFragranticaExport(row);

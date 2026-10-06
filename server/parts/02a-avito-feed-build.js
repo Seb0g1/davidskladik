@@ -219,7 +219,7 @@ function buildAvitoAdXml(listing, feedDefaults = {}) {
     if (spec.tags.PerfumeryType) emit("PerfumeryType", spec.tags.PerfumeryType);
     if (spec.tags.CosmeticsType) emit("CosmeticsType", spec.tags.CosmeticsType);
     emit("AdType", listing.adType || feedDefaults.adType);
-    if (spec.condition) emit("Condition", listing.condition || feedDefaults.condition || "Новое");
+    if (spec.condition) emit("Condition", feedDefaults.condition || listing.condition || "Новое");
   } else {
     emit("Category", listing.category || feedDefaults.category);
     emit("GoodsType", listing.goodsType || feedDefaults.goodsType);
@@ -227,7 +227,7 @@ function buildAvitoAdXml(listing, feedDefaults = {}) {
     if (listing.subType) emit("SubType", listing.subType);
     if (listing.perfumeryType) emit("PerfumeryType", listing.perfumeryType);
     emit("AdType", listing.adType || feedDefaults.adType);
-    emit("Condition", listing.condition || feedDefaults.condition);
+    emit("Condition", feedDefaults.condition || listing.condition);
   }
   emit("Address", listing.address || feedDefaults.address);
   emit("Brand", listing.brand);

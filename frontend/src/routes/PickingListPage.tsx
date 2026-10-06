@@ -1703,6 +1703,11 @@ export function PickingListPage() {
                                 <div className="picking-row-header-left">
                                   <strong className="picking-row-name">{row.productName || row.offerId}</strong>
                                   <span className="picking-row-sub"><MarketplaceBadge marketplace={row.marketplace} />{row.isExpress ? <span className="express-badge"><Zap size={11} /> Экспресс</span> : null}</span>
+                                  {row.marketplaceCancelledAt ? (
+                                    <span className="picking-mp-cancelled" title={`Отмена получена ${compactDate(row.marketplaceCancelledAt)}`}>
+                                      Покупатель отменил заказ — товар у нас: «Возврат» или вернуть поставщику
+                                    </span>
+                                  ) : null}
                                 </div>
                                 <div className="picking-row-header-right">
                                   <span className="picking-row-qty">×{row.pickedQuantity && row.pickedQuantity !== row.quantity ? `${row.pickedQuantity}/${row.quantity}` : row.quantity}</span>

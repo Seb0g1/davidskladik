@@ -68,6 +68,8 @@ function normalizeSupplierPickingRow(input = {}) {
     cancelledBy: cleanText(input.cancelledBy),
     cancelledAt: input.cancelledAt || null,
     cancelledNotifiedEmail: cleanText(input.cancelledNotifiedEmail),
+    // the marketplace cancelled the order after the item was already picked: the row stays, the operator decides
+    marketplaceCancelledAt: input.marketplaceCancelledAt || null,
     wbSupplyId: cleanText(input.wbSupplyId || input.wb_supply_id),
     deferredUntil: input.deferredUntil || null,
   };
