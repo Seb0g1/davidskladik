@@ -233,6 +233,10 @@ function startBackgroundSchedulers() {
       lookbackDays: financeOrdersLookbackDays,
     });
   }
+  if (feedbackAutopilotEnabled) {
+    scheduleFeedbackAutopilot(3 * 60_000);
+    logger.info("feedback autopilot enabled", { intervalMinutes: Math.round(feedbackAutopilotIntervalMs / 60000) });
+  }
   if (notifyPollEnabled) {
     scheduleNotificationPolling(60_000);
     logger.info("notification polling enabled", {

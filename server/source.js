@@ -312,6 +312,7 @@ const partFiles = [
   "02f-tnved-sweep.js",
   "02f-ozon-new-offer-discovery.js",
   "02f-questions-routes.js",
+  "02f-feedback-autopilot.js",
   "02f-chats-routes.js",
   "02f-product-eta-route.js",
   "02f-supplier-export-routes.js",

@@ -9,6 +9,7 @@ import { ReplyBox } from "../components/ReplyBox";
 import { SelectField } from "../components/SelectField";
 import { Stat } from "../components/Stat";
 import { TemplatesDrawer } from "../components/TemplatesDrawer";
+import { FeedbackAutopilot } from "../components/FeedbackAutopilot";
 
 type ReviewRow = {
   id: string;
@@ -282,6 +283,8 @@ export function FeedbackPage({ defaultTab }: { defaultTab: "reviews" | "question
           <HelpCircle size={14} /> Вопросы{questionCounters.needsAnswer ? ` (${questionCounters.needsAnswer})` : ""}
         </button>
       </nav>
+
+      <FeedbackAutopilot tab={tab} />
 
       <div className="fb-toolbar">
         {isReviews ? (

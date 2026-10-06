@@ -263,28 +263,27 @@ function feedbackMarketplaceLabel(marketplace = "") {
   return mp === "ozon" ? "Ozon" : mp === "wb" ? "Wildberries" : "Яндекс Маркет";
 }
 
-app.post("/api/reviews/ai-draft", requireAdmin, async (request, response, next) => {
-  try {
-    const aiSettings = await readEffectiveAiSettings();
-    assertTextGenerationConfigured(aiSettings);
+/** AI reply to a review, signed by the cabinet's store; shared by the button and the autopilot (02f-feedback-autopilot.js). */
+async function buildReviewReplyDraft(input = {}, aiSettings = null) {
+  aiSettings = aiSettings || await readEffectiveAiSettings();
+  assertTextGenerationConfigured(aiSettings);
+  const rating = Number(input.rating) || 0;
+  const reviewText = cleanText(input.reviewText || "");
+  const advantages = cleanText(input.advantages || "");
+  const disadvantages = cleanText(input.disadvantages || "");
+  const productName = cleanText(input.productName || "");
+  const marketplace = cleanText(input.marketplace || "ozon");
+  const storeName = feedbackStoreName(marketplace, input.target);
 
-    const rating = Number(request.body?.rating) || 0;
-    const reviewText = cleanText(request.body?.reviewText || "");
-    const advantages = cleanText(request.body?.advantages || "");
-    const disadvantages = cleanText(request.body?.disadvantages || "");
-    const productName = cleanText(request.body?.productName || "");
-    const marketplace = cleanText(request.body?.marketplace || "ozon");
-    const storeName = feedbackStoreName(marketplace, request.body?.target);
+  const ratingLabel = rating >= 4 ? "положительный" : rating === 3 ? "нейтральный" : "отрицательный";
+  const productPart = productName ? `Товар: «${productName}».` : "";
+  const reviewBody = [
+    reviewText && `Текст: «${reviewText}»`,
+    advantages && `Плюсы: ${advantages}`,
+    disadvantages && `Минусы: ${disadvantages}`,
+  ].filter(Boolean).join(" ");
 
-    const ratingLabel = rating >= 4 ? "положительный" : rating === 3 ? "нейтральный" : "отрицательный";
-    const productPart = productName ? `Товар: «${productName}».` : "";
-    const reviewBody = [
-      reviewText && `Текст: «${reviewText}»`,
-      advantages && `Плюсы: ${advantages}`,
-      disadvantages && `Минусы: ${disadvantages}`,
-    ].filter(Boolean).join(" ");
-
-    const systemPrompt = `Ты — представитель службы заботы о клиентах магазина парфюмерии и косметики «${storeName}» на маркетплейсе ${feedbackMarketplaceLabel(marketplace)}. Тебе нужно написать ответ на отзыв покупателя.
+  const systemPrompt = `Ты — представитель службы заботы о клиентах магазина парфюмерии и косметики «${storeName}» на маркетплейсе ${feedbackMarketplaceLabel(marketplace)}. Тебе нужно написать ответ на отзыв покупателя.
 
 Правила:
 - Пиши только по-русски.
@@ -298,14 +297,19 @@ app.post("/api/reviews/ai-draft", requireAdmin, async (request, response, next) 
 - Последней строкой подпись: «С уважением, команда ${storeName}».
 - Не добавляй ничего лишнего — только текст ответа.`;
 
-    const userPrompt = `${productPart} Рейтинг: ${rating}/5 (${ratingLabel}). ${reviewBody || "Текст отзыва отсутствует."}`;
+  const userPrompt = `${productPart} Рейтинг: ${rating}/5 (${ratingLabel}). ${reviewBody || "Текст отзыва отсутствует."}`;
 
-    const completion = await createTextAiChat([
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
-    ], { json: false, temperature: 0.7, maxTokens: 400, aiSettings });
+  const completion = await createTextAiChat([
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userPrompt },
+  ], { json: false, temperature: 0.7, maxTokens: 400, aiSettings });
 
-    const draft = cleanText(completion.choices?.[0]?.message?.content || "");
+  return cleanText(completion.choices?.[0]?.message?.content || "");
+}
+
+app.post("/api/reviews/ai-draft", requireAdmin, async (request, response, next) => {
+  try {
+    const draft = await buildReviewReplyDraft(request.body || {});
     if (!draft) return response.status(502).json({ error: "AI не вернул текст." });
     response.json({ ok: true, draft });
   } catch (error) {
