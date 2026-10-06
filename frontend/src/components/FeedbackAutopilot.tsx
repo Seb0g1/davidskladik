@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Bot, CheckCircle2, ChevronDown, Loader2, Play, Send, X } from "lucide-react";
+import { AlertTriangle, Bot, CheckCircle2, ChevronDown, Loader2, Play, RefreshCw, Send, X } from "lucide-react";
 import { z } from "zod";
 import { fetchJson } from "../api";
 import { MarketplaceBadge } from "./MarketplaceBadge";
@@ -24,6 +24,11 @@ function PendingCard({ item, onDone }: { item: Pending; onDone: () => void }) {
   const send = useMutation({
     mutationFn: () => fetchJson(`/api/feedback-autopilot/pending/${encodeURIComponent(item.id)}/send`, z.unknown(), { method: "POST", body: JSON.stringify({ text }) }),
     onSuccess: onDone,
+  });
+  // «Переписать»: gather the data again and draft anew (after a rule change, or when the buyer named another product)
+  const redraft = useMutation({
+    mutationFn: () => fetchJson(`/api/feedback-autopilot/pending/${encodeURIComponent(item.id)}/redraft`, z.unknown(), { method: "POST", body: "{}" }) as Promise<{ ok: boolean; item?: Pending }>,
+    onSuccess: (res) => { if (res.item?.draft) setText(res.item.draft); onDone(); },
   });
   const dismiss = useMutation({
     mutationFn: () => fetchJson(`/api/feedback-autopilot/pending/${encodeURIComponent(item.id)}/dismiss`, z.unknown(), { method: "POST", body: "{}" }),
@@ -50,6 +55,9 @@ function PendingCard({ item, onDone }: { item: Pending; onDone: () => void }) {
         </details>
       ) : <div className="ap-facts-empty">Данных о товаре не нашлось — ответ на общих знаниях, проверьте внимательно.</div>}
       <div className="ap-actions">
+        <button className="secondary-action" type="button" disabled={redraft.isPending || send.isPending} onClick={() => redraft.mutate()} title="Собрать данные заново и написать ответ ещё раз">
+          {redraft.isPending ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />} Переписать
+        </button>
         <button className="secondary-action" type="button" disabled={dismiss.isPending || send.isPending} onClick={() => dismiss.mutate()}>
           {dismiss.isPending ? <Loader2 className="spin" size={14} /> : <X size={14} />} Не отвечать
         </button>
@@ -57,7 +65,7 @@ function PendingCard({ item, onDone }: { item: Pending; onDone: () => void }) {
           {send.isPending ? <Loader2 className="spin" size={14} /> : <Send size={14} />} Отправить
         </button>
       </div>
-      {send.error || dismiss.error ? <div className="inline-error">{String(((send.error || dismiss.error) as Error).message)}</div> : null}
+      {send.error || dismiss.error || redraft.error ? <div className="inline-error">{String(((send.error || dismiss.error || redraft.error) as Error).message)}</div> : null}
     </article>
   );
 }

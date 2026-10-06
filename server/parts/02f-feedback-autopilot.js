@@ -199,6 +199,44 @@ async function collectQuestionFacts(question) {
   return { offerId, facts: facts.slice(0, 60) };
 }
 
+/**
+ * Products the buyer names by number (an Ozon SKU or our article, «2056001649, в чем отличие?») — found in our
+ * cabinets / warehouse with their facts, so the answer can compare. Other sellers' SKUs are not visible to us.
+ */
+async function findMentionedProducts(question) {
+  const refs = [...new Set((cleanText(question.text).match(/\b\d{6,12}\b/g) || []).filter((n) => n !== cleanText(question.sku)))].slice(0, 2);
+  const out = [];
+  for (const ref of refs) {
+    let found = null;
+    for (const account of getOzonAccounts()) {
+      try {
+        const data = await ozonRequest("/v3/product/info/list", { sku: [Number(ref)] }, account);
+        const item = (data?.items || [])[0];
+        if (item) { found = { ref, sku: ref, offerId: cleanText(item.offer_id), name: cleanText(item.name), marketplace: "ozon", target: account.id }; break; }
+      } catch { /* not ours in this cabinet */ }
+    }
+    if (!found) {
+      const row = await getPrisma()?.warehouseProduct.findFirst({ where: { offerId: ref }, select: { offerId: true, name: true } }).catch(() => null);
+      if (row) found = { ref, sku: "", offerId: row.offerId, name: cleanText(row.name), marketplace: "ozon", target: "ozon" };
+    }
+    if (!found) continue;
+    const { facts } = await collectQuestionFacts({ marketplace: found.marketplace, target: found.target, sku: found.sku, offerId: found.offerId });
+    out.push({ ref, name: found.name, facts: facts.slice(0, 40) });
+  }
+  return out;
+}
+
+/** Facts → answer → check, for one question (the autopilot run, «Переписать» and the manual AI button). */
+async function draftQuestionAnswer(question, aiSettings) {
+  const { offerId, facts } = await collectQuestionFacts(question);
+  const mentioned = await findMentionedProducts(question).catch(() => []);
+  const withMentioned = { ...question, mentioned };
+  const draft = await buildQuestionAnswerWithFacts(withMentioned, facts, aiSettings);
+  if (!draft) throw new Error("ИИ не вернул текст");
+  const check = await verifyQuestionAnswer(withMentioned, facts, draft, aiSettings);
+  return { offerId, facts: [...facts, ...mentioned.flatMap((m) => [`— второй товар ${m.ref}: ${m.name}`, ...m.facts.slice(0, 15)])], draft, check, mentioned };
+}
+
 // ── AI ─────────────────────────────────────────────────────────────────────────
 async function buildOriginalityAnswer(question, aiSettings) {
   const storeName = feedbackStoreName(question.marketplace, question.target);
@@ -225,11 +263,13 @@ async function buildQuestionAnswerWithFacts(question, facts, aiSettings) {
 Правила:
 - Только по-русски, тепло и по делу, 1–4 предложения.
 - Опирайся на «Данные о товаре». Если там есть ответ (например, страна-изготовитель) — дай его прямо.
-- Если в данных ответа нет, а общеизвестного факта о товаре ты точно не знаешь — честно скажи и предложи уточнить в чате с продавцом. Ничего не выдумывай.
+- Если покупатель назвал другой товар (артикулом или названием) и о нём есть «Данные о втором товаре» — сравни по существу: ноты, тип, концентрация, объём, для кого.
+- Отвечай только фактами. Никогда не предлагай написать в чат, продавцу или в поддержку и не проси покупателя что-то уточнить.
+- Если точного факта нет — ответь тем, что известно о товаре, без выдумок.
 - Не упоминай другие магазины, сайты и ссылки, не обещай скидок.
 - Последней строкой: «С уважением, команда ${storeName}». Верни только текст ответа.` },
-    { role: "user", content: `Товар: «${question.productName || "—"}».\nДанные о товаре:\n${facts.length ? facts.join("\n") : "(нет данных)"}\n\nВопрос покупателя: «${question.text}»` },
-  ], { json: false, temperature: 0.4, maxTokens: 350, aiSettings });
+    { role: "user", content: `Товар: «${question.productName || "—"}».\nДанные о товаре:\n${facts.length ? facts.join("\n") : "(нет данных)"}${(question.mentioned || []).map((m) => `\n\nДанные о втором товаре (${m.ref}) «${m.name}»:\n${m.facts.join("\n") || "(нет данных)"}`).join("")}\n\nВопрос покупателя: «${question.text}»` },
+  ], { json: false, temperature: 0.4, maxTokens: 400, aiSettings });
   return cleanText(completion.choices?.[0]?.message?.content || "");
 }
 
@@ -238,8 +278,8 @@ async function verifyQuestionAnswer(question, facts, answer, aiSettings) {
   try {
     const completion = await createTextAiChat([
       { role: "system", content: `Ты проверяешь ответ магазина на вопрос покупателя. Верни JSON {"ok": boolean, "answersQuestion": boolean, "issues": [строки по-русски]}.
-ok=false, если в ответе есть утверждение о товаре, которого нет в «Данных о товаре» и которое не является общеизвестным фактом, или если ответ противоречит данным. answersQuestion=false, если ответ не отвечает на вопрос.` },
-      { role: "user", content: `Данные о товаре:\n${facts.length ? facts.join("\n") : "(нет данных)"}\n\nВопрос: «${question.text}»\n\nОтвет: «${answer}»` },
+ok=false, если в ответе есть утверждение о товаре, которого нет в данных и которое не является общеизвестным фактом, если ответ противоречит данным или предлагает написать в чат/поддержку. answersQuestion=false, если ответ не отвечает на вопрос.` },
+      { role: "user", content: `Данные о товаре:\n${facts.length ? facts.join("\n") : "(нет данных)"}${(question.mentioned || []).map((m) => `\n\nДанные о втором товаре (${m.ref}) «${m.name}»:\n${m.facts.join("\n") || "(нет данных)"}`).join("")}\n\nВопрос: «${question.text}»\n\nОтвет: «${answer}»` },
     ], { json: true, temperature: 0, maxTokens: 300, aiSettings });
     const parsed = JSON.parse(cleanText(completion.choices?.[0]?.message?.content || "{}"));
     return { ok: parsed.ok !== false, answersQuestion: parsed.answersQuestion !== false, issues: Array.isArray(parsed.issues) ? parsed.issues.map(cleanText).filter(Boolean).slice(0, 5) : [] };
@@ -262,6 +302,11 @@ async function runFeedbackAutopilot({ source = "schedule" } = {}) {
       const reviews = (await feedbackAutopilotReviews()).filter((r) => r.rating >= 4);
       const { handled } = await readFeedbackAutopilotState();
       for (const review of reviews.filter((r) => !handled[`review:${r.id}`]).slice(0, FEEDBACK_AUTOPILOT_PER_RUN)) {
+        // Ozon refuses a comment on a review without text («cannot comment on empty review»): skip before any AI call
+        if (review.marketplace === "ozon" && !review.text && !review.advantages && !review.disadvantages) {
+          await updateFeedbackAutopilotState((state) => { state.handled[`review:${review.id}`] = { at: new Date().toISOString(), action: "skip_empty" }; });
+          continue;
+        }
         try {
           const text = await buildReviewReplyDraft({ ...review, reviewText: review.text }, aiSettings);
           if (!text) throw new Error("ИИ не вернул текст");
@@ -273,7 +318,12 @@ async function runFeedbackAutopilot({ source = "schedule" } = {}) {
           });
         } catch (error) {
           totals.errors += 1;
-          await updateFeedbackAutopilotState((state) => feedbackAutopilotLog(state, { kind: "review", action: "error", marketplace: review.marketplace, product: review.productName, error: error?.message || String(error) }));
+          const message = error?.message || String(error);
+          await updateFeedbackAutopilotState((state) => {
+            // a refusal that will never change is not retried every run
+            if (/empty review|already|уже есть ответ/i.test(message)) state.handled[`review:${review.id}`] = { at: new Date().toISOString(), action: "refused" };
+            feedbackAutopilotLog(state, { kind: "review", action: "error", marketplace: review.marketplace, product: review.productName, error: message });
+          });
         }
       }
     }
@@ -304,10 +354,7 @@ async function runFeedbackAutopilot({ source = "schedule" } = {}) {
               feedbackAutopilotLog(state, { kind: "question", action: "sent", reason: "оригинальность", marketplace: question.marketplace, target: question.target, product: question.productName, question: question.text, text });
             });
           } else {
-            const { offerId, facts } = await collectQuestionFacts(question);
-            const draft = await buildQuestionAnswerWithFacts(question, facts, aiSettings);
-            if (!draft) throw new Error("ИИ не вернул текст");
-            const check = await verifyQuestionAnswer(question, facts, draft, aiSettings);
+            const { offerId, facts, draft, check } = await draftQuestionAnswer(question, aiSettings);
             totals.drafts += 1;
             await updateFeedbackAutopilotState((state) => {
               if (state.pending.some((p) => p.id === id)) return;
@@ -402,6 +449,28 @@ app.post("/api/feedback-autopilot/pending/:id/send", requireAdmin, async (reques
     await appendAudit(request, "questions.reply", { entityType: "question", entityId: `${item.marketplace}:${item.externalId}` });
     response.json({ ok: true });
   } catch (error) { next(error); }
+});
+
+app.post("/api/feedback-autopilot/pending/:id/redraft", requireAdmin, async (request, response, next) => {
+  try {
+    const id = cleanText(request.params.id);
+    const { pending } = await readFeedbackAutopilotState();
+    const item = pending.find((p) => p.id === id);
+    if (!item) return response.status(404).json({ error: "Черновик не найден." });
+    const aiSettings = await readEffectiveAiSettings();
+    assertTextGenerationConfigured(aiSettings);
+    const fresh = await draftQuestionAnswer(item, aiSettings);
+    const updated = await updateFeedbackAutopilotState((state) => {
+      const p = state.pending.find((x) => x.id === id);
+      if (!p) return null;
+      Object.assign(p, { facts: fresh.facts, draft: fresh.draft, check: fresh.check, redraftedAt: new Date().toISOString() });
+      return p;
+    });
+    response.json({ ok: true, item: updated });
+  } catch (error) {
+    if (error.statusCode) return response.status(error.statusCode).json({ error: error.message });
+    next(error);
+  }
 });
 
 app.post("/api/feedback-autopilot/pending/:id/dismiss", requireAdmin, async (request, response, next) => {

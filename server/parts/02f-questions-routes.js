@@ -147,32 +147,21 @@ app.post("/api/questions/ai-draft", requireAdmin, async (request, response, next
   try {
     const aiSettings = await readEffectiveAiSettings();
     assertTextGenerationConfigured(aiSettings);
-    const questionText = cleanText(request.body?.questionText || "");
-    const productName = cleanText(request.body?.productName || "");
-    const marketplace = cleanText(request.body?.marketplace || "ozon");
-    const storeName = feedbackStoreName(marketplace, request.body?.target);
-    if (!questionText) return response.status(400).json({ error: "Нет текста вопроса." });
-
-    const systemPrompt = `Ты — консультант магазина парфюмерии и косметики «${storeName}» на маркетплейсе ${feedbackMarketplaceLabel(marketplace)}. Ответь на вопрос покупателя о товаре.
-
-Правила:
-- Пиши только по-русски, тепло и по делу, 1–4 предложения.
-- Отвечай на сам вопрос. Используй общеизвестные факты о товаре (аромат, ноты, тип, объём, применение), если уверен в них.
-- Ничего не выдумывай: если не знаешь наличия, сроков, партии, маркировки или комплектации конкретного экземпляра — так и скажи и предложи уточнить в чате с продавцом.
-- Мы продаём только оригинальную продукцию — на вопрос о подлинности ответь уверенно, без обещаний документов, которых не знаешь.
-- Не упоминай другие магазины, сайты и ссылки, не обещай скидок.
-- Последней строкой подпись: «С уважением, команда ${storeName}».
-- Верни только текст ответа.`;
-    const userPrompt = `${productName ? `Товар: «${productName}». ` : ""}Вопрос покупателя: «${questionText}»`;
-
-    const completion = await createTextAiChat([
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
-    ], { json: false, temperature: 0.5, maxTokens: 350, aiSettings });
-
-    const draft = cleanText(completion.choices?.[0]?.message?.content || "");
-    if (!draft) return response.status(502).json({ error: "AI не вернул текст." });
-    response.json({ ok: true, draft, storeName });
+    const question = {
+      marketplace: cleanText(request.body?.marketplace || "ozon").toLowerCase(),
+      target: cleanText(request.body?.target),
+      sku: cleanText(request.body?.sku),
+      offerId: cleanText(request.body?.offerId),
+      productName: cleanText(request.body?.productName),
+      text: cleanText(request.body?.questionText),
+    };
+    if (!question.text) return response.status(400).json({ error: "Нет текста вопроса." });
+    // a pure «оригинал?» gets the same warm answer as the autopilot; anything else — facts, comparison, check
+    if (isOriginalityOnlyQuestion(question.text)) {
+      return response.json({ ok: true, draft: await buildOriginalityAnswer(question, aiSettings), storeName: feedbackStoreName(question.marketplace, question.target) });
+    }
+    const result = await draftQuestionAnswer(question, aiSettings);
+    response.json({ ok: true, draft: result.draft, check: result.check, storeName: feedbackStoreName(question.marketplace, question.target) });
   } catch (error) {
     if (error.statusCode) return response.status(error.statusCode).json({ error: error.message });
     next(error);

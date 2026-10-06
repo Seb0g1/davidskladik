@@ -141,7 +141,7 @@ function QuestionCard({ question, templates, onReplied }: { question: QuestionRo
   const aiDraft = useMutation({
     mutationFn: () => fetchJson("/api/questions/ai-draft", z.unknown(), {
       method: "POST",
-      body: JSON.stringify({ marketplace: question.marketplace, target: question.target, questionText: question.text, productName: question.productName }),
+      body: JSON.stringify({ marketplace: question.marketplace, target: question.target, sku: question.sku, questionText: question.text, productName: question.productName }),
     }) as Promise<{ ok: boolean; draft: string }>,
     onSuccess: (data) => { if (data.draft) setText(data.draft); setOpen(true); },
   });
