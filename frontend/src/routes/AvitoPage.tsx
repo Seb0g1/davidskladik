@@ -255,6 +255,16 @@ function categoryPath(item: { goodsType?: string; goodsSubType?: string; subType
   return [item.goodsType, item.goodsSubType, item.subType, item.perfumeryType].filter(Boolean).join(" / ");
 }
 
+function wordsFoldSummary(rules: { excludeTitleWords: string[]; includeTitleWords: string[]; excludeBrands: string[]; includeBrands: string[] }) {
+  const parts = [
+    rules.excludeTitleWords.length ? `стоп-слов ${rules.excludeTitleWords.length}` : "",
+    rules.includeTitleWords.length ? `обязательных ${rules.includeTitleWords.length}` : "",
+    rules.excludeBrands.length ? `исключено брендов ${rules.excludeBrands.length}` : "",
+    rules.includeBrands.length ? `только ${rules.includeBrands.length} брендов` : "",
+  ].filter(Boolean);
+  return parts.length ? parts.join(", ") : "без ограничений";
+}
+
 export function AvitoPage() {
   const queryClient = useQueryClient();
   const [rules, setRules] = useState<ImportRules | null>(null);
@@ -549,8 +559,13 @@ export function AvitoPage() {
                   Скрывать без остатков
                 </label>
               </div>
-              <div className="section-title compact-title">
-                <div><span>Цена</span><h3>Гибкие правила наценки Avito</h3></div>
+              <details className="avito-fold">
+                <summary>
+                  <b>Наценка</b>
+                  <span>{rules.priceRules.length ? `правил: ${rules.priceRules.length}` : `базовый коэффициент ${rules.priceCoefficient}`}</span>
+                </summary>
+              <div className="avito-fold-body">
+              <div className="avito-fold-actions">
                 <button className="secondary-action" type="button" onClick={() => updateRules({ priceRules: [...rules.priceRules, { minPriceRub: 0, coefficient: rules.priceCoefficient || 1 }] })}>
                   Добавить правило
                 </button>
@@ -587,6 +602,14 @@ export function AvitoPage() {
                 {adjustPrices.isSuccess ? <div className="info-strip success compact">Коэффициенты обновлены, цены в фиде пересчитаны.</div> : null}
                 {adjustPrices.error ? <div className="inline-error">{String((adjustPrices.error as Error).message)}</div> : null}
               </div>
+              </div>
+              </details>
+              <details className="avito-fold">
+                <summary>
+                  <b>Слова и бренды</b>
+                  <span>{wordsFoldSummary(rules)}</span>
+                </summary>
+              <div className="avito-fold-body">
               <div className="settings-form-row">
                 <label className="field-label field-label-wide">
                   Стоп-слова в названии (через запятую)
@@ -607,7 +630,16 @@ export function AvitoPage() {
                   <textarea rows={2} value={wordsToText(rules.includeBrands)} onChange={(event) => updateRules({ includeBrands: textToWords(event.target.value) })} />
                 </label>
               </div>
-              <div className="section-title compact-title"><div><span>Фид</span><h3>Значения по умолчанию для объявлений</h3></div></div>
+              </div>
+              </details>
+              <details className="avito-fold" open={!rules.feedDefaults.address.trim() || undefined}>
+                <summary>
+                  <b>Объявления по умолчанию</b>
+                  {rules.feedDefaults.address.trim()
+                    ? <span>{rules.feedDefaults.address}</span>
+                    : <span className="is-warn">нет адреса — Avito не опубликует объявления</span>}
+                </summary>
+              <div className="avito-fold-body">
               <div className="settings-form-row">
                 <label className="field-label">
                   Категория
@@ -636,6 +668,8 @@ export function AvitoPage() {
                   <textarea rows={3} value={rules.feedDefaults.description} onChange={(event) => updateFeedDefaults({ description: event.target.value })} placeholder="{title} — оригинальная продукция. Быстрая отправка." />
                 </label>
               </div>
+              </div>
+              </details>
             </>
           )}
         </section>

@@ -1979,3 +1979,27 @@ body:has(.bulk-action-bar) .toast-stack { bottom: 88px; }
 .cart-sugg-opt span { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .cart-sugg-opt em { font-style: normal; font-size: 11px; color: var(--yellow, #f5b942); }
 .cart-sugg-opt.is-other { border-color: rgba(245, 185, 66, 0.45); background: rgba(245, 185, 66, 0.07); }
+
+/* Avito: rule groups folded, the summary line tells what is set */
+.avito-page .avito-fold { border: 1px solid var(--ux-border, #e3e6ea); border-radius: var(--ux-radius, 10px); margin-top: 12px; background: var(--ux-panel, var(--panel, #fff)); }
+.avito-page .avito-fold > summary { display: flex; align-items: baseline; gap: 12px; padding: 11px 14px; cursor: pointer; list-style: none; }
+.avito-page .avito-fold > summary::-webkit-details-marker { display: none; }
+.avito-page .avito-fold > summary::before { content: ""; width: 7px; height: 7px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; transform: rotate(-45deg); transition: transform .18s var(--ux-ease, ease); opacity: .55; flex: none; align-self: center; }
+.avito-page .avito-fold[open] > summary::before { transform: rotate(45deg); }
+.avito-page .avito-fold > summary b { font-weight: 600; flex: none; }
+.avito-page .avito-fold > summary span { color: var(--muted, #6b7280); font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.avito-page .avito-fold > summary span.is-warn { color: var(--warn, #b45309); }
+.avito-page .avito-fold > summary:focus-visible { outline: 2px solid rgb(var(--accent-rgb)); outline-offset: -2px; border-radius: 10px; }
+.avito-page .avito-fold-body { padding: 0 14px 14px; }
+.avito-page .avito-fold-actions { display: flex; justify-content: flex-end; margin-bottom: 6px; }
+@media (max-width: 720px) {
+  .avito-page .avito-fold > summary { flex-wrap: wrap; row-gap: 2px; }
+  .avito-page .avito-fold > summary span { white-space: normal; flex-basis: 100%; padding-left: 19px; }
+}
+@media (prefers-reduced-motion: reduce) { .avito-page .avito-fold > summary::before { transition: none; } }
+@media (max-width: 720px) {
+  .avito-page .settings-form-row:has(> label > input[type="number"]) { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+  .avito-page .settings-form-row:has(> label > input[type="number"]) > label { min-width: 0; margin: 0; }
+  .avito-page .settings-form-row:has(> label > input[type="number"]) > label > input { width: 100%; }
+  .avito-page .settings-form-row:has(> label > input[type="number"]) > label:has(select) { grid-column: 1 / -1; }
+}
