@@ -17,11 +17,27 @@ const zeroStockSweepBatchLimit = Math.max(50, Math.min(2000, Number(process.env.
 let zeroStockSweepTimer = null;
 let zeroStockSweepRunning = false;
 let zeroStockSweepNextRunAt = null;
-// Rotate through the catalog: skip ids we checked within this window so successive ticks
-// advance instead of rebuilding the same newest rows forever.
-const zeroStockSweepRecentlyChecked = new Map(); // id -> at
-// 3 h: at 500 per tick (every 3 min) the sweep walks through ~30k linked cards before it starts over
-const zeroStockSweepCheckedCooldownMs = Math.max(5 * 60_000, Number(process.env.ZERO_STOCK_SWEEP_CHECKED_COOLDOWN_MS || 3 * 3_600_000) || 3 * 3_600_000);
+// Rotation: the cards checked longest ago (or never) go first. The time of the last check is kept in
+// zero_stock_sweep_checks, so a restart does not start over. Before, the batch was the most recently
+// updated cards minus an in-memory 3 h cooldown: busy cards took every slot, the cooldown was lost on
+// each deploy, and a quiet card could wait for weeks (06.10: ASK47 on Маркет, its supplier gone, never
+// reached — 24k never-zeroed cards were in the pool).
+let zeroStockSweepTableReady = null;
+
+function ensureZeroStockSweepTable(prisma) {
+  if (!zeroStockSweepTableReady) {
+    zeroStockSweepTableReady = prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS zero_stock_sweep_checks (
+        product_id TEXT PRIMARY KEY,
+        checked_at TIMESTAMPTZ NOT NULL
+      )
+    `).catch((error) => {
+      zeroStockSweepTableReady = null;
+      throw error;
+    });
+  }
+  return zeroStockSweepTableReady;
+}
 
 async function runZeroStockSweep({ source = "schedule" } = {}) {
   if (zeroStockSweepRunning) return { status: "already_running" };
@@ -38,17 +54,12 @@ async function runZeroStockSweep({ source = "schedule" } = {}) {
     // the catalog shows as «Остаток» and what we push) is > 0. Keying only on marketplaceState
     // missed no-supplier products whose marketplace stock was already zeroed but whose
     // target_stock was never reset — they kept showing «Остаток N» in the catalog forever.
-    // Cards checked within the cooldown are left out IN the query: before, the LIMIT took the same
-    // 2000 most recently updated cards every time, the cooldown then skipped them all, and older cards
-    // (e.g. a supplier row that silently vanished) were never swept.
-    const nowMsForQuery = Date.now();
-    for (const [id, at] of zeroStockSweepRecentlyChecked.entries()) {
-      if (nowMsForQuery - at > zeroStockSweepCheckedCooldownMs) zeroStockSweepRecentlyChecked.delete(id);
-    }
-    const recentlyChecked = [...zeroStockSweepRecentlyChecked.keys()];
+    // The batch: the cards checked longest ago first, never-checked ones before all.
+    await ensureZeroStockSweepTable(prisma);
     const rows = await prisma.$queryRawUnsafe(`
-      SELECT p.id
+      SELECT p.id, c.checked_at
       FROM warehouse_products p
+      LEFT JOIN zero_stock_sweep_checks c ON c.product_id = p.id
       WHERE p.archived = false
         AND ${duplicateNameSqlExclusion("p")}
         AND (
@@ -60,25 +71,19 @@ async function runZeroStockSweep({ source = "schedule" } = {}) {
           OR COALESCE(NULLIF(p.raw -> 'marketplaceState' ->> 'stock', '')::numeric, 0) > 0
           OR (p.raw -> 'noSupplierAutomation' ->> 'stockZeroAt') IS NULL
         )
-        AND NOT (p.id = ANY($2::text[]))
-      ORDER BY p.updated_at DESC
+      ORDER BY c.checked_at ASC NULLS FIRST, p.updated_at DESC
       LIMIT $1
-    `, zeroStockSweepBatchLimit * 4, recentlyChecked);
+    `, zeroStockSweepBatchLimit);
     if (!rows.length) return { status: "ok", candidates: 0, zeroed: 0 };
 
     const nowMs = Date.now();
-    for (const [id, at] of zeroStockSweepRecentlyChecked.entries()) {
-      if (nowMs - at > zeroStockSweepCheckedCooldownMs) zeroStockSweepRecentlyChecked.delete(id);
-    }
-    const candidateIds = [];
-    for (const row of rows) {
-      const id = String(row.id);
-      if (zeroStockSweepRecentlyChecked.has(id)) continue;
-      candidateIds.push(id);
-      zeroStockSweepRecentlyChecked.set(id, nowMs);
-      if (candidateIds.length >= zeroStockSweepBatchLimit) break;
-    }
-    if (!candidateIds.length) return { status: "ok", candidates: rows.length, zeroed: 0, cooldown: true };
+    const candidateIds = rows.map((row) => String(row.id));
+    // Stamped before the rebuild: a card whose rebuild keeps failing must not hold the head of the line.
+    await prisma.$executeRawUnsafe(`
+      INSERT INTO zero_stock_sweep_checks (product_id, checked_at)
+      SELECT id, NOW() FROM UNNEST($1::text[]) AS id
+      ON CONFLICT (product_id) DO UPDATE SET checked_at = EXCLUDED.checked_at
+    `, candidateIds);
 
     const products = await buildFreshWarehouseProducts(candidateIds, { livePriceMaster: zeroStockSweepLivePm, batchPriceMaster: zeroStockSweepLivePm })
       .catch((error) => {
@@ -117,6 +122,8 @@ async function runZeroStockSweep({ source = "schedule" } = {}) {
     });
     logger.info("zero_stock_sweep_complete", {
       source,
+      // when the head of this batch was checked before (null = never): how far behind the rotation is
+      headLastCheckedAt: rows[0]?.checked_at || null,
       candidates: rows.length,
       selected: candidateIds.length,
       noSupplierWithStock: noSupplierWithStock.length,
