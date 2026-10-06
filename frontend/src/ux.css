@@ -2272,3 +2272,48 @@ body:has(.bulk-action-bar) .toast-stack { bottom: 88px; }
 @media (max-width: 900px) { .settings-base-prices { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .settings-base-prices > label { grid-template-rows: 1fr auto; align-items: end; }
 .settings-panel .settings-base-prices + .form-hint { font-size: 12.5px; color: var(--muted); margin: 10px 0 0; }
+
+/* Склад на телефоне: карточка товара — полноэкранный лист поверх списка (позднее правило styles.css
+   ставило её position: static, и она оказывалась под всем каталогом) */
+@media (max-width: 1180px) {
+  .app-content .workspace > .detail-panel {
+    position: fixed !important; inset: 0 !important; top: 0 !important; z-index: 60;
+    width: 100vw; max-width: 100vw; height: 100dvh !important; margin: 0; border: 0; border-radius: 0 !important;
+    overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain;
+    background: var(--panel, #0b1426); padding: 0 0 calc(16px + env(safe-area-inset-bottom));
+    transform: translateX(100%); transition: transform .22s var(--ux-ease, ease); animation: none !important;
+  }
+  .app-content .workspace.detail-open > .detail-panel { transform: none; }
+  .app-content .workspace:not(.detail-open) > .detail-panel { visibility: hidden; transition: transform .22s var(--ux-ease, ease), visibility 0s .22s; }
+}
+@media (max-width: 1180px) and (prefers-reduced-motion: reduce) { .app-content .workspace > .detail-panel { transition: none; } }
+@media (max-width: 1180px) {
+  .app-content .workspace > .detail-panel * { min-width: 0; max-width: 100%; }
+  .app-content .detail-panel .detail-head { position: sticky; top: 0; z-index: 5; display: grid; grid-template-columns: 56px minmax(0, 1fr) auto; gap: 10px 12px; align-items: start; padding: 10px 12px; margin: 0; background: var(--panel, #0b1426); border-bottom: 1px solid var(--ux-border, rgba(255,255,255,.08)); }
+  .app-content .detail-panel .detail-image { width: 56px; height: 56px; border-radius: 10px; }
+  .app-content .detail-panel .detail-title h2 { font-size: 16px; line-height: 1.3; margin: 2px 0; }
+  .app-content .detail-panel .detail-title p { font-size: 12px; margin: 0; }
+  .app-content .detail-panel .detail-title .pill { font-size: 11.5px; }
+  .app-content .detail-panel .detail-head-actions { display: flex; gap: 6px; }
+  .app-content .detail-panel .detail-head-actions :is(.icon-action, button) { width: 40px; height: 40px; }
+  .app-content .detail-panel .copy-actions { margin-top: 6px; }
+  .app-content .detail-panel .detail-section { margin: 10px 10px 0; padding: 12px; }
+  .app-content .detail-panel .section-note { font-size: 12px; line-height: 1.4; }
+  .app-content .detail-panel .pm-link-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .app-content .detail-panel .pm-link-summary > div { padding: 8px; border-radius: 10px; }
+  .app-content .detail-panel .pm-link-summary strong { font-size: 17px; }
+  .app-content .detail-panel .pm-link-summary span { font-size: 11px; line-height: 1.25; }
+  .app-content .detail-panel .marketplace-row { display: grid !important; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 10px; padding: 12px; }
+  .app-content .detail-panel .marketplace-row > div:first-child { grid-column: 1 / 3; }
+  .app-content .detail-panel .marketplace-row > .pill { grid-column: 3; justify-self: end; align-self: start; white-space: nowrap; }
+  .app-content .detail-panel .marketplace-row > div:first-child span { display: block; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .app-content .detail-panel .marketplace-row > div:not(:first-child):not(.marketplace-flags) strong { font-size: 16px; }
+  .app-content .detail-panel .marketplace-row > div:not(:first-child):not(.marketplace-flags) small { font-size: 11.5px; }
+  .app-content .detail-panel .marketplace-row > .marketplace-flags { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 5px; }
+  .app-content .detail-panel .marketplace-flags > * { white-space: normal; font-size: 11.5px; line-height: 1.35; }
+  .app-content .detail-panel .formula-chip { white-space: normal; }
+}
+/* the sheet is used up to 1180 px, so its close button is too (styles.css showed it only on phones) */
+@media (max-width: 1180px) {
+  .app-content .detail-panel .mobile-close { display: inline-grid !important; place-items: center; width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--ux-border, rgba(255,255,255,.12)); background: transparent; color: var(--text); }
+}
