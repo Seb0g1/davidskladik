@@ -71,7 +71,7 @@ function PendingCard({ item, onDone }: { item: Pending; onDone: () => void }) {
 }
 
 /** Autopilot settings, last run, drafts waiting for a person (questions tab) and the log. */
-export function FeedbackAutopilot({ tab }: { tab: "reviews" | "questions" }) {
+export function FeedbackAutopilot({ tab = "all" }: { tab?: "reviews" | "questions" | "all" }) {
   const queryClient = useQueryClient();
   const state = useQuery({
     queryKey: ["feedback-autopilot"],
@@ -91,7 +91,7 @@ export function FeedbackAutopilot({ tab }: { tab: "reviews" | "questions" }) {
   if (!data) return state.isLoading ? <div className="ap-panel is-loading"><Loader2 className="spin" size={14} /> Автоответы…</div> : null;
   const last = data.lastRun || {};
   const pending = data.pending || [];
-  const log = (data.log || []).filter((e) => (tab === "reviews" ? e.kind === "review" : e.kind === "question"));
+  const log = (data.log || []).filter((e) => (tab === "all" ? true : tab === "reviews" ? e.kind === "review" : e.kind === "question"));
   const lastText = last.at
     ? `${time(last.at)}: отзывов ${Number(last.reviewsAnswered || 0)}, «оригинал» ${Number(last.originalityAnswered || 0)}, черновиков ${Number(last.drafts || 0)}${Number(last.errors || 0) ? `, ошибок ${Number(last.errors)}` : ""}${last.error ? ` — ${String(last.error)}` : ""}`
     : "ещё не запускались";
@@ -105,6 +105,10 @@ export function FeedbackAutopilot({ tab }: { tab: "reviews" | "questions" }) {
           {run.isPending || data.runRequestedAt ? <Loader2 className="spin" size={14} /> : <Play size={14} />} {data.runRequestedAt ? "Запущено…" : "Запустить сейчас"}
         </button>
       </div>
+      <details className="ap-settings">
+        <summary>
+          Режимы: {MODES.filter((m) => data.settings[m.key]).map((m) => m.label).join(", ") || "всё выключено"} <ChevronDown size={14} />
+        </summary>
       <div className="ap-modes">
         {MODES.map((m) => (
           <label key={m.key} className={`ap-mode${data.settings[m.key] ? " is-on" : ""}`}>
@@ -113,9 +117,10 @@ export function FeedbackAutopilot({ tab }: { tab: "reviews" | "questions" }) {
           </label>
         ))}
       </div>
+      </details>
       {!data.enabled ? <div className="inline-warn">Автоответы выключены на сервере (FEEDBACK_AUTOPILOT=false).</div> : null}
 
-      {tab === "questions" && pending.length ? (
+      {tab !== "reviews" && pending.length ? (
         <div className="ap-pending">
           <h3>Ответы на проверку <span>{pending.length}</span></h3>
           {pending.map((item) => <PendingCard key={item.id} item={item} onDone={refresh} />)}

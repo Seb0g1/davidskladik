@@ -1,13 +1,11 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, BookOpen, BotMessageSquare, HelpCircle, Loader2, MessageSquareReply, RefreshCw, Star } from "lucide-react";
+import { BookOpen, BotMessageSquare, HelpCircle, Loader2, MessageSquareReply, RefreshCw, Star } from "lucide-react";
 import { z } from "zod";
 import { fetchJson } from "../api";
 import { MarketplaceBadge } from "../components/MarketplaceBadge";
 import { PageHeader } from "../components/PageHeader";
 import { ReplyBox } from "../components/ReplyBox";
-import { SelectField } from "../components/SelectField";
-import { Stat } from "../components/Stat";
 import { TemplatesDrawer } from "../components/TemplatesDrawer";
 import { FeedbackAutopilot } from "../components/FeedbackAutopilot";
 
@@ -150,6 +148,7 @@ function QuestionCard({ question, templates, onReplied }: { question: QuestionRo
     <div className={`review-card fb-card is-question${question.needsAnswer ? " needs-reply" : " is-answered"}`}>
       <div className="review-head">
         <MarketplaceBadge marketplace={question.marketplace} />
+        <span className="pill fb-kind"><HelpCircle size={12} /> Вопрос</span>
         {question.needsAnswer ? <span className="pill warn">ждёт ответа</span> : <span className="pill ok">отвечено ({question.answersCount})</span>}
         <small className="review-date">{[question.authorName, formatDate(question.createdAt)].filter(Boolean).join(" · ")}</small>
       </div>
@@ -193,181 +192,163 @@ function feedbackWarning(text: string) {
   return text;
 }
 
+type Kind = "all" | "reviews" | "questions";
+type FeedItem = { kind: "review"; at: string; waiting: boolean; urgent: boolean; row: ReviewRow } | { kind: "question"; at: string; waiting: boolean; urgent: boolean; row: QuestionRow };
+
+const MARKETPLACES = [
+  { value: "all", label: "Все" },
+  { value: "ozon", label: "Ozon" },
+  { value: "yandex", label: "Маркет" },
+  { value: "wb", label: "WB" },
+];
+
+/**
+ * Отзывы и вопросы — одна лента: сначала то, что ждёт ответа (1–3★ первыми), потом остальное по дате.
+ * Фильтры кнопками: что показывать (всё / отзывы / вопросы / 1–3★) и маркетплейс.
+ */
 export function FeedbackPage({ defaultTab }: { defaultTab: "reviews" | "questions" }) {
   const queryClient = useQueryClient();
-  const [tab, setTab] = useState<"reviews" | "questions">(defaultTab);
+  const [kind, setKind] = useState<Kind>(defaultTab === "questions" ? "questions" : "all");
   const [marketplace, setMarketplace] = useState("all");
   const [unanswered, setUnanswered] = useState(true);
   const [negativeOnly, setNegativeOnly] = useState(false);
-  const [templatesOpen, setTemplatesOpen] = useState(false);
-
-  function switchTab(next: "reviews" | "questions") {
-    setTab(next);
-    setMarketplace("all");
-    setNegativeOnly(false);
-  }
+  const [templatesKind, setTemplatesKind] = useState<"reviews" | "questions" | null>(null);
 
   const reviewsQuery = useQuery({
     queryKey: ["reviews", marketplace, unanswered],
     queryFn: () => fetchJson(`/api/reviews?marketplace=${marketplace}&unanswered=${unanswered}&limit=50`, z.unknown()) as Promise<{ rows: ReviewRow[]; warnings: string[] }>,
     refetchInterval: 120_000,
-    enabled: tab === "reviews",
   });
-  const reviewTemplatesQuery = useQuery({
-    queryKey: ["review-templates"],
-    queryFn: () => fetchJson("/api/reviews/templates", z.unknown()) as Promise<{ templates: Template[] }>,
-    enabled: tab === "reviews",
-  });
-
   const questionsQuery = useQuery({
     queryKey: ["questions", marketplace, unanswered],
     queryFn: () => fetchJson(`/api/questions?marketplace=${marketplace}&unanswered=${unanswered}&limit=50`, z.unknown()) as Promise<{ rows: QuestionRow[]; warnings: string[] }>,
     refetchInterval: 120_000,
-    enabled: tab === "questions",
+  });
+  const reviewTemplatesQuery = useQuery({
+    queryKey: ["review-templates"],
+    queryFn: () => fetchJson("/api/reviews/templates", z.unknown()) as Promise<{ templates: Template[] }>,
   });
   const questionTemplatesQuery = useQuery({
     queryKey: ["question-templates"],
     queryFn: () => fetchJson("/api/questions/templates", z.unknown()) as Promise<{ templates: Template[] }>,
-    enabled: tab === "questions",
   });
 
-  const isReviews = tab === "reviews";
-  const activeQuery = isReviews ? reviewsQuery : questionsQuery;
   const reviewRows = reviewsQuery.data?.rows || [];
   const questionRows = questionsQuery.data?.rows || [];
   const reviewTemplates = reviewTemplatesQuery.data?.templates || [];
   const questionTemplates = questionTemplatesQuery.data?.templates || [];
 
-  const reviewCounters = useMemo(() => ({
-    total: reviewRows.length,
-    needsReply: reviewRows.filter((r) => r.needsReply).length,
+  const counts = useMemo(() => ({
+    reviewsWaiting: reviewRows.filter((r) => r.needsReply).length,
+    questionsWaiting: questionRows.filter((q) => q.needsAnswer).length,
     negative: reviewRows.filter((r) => r.rating <= 3).length,
     avg: reviewRows.length ? (reviewRows.reduce((s, r) => s + r.rating, 0) / reviewRows.length).toFixed(1) : "–",
-  }), [reviewRows]);
-  // 1–3★ first among the ones waiting: they hurt the rating and need the answer soonest
-  const shownReviews = useMemo(() => {
-    const list = negativeOnly ? reviewRows.filter((r) => r.rating <= 3) : reviewRows;
-    return [...list].sort((a, b) => Number(Boolean(b.needsReply)) - Number(Boolean(a.needsReply))
-      || Number(b.rating <= 3) - Number(a.rating <= 3)
-      || String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
-  }, [reviewRows, negativeOnly]);
+  }), [reviewRows, questionRows]);
 
-  const questionCounters = useMemo(() => ({
-    total: questionRows.length,
-    needsAnswer: questionRows.filter((q) => q.needsAnswer).length,
-  }), [questionRows]);
+  const feed = useMemo(() => {
+    const items: FeedItem[] = [];
+    if (kind !== "questions") {
+      for (const row of reviewRows) {
+        if (negativeOnly && row.rating > 3) continue;
+        items.push({ kind: "review", at: String(row.createdAt || ""), waiting: Boolean(row.needsReply), urgent: row.rating <= 3, row });
+      }
+    }
+    if (kind !== "reviews" && !negativeOnly) {
+      for (const row of questionRows) items.push({ kind: "question", at: String(row.createdAt || ""), waiting: Boolean(row.needsAnswer), urgent: false, row });
+    }
+    return items.sort((a, b) => Number(b.waiting) - Number(a.waiting) || Number(b.urgent) - Number(a.urgent) || b.at.localeCompare(a.at));
+  }, [kind, negativeOnly, reviewRows, questionRows]);
 
-  const warnings = activeQuery.data?.warnings || [];
+  const loading = (kind !== "questions" && reviewsQuery.isFetching) || (kind !== "reviews" && questionsQuery.isFetching);
+  const warnings = [...new Set([
+    ...(kind !== "questions" ? reviewsQuery.data?.warnings || [] : []),
+    ...(kind !== "reviews" ? questionsQuery.data?.warnings || [] : []),
+  ])];
+  const errors = [kind !== "questions" ? reviewsQuery.error : null, kind !== "reviews" ? questionsQuery.error : null].filter(Boolean) as Error[];
+  const refetch = () => { void reviewsQuery.refetch(); void questionsQuery.refetch(); };
+  const chooseKind = (next: Kind) => { setKind(next); if (next === "questions") setNegativeOnly(false); };
 
   return (
-    <section className="page-section reviews-page">
+    <section className="page-section reviews-page fb-inbox">
       <PageHeader
-        title="Обратная связь"
-        subtitle="Отзывы и вопросы покупателей на Ozon, Яндекс.Маркете и Wildberries."
+        title="Отзывы и вопросы"
+        subtitle="Всё, что пишут покупатели на Ozon, Маркете и Wildberries, — в одной ленте. Сначала то, что ждёт ответа."
         action={(
           <div className="row-actions">
-            <button className="secondary-action" type="button" onClick={() => setTemplatesOpen(true)}>
-              <BookOpen size={16} /> Шаблоны
-            </button>
-            <button className="secondary-action" type="button" onClick={() => activeQuery.refetch()}>
-              {activeQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить
+            <details className="fb-tpl-menu">
+              <summary className="secondary-action"><BookOpen size={16} /> Шаблоны</summary>
+              <div role="menu">
+                <button type="button" role="menuitem" onClick={(e) => { (e.currentTarget.closest("details") as HTMLDetailsElement).open = false; setTemplatesKind("reviews"); }}>
+                  <Star size={14} /> Ответы на отзывы
+                </button>
+                <button type="button" role="menuitem" onClick={(e) => { (e.currentTarget.closest("details") as HTMLDetailsElement).open = false; setTemplatesKind("questions"); }}>
+                  <HelpCircle size={14} /> Ответы на вопросы
+                </button>
+              </div>
+            </details>
+            <button className="secondary-action" type="button" onClick={refetch}>
+              {loading ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить
             </button>
           </div>
         )}
       />
 
-      <nav className="settings-tabs" aria-label="feedback sections">
-        <button className={tab === "reviews" ? "is-active" : ""} type="button" onClick={() => switchTab("reviews")}>
-          <Star size={14} /> Отзывы{reviewCounters.needsReply ? ` (${reviewCounters.needsReply})` : ""}
-        </button>
-        <button className={tab === "questions" ? "is-active" : ""} type="button" onClick={() => switchTab("questions")}>
-          <HelpCircle size={14} /> Вопросы{questionCounters.needsAnswer ? ` (${questionCounters.needsAnswer})` : ""}
-        </button>
-      </nav>
+      <FeedbackAutopilot tab="all" />
 
-      <FeedbackAutopilot tab={tab} />
-
-      <div className="fb-toolbar">
-        {isReviews ? (
-          <div className="fb-summary" role="group" aria-label="Сводка по отзывам">
-            <span className={`fb-chip${reviewCounters.needsReply ? " is-warn" : ""}`}><AlertCircle size={14} /> Ждут ответа <b>{reviewCounters.needsReply}</b></span>
-            <button type="button" className={`fb-chip is-button${reviewCounters.negative ? " is-neg" : ""}${negativeOnly ? " is-on" : ""}`}
-              aria-pressed={negativeOnly} onClick={() => setNegativeOnly((v) => !v)} title="Показать только оценки 1–3">
-              <Star size={14} /> 1–3★ <b>{reviewCounters.negative}</b>
-            </button>
-            <span className="fb-chip"><Star size={14} fill="#ffb020" color="#ffb020" /> Средняя <b>{reviewCounters.avg}</b></span>
-            <span className="fb-chip is-muted">показано {reviewCounters.total}</span>
-          </div>
-        ) : (
-          <div className="fb-summary" role="group" aria-label="Сводка по вопросам">
-            <span className={`fb-chip${questionCounters.needsAnswer ? " is-warn" : ""}`}><AlertCircle size={14} /> Ждут ответа <b>{questionCounters.needsAnswer}</b></span>
-            <span className="fb-chip is-muted">показано {questionCounters.total}</span>
-          </div>
-        )}
-      <div className="filters-row">
-        <SelectField
-          ariaLabel="Маркетплейс"
-          value={marketplace}
-          onChange={setMarketplace}
-          options={isReviews
-            ? [
-                { value: "all", label: "Все маркетплейсы" },
-                { value: "ozon", label: "Ozon" },
-                { value: "yandex", label: "Яндекс" },
-                { value: "wb", label: "Wildberries" },
-              ]
-            : [
-                { value: "all", label: "Все маркетплейсы" },
-                { value: "ozon", label: "Ozon" },
-                { value: "yandex", label: "Яндекс" },
-                { value: "wb", label: "Wildberries" },
-              ]
-          }
-        />
-        <label className="settings-toggle">
+      <div className="fb-bar" role="toolbar" aria-label="Фильтры">
+        <div className="fb-seg" role="group" aria-label="Что показать">
+          <button type="button" className={kind === "all" && !negativeOnly ? "is-on" : ""} aria-pressed={kind === "all" && !negativeOnly} onClick={() => { chooseKind("all"); setNegativeOnly(false); }}>
+            Всё{counts.reviewsWaiting + counts.questionsWaiting ? <b>{counts.reviewsWaiting + counts.questionsWaiting}</b> : null}
+          </button>
+          <button type="button" className={kind === "reviews" && !negativeOnly ? "is-on" : ""} aria-pressed={kind === "reviews" && !negativeOnly} onClick={() => { chooseKind("reviews"); setNegativeOnly(false); }}>
+            <Star size={14} /> Отзывы{counts.reviewsWaiting ? <b>{counts.reviewsWaiting}</b> : null}
+          </button>
+          <button type="button" className={kind === "questions" ? "is-on" : ""} aria-pressed={kind === "questions"} onClick={() => chooseKind("questions")}>
+            <HelpCircle size={14} /> Вопросы{counts.questionsWaiting ? <b>{counts.questionsWaiting}</b> : null}
+          </button>
+          <button type="button" className={`is-neg${negativeOnly ? " is-on" : ""}`} aria-pressed={negativeOnly} onClick={() => { setNegativeOnly((v) => !v); if (kind === "questions") setKind("all"); }} title="Только отзывы с оценкой 1–3">
+            1–3★{counts.negative ? <b>{counts.negative}</b> : null}
+          </button>
+        </div>
+        <div className="fb-seg is-mp" role="group" aria-label="Маркетплейс">
+          {MARKETPLACES.map((m) => (
+            <button key={m.value} type="button" className={marketplace === m.value ? "is-on" : ""} aria-pressed={marketplace === m.value} onClick={() => setMarketplace(m.value)}>{m.label}</button>
+          ))}
+        </div>
+        <label className="settings-toggle fb-only-new">
           <input type="checkbox" checked={unanswered} onChange={(e) => setUnanswered(e.target.checked)} />
-          {isReviews ? "Только без ответа" : "Только без ответа"}
+          Только без ответа
         </label>
-      </div>
+        <span className="fb-avg" title="Средняя оценка показанных отзывов"><Star size={14} fill="#ffb020" color="#ffb020" /> {counts.avg}</span>
       </div>
 
       {warnings.map((w) => <div className="inline-warn" key={w}>{feedbackWarning(w)}</div>)}
-      {activeQuery.error ? <div className="inline-error">{String((activeQuery.error as Error).message)}</div> : null}
+      {errors.map((e) => <div className="inline-error" key={e.message}>{e.message}</div>)}
 
-      {isReviews ? (
-        <div className="reviews-grid">
-          {shownReviews.map((review) => (
-            <ReviewCard
-              key={review.id}
-              review={review}
-              templates={reviewTemplates}
-              onReplied={() => void queryClient.invalidateQueries({ queryKey: ["reviews"] })}
-            />
-          ))}
-          {!shownReviews.length && !reviewsQuery.isFetching ? <div className="empty-state">{negativeOnly ? "Отзывов с оценкой 1–3 нет." : unanswered ? "Все отзывы с ответом." : "Отзывов по фильтру нет."}</div> : null}
-        </div>
-      ) : (
-        <div className="reviews-grid">
-          {questionRows.map((question) => (
-            <QuestionCard
-              key={question.id}
-              question={question}
-              templates={questionTemplates}
-              onReplied={() => void queryClient.invalidateQueries({ queryKey: ["questions"] })}
-            />
-          ))}
-          {!questionRows.length && !questionsQuery.isFetching ? <div className="empty-state">{unanswered ? "На все вопросы ответили." : "Вопросов по фильтру нет."}</div> : null}
-        </div>
-      )}
+      <div className="reviews-grid fb-feed">
+        {feed.map((item) => item.kind === "review" ? (
+          <ReviewCard key={`r:${item.row.id}`} review={item.row} templates={reviewTemplates}
+            onReplied={() => void queryClient.invalidateQueries({ queryKey: ["reviews"] })} />
+        ) : (
+          <QuestionCard key={`q:${item.row.id}`} question={item.row} templates={questionTemplates}
+            onReplied={() => void queryClient.invalidateQueries({ queryKey: ["questions"] })} />
+        ))}
+        {!feed.length && loading ? <div className="empty-state"><Loader2 className="spin" size={16} /> Загружаем отзывы и вопросы…</div> : null}
+        {!feed.length && !loading ? (
+          <div className="empty-state">
+            {negativeOnly ? "Отзывов с оценкой 1–3 нет." : unanswered ? "Всё отвечено — новых отзывов и вопросов нет." : "По этому фильтру пусто."}
+          </div>
+        ) : null}
+      </div>
 
       <TemplatesDrawer
-        open={templatesOpen}
-        onClose={() => setTemplatesOpen(false)}
-        title={isReviews ? "Ответы на отзывы" : "Ответы на вопросы"}
-        description={isReviews ? "Готовые тексты для быстрого ответа на отзывы покупателей." : "Готовые тексты для быстрого ответа на вопросы покупателей."}
-        apiBase={isReviews ? "/api/reviews/templates" : "/api/questions/templates"}
-        queryKey={isReviews ? ["review-templates"] : ["question-templates"]}
-        templates={isReviews ? reviewTemplates : questionTemplates}
+        open={templatesKind !== null}
+        onClose={() => setTemplatesKind(null)}
+        title={templatesKind === "questions" ? "Ответы на вопросы" : "Ответы на отзывы"}
+        description={templatesKind === "questions" ? "Готовые тексты для быстрого ответа на вопросы покупателей." : "Готовые тексты для быстрого ответа на отзывы покупателей."}
+        apiBase={templatesKind === "questions" ? "/api/questions/templates" : "/api/reviews/templates"}
+        queryKey={templatesKind === "questions" ? ["question-templates"] : ["review-templates"]}
+        templates={templatesKind === "questions" ? questionTemplates : reviewTemplates}
       />
     </section>
   );

@@ -12,9 +12,9 @@ export const navItems: NavItem[] = [
   { route: "picking-list", href: "/app/picking-list", label: "Сборка", icon: <ClipboardList size={16} />, keywords: "лист закупки собрать заказ sborka" },
   { route: "avito", href: "/app/avito", label: "Автозагрузка Avito", icon: <Upload size={16} />, keywords: "авито фид avito" },
   { route: "consignment", href: "/app/consignment", label: "Реализация", icon: <HandCoins size={16} />, keywords: "спонсор накладные realizaciya" },
-  { route: "reviews", href: "/app/reviews", label: "Отзывы", icon: <Star size={16} />, keywords: "отзывы оценки otzyvy" },
+  { route: "reviews", href: "/app/reviews", label: "Отзывы и вопросы", icon: <Star size={16} />, keywords: "отзывы оценки вопросы покупателей otzyvy voprosy" },
   { route: "chats", href: "/app/chats", label: "Чаты", icon: <MessageCircle size={16} />, keywords: "сообщения покупатели chaty" },
-  { route: "questions", href: "/app/questions", label: "Вопросы", icon: <HelpCircle size={16} />, keywords: "вопросы покупателей voprosy" },
+  { route: "questions", href: "/app/questions", label: "Вопросы покупателей", icon: <HelpCircle size={16} />, keywords: "вопросы покупателей voprosy" },
   { route: "support", href: "/app/support", label: "Поддержка сайта", icon: <MessageCircleHeart size={16} />, keywords: "сайт чат поддержка" },
   { route: "settings", href: "/app/settings", label: "Настройки", icon: <Settings size={16} />, keywords: "сотрудники доступы ключи nastroyki" },
   { route: "system", href: "/app/system", label: "Система", icon: <Activity size={16} />, keywords: "восстановление из архива разархив здоровье очереди логи" },
@@ -39,7 +39,7 @@ export const navItems: NavItem[] = [
 // задачам: покупатели → карточки → деньги → каналы продаж → справочники → система.
 export const NAV_SECTIONS: Array<{ id: string; title?: string; routes: AppRoute[] }> = [
   { id: "daily", routes: ["dashboard", "warehouse", "picking-list", "supplier-cart", "suppliers"] },
-  { id: "customers", title: "Покупатели", routes: ["chats", "questions", "reviews", "support"] },
+  { id: "customers", title: "Покупатели", routes: ["chats", "reviews", "support"] },
   { id: "cards", title: "Карточки товаров", routes: ["card-improve", "card-health", "fragrantica", "supplier-match", "ozon-docs", "problem-products"] },
   { id: "money", title: "Цены и деньги", routes: ["prices", "finance", "consignment"] },
   { id: "channels", title: "Каналы продаж", routes: ["shop", "avito", "import"] },

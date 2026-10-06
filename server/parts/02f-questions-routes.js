@@ -10,6 +10,50 @@
 
 const questionTemplatesPath = path.join(dataDir, "question-templates.json");
 
+// Yandex keeps needAnswer=true while the shop's answer waits for moderation (and for answers posted elsewhere),
+// so «ждёт ответа» is decided by the question's own answers: one from the shop (not a buyer) = answered.
+// Cached 15 min; an answer we sent is remembered at once.
+const yandexQuestionAnswerCache = new Map();
+
+function rememberYandexQuestionAnswered(questionId, status = "UNMODERATED") {
+  yandexQuestionAnswerCache.set(cleanText(questionId), { at: Date.now(), answered: true, status });
+}
+
+async function yandexQuestionShopAnswer(shop, questionId) {
+  const key = cleanText(questionId);
+  const cached = yandexQuestionAnswerCache.get(key);
+  if (cached && Date.now() - cached.at < 15 * 60_000) return cached;
+  const data = await yandexRequest(shop, "POST", `/v1/businesses/${shop.businessId}/goods-questions/answers?limit=50`, { questionId: Number(key) });
+  const own = (data?.result?.answers || []).find((answer) => cleanText(answer.author?.type).toUpperCase() !== "USER"
+    && cleanText(answer.status).toUpperCase() !== "DELETED");
+  const entry = { at: Date.now(), answered: Boolean(own), status: cleanText(own?.status) };
+  yandexQuestionAnswerCache.set(key, entry);
+  return entry;
+}
+
+/** Marks Yandex questions that already have the shop's answer; on an API error the question is left as is. */
+async function markYandexQuestionsAnswered(shop, rows = []) {
+  const queue = rows.slice();
+  const worker = async () => {
+    while (queue.length) {
+      const row = queue.shift();
+      try {
+        const own = await yandexQuestionShopAnswer(shop, row.externalId);
+        if (own.answered) {
+          row.needsAnswer = false;
+          row.answersCount = Math.max(1, Number(row.answersCount || 0));
+          row.status = own.status === "UNMODERATED" ? "MODERATION" : "PROCESSED";
+        }
+      } catch (error) {
+        row.answerCheckFailed = true;
+        logger.warn("yandex question answers lookup failed", { question: row.externalId, detail: error?.message });
+      }
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
+  return rows;
+}
+
 async function readQuestionTemplates() {
   try {
     const parsed = JSON.parse(await fs.readFile(questionTemplatesPath, "utf8"));
@@ -161,9 +205,10 @@ app.get("/api/questions", requireAdmin, async (request, response, next) => {
               if (!batch.length || !pageToken) break;
             }
           }
+          const shopRows = [];
           for (const { question, needAnswer } of byId.values()) {
             const ids = question.questionIdentifiers || {};
-            yandexQuestions.push({
+            shopRows.push({
               id: `yandex:${cleanText(ids.id)}`,
               marketplace: "yandex",
               target: shop.id || "yandex",
@@ -180,6 +225,8 @@ app.get("/api/questions", requireAdmin, async (request, response, next) => {
               needsAnswer: needAnswer,
             });
           }
+          await markYandexQuestionsAnswered(shop, shopRows.filter((row) => row.needsAnswer));
+          yandexQuestions.push(...(onlyNew ? shopRows.filter((row) => row.needsAnswer) : shopRows));
         } catch (error) {
           warnings.push(`Yandex ${shop.id}: ${error?.message || "ошибка"}`);
         }
@@ -253,6 +300,7 @@ app.post("/api/questions/reply", requireAdmin, async (request, response, next) =
         parentEntityId: { id: Number(externalId), type: "QUESTION" },
         text: text.slice(0, 5000),
       });
+      rememberYandexQuestionAnswered(externalId);
       await appendAudit(request, "questions.reply", { entityType: "question", entityId: `yandex:${externalId}` });
       return response.json({ ok: true, result });
     }

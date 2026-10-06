@@ -104,8 +104,12 @@ async function sendQuestionAnswer({ marketplace, target, externalId, sku, text }
   if (marketplace === "yandex") {
     const shop = getYandexShopByTarget(target) || getYandexShops()[0];
     if (!shop?.businessId) throw new Error("Yandex кабинет не найден");
-    return yandexRequest(shop, "POST", `/v1/businesses/${shop.businessId}/goods-questions/update`,
+    // never a second answer: the question may have been answered in the cabinet or by another tool
+    if ((await yandexQuestionShopAnswer(shop, externalId)).answered) throw new Error("На этот вопрос уже есть ответ магазина");
+    const result = await yandexRequest(shop, "POST", `/v1/businesses/${shop.businessId}/goods-questions/update`,
       { operationType: "CREATE", parentEntityId: { id: Number(externalId), type: "QUESTION" }, text: text.slice(0, 5000) });
+    rememberYandexQuestionAnswered(externalId);
+    return result;
   }
   if (marketplace === "wb") {
     const account = getWbAccountByTarget(target) || getWbAccounts()[0];
@@ -174,11 +178,14 @@ async function feedbackAutopilotQuestions() {
     seenBusinesses.add(String(shop.businessId));
     try {
       const data = await yandexRequest(shop, "POST", `/v1/businesses/${shop.businessId}/goods-questions?limit=50`, { needAnswer: true, sort: "CREATED_AT_DESC" });
-      for (const q of data?.result?.questions || []) {
+      const rows = (data?.result?.questions || []).map((q) => {
         const ids = q.questionIdentifiers || {};
-        out.push({ marketplace: "yandex", target: shop.id || "yandex", externalId: cleanText(ids.id), sku: "", offerId: cleanText(ids.offerId),
-          productName: "", text: cleanText(q.text), createdAt: cleanText(q.createdAt || "") });
-      }
+        return { marketplace: "yandex", target: shop.id || "yandex", externalId: cleanText(ids.id), sku: "", offerId: cleanText(ids.offerId),
+          productName: "", text: cleanText(q.text), createdAt: cleanText(q.createdAt || ""), needsAnswer: true };
+      });
+      // only questions without the shop's answer, and only when the check itself worked
+      await markYandexQuestionsAnswered(shop, rows);
+      out.push(...rows.filter((q) => q.needsAnswer && !q.answerCheckFailed));
     } catch (error) { logger.warn("feedback autopilot: yandex questions", { shop: shop.id, detail: error?.message }); }
   }
   const yandexRows = out.slice(yandexStart);

@@ -2421,3 +2421,50 @@ body:has(.bulk-action-bar) .toast-stack { bottom: 88px; }
   .picking-page .picking-bulk-bar .danger-action { flex: 1 1 100%; order: 3; justify-content: center; white-space: nowrap; height: 40px; }
 }
 
+
+/* Отзывы и вопросы — одна лента: фильтры кнопками, пометка «Вопрос», меню шаблонов */
+.fb-inbox .fb-bar { position: sticky; top: 0; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin: 4px 0 14px; padding: 10px 0; background: var(--bg, #0b1220); }
+.fb-inbox .fb-seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: 12px; border: 1px solid var(--ux-border, rgba(255,255,255,.1)); background: var(--ux-panel, transparent); }
+.fb-inbox .fb-seg button { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border: 0; border-radius: 9px; background: transparent; color: var(--muted); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+.fb-inbox .fb-seg button:hover { color: var(--text); background: rgba(var(--accent-rgb), .07); }
+.fb-inbox .fb-seg button.is-on { background: rgba(var(--accent-rgb), .18); color: var(--text); }
+.fb-inbox .fb-seg button.is-neg { color: #ff9b9b; }
+.fb-inbox .fb-seg button.is-neg.is-on { background: rgba(255, 92, 92, .18); color: #ffd0d0; }
+.fb-inbox .fb-seg button b { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: rgba(255, 176, 32, .2); color: #ffcf73; font-size: 11px; line-height: 20px; text-align: center; font-variant-numeric: tabular-nums; }
+.fb-inbox .fb-seg button:focus-visible { outline: 2px solid rgb(var(--accent-rgb)); outline-offset: 1px; }
+.fb-inbox .fb-only-new { margin: 0; }
+.fb-inbox .fb-avg { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.fb-inbox .fb-kind { display: inline-flex; align-items: center; gap: 4px; background: rgba(199, 146, 234, .16); color: #dcb8f5; }
+.fb-tpl-menu { position: relative; }
+.fb-tpl-menu > summary { list-style: none; cursor: pointer; }
+.fb-tpl-menu > summary::-webkit-details-marker { display: none; }
+.fb-tpl-menu > div { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; min-width: 210px; padding: 6px; border-radius: 12px; border: 1px solid var(--ux-border, rgba(255,255,255,.12)); background: var(--panel, #111a2e); box-shadow: 0 12px 32px rgba(0,0,0,.35); display: grid; gap: 2px; }
+.fb-tpl-menu > div button { display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 10px; border: 0; border-radius: 8px; background: transparent; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.fb-tpl-menu > div button:hover { background: rgba(var(--accent-rgb), .1); }
+@media (max-width: 720px) {
+  .fb-inbox .fb-bar { gap: 8px; }
+  .fb-inbox .fb-seg { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .fb-inbox .fb-seg::-webkit-scrollbar { display: none; }
+  .fb-inbox .fb-seg.is-mp { flex: 1 1 auto; }
+  .fb-inbox .fb-seg.is-mp button { flex: 1 1 0; justify-content: center; }
+  .fb-inbox .fb-avg { margin-left: auto; }
+}
+/* автоответы: режимы свёрнуты в одну строку, панель не шире экрана */
+.ap-panel, .ap-panel > *, .ap-pending, .ap-draft { min-width: 0; max-width: 100%; }
+.ap-settings > summary { cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
+.ap-settings > summary::-webkit-details-marker { display: none; }
+.ap-settings[open] > summary { margin-bottom: 8px; }
+.ap-settings[open] > summary svg { transform: rotate(180deg); }
+@media (max-width: 720px) {
+  .ap-modes { grid-template-columns: minmax(0, 1fr); }
+  .ap-last { flex-basis: 100%; min-width: 0; }
+  .ap-head .secondary-action { width: 100%; justify-content: center; }
+  .ap-actions { flex-wrap: wrap; }
+  .ap-actions > * { flex: 1 1 auto; justify-content: center; }
+}
+@media (max-width: 720px) {
+  .fb-inbox .fb-seg:not(.is-mp) { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); overflow: visible; width: 100%; }
+  .fb-inbox .fb-seg:not(.is-mp) button { justify-content: center; }
+  .ap-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ap-actions > :last-child { grid-column: 1 / -1; grid-row: 1; }
+}
