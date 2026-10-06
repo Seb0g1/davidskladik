@@ -2389,3 +2389,21 @@ body:has(.bulk-action-bar) .toast-stack { bottom: 88px; }
   .ap-log-product { grid-column: 1 / -1; }
   .ap-actions .primary-action { flex: 1; justify-content: center; }
 }
+
+/* Фото товара в автокорзине и сборке: сверить с карточкой маркетплейса, нажатие — на весь экран */
+.order-photo { position: relative; flex: none; width: 52px; height: 52px; padding: 0; border-radius: 10px; border: 1px solid var(--ux-border, rgba(255,255,255,.12)); background: #fff; overflow: hidden; cursor: zoom-in; display: grid; place-items: center; }
+.order-photo.is-lg { width: 64px; height: 64px; }
+.order-photo img { width: 100%; height: 100%; object-fit: contain; }
+.order-photo.is-empty { background: rgba(var(--accent-rgb), .07); color: var(--muted); cursor: default; }
+.order-photo:focus-visible { outline: 2px solid rgb(var(--accent-rgb)); outline-offset: 2px; }
+.order-photo-count { position: absolute; right: 3px; top: 3px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: rgba(0,0,0,.62); color: #fff; font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; }
+.order-photo-src { position: absolute; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.55); color: #fff; font-size: 9px; font-weight: 600; line-height: 13px; text-align: center; letter-spacing: .02em; }
+.cart-line { grid-template-columns: auto 52px minmax(0, 1fr) 84px minmax(160px, 240px) auto; }
+.picking-page .picking-row-header { align-items: center; }
+@media (max-width: 720px) {
+  .cart-line { grid-template-columns: auto 60px minmax(0, 1fr) auto; }
+  .cart-line .order-photo { width: 60px; height: 60px; grid-row: span 2; }
+  .cart-line-supplier { grid-column: 3 / 4; }
+  .order-photo.is-lg { width: 72px; height: 72px; }
+  .picking-page .picking-row-header { flex-wrap: nowrap !important; align-items: flex-start; }
+}

@@ -1,3 +1,4 @@
+import { OrderPhoto } from "../components/OrderPhoto";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CalendarDays, Check, CheckCircle2, ChevronDown, ClipboardList, Clock, Copy, Database, Download, Info, Loader2, MoreHorizontal, PackageX, Pencil, RefreshCw, Repeat2, RotateCcw, Search, ShoppingBag, Trash2, Users, Wallet, X, Zap } from "lucide-react";
 import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
@@ -1667,6 +1668,7 @@ export function PickingListPage() {
                           return (
                             <div className={`picking-row status-${row.status}`} key={row.key}>
                               <div className="picking-row-header" onClick={() => toggleRowExpand(row.key)}>
+                                <OrderPhoto photos={row.photos} sources={row.photoSources} name={row.productName || row.offerId} />
                                 <div className="picking-row-header-left">
                                   <strong className="picking-row-name">{row.productName || row.offerId}</strong>
                                   <span className="picking-row-sub"><MarketplaceBadge marketplace={row.marketplace} />{row.isExpress ? <span className="express-badge"><Zap size={11} /> Экспресс</span> : null}</span>
@@ -1997,6 +1999,7 @@ export function PickingListPage() {
                               return (
                                 <div className={`picking-row status-${row.status}${isMulti ? " in-group" : ""}${expressUrgency?.urgent ? " express-urgent" : expressUrgency ? " express-row" : ""}`} key={row.key}>
                                   <div className="picking-row-header" onClick={() => toggleRowExpand(row.key)}>
+                                    <OrderPhoto photos={row.photos} sources={row.photoSources} name={row.productName || row.offerId} size="lg" />
                                     <div className="picking-row-header-left">
                                       <strong className="picking-row-name">
                                         {row.productName || row.offerId}

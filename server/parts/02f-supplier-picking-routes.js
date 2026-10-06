@@ -75,7 +75,7 @@ app.get("/api/supplier-picking-list", requireStaff, async (request, response, ne
     response.json({
       ok: true,
       updatedAt: state.updatedAt,
-      rows: rows.slice(0, limit),
+      rows: await attachOrderRowPhotos(rows.slice(0, limit)),
       total: rows.length,
       usdRate,
       suppliers,

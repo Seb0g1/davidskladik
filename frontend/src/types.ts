@@ -739,6 +739,8 @@ export const SupplierCartRowSchema = z.object({
   requestRowId: z.coerce.string().optional().default(""),
   pmName: z.coerce.string().optional().default(""),
   pmNameMismatch: z.boolean().optional().default(false),
+  photos: z.array(z.string()).optional().default([]),
+  photoSources: z.array(z.string()).optional().default([]),
 }).passthrough();
 
 export const SupplierCartPreviewSchema = z.object({
@@ -863,6 +865,8 @@ export const SupplierPickingRowSchema = z.object({
   supplierReturnAmountRub: z.number().nullable().optional(),
   wbSupplyId: z.coerce.string().optional().default(""),
   deferredUntil: z.coerce.string().optional().nullable(),
+  photos: z.array(z.string()).optional().default([]),
+  photoSources: z.array(z.string()).optional().default([]),
 }).passthrough();
 
 export const SupplierPickingListSchema = z.object({

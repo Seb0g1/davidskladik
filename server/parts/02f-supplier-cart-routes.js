@@ -21,10 +21,66 @@ app.get("/api/supplier-cart/preview", requireAdmin, async (request, response, ne
   }
 });
 
+// Photos of the ordered product for the cart and the picking list: the picker compares the item in hand with
+// the marketplace card. The order's own card first (Ozon / Маркет), then the same article's other cards;
+// up to 6 photos, each with where it comes from. One query for the whole list.
+async function attachOrderRowPhotos(rows = []) {
+  const prisma = getPrisma();
+  if (!prisma || !rows.length) return rows;
+  const ids = [...new Set(rows.map((r) => cleanText(r.warehouseProductId)).filter(Boolean))];
+  const offers = [...new Set(rows.map((r) => cleanText(r.offerId).toLowerCase()).filter(Boolean))];
+  let products = [];
+  try {
+    products = await prisma.$queryRawUnsafe(
+      `SELECT id, lower(offer_id) AS offer, marketplace, images, raw->'ozon'->'images' AS ozon_images, raw->'ozon'->>'primaryImage' AS ozon_primary,
+              raw->'yandex'->'pictures' AS yandex_pictures
+         FROM warehouse_products WHERE id = ANY($1::text[]) OR lower(offer_id) = ANY($2::text[])`,
+      ids, offers,
+    );
+  } catch (error) {
+    logger.warn("order row photos lookup failed", { detail: error?.message || String(error) });
+    return rows;
+  }
+  const photosOf = (p) => {
+    const out = [];
+    const im = p.images;
+    if (Array.isArray(im)) out.push(...im);
+    else if (im && typeof im === "object") { if (im.imageUrl) out.push(im.imageUrl); if (Array.isArray(im.images)) out.push(...im.images); }
+    if (!out.length) {
+      if (p.ozon_primary) out.push(p.ozon_primary);
+      if (Array.isArray(p.ozon_images)) out.push(...p.ozon_images);
+      if (Array.isArray(p.yandex_pictures)) out.push(...p.yandex_pictures);
+    }
+    return out.map((u) => cleanText(typeof u === "string" ? u : u?.url)).filter((u) => /^https?:\/\//i.test(u));
+  };
+  const label = (mp) => (mp === "yandex" ? "Маркет" : mp === "wb" ? "WB" : mp === "avito" ? "Avito" : "Ozon");
+  const byId = new Map(products.map((p) => [p.id, p]));
+  const byOffer = new Map();
+  for (const p of products) {
+    if (!byOffer.has(p.offer)) byOffer.set(p.offer, []);
+    byOffer.get(p.offer).push(p);
+  }
+  for (const list of byOffer.values()) list.sort((a, b) => Number(b.marketplace === "ozon") - Number(a.marketplace === "ozon"));
+  return rows.map((row) => {
+    const own = byId.get(cleanText(row.warehouseProductId));
+    const cards = [own, ...(byOffer.get(cleanText(row.offerId).toLowerCase()) || []).filter((p) => p !== own)].filter(Boolean);
+    const photos = [];
+    const sources = [];
+    for (const card of cards) {
+      for (const url of photosOf(card)) {
+        if (photos.length >= 6 || photos.includes(url)) continue;
+        photos.push(url);
+        sources.push(label(card.marketplace));
+      }
+    }
+    return photos.length ? { ...row, photos, photoSources: sources } : row;
+  });
+}
+
 app.get("/api/supplier-cart/draft", requireAdmin, async (_request, response, next) => {
   try {
     const state = await readSupplierCartState();
-    const rows = state.draft?.rows || [];
+    const rows = await attachOrderRowPhotos(state.draft?.rows || []);
     const ready = rows.filter((row) => row.ready && !row.alreadyCommitted).length;
     const alreadyCommitted = rows.filter((row) => row.alreadyCommitted).length;
     const skipped = rows.length - ready - alreadyCommitted;

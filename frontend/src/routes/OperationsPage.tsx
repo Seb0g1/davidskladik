@@ -1,3 +1,4 @@
+import { OrderPhoto } from "../components/OrderPhoto";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Clock3, Copy, ListChecks, Loader2, Plus, RefreshCw, Repeat2, Search, Zap } from "lucide-react";
@@ -516,6 +517,7 @@ export function SupplierCartPanel() {
                   {/* одна строка: что заказали и сколько → у кого и почём; служебное — в «Подробнее» */}
                   <div className="cart-line">
                     <input type="checkbox" aria-label="Выбрать строку" disabled={disabled} checked={selected.has(row.key)} onChange={() => toggleRow(row.key)} />
+                    <OrderPhoto photos={row.photos} sources={row.photoSources} name={row.productName || row.offerId} />
                     <div className="cart-line-main">
                       <strong title={row.productName || row.offerId}>{row.productName || row.offerId}</strong>
                       <span className="cart-line-meta">
