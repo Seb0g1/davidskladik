@@ -16,6 +16,8 @@ function applyOzonYandexPairGroupIds(products = []) {
   const ozon = list.find((product) => cleanText(product.marketplace).toLowerCase() === "ozon");
   const yandex = list.find((product) => cleanText(product.marketplace).toLowerCase() === "yandex");
   if (!ozon || !yandex) return [];
+  // a group set by hand, or two different products under one offer id, is not an automatic pair
+  if (!warehouseOfferPairAllowed(ozon, yandex)) return [];
   const groupId = buildOzonYandexAutoPairGroupId(ozon);
   if (!groupId) return [];
   const patches = [];

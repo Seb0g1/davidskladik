@@ -93,6 +93,46 @@ function ozonProductHasYandexExport(product = {}, shop = {}) {
     && /yandex/i.test(cleanText(entry.targetName || entry.marketplace || entry.target || shopId)));
 }
 
+// Offer ids are not unique across Ozon cabinets: AURA's numeric ids collide with Magic Stick's and
+// Маркет's (06.10: AURA «DELILAH Lip Line pencil» 3001 ↔ Маркет «NARCYSS mask» 3001, «PINZETTA» ↔
+// «Elizabeth Arden», 115 such pairs). Paired by the offer id alone they shared supplier links, so a
+// pencil carried a mask's supplier and a conditioner a perfume tester's. An offer-id pair now needs
+// names that share a meaningful word; a name with nothing to judge by (a code, «Дубль108») is not a veto.
+const PAIR_NAME_GENERIC_WORDS = new Set([
+  "для", "and", "the", "with", "eau", "parfum", "parfume", "perfume", "de", "du", "la", "le", "les", "des", "edp", "edt",
+  "вода", "воды", "парфюмерная", "туалетная", "парфюмированная", "парфюмированный", "духи", "мужская", "женская",
+  "мужской", "женский", "мужчин", "женщин", "унисекс", "unisex", "women", "woman", "men", "man", "homme", "femme",
+  "pour", "набор", "tester", "тестер", "краска", "волос", "шампунь", "кондиционер", "маска", "спрей", "крем", "масло",
+  "гель", "лица", "тела", "рук", "ногтей", "уход", "care", "color", "колор", "мыло", "лосьон", "сыворотка", "средство",
+]);
+
+function pairNameWords(name = "") {
+  return String(name || "").toLowerCase().replace(/ё/g, "е").match(/[a-zа-я0-9]+/g)?.filter((word) => (
+    word.length >= 3 && /[a-zа-я]/.test(word) && !/\d/.test(word) && !PAIR_NAME_GENERIC_WORDS.has(word)
+  )) || [];
+}
+
+/** Pure: may two cards with the same offer id be one product? false only when both names are telling and share no word. */
+function warehousePairNamesCompatible(leftName = "", rightName = "") {
+  const left = pairNameWords(leftName);
+  const right = pairNameWords(rightName);
+  const telling = (words, name) => words.length >= 2 && !(typeof isDuplicateMarkerName === "function" && isDuplicateMarkerName(name));
+  if (!telling(left, leftName) || !telling(right, rightName)) return true;
+  const rightSet = new Set(right);
+  return left.some((word) => rightSet.has(word));
+}
+
+/** A group set by hand (not an automatic Ozon↔Маркет pair) is never replaced by an automatic pair. */
+function warehouseProductHasOwnManualGroup(product = {}) {
+  const group = cleanText(product.manualGroupId || product.raw?.manualGroupId || product.raw?.manual_group_id).toLowerCase();
+  return Boolean(group) && !group.startsWith("auto-pair-");
+}
+
+function warehouseOfferPairAllowed(ozon = {}, yandex = {}) {
+  if (warehouseProductHasOwnManualGroup(ozon) || warehouseProductHasOwnManualGroup(yandex)) return false;
+  return warehousePairNamesCompatible(ozon.name, yandex.name);
+}
+
 function buildOzonYandexAutoPairGroupId(ozonProduct = {}) {
   const ozonId = cleanText(ozonProduct.id);
   return ozonId ? `auto-pair-${ozonId}` : "";
@@ -223,7 +263,7 @@ function findOzonMatchForYandexProduct(yandexProduct = {}, indexes = {}) {
   const sourceId = extractYandexSourceProductId(yandex);
   if (sourceId && indexes.byId?.get(sourceId)) return indexes.byId.get(sourceId);
   const offerId = cleanText(yandex.offerId).toLowerCase();
-  if (offerId && indexes.byOffer?.get(offerId)) return indexes.byOffer.get(offerId);
+  if (offerId && indexes.byOffer?.get(offerId) && warehouseOfferPairAllowed(indexes.byOffer.get(offerId), yandex)) return indexes.byOffer.get(offerId);
   const productId = cleanText(yandex.productId);
   if (productId && indexes.byProductId?.get(productId)) return indexes.byProductId.get(productId);
   return null;
@@ -269,7 +309,7 @@ function collectOzonYandexPairsFromProducts(ozonProducts = [], yandexProducts = 
   const seen = new Set();
   for (const ozon of ozonProducts) {
     const offerId = cleanText(ozon.offerId).toLowerCase();
-    if (offerId && yandexByOffer.has(offerId)) {
+    if (offerId && yandexByOffer.has(offerId) && warehouseOfferPairAllowed(ozon, yandexByOffer.get(offerId))) {
       rememberOzonYandexPair(pairs, seen, ozon, yandexByOffer.get(offerId));
     }
   }
