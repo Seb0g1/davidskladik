@@ -157,6 +157,9 @@ app.post("/api/questions/ai-draft", requireAdmin, async (request, response, next
     };
     if (!question.text) return response.status(400).json({ error: "Нет текста вопроса." });
     // a pure «оригинал?» gets the same warm answer as the autopilot; anything else — facts, comparison, check
+    if (isPickupCheckQuestion(question.text)) {
+      return response.json({ ok: true, draft: pickupCheckAnswer(question), storeName: feedbackStoreName(question.marketplace, question.target) });
+    }
     if (isOriginalityOnlyQuestion(question.text)) {
       return response.json({ ok: true, draft: await buildOriginalityAnswer(question, aiSettings), storeName: feedbackStoreName(question.marketplace, question.target) });
     }

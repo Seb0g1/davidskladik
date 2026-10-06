@@ -32,3 +32,12 @@ test("anything else needs data and a check", () => {
     assert.equal(only(q), false, q);
   }
 });
+
+const ctx2 = vm.createContext({ cleanText: (v) => String(v ?? "").trim() });
+const s2 = source.indexOf("// «можно ли проверить");
+vm.runInContext(`${source.slice(s2, source.indexOf("function pickupCheckAnswer"))}\nthis.f = isPickupCheckQuestion;`, ctx2);
+
+test("checking at the pickup point gets the owner's answer", () => {
+  for (const q of ["Здравствуйте! Можно ли проверить в пункте выдачи как пахнет аромат не распыляя? Спасибо", "Можно понюхать на пункте выдачи?", "Можно открыть при получении?", "В ПВЗ можно проверить запах?"]) assert.equal(ctx2.f(q), true, q);
+  for (const q of ["Какой срок годности?", "Крышка флакона на магните или нет?", "Оригинал?"]) assert.equal(ctx2.f(q), false, q);
+});

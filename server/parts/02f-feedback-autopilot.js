@@ -60,6 +60,19 @@ const ORIGINALITY_RE = /(оригинал|подлинн|подделк|пале
 // anything beyond originality makes it a «real» question that needs data and a check
 const OTHER_TOPIC_RE = /(стран|производ|изготов|срок|годност|дата|партия|бат[чк]|объ[её]м|мл\b|состав|нот[аыу]|аромат\s+как|стойк|шлейф|честн|маркир|коробк|упаков|тестер|миниат|пробник|отлив|доставк|наличи|скидк|цен[аы]|размер|подар|отличи|чем\s+отлича|похож|сезон|возраст|мужск|женск|унисекс|аллерг|чек|документ|сертификат|декларац)/i;
 
+// «можно ли проверить / понюхать / открыть в пункте выдачи» — the owner's own answer, sent as is (2026-10-06)
+const PICKUP_CHECK_RE = /((провер|понюха|нюхн|откры|вскры|распыл|попроб|протестир|посмотре)[а-я]*[^?.!]{0,60}(пункт|пвз|выдач|получени|до оплат|на месте|при курьер))|((пункт|пвз|выдач|получени)[^?.!]{0,60}(провер|понюха|откры|вскры|распыл|попроб)[а-я]*)/i;
+
+/** Pure: a question about checking/sniffing/opening the perfume at the pickup point. */
+function isPickupCheckQuestion(text = "") {
+  return PICKUP_CHECK_RE.test(cleanText(text).toLowerCase());
+}
+
+function pickupCheckAnswer(question) {
+  const storeName = feedbackStoreName(question.marketplace, question.target);
+  return `Здравствуйте!\nОткрывать и пользоваться парфюмом до покупки нельзя: после использования парфюм не подлежит возврату и, соответственно, продаже.\nМы со своей стороны делаем всё возможное, чтобы вы остались довольны, и продаём только оригинальную продукцию — об этом говорят отзывы наших покупателей и наш рейтинг на многих площадках.\nС уважением, команда ${storeName}`;
+}
+
 /** Pure: a question asking only whether the product is original. */
 function isOriginalityOnlyQuestion(text = "") {
   const t = cleanText(text).toLowerCase();
@@ -265,7 +278,10 @@ async function buildQuestionAnswerWithFacts(question, facts, aiSettings) {
 - Опирайся на «Данные о товаре». Если там есть ответ (например, страна-изготовитель) — дай его прямо.
 - Если покупатель назвал другой товар (артикулом или названием) и о нём есть «Данные о втором товаре» — сравни по существу: ноты, тип, концентрация, объём, для кого.
 - Отвечай только фактами. Никогда не предлагай написать в чат, продавцу или в поддержку и не проси покупателя что-то уточнить.
-- Если точного факта нет — ответь тем, что известно о товаре, без выдумок.
+- Не пиши «в данных о товаре не указано», «не можем подтвердить» и подобное — покупатель не видит наших данных.
+- Если точного факта о товаре нет, дай полезный общеизвестный факт по теме (например, где указана дата изготовления и обычный срок годности такого средства) или нейтрально скажи, от чего это зависит (партия производителя). Ничего не утверждай о конкретном экземпляре.
+- Не придумывай причин и объяснений, которых нет в данных (почему отличаются карточки, цены, упаковка).
+- Добавляй о товаре только то, что относится к вопросу: ноты — если спрашивают об аромате, страну — если о производстве.
 - Не упоминай другие магазины, сайты и ссылки, не обещай скидок.
 - Последней строкой: «С уважением, команда ${storeName}». Верни только текст ответа.` },
     { role: "user", content: `Товар: «${question.productName || "—"}».\nДанные о товаре:\n${facts.length ? facts.join("\n") : "(нет данных)"}${(question.mentioned || []).map((m) => `\n\nДанные о втором товаре (${m.ref}) «${m.name}»:\n${m.facts.join("\n") || "(нет данных)"}`).join("")}\n\nВопрос покупателя: «${question.text}»` },
@@ -278,7 +294,7 @@ async function verifyQuestionAnswer(question, facts, answer, aiSettings) {
   try {
     const completion = await createTextAiChat([
       { role: "system", content: `Ты проверяешь ответ магазина на вопрос покупателя. Верни JSON {"ok": boolean, "answersQuestion": boolean, "issues": [строки по-русски]}.
-ok=false, если в ответе есть утверждение о товаре, которого нет в данных и которое не является общеизвестным фактом, если ответ противоречит данным или предлагает написать в чат/поддержку. answersQuestion=false, если ответ не отвечает на вопрос.` },
+ok=false, если в ответе есть утверждение о товаре, которого нет в данных и которое не является общеизвестным фактом, если ответ содержит догадку или объяснение причин, которых нет в данных, если ответ противоречит данным или предлагает написать в чат/поддержку. answersQuestion=false, если ответ не отвечает на вопрос.` },
       { role: "user", content: `Данные о товаре:\n${facts.length ? facts.join("\n") : "(нет данных)"}${(question.mentioned || []).map((m) => `\n\nДанные о втором товаре (${m.ref}) «${m.name}»:\n${m.facts.join("\n") || "(нет данных)"}`).join("")}\n\nВопрос: «${question.text}»\n\nОтвет: «${answer}»` },
     ], { json: true, temperature: 0, maxTokens: 300, aiSettings });
     const parsed = JSON.parse(cleanText(completion.choices?.[0]?.message?.content || "{}"));
@@ -340,18 +356,19 @@ async function runFeedbackAutopilot({ source = "schedule" } = {}) {
         if (done >= FEEDBACK_AUTOPILOT_PER_RUN) break;
         const id = `question:${question.marketplace}:${question.externalId}`;
         if (handled[id] || pendingIds.has(id)) continue;
-        const originality = isOriginalityOnlyQuestion(question.text);
+        const pickup = isPickupCheckQuestion(question.text);
+        const originality = pickup || isOriginalityOnlyQuestion(question.text);
         if (originality && !settings.originality) continue;
         if (!originality && !settings.questionDrafts) continue;
         done += 1;
         try {
           if (originality) {
-            const text = await buildOriginalityAnswer(question, aiSettings);
+            const text = pickup ? pickupCheckAnswer(question) : await buildOriginalityAnswer(question, aiSettings);
             await sendQuestionAnswer({ ...question, text });
             totals.originalityAnswered += 1;
             await updateFeedbackAutopilotState((state) => {
-              state.handled[id] = { at: new Date().toISOString(), action: "auto_originality" };
-              feedbackAutopilotLog(state, { kind: "question", action: "sent", reason: "оригинальность", marketplace: question.marketplace, target: question.target, product: question.productName, question: question.text, text });
+              state.handled[id] = { at: new Date().toISOString(), action: pickup ? "auto_pickup" : "auto_originality" };
+              feedbackAutopilotLog(state, { kind: "question", action: "sent", reason: pickup ? "проверка в пункте выдачи" : "оригинальность", marketplace: question.marketplace, target: question.target, product: question.productName, question: question.text, text });
             });
           } else {
             const { offerId, facts, draft, check } = await draftQuestionAnswer(question, aiSettings);

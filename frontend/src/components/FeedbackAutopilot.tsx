@@ -15,7 +15,7 @@ const time = (iso?: unknown) => (iso ? new Date(String(iso)).toLocaleString("ru-
 
 const MODES: Array<{ key: keyof Settings; label: string; hint: string }> = [
   { key: "reviews", label: "Отзывы 4–5★", hint: "ИИ отвечает и сразу отправляет" },
-  { key: "originality", label: "Вопрос «оригинал?»", hint: "ответ с эмодзи сразу, без проверки" },
+  { key: "originality", label: "Типовые вопросы", hint: "«оригинал?» и «проверить в пункте выдачи» — ответ сразу, без проверки" },
   { key: "questionDrafts", label: "Остальные вопросы", hint: "ИИ собирает данные товара, проверяет ответ — отправляете вы" },
 ];
 
