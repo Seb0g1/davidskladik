@@ -2149,3 +2149,89 @@ body:has(.bulk-action-bar) .toast-stack { bottom: 88px; }
 .app-content .detail-panel .copy-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .app-content .detail-panel .copy-action { height: 30px; padding: 0 10px; font-size: 12.5px; font-weight: 500; border-radius: 8px; gap: 5px; display: inline-flex; align-items: center; }
 .app-content .detail-panel .copy-action svg { width: 13px; height: 13px; }
+
+/* Реализация: three numbers on top, the ledger folded, PriceMaster tools in one menu */
+.consignment-page .cn-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.consignment-page .cn-ledger { margin: 12px 0 16px; border: 1px solid var(--ux-border, rgba(255,255,255,.1)); border-radius: var(--ux-radius, 12px); background: var(--ux-panel, transparent); }
+.consignment-page .cn-ledger > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 14px; cursor: pointer; list-style: none; font-size: 14px; }
+.consignment-page .cn-ledger > summary::-webkit-details-marker { display: none; }
+.consignment-page .cn-ledger > summary span { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.consignment-page .cn-ledger > summary b { font-variant-numeric: tabular-nums; }
+.consignment-page .cn-ledger-more { color: rgb(var(--accent-rgb)); font-size: 13px; white-space: nowrap; }
+.consignment-page .cn-ledger[open] .cn-ledger-more { color: var(--muted); }
+.consignment-page .cn-ledger > summary:focus-visible { outline: 2px solid rgb(var(--accent-rgb)); outline-offset: -2px; border-radius: var(--ux-radius, 12px); }
+.consignment-page .cn-ledger-grid { margin: 0; padding: 4px 14px 14px; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px 24px; }
+.consignment-page .cn-ledger-grid div { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-top: 1px solid rgba(255,255,255,.05); font-size: 13px; }
+.consignment-page .cn-ledger-grid dt { color: var(--muted); }
+.consignment-page .cn-ledger-grid dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+.consignment-page .cn-more { position: relative; }
+.consignment-page .cn-more > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.consignment-page .cn-more > summary::-webkit-details-marker { display: none; }
+.consignment-page .cn-more-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; min-width: 250px; padding: 6px; border-radius: 12px; border: 1px solid var(--ux-border-strong, rgba(255,255,255,.16)); background: var(--panel, #0d1830); box-shadow: 0 16px 40px rgba(0,0,0,.45); display: grid; gap: 2px; }
+.consignment-page .cn-more-menu button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--text); font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; }
+.consignment-page .cn-more-menu button:hover:not(:disabled) { background: rgba(var(--accent-rgb), .1); }
+.consignment-page .cn-more-menu button:disabled { opacity: .5; cursor: default; }
+.consignment-page .cn-more-menu button.is-danger { color: #ff8f8f; margin-top: 4px; border-top: 1px solid rgba(255,255,255,.06); border-radius: 0 0 8px 8px; }
+@media (max-width: 720px) {
+  .consignment-page .cn-kpis { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .consignment-page .cn-ledger > summary { flex-direction: column; align-items: flex-start; gap: 4px; }
+  .consignment-page .cn-ledger-grid { grid-template-columns: minmax(0, 1fr); }
+  .consignment-page .cn-more-menu { right: auto; left: 0; }
+}
+.consignment-page .consignment-items-table .table-head,
+.consignment-page .consignment-items-table .table-row { grid-template-columns: minmax(180px, 1.6fr) minmax(80px, .6fr) minmax(100px, .8fr) 124px 124px 70px 96px 136px; }
+.consignment-page .consignment-items-table .table-row > span.row-actions { flex-wrap: nowrap; gap: 6px; }
+@media (max-width: 980px) {
+  .consignment-page .consignment-items-table .table-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: "name name" "art sup" "buy sell" "qty sum" "act act"; gap: 8px 12px; }
+  .consignment-page .consignment-items-table .table-row > span { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .consignment-page .consignment-items-table .table-row > span::before { font-size: 10.5px; font-weight: 700; letter-spacing: 0; text-transform: none; }
+  .consignment-page .consignment-items-table .table-row > span:nth-child(1) { grid-area: name; font-weight: 600; font-size: 15px; }
+  .consignment-page .consignment-items-table .table-row > span:nth-child(1)::before { display: none; }
+  .consignment-page .consignment-items-table .table-row > span:nth-child(2) { grid-area: art; }
+  .consignment-page .consignment-items-table .table-row > span:nth-child(3) { grid-area: sup; }
+  .consignment-page .consignment-items-table .table-row > span:nth-child(4) { grid-area: buy; }
+  .consignment-page .consignment-items-table .table-row > span:nth-child(5) { grid-area: sell; }
+  .consignment-page .consignment-items-table .table-row > span:nth-child(6) { grid-area: qty; }
+  .consignment-page .consignment-items-table .table-row > span:nth-child(7) { grid-area: sum; }
+  .consignment-page .consignment-items-table .table-row > span:nth-child(8) { grid-area: act; flex-direction: row; }
+  .consignment-page .consignment-items-table .table-row > span:nth-child(8)::before { display: none; }
+  .consignment-page .consignment-items-table .table-row > span:nth-child(8) .secondary-action { flex: 1; height: 40px; justify-content: center; }
+  .consignment-page .consignment-items-table .table-row .finance-inline-edit { flex-direction: row !important; flex-wrap: wrap; align-items: center; }
+  .consignment-page .consignment-items-table .table-row .finance-inline-edit::before { flex-basis: 100%; }
+  .consignment-page .consignment-items-table .table-row .finance-inline-edit input { flex: 1; min-width: 0; width: auto; }
+}
+@media (max-width: 980px) {
+  .consignment-page .consignment-items-table .table-row > span:nth-child(8) .secondary-action { gap: 6px; font-size: 12.5px; }
+  .consignment-page .consignment-items-table .table-row > span:nth-child(8) .secondary-action::after { content: attr(title); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}
+
+/* Цены: reasons as one line of chips with counts; an empty table is one line, not a tall empty frame */
+.price-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 12px; }
+.price-chip { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 11px; border-radius: 999px; border: 1px solid var(--ux-border, rgba(255,255,255,.1)); background: transparent; color: var(--muted); font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; }
+.price-chip.has-count { color: var(--text); }
+.price-chip b { font-variant-numeric: tabular-nums; color: #ffbe45; }
+.price-chip:hover { background: rgba(var(--accent-rgb), .08); }
+.price-chip.is-active { background: rgba(var(--accent-rgb), .18); border-color: rgba(var(--accent-rgb), .5); color: var(--text); }
+.price-chip:focus-visible { outline: 2px solid rgb(var(--accent-rgb)); outline-offset: 2px; }
+.price-table--virtual:has(> .empty-state) { height: auto !important; min-height: 0 !important; }
+@media (max-width: 720px) {
+  .price-chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; min-width: 0; }
+  .price-chips::-webkit-scrollbar { display: none; }
+}
+
+/* Финансы on a phone: a sale is a compact card — product, date · order, profit on the right, purchase and supplier below */
+@media (max-width: 720px) {
+  .finance-orders-table .table-row.finance-order-row { display: grid !important; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "name name" "meta profit" "sup buy" "edit edit"; gap: 4px 12px; padding: 12px 12px !important; }
+  .finance-orders-table .finance-order-row > span { display: block !important; min-width: 0; padding: 0 !important; border: 0 !important; }
+  .finance-orders-table .finance-order-row > span::before { display: none !important; }
+  .finance-orders-table .finance-order-row > span:nth-child(1) { grid-area: meta; color: var(--muted); font-size: 12px; }
+  .finance-orders-table .finance-order-row > span:nth-child(2) { grid-area: meta; color: var(--muted); font-size: 12px; padding-left: 92px !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .finance-orders-table .finance-order-row > span:nth-child(3) { grid-area: name; font-weight: 600; font-size: 14px; line-height: 1.35; }
+  .finance-orders-table .finance-order-row > span:nth-child(4) { grid-area: sup; color: var(--muted); font-size: 12.5px; }
+  .finance-orders-table .finance-order-row > span:nth-child(5) { grid-area: buy; color: var(--muted); font-size: 12.5px; text-align: right; }
+  .finance-orders-table .finance-order-row > span:nth-child(5)::after { content: " закупка"; }
+  .finance-orders-table .finance-order-row > span:nth-child(6) { grid-area: profit; font-weight: 700; font-size: 16px; color: #34d399; text-align: right; font-variant-numeric: tabular-nums; }
+  .finance-orders-table .finance-order-row > span:nth-child(7) { grid-area: edit; margin-top: 6px; }
+  .finance-orders-table .finance-order-row > .finance-row-edit { justify-self: end; margin-top: 2px !important; }
+  .finance-orders-table .finance-order-row > .finance-row-edit .secondary-action { height: 30px; padding: 0 10px; font-size: 12.5px; }
+}

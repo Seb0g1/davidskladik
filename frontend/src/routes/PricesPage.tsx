@@ -53,7 +53,8 @@ const reasonLabel = (reason: unknown) => {
     ozon_price_delayed: "Ozon отложил цену",
     pm_live_timeout: "PriceMaster не ответил",
   };
-  return labels[value] || value || "-";
+  // an unknown code still reads as words, not as snake_case
+  return labels[value] || value.replace(/_/g, " ") || "-";
 };
 
 export function PricesPage() {
@@ -161,9 +162,9 @@ export function PricesPage() {
       </div>
 
       <section className="dashboard-metrics">
-        <Stat label="Товаров под контролем" value={summary.data?.total ?? 0} tone="accent" icon={<BadgeDollarSign size={18} />} />
-        <Stat label="Ждут повтора" value={summary.data?.retryTotal ?? 0} tone={summary.data?.retryTotal ? "warn" : "success"} icon={<AlertTriangle size={18} />} />
-        <Stat label="В автоархиве Ozon" value={summary.data?.ozonUnarchiveQueued ?? 0} tone={summary.data?.ozonUnarchiveQueued ? "warn" : "success"} icon={<Zap size={18} />} />
+        <Stat label="Товаров под контролем" value={Number(summary.data?.total ?? 0).toLocaleString("ru-RU")} tone="accent" icon={<BadgeDollarSign size={18} />} />
+        <Stat label="Ждут повтора" value={Number(summary.data?.retryTotal ?? 0).toLocaleString("ru-RU")} tone={summary.data?.retryTotal ? "warn" : "success"} icon={<AlertTriangle size={18} />} />
+        <Stat label="В автоархиве Ozon" value={Number(summary.data?.ozonUnarchiveQueued ?? 0).toLocaleString("ru-RU")} tone={summary.data?.ozonUnarchiveQueued ? "warn" : "success"} icon={<Zap size={18} />} />
         <Stat label="Проблемы Ozon / Маркет" value={`${ozonIssues} / ${yandexIssues}`} tone={ozonIssues || yandexIssues ? "warn" : "success"} icon={<AlertTriangle size={18} />} />
       </section>
 
@@ -255,28 +256,27 @@ export function PricesPage() {
         )}
       </div>
 
-      <div className="price-reason-grid">
-        {quickFilters.map((filter) => (
-          <button
-            className={reason === filter.reason && applyStatus === filter.status ? "is-active" : ""}
-            type="button"
-            key={`${filter.reason}-${filter.status}`}
-            onClick={() => {
-              setReason(filter.reason);
-              setApplyStatus(filter.status);
-            }}
-          >
-            <AlertTriangle size={14} />
-            <span>{filter.label}</span>
+      {/* one line of filters: the usual reasons with their counts, then whatever else the run reported */}
+      <div className="price-chips" role="group" aria-label="Быстрые фильтры">
+        <button type="button" className={`price-chip${reason === "all" && applyStatus === "all" ? " is-active" : ""}`} onClick={() => { setReason("all"); setApplyStatus("all"); }}>Все</button>
+        {quickFilters.map((filter) => {
+          const count = filter.status === "all" ? Number(reasons[filter.reason] || 0) : 0;
+          return (
+            <button
+              className={`price-chip${reason === filter.reason && applyStatus === filter.status ? " is-active" : ""}${count ? " has-count" : ""}`}
+              type="button"
+              key={`${filter.reason}-${filter.status}`}
+              onClick={() => { setReason(filter.reason); setApplyStatus(filter.status); }}
+            >
+              {filter.label}{count ? <b>{count}</b> : null}
+            </button>
+          );
+        })}
+        {reasonOptions.filter(([key]) => !quickFilters.some((f) => f.reason === key) && !okReasons.includes(key)).slice(0, 8).map(([key, count]) => (
+          <button className={`price-chip has-count${reason === key && applyStatus === "all" ? " is-active" : ""}`} type="button" key={key} onClick={() => { setReason(key); setApplyStatus("all"); }}>
+            {reasonLabel(key)}<b>{count}</b>
           </button>
         ))}
-        {reasonOptions.length ? reasonOptions.slice(0, 8).map(([key, count]) => (
-          <button className={reason === key && applyStatus === "all" ? "is-active" : ""} type="button" key={key} onClick={() => { setReason(key); setApplyStatus("all"); }}>
-            <AlertTriangle size={14} />
-            <span>{reasonLabel(key)}</span>
-            <strong>{count}</strong>
-          </button>
-        )) : <span className="muted-text">Причин пропуска пока нет.</span>}
       </div>
 
       <div className="table-panel price-table price-status-table price-table--virtual" ref={tableRef}>

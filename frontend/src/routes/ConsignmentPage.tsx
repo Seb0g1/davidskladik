@@ -571,40 +571,29 @@ export function ConsignmentPage() {
             <button className="secondary-action" type="button" onClick={openOperations}>
               <History size={16} /> Операции ({operations.data?.operations?.length ?? "…"})
             </button>
-            <span className="cn-header-group" aria-label="PriceMaster">
-              <button
-                className="secondary-action"
-                type="button"
-                onClick={() => { setPmNomenclatureOpen(true); setPmNomenclatureQuery(""); setPmNomenclaturePage(1); }}
-                title="Добавить товар из номенклатуры PriceMaster"
-              >
-                <Package size={16} /> Из PM
+            {/* PriceMaster tools are occasional: one menu instead of four buttons in the header */}
+            <details className="cn-more">
+              <summary className="secondary-action" title="Номенклатура и продажи из PriceMaster">
+                {pmSync.isPending || pmReset.isPending ? <Loader2 className="spin" size={16} /> : <Package size={16} />} PriceMaster
                 {pmNewCount > 0 && <span className="cn-accent-badge">+{pmNewCount}</span>}
-              </button>
-              <button
-                className="secondary-action"
-                type="button"
-                disabled={pmSync.isPending}
-                onClick={() => { setPmSyncResult(null); pmSync.mutate(); }}
-                title="Импортировать продажи из PriceMaster"
-              >
-                {pmSync.isPending ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
-                {pmSync.isPending ? "Синк PM…" : "Синк PM"}
-              </button>
-            </span>
-            <button className="icon-action" type="button" onClick={invalidate} title="Обновить данные">
-              <RefreshCw size={16} />
-            </button>
-            <button
-              className="secondary-action danger cn-header-danger"
-              type="button"
-              disabled={pmReset.isPending}
-              onClick={() => { if (confirm("Удалить все продажи, импортированные из PriceMaster, и вернуть остатки? Это действие нельзя отменить.")) pmReset.mutate(); }}
-              title="Удалить все операции pm_sale_* и восстановить остатки товаров"
-            >
-              {pmReset.isPending ? <Loader2 className="spin" size={16} /> : <RotateCcw size={16} />}
-              Сброс PM
-            </button>
+              </summary>
+              <div className="cn-more-menu" role="menu">
+                <button type="button" role="menuitem" onClick={(e) => { (e.currentTarget.closest("details") as HTMLDetailsElement | null)?.removeAttribute("open"); setPmNomenclatureOpen(true); setPmNomenclatureQuery(""); setPmNomenclaturePage(1); }}>
+                  <Package size={15} /> Добавить из номенклатуры{pmNewCount > 0 ? <span className="cn-accent-badge">+{pmNewCount}</span> : null}
+                </button>
+                <button type="button" role="menuitem" disabled={pmSync.isPending} onClick={(e) => { (e.currentTarget.closest("details") as HTMLDetailsElement | null)?.removeAttribute("open"); setPmSyncResult(null); pmSync.mutate(); }}>
+                  {pmSync.isPending ? <Loader2 className="spin" size={15} /> : <Upload size={15} />} Импортировать продажи
+                </button>
+                <button type="button" role="menuitem" onClick={(e) => { (e.currentTarget.closest("details") as HTMLDetailsElement | null)?.removeAttribute("open"); invalidate(); }}>
+                  <RefreshCw size={15} /> Обновить данные
+                </button>
+                <button type="button" role="menuitem" className="is-danger" disabled={pmReset.isPending}
+                  onClick={(e) => { (e.currentTarget.closest("details") as HTMLDetailsElement | null)?.removeAttribute("open"); if (confirm("Удалить все продажи, импортированные из PriceMaster, и вернуть остатки? Это действие нельзя отменить.")) pmReset.mutate(); }}
+                  title="Удалить все операции pm_sale_* и восстановить остатки товаров">
+                  <RotateCcw size={15} /> Сбросить продажи из PM
+                </button>
+              </div>
+            </details>
           </div>
         )}
       />
@@ -741,23 +730,28 @@ export function ConsignmentPage() {
         </div>
       )}
 
-      <section className="dashboard-metrics">
-        <Stat label="Капитализация (по закупке)" value={money(s?.capitalization)} tone="accent" icon={<Boxes size={18} />} />
-        <Stat label="Товара на складе" value={`${Number(s?.stockQuantity || 0)} шт`} tone="" icon={<Package size={18} />} />
-        <Stat label="Общий баланс" value={money(s?.balance)} tone={Number(s?.balance || 0) >= 0 ? "success" : "warn"} icon={<Wallet size={18} />} />
-        <Stat label="Профит спонсора" value={money(s?.sponsorProfit)} tone="accent" icon={<HandCoins size={18} />} />
-        <Stat label="Мой профит" value={money(s?.myProfit)} tone="success" icon={<TrendingUp size={18} />} />
+      {/* the three numbers people act on; the rest of the ledger is one tap away */}
+      <section className="dashboard-metrics cn-kpis">
+        <Stat label="Общий баланс" value={money(s?.balance)} tone={Number(s?.balance || 0) >= 0 ? "success" : "warn"} icon={<Wallet size={18} />} delta="свободные деньги реализации" />
+        <Stat label="Профит спонсора" value={money(s?.sponsorProfit)} tone="accent" icon={<HandCoins size={18} />} delta={`выплачено ${money(Number(s?.sponsorPayouts || 0) + Number(s?.sponsorProfitPaidOut || 0))}`} />
+        <Stat label="Мой профит" value={money(s?.myProfit)} tone="success" icon={<TrendingUp size={18} />} delta={`выведено ${money(s?.myProfitPaidOut)}`} />
       </section>
 
-      <div className="summary-grid">
-        <div className="system-card"><span>Продано (за всё время)</span><strong>{Number(s?.soldQuantity || 0)} шт на {money(s?.salesRevenue)}</strong></div>
-        <div className="system-card"><span>Общий профит с продаж</span><strong>{money(s?.profitTotal)}</strong></div>
-        <div className="system-card"><span>Стоимость склада по продаже</span><strong>{money(s?.stockSaleValue)}</strong></div>
-        <div className="system-card"><span>Закупки с баланса</span><strong>{money(s?.purchasesFromBalance)}</strong></div>
-        <div className="system-card"><span>Пополнения баланса</span><strong>{money(s?.sponsorTopUps)}</strong></div>
-        <div className="system-card"><span>Выплачено спонсору</span><strong>{money(Number(s?.sponsorPayouts || 0) + Number(s?.sponsorProfitPaidOut || 0))}</strong></div>
-        <div className="system-card"><span>Выведено моего профита</span><strong>{money(s?.myProfitPaidOut)}</strong></div>
-      </div>
+      <details className="cn-ledger">
+        <summary>
+          <span><Boxes size={15} /> На складе <b>{Number(s?.stockQuantity || 0)} шт</b> на <b>{money(s?.capitalization)}</b> по закупке</span>
+          <span className="cn-ledger-more">Подробнее</span>
+        </summary>
+        <dl className="cn-ledger-grid">
+          <div><dt>Продано за всё время</dt><dd>{Number(s?.soldQuantity || 0)} шт на {money(s?.salesRevenue)}</dd></div>
+          <div><dt>Общий профит с продаж</dt><dd>{money(s?.profitTotal)}</dd></div>
+          <div><dt>Склад по цене продажи</dt><dd>{money(s?.stockSaleValue)}</dd></div>
+          <div><dt>Закупки с баланса</dt><dd>{money(s?.purchasesFromBalance)}</dd></div>
+          <div><dt>Пополнения баланса</dt><dd>{money(s?.sponsorTopUps)}</dd></div>
+          <div><dt>Выплачено спонсору</dt><dd>{money(Number(s?.sponsorPayouts || 0) + Number(s?.sponsorProfitPaidOut || 0))}</dd></div>
+          <div><dt>Выведено моего профита</dt><dd>{money(s?.myProfitPaidOut)}</dd></div>
+        </dl>
+      </details>
 
       {newItemOpen || draftItems.length ? (
       <section className="settings-panel settings-panel-wide">
