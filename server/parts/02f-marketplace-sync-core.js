@@ -53,6 +53,10 @@ async function runSync() {
     // Прежние syncId/createdAt сохраняются — кэши индексов остаются валидными.
     if (previous.syncId && !changes.length
       && Object.keys(currentItems).length === Object.keys(previous.items || {}).length) {
+      // the Postgres copy may be a half-written older one (restart mid-upsert): heal it in the background
+      ensurePriceMasterPostgresSnapshotFresh(previous).catch((error) => {
+        logger.warn("PriceMaster postgres snapshot heal failed", { detail: error?.message || String(error) });
+      });
       const unchangedResult = {
         syncId: previous.syncId,
         createdAt: previous.createdAt,

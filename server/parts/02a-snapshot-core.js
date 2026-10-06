@@ -184,7 +184,42 @@ async function upsertPriceMasterSnapshotRows(prisma, normalizedRows, updatedAt) 
   logger.info("PriceMaster postgres snapshot upserted", { rows: unique.length, removed: Number(removed) || 0, ms: Date.now() - startedAt });
 }
 
-async function writePriceMasterSnapshotToPostgres(snapshot = {}) {
+// One write at a time: a heal and a fresh snapshot must not interleave their upserts and deletes.
+let priceMasterPostgresWriteChain = Promise.resolve();
+let priceMasterPostgresHealRunning = false;
+
+function writePriceMasterSnapshotToPostgres(snapshot = {}, options = {}) {
+  const run = priceMasterPostgresWriteChain.then(() => writePriceMasterSnapshotToPostgresNow(snapshot, options));
+  priceMasterPostgresWriteChain = run.catch(() => {});
+  return run;
+}
+
+// The upsert takes minutes; a restart in the middle left rows of older price lists in the copy as active (06.10:
+// rows Сорин removed at 18:20 still stood there at 05:00), and while PriceMaster did not change nothing rewrote
+// it — every lookup that fell back to the copy saw a supplier that was gone. An unchanged sync checks that the
+// copy is exactly this snapshot and rewrites it otherwise.
+async function ensurePriceMasterPostgresSnapshotFresh(snapshot = {}) {
+  if (priceMasterPostgresHealRunning || !shouldUsePostgresStorage()) return { skipped: true };
+  const prisma = getPrisma();
+  const snapshotAt = toDateOrNull(snapshot.createdAt);
+  if (!prisma || !snapshotAt || !Object.keys(snapshot.items || {}).length) return { skipped: true };
+  priceMasterPostgresHealRunning = true;
+  try {
+    const [row] = await prisma.$queryRawUnsafe(
+      `SELECT COUNT(*)::int AS n,
+              COUNT(*) FILTER (WHERE updated_at <> ($1::timestamptz AT TIME ZONE 'UTC'))::int AS stale
+       FROM pm_snapshot_items`,
+      snapshotAt.toISOString(),
+    );
+    if (!row || (Number(row.stale) === 0 && Number(row.n) > 0)) return { fresh: true };
+    logger.warn("PriceMaster postgres snapshot out of step, rewriting", { rows: Number(row.n), stale: Number(row.stale), snapshotAt: snapshot.createdAt });
+    return await writePriceMasterSnapshotToPostgres(snapshot, { force: true });
+  } finally {
+    priceMasterPostgresHealRunning = false;
+  }
+}
+
+async function writePriceMasterSnapshotToPostgresNow(snapshot = {}, { force = false } = {}) {
   if (!shouldUsePostgresStorage()) return { skipped: true, reason: "postgres_disabled" };
   const prisma = getPrisma();
   if (!prisma) return { skipped: true, reason: "no_prisma" };
@@ -196,7 +231,7 @@ async function writePriceMasterSnapshotToPostgres(snapshot = {}) {
   const snapshotAt = toDateOrNull(snapshot.createdAt) || new Date();
   // «Unchanged» only when the table already holds THIS snapshot: the count alone hid a copy 9 days old
   const newest = await prisma.priceMasterSnapshotItem.aggregate({ _max: { updatedAt: true } }).catch(() => null);
-  if (existingCount === rows.length && changes === 0 && newest?._max?.updatedAt && newest._max.updatedAt >= snapshotAt) {
+  if (!force && existingCount === rows.length && changes === 0 && newest?._max?.updatedAt && newest._max.updatedAt >= snapshotAt) {
     return { skipped: true, reason: "unchanged", items: rows.length };
   }
 
