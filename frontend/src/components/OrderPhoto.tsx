@@ -1,9 +1,9 @@
 import { ImageOff } from "lucide-react";
 import { openPhotoLightbox } from "./PhotoLightbox";
 
-// A small preview for lists: Ozon serves resized copies (/wc200/), other hosts give the original.
+// A small preview for lists: Ozon serves resized copies (/wc400/), other hosts give the original.
 function thumbUrl(url: string) {
-  return url.replace(/(ir\.ozone\.ru\/s3\/[^/]+\/)(?!wc\d+\/)([^/]+\.(?:jpe?g|png|webp))$/i, "$1wc200/$2");
+  return url.replace(/(ir\.ozone\.ru\/s3\/[^/]+\/)(?!wc\d+\/)([^/]+\.(?:jpe?g|png|webp))$/i, "$1wc400/$2");
 }
 
 /**

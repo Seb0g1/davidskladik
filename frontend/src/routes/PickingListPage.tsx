@@ -17,7 +17,7 @@ import { SupplierPicker, setSupplierColorOrder, supplierColor } from "../compone
 import { DailyCartTotalSchema, PickerBalanceSchema, PickerBalancesSchema, PickerMyDaySchema, PickerReportSchema, PickerSpendingSchema, SupplierCartCancelSchema, SupplierLedgerPaymentSchema, SupplierPickingInvoiceSchema, SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema, SupplierReplaceResponseSchema } from "../types";
 import { PmSearchPanel } from "./SupplierCartPage";
 import { compactDate, copyPlainText, errorMessage, money, numberValue } from "../lib/common";
-import { FlashToast } from "../lib/toast";
+import { FlashToast, toast } from "../lib/toast";
 
 type PickingRow = z.infer<typeof SupplierPickingRowSchema>;
 
@@ -331,6 +331,37 @@ export function PickingListPage() {
     mutationFn: (key: string) =>
       fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}/cancel-cart`, SupplierCartCancelSchema, mutationBody({})),
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
+      void queryClient.invalidateQueries({ queryKey: ["supplier-cart-history"] });
+      void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
+      void queryClient.invalidateQueries({ queryKey: ["finance"] });
+    },
+  });
+  // Admin: delete several «к сборке» rows of one supplier — pick them with checkboxes or take all.
+  // Same request as the per-row «Удалить» (cancel-cart), one row after another.
+  const [bulkDeleteSupplier, setBulkDeleteSupplier] = useState<string | null>(null);
+  const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
+  const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number; failed: number } | null>(null);
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async (keys: string[]) => {
+      let failed = 0;
+      setBulkProgress({ done: 0, total: keys.length, failed: 0 });
+      for (let i = 0; i < keys.length; i += 1) {
+        try {
+          await fetchJson(`/api/supplier-picking-list/${encodeURIComponent(keys[i])}/cancel-cart`, SupplierCartCancelSchema, mutationBody({}));
+        } catch { failed += 1; }
+        setBulkProgress({ done: i + 1, total: keys.length, failed });
+      }
+      return { failed, total: keys.length };
+    },
+    onSuccess: ({ failed, total }) => {
+      if (failed) toast(`Удалено ${total - failed} из ${total}, не удалось: ${failed}`, "error");
+      else toast(`Удалено позиций: ${total}`);
+    },
+    onSettled: () => {
+      setBulkSelected(new Set());
+      setBulkDeleteSupplier(null);
+      setBulkProgress(null);
       void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
       void queryClient.invalidateQueries({ queryKey: ["supplier-cart-history"] });
       void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
@@ -1784,6 +1815,16 @@ export function PickingListPage() {
                         >
                           <Wallet size={14} /> Оплата
                         </button>
+                        {isAdmin && supplierRows.some((r) => r.status === "open") ? (
+                          <button
+                            type="button"
+                            className={`secondary-action picking-bulk-toggle${bulkDeleteSupplier === supplierName ? " is-on" : ""}`}
+                            onClick={() => { setBulkSelected(new Set()); setBulkDeleteSupplier((prev) => (prev === supplierName ? null : supplierName)); }}
+                            title="Удалить позиции к сборке у этого поставщика: выбрать галочками или все"
+                          >
+                            <Trash2 size={14} /> Удалить…
+                          </button>
+                        ) : null}
                       </div>
                     </div>
                     {debtNative > 0 || paidNative > 0 ? <div className="supplier-ledger-row">
@@ -1837,6 +1878,32 @@ export function PickingListPage() {
                     <div className="inline-error" style={{ margin: "0 0 4px" }}>{paymentErrors[supplierName]}</div>
                   ) : null}
                   <div className="picking-row-list">
+                    {bulkDeleteSupplier === supplierName ? (() => {
+                      const openKeys = supplierRows.filter((r) => r.status === "open").map((r) => r.key);
+                      const chosen = openKeys.filter((k) => bulkSelected.has(k));
+                      return (
+                        <div className="picking-bulk-bar" role="region" aria-label="Удаление позиций">
+                          <span>{bulkDeleteMutation.isPending && bulkProgress
+                            ? <>Удаляю <b>{bulkProgress.done}</b> из {bulkProgress.total}…</>
+                            : <>Отметьте позиции к сборке · выбрано <b>{chosen.length}</b> из {openKeys.length}</>}</span>
+                          <button type="button" className="secondary-action" onClick={() => setBulkSelected(new Set(chosen.length === openKeys.length ? [] : openKeys))}>
+                            {chosen.length === openKeys.length ? "Снять все" : "Выбрать все"}
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary-action danger-action"
+                            disabled={!chosen.length || bulkDeleteMutation.isPending}
+                            onClick={() => {
+                              if (!window.confirm(`Удалить ${chosen.length} поз. у «${supplierName}»? Строки уберутся из сборки и из PriceMaster, долг по ним не начислится.`)) return;
+                              bulkDeleteMutation.mutate(chosen);
+                            }}
+                          >
+                            {bulkDeleteMutation.isPending ? <Loader2 className="spin" size={14} /> : <Trash2 size={14} />} Удалить выбранные ({chosen.length})
+                          </button>
+                          <button type="button" className="secondary-action" onClick={() => { setBulkDeleteSupplier(null); setBulkSelected(new Set()); }}>Отмена</button>
+                        </div>
+                      );
+                    })() : null}
                     {(() => {
                       // Group rows by offerId for visual consolidation (same product, different orders)
                       const productMap = new Map<string, PickingRow[]>();
@@ -1999,6 +2066,15 @@ export function PickingListPage() {
                               return (
                                 <div className={`picking-row status-${row.status}${isMulti ? " in-group" : ""}${expressUrgency?.urgent ? " express-urgent" : expressUrgency ? " express-row" : ""}`} key={row.key}>
                                   <div className="picking-row-header" onClick={() => toggleRowExpand(row.key)}>
+                                    {bulkDeleteSupplier === supplierName && row.status === "open" ? (
+                                      <label className="picking-bulk-check" onClick={(e) => e.stopPropagation()} title="Удалить эту позицию">
+                                        <input
+                                          type="checkbox"
+                                          checked={bulkSelected.has(row.key)}
+                                          onChange={(e) => setBulkSelected((prev) => { const next = new Set(prev); if (e.target.checked) next.add(row.key); else next.delete(row.key); return next; })}
+                                        />
+                                      </label>
+                                    ) : null}
                                     <OrderPhoto photos={row.photos} sources={row.photoSources} name={row.productName || row.offerId} size="lg" />
                                     <div className="picking-row-header-left">
                                       <strong className="picking-row-name">

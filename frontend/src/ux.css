@@ -2407,3 +2407,17 @@ body:has(.bulk-action-bar) .toast-stack { bottom: 88px; }
   .order-photo.is-lg { width: 72px; height: 72px; }
   .picking-page .picking-row-header { flex-wrap: nowrap !important; align-items: flex-start; }
 }
+
+/* Сборка: удаление позиций поставщика галочками (только админ) */
+.picking-page .picking-bulk-toggle.is-on { border-color: rgba(255, 92, 92, .6); color: #ff9b9b; }
+.picking-page .picking-bulk-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 8px 12px; padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(255, 92, 92, .45); background: rgba(255, 92, 92, .07); font-size: 13px; }
+.picking-page .picking-bulk-bar > span { flex: 1; min-width: 180px; }
+.picking-page .picking-bulk-bar .secondary-action { min-height: 34px; height: 34px; padding: 0 12px; font-size: 13px; }
+.picking-page .picking-bulk-check { display: grid; place-items: center; width: 34px; height: 34px; flex: none; cursor: pointer; }
+.picking-page .picking-bulk-check input { width: 20px; height: 20px; accent-color: #ff5c5c; cursor: pointer; }
+@media (max-width: 720px) {
+  .picking-page .picking-bulk-bar { margin: 8px 0; }
+  .picking-page .picking-bulk-bar > span { flex-basis: 100%; }
+  .picking-page .picking-bulk-bar .danger-action { flex: 1 1 100%; order: 3; justify-content: center; white-space: nowrap; height: 40px; }
+}
+
