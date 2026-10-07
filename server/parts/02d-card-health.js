@@ -850,21 +850,73 @@ async function applyVariantDedupe({ dryRun = false, offerIds = null } = {}) {
     }
   }
   marketDedupeCache.at = 0;
-  logger.info("market variant dedupe", { groups: out.groups, archived: out.archived, failed: out.failed });
+  // an archived offer still sits in its Market variant group and keeps «Дубль варианта» on both cards —
+  // archived duplicates leave the group
+  const moved = await moveArchivedDuplicatesOutOfGroups({ offerIds: plan.flatMap((p) => p.archive) }).catch((error) => ({ error: error?.message }));
+  out.movedOut = moved.updated || 0;
+  logger.info("market variant dedupe", { groups: out.groups, archived: out.archived, failed: out.failed, movedOut: out.movedOut });
   return out;
 }
+
+/** Own variant group of an archived duplicate: unique per offer, so archived copies never collide either. */
+function archivedDuplicateGroupName(groupName, offerId) {
+  const tail = ` архив ${offerId}`;
+  return `${String(groupName || "").slice(0, 255 - tail.length)}${tail}`.trim();
+}
+
+/**
+ * Archived duplicates (market_offer_dedupe) get their own variant group (parameter 200) on Market.
+ * offerIds limits the run; without it every archived duplicate is checked (onlyChanged skips those already moved).
+ */
+async function moveArchivedDuplicatesOutOfGroups({ dryRun = false, offerIds = null } = {}) {
+  const prisma = await requireMarketDedupeTable();
+  const only = offerIds ? new Set(offerIds.map((id) => cleanText(id).toLowerCase())) : null;
+  const rows = (await prisma.$queryRawUnsafe(`SELECT shop_id, offer_id, group_id FROM market_offer_dedupe WHERE group_id IS NOT NULL`))
+    .filter((r) => !only || only.has(String(r.offer_id).toLowerCase()));
+  const byShop = new Map();
+  for (const r of rows) {
+    if (!byShop.has(r.shop_id)) byShop.set(r.shop_id, []);
+    byShop.get(r.shop_id).push({ offerId: r.offer_id, marketCategoryId: YANDEX_CATEGORY_PERFUMERY, parameterValues: [{ parameterId: YANDEX_PARAM_VARIANT_GROUP, value: archivedDuplicateGroupName(r.group_id, r.offer_id) }] });
+  }
+  const out = { offers: rows.length, updated: 0, failed: 0, errors: [] };
+  if (dryRun) return out;
+  const shops = getYandexShops({ includeSyncDisabled: true });
+  for (const [shopId, offers] of byShop) {
+    const shop = shops.find((s) => cleanText(s.id) === cleanText(shopId));
+    if (!shop) continue;
+    for (const r of await sendYandexOfferMappings(shop, offers, { onlyChanged: true })) {
+      if (r.ok) out.updated += 1;
+      else { out.failed += 1; out.errors.push(`${r.offerId}: ${String(r.error || "").slice(0, 160)}`); }
+    }
+  }
+  logger.info("market archived duplicates out of groups", { offers: out.offers, updated: out.updated, failed: out.failed });
+  return out;
+}
+
+app.post("/api/card-health/variant-duplicates/move-out", requireAdmin, async (request, response, next) => {
+  try {
+    const result = await moveArchivedDuplicatesOutOfGroups({ dryRun: request.body?.dryRun === true, offerIds: Array.isArray(request.body?.offerIds) ? request.body.offerIds : null });
+    if (!request.body?.dryRun) await appendAudit(request, "card_health.variant_move_out", { entityType: "market_offer", entityId: "variant-duplicates", newValue: { updated: result.updated, failed: result.failed } });
+    response.json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
 
 // Вернуть артикул из «архивированных дублей» (например, по ошибке): снять блок и разархивировать
 app.post("/api/card-health/variant-duplicates/restore", requireAdmin, async (request, response, next) => {
   try {
     const prisma = await requireMarketDedupeTable();
     const offerId = cleanText(request.body?.offerId);
-    const rows = await prisma.$queryRawUnsafe(`DELETE FROM market_offer_dedupe WHERE lower(offer_id) = lower($1) RETURNING shop_id, offer_id`, offerId);
+    const rows = await prisma.$queryRawUnsafe(`DELETE FROM market_offer_dedupe WHERE lower(offer_id) = lower($1) RETURNING shop_id, offer_id, group_id`, offerId);
     marketDedupeCache.at = 0;
     const shops = getYandexShops({ includeSyncDisabled: true });
     for (const r of rows) {
       const shop = shops.find((s) => cleanText(s.id) === cleanText(r.shop_id));
-      if (shop) await sendYandexOfferArchiveState(shop, [r.offer_id], false);
+      if (!shop) continue;
+      await sendYandexOfferArchiveState(shop, [r.offer_id], false);
+      // back into its old variant group
+      if (r.group_id) await sendYandexOfferMappings(shop, [{ offerId: r.offer_id, marketCategoryId: YANDEX_CATEGORY_PERFUMERY, parameterValues: [{ parameterId: YANDEX_PARAM_VARIANT_GROUP, value: r.group_id }] }], { onlyChanged: true }).catch(() => {});
     }
     await appendAudit(request, "card_health.variant_restore", { entityType: "market_offer", entityId: offerId, newValue: { restored: rows.length } });
     response.json({ ok: true, restored: rows.length });
@@ -970,7 +1022,7 @@ async function restoreWrongVariantDedupes({ dryRun = false, skip = [] } = {}) {
   const brands = await supplierMatchBrands(prisma);
   const skipSet = new Set(skip.map((id) => cleanText(id).toLowerCase()));
   const rows = await prisma.$queryRawUnsafe(`
-    SELECT d.shop_id, d.offer_id, d.keeper_offer_id,
+    SELECT d.shop_id, d.offer_id, d.keeper_offer_id, d.group_id,
            coalesce((SELECT name FROM card_quality q WHERE q.shop_id = d.shop_id AND q.offer_id = d.offer_id LIMIT 1),
                     (SELECT name FROM warehouse_products w WHERE w.target = d.shop_id AND w.offer_id = d.offer_id LIMIT 1)) AS name,
            coalesce((SELECT name FROM card_quality q WHERE q.shop_id = d.shop_id AND q.offer_id = d.keeper_offer_id LIMIT 1),
@@ -980,7 +1032,7 @@ async function restoreWrongVariantDedupes({ dryRun = false, skip = [] } = {}) {
   for (const r of rows) {
     if (skipSet.has(String(r.offer_id).toLowerCase())) continue;
     const res = perfumeNameParser.comparePerfumes(perfumeNameParser.parsePerfumeName(r.name, { brands }), perfumeNameParser.parsePerfumeName(r.keeper_name, { brands }));
-    if (!res.ok) wrong.push({ shopId: r.shop_id, offerId: r.offer_id, name: r.name, keeper: r.keeper_offer_id, keeperName: r.keeper_name, reason: res.reason });
+    if (!res.ok) wrong.push({ shopId: r.shop_id, offerId: r.offer_id, groupId: r.group_id, name: r.name, keeper: r.keeper_offer_id, keeperName: r.keeper_name, reason: res.reason });
   }
   const out = { checked: rows.length, wrong: wrong.length, restored: 0, failed: 0, items: wrong };
   if (dryRun) return out;
@@ -991,6 +1043,7 @@ async function restoreWrongVariantDedupes({ dryRun = false, skip = [] } = {}) {
     await prisma.$executeRawUnsafe(`DELETE FROM market_offer_dedupe WHERE shop_id = $1 AND offer_id = $2`, cleanText(w.shopId), w.offerId);
     const [r] = await sendYandexOfferArchiveState(shop, [w.offerId], false);
     if (r?.ok) out.restored += 1; else out.failed += 1;
+    if (w.groupId) await sendYandexOfferMappings(shop, [{ offerId: w.offerId, marketCategoryId: YANDEX_CATEGORY_PERFUMERY, parameterValues: [{ parameterId: YANDEX_PARAM_VARIANT_GROUP, value: w.groupId }] }], { onlyChanged: true }).catch(() => {});
   }
   marketDedupeCache.at = 0;
   logger.info("market variant dedupe restore", { wrong: out.wrong, restored: out.restored, failed: out.failed });
