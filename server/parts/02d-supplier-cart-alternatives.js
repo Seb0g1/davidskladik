@@ -184,6 +184,64 @@ app.post("/api/supplier-cart/draft/:key/supplier", requireAdmin, async (request,
   }
 });
 
+/** Pure: which units move and how much — whole units first (current row first), a bigger unit is split. */
+function splitPickingUnits(units = [], quantity = 0) {
+  let left = Math.max(0, Math.round(Number(quantity) || 0));
+  const moves = [];
+  for (const unit of units) {
+    if (!left) break;
+    const qty = Math.max(1, Math.round(Number(unit.quantity || 1)));
+    const take = Math.min(qty, left);
+    moves.push({ key: unit.key, take, keep: qty - take });
+    left -= take;
+  }
+  return moves;
+}
+
+/**
+ * Part of a picking position re-ordered from another supplier: `quantity` units move (marked «не было» or a
+ * bigger row reduced), the old PM request row keeps the remaining quantity, and the moved units are one new
+ * PM request to the chosen supplier. The old supplier is not blocked — it still brings the rest.
+ */
+async function replacePickingUnitsPartly(request, { key, current, siblingRows, totalQuantity, quantity, chosen }) {
+  const now = new Date();
+  const username = requestUsername(request);
+  const remaining = totalQuantity - quantity;
+  if (current.requestRowId) await setSupplierCartPriceMasterQuantity(current, remaining);
+  const state = await readSupplierPickingState();
+  const moves = splitPickingUnits([current, ...siblingRows], quantity);
+  for (const move of moves) {
+    const row = normalizeSupplierPickingRow(state.rows[move.key]);
+    state.rows[move.key] = move.keep > 0
+      ? normalizeSupplierPickingRow({ ...row, quantity: move.keep })
+      : normalizeSupplierPickingRow({
+        ...row, status: "missing", missingBy: username, missingAt: now.toISOString(),
+        missingReason: "supplier_replaced_partly", nextRetryAt: null,
+      });
+  }
+  await writeSupplierPickingState(state);
+  const sourceCartKey = supplierCartSourceKeyForPickingRow(current);
+  // a key of its own: the remaining units of the order are still «in work» under the order's key
+  const newCartRow = normalizeSupplierCartPreviewRow({
+    key: `${sourceCartKey}|part:${now.getTime()}`,
+    marketplace: current.marketplace, accountName: current.accountName, orderId: current.orderId, postingNumber: current.postingNumber,
+    itemId: current.offerId, offerId: current.offerId, productName: current.productName, quantity,
+    warehouseProductId: current.warehouseProductId, supplierName: chosen.supplierName, partnerId: chosen.partnerId, offerRowId: chosen.rowId,
+    price: chosen.price, originalPrice: chosen.originalPrice, priceCurrency: chosen.priceCurrency,
+    saleAmount: current.saleAmount, payoutAmount: current.payoutAmount, soldAt: current.soldAt,
+    trustFactor: chosen.trustFactor, orderCutoffTime: chosen.orderCutoffTime, reseller: chosen.reseller, supplierScore: chosen.score,
+    available: true, ready: true, stockOnlyFallback: chosen.stockOnly, inactivePm: chosen.inactivePm || false, manualSupplier: true,
+  });
+  const commit = await insertSupplierCartRowsIntoPriceMaster([newCartRow], request);
+  await appendAudit(request, "supplier_picking.supplier_replaced_partly", {
+    entityType: "supplier_picking",
+    entityId: key,
+    oldValue: { supplierName: current.supplierName, partnerId: current.partnerId, requestRowId: current.requestRowId, totalQuantity },
+    newValue: { supplierName: chosen.supplierName, partnerId: chosen.partnerId, quantity, remaining, moves, docIds: commit.docIds },
+  });
+  return { ok: true, partial: true, moved: quantity, remaining, newPickingRow: commit.pickingCreated?.[0] || null, inserted: commit.inserted?.length || 0, skippedDetails: commit.skippedDetails || [] };
+}
+
 app.post("/api/supplier-picking-list/:key/replace-supplier", requireStaff, async (request, response, next) => {
   try {
     const key = cleanText(request.params.key);
@@ -225,6 +283,11 @@ app.post("/api/supplier-picking-list/:key/replace-supplier", requireStaff, async
     }
     // Total units = current + all open siblings sharing the same PM row.
     const totalQuantity = [current, ...siblingRows].reduce((sum, r) => sum + Math.max(1, Number(r.quantity || 1)), 0);
+    // «Перезаказать 2 из 3» (2026-10-08): only that many units go to the new supplier, the rest stays
+    const askedQuantity = Math.round(Number(request.body?.quantity || 0));
+    if (askedQuantity > 0 && askedQuantity < totalQuantity) {
+      return response.json(await replacePickingUnitsPartly(request, { key, current, siblingRows, totalQuantity, quantity: askedQuantity, chosen }));
+    }
 
     // 1) Mark current and all siblings as «не было»: block old supplier + free cart slot.
     const nextRetryAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();

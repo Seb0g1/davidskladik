@@ -211,6 +211,16 @@ app.post("/api/supplier-cart/generate", requireAdmin, async (request, response, 
   }
 });
 
+/**
+ * Pure: the rows to commit. A row the server's draft has is taken from the draft — a supplier changed there
+ * («Заменить», supplier_override) must win over the copy the page sent before the change (2026-10-07: the
+ * order went to the old supplier). Rows the draft doesn't know are sent as the page has them.
+ */
+function freshSupplierCartRows(clientRows = [], draftRows = []) {
+  const byKey = new Map((draftRows || []).map((row) => [cleanText(row?.key), row]));
+  return (clientRows || []).map((row) => byKey.get(cleanText(row?.key)) || row);
+}
+
 app.post("/api/supplier-cart/commit", requireAdmin, async (request, response, next) => {
   try {
     const result = await withCartCommitLock(async () => {
@@ -218,7 +228,7 @@ app.post("/api/supplier-cart/commit", requireAdmin, async (request, response, ne
       const keys = Array.isArray(request.body?.keys) ? request.body.keys : [];
       const state = await readSupplierCartState();
       const sourceRows = rows.length
-        ? rows
+        ? freshSupplierCartRows(rows, state.draft?.rows || [])
         : (state.draft?.rows?.length ? state.draft.rows : (await buildSupplierCartPreview(request.body || {})).rows);
       const selectedKeys = new Set(keys.map(cleanText).filter(Boolean));
       const selectedRows = selectedKeys.size ? sourceRows.filter((row) => selectedKeys.has(cleanText(row.key))) : sourceRows;

@@ -871,6 +871,12 @@ async function buildFragranticaCardDraft(draft) {
     warnings.push(`Пирамида аромата не собралась после 3 попыток (${why}) — нажмите «Пересобрать».`);
   }
   // own photos survive a rebuild (the operator chose them)
+  // «Станет» corrected by hand (Улучшение карточек): the rebuild keeps that name
+  if (draft.data?.nameEdited && cleanText(draft.data.name)) {
+    data.name = cleanText(draft.data.name);
+    data.nameEdited = true;
+    if (cleanText(draft.data.marketNameEdited)) data.marketNameEdited = cleanText(draft.data.marketNameEdited);
+  }
   if (Array.isArray(draft.data?.customPhotos) && !draft.data.customPhotosAuto) {
     data.customPhotos = draft.data.customPhotos;
     data.onlyCustomPhotos = Boolean(draft.data.onlyCustomPhotos);
@@ -941,7 +947,7 @@ async function buildFragranticaCardDraft(draft) {
         supplierName: "", markup: 0,
         existing: { ...existing, state, prices, createOn },
         // the Market title the export will use (Ozon keeps data.name)
-        marketName: buildFragranticaMarketName({ perfume, typeKey, volume: draft.volume_ml, tester: Boolean(draft.tester) }),
+        marketName: data.marketNameEdited || buildFragranticaMarketName({ perfume, typeKey, volume: draft.volume_ml, tester: Boolean(draft.tester) }),
       });
       if (state.dims.depth && state.dims.width && state.dims.height && state.dims.weight) data.dims = state.dims;
       data.ownBottleOnly = ownBottleOnly;
@@ -1423,6 +1429,12 @@ app.patch("/api/fragrantica/drafts/:id", requireAdmin, async (request, response,
       rebuild = true;
     }
     for (const key of ["name", "barcode"]) if (body[key] !== undefined) data[key] = cleanText(body[key]);
+    if (body.name !== undefined) data.nameEdited = Boolean(cleanText(body.name));
+    // the Market title of an improved card, corrected by hand
+    if (typeof body.marketName === "string") {
+      data.marketName = cleanText(body.marketName);
+      data.marketNameEdited = data.marketName;
+    }
     // own photos (тестер, пробник, набор look different): reorder / remove — only ones uploaded to this draft
     if (Array.isArray(body.customPhotos)) {
       const known = new Set(Array.isArray(data.customPhotos) ? data.customPhotos : []);

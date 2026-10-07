@@ -194,6 +194,7 @@ export function PickingListPage() {
   });
 
   const [replaceKey, setReplaceKey] = useState<string | null>(null);
+  const [replaceQty, setReplaceQty] = useState("");
   const [editCredit, setEditCredit] = useState<{ username: string; id: string; amount: string; note: string; originalUsd: number } | null>(null);
   const [missingRow, setMissingRow] = useState<PickingRow | null>(null);
   const [pmSearchOpen, setPmSearchOpen] = useState(false);
@@ -317,10 +318,11 @@ export function PickingListPage() {
     },
   });
   const replaceMutation = useMutation({
-    mutationFn: ({ key, partnerId, rowId }: { key: string; partnerId: string; rowId: string }) =>
-      fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}/replace-supplier`, SupplierReplaceResponseSchema, mutationBody({ partnerId, rowId })),
+    mutationFn: ({ key, partnerId, rowId, quantity }: { key: string; partnerId: string; rowId: string; quantity?: number }) =>
+      fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}/replace-supplier`, SupplierReplaceResponseSchema, mutationBody({ partnerId, rowId, ...(quantity ? { quantity } : {}) })),
     onSuccess: () => {
       setReplaceKey(null);
+      setReplaceQty("");
       void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
       void queryClient.invalidateQueries({ queryKey: ["supplier-cart-history"] });
       void queryClient.invalidateQueries({ queryKey: ["supplier-cart-draft"] });
@@ -445,6 +447,12 @@ export function PickingListPage() {
   const usdRate = listQuery.data?.usdRate ?? 95;
 
   const rows = listQuery.data?.rows || [];
+  // units of a picking position: the row and its open/picked siblings of the same PM request row
+  const unitsOf = (row: { key: string; quantity?: number; requestRowId?: string }) => {
+    const same = row.requestRowId ? rows.filter((r) => r.requestRowId === row.requestRowId && (r.status === "open" || r.status === "picked")) : [];
+    const list = same.some((r) => r.key === row.key) ? same : [row, ...same];
+    return list.reduce((sum, r) => sum + Math.max(1, Number(r.quantity || 1)), 0);
+  };
 
   const stalledCount = useMemo(() => {
     if (status !== "open") return 0;
@@ -2288,13 +2296,25 @@ export function PickingListPage() {
                                       <MoreHorizontal size={16} />
                                     </button>
                                   </div>
+                                  {replaceKey === row.key && unitsOf(row) > 1 ? (
+                                    <label className="picking-replace-qty">
+                                      Перезаказать
+                                      <input type="number" min={1} max={unitsOf(row)} value={replaceQty || String(unitsOf(row))}
+                                        onChange={(e) => setReplaceQty(e.target.value)} onClick={(e) => e.stopPropagation()} />
+                                      из {unitsOf(row)} шт — остальное остаётся у {row.supplierName || "текущего поставщика"}
+                                    </label>
+                                  ) : null}
                                   {replaceKey === row.key ? (
                                     <SupplierAltPicker
                                       offerId={row.offerId}
                                       currentPartnerId={row.partnerId}
                                       busy={replaceMutation.isPending}
                                       actionLabel="Заказать у него"
-                                      onPick={(option) => replaceMutation.mutate({ key: row.key, partnerId: option.partnerId, rowId: option.rowId })}
+                                      onPick={(option) => {
+                                        const total = unitsOf(row);
+                                        const q = Math.min(total, Math.max(1, Math.round(Number(replaceQty) || total)));
+                                        replaceMutation.mutate({ key: row.key, partnerId: option.partnerId, rowId: option.rowId, quantity: q < total ? q : undefined });
+                                      }}
                                       onClose={() => setReplaceKey(null)}
                                     />
                                   ) : null}

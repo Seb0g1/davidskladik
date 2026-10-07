@@ -261,7 +261,8 @@ export function SupplierCartPanel() {
   }, [isGenerating, generatingQuery.data?.generating, queryClient]);
   const commitMutation = useMutation({
     mutationFn: () => fetchJson("/api/supplier-cart/commit", SupplierCartCommitSchema, mutationBody({
-      rows: (generateMutation.data || draftQuery.data)?.rows || [],
+      // the saved draft first: it has the suppliers changed by «Заменить» (the server also re-reads it)
+      rows: (draftQuery.data || generateMutation.data)?.rows || [],
       keys: Array.from(selected),
     })),
     onSuccess: () => {

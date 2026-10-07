@@ -902,6 +902,14 @@ async function deleteSupplierPickingStateRow(key = "") {
   }
 }
 
+/** The PM request row of a picking position keeps `quantity` units (part of it re-ordered elsewhere). */
+async function setSupplierCartPriceMasterQuantity(row = {}, quantity = 1) {
+  const requestRowId = Number(normalizeSupplierPickingRow(row).requestRowId || 0);
+  if (!requestRowId || !(quantity > 0)) return { updated: 0 };
+  const [result] = await pool.query("UPDATE RequestRows SET RequestQuant = ? WHERE RowID = ?", [Math.round(quantity), requestRowId]);
+  return { updated: Number(result?.affectedRows || 0) };
+}
+
 async function deleteSupplierCartPriceMasterRow(row = {}) {
   const normalized = normalizeSupplierPickingRow(row);
   const requestRowId = Number(normalized.requestRowId || 0);

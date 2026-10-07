@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, CheckCheck, ChevronDown, ChevronUp, EyeOff, Loader2, Plus, RefreshCw, Search, Undo2 } from "lucide-react";
+import { AlertTriangle, Check, CheckCheck, ChevronDown, ChevronUp, EyeOff, Loader2, Pencil, Plus, RefreshCw, Search, Undo2 } from "lucide-react";
 import { z } from "zod";
 import { fetchJson, mutationBody } from "../api";
 import { PageHeader } from "../components/PageHeader";
@@ -226,7 +226,8 @@ function ImproveCard({ item, picked, onPick, onApprove, onSkip, onRestore, onReb
 
       <div className="ci-compare">
         <SideView label="Было" side={item.before} showText={showText} />
-        <SideView label="Станет" side={item.after} showText={showText} fresh />
+        <SideView label="Станет" side={item.after} showText={showText} fresh
+          nameEditor={editable ? <NameEditor item={item} /> : null} />
       </div>
       <div className="ci-foot">
         <button type="button" className="fr-link-button" onClick={() => setShowText((v) => !v)}>
@@ -246,13 +247,47 @@ function ImproveCard({ item, picked, onPick, onApprove, onSkip, onRestore, onReb
   );
 }
 
-function SideView({ label, side, showText, fresh = false }: { label: string; side: Side | null; showText: boolean; fresh?: boolean }) {
+/** «Станет» name corrected by hand — optional, approving does not wait for it. Kept when the card is rebuilt. */
+function NameEditor({ item }: { item: Item }) {
+  const queryClient = useQueryClient();
+  const current = String(item.after?.name || "");
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState(current);
+  const save = useMutation({
+    mutationFn: (name: string) => apiJson(`/api/fragrantica/drafts/${item.id}`, {
+      method: "PATCH",
+      // a Market card shows its own title (marketName), an Ozon card the main name
+      body: JSON.stringify(item.marketplace === "yandex" ? { marketName: name } : { name }),
+    }),
+    onSuccess: () => { toast.success("Название сохранено"); setOpen(false); queryClient.invalidateQueries({ queryKey: ["card-improve"] }); },
+    onError: (error) => toast.error(errorMessage(error)),
+  });
+  if (!open) {
+    return (
+      <button type="button" className="ci-name-edit" title="Исправить название" aria-label="Исправить название"
+        onClick={() => { setValue(current); setOpen(true); }}><Pencil size={13} /></button>
+    );
+  }
+  const v = value.trim();
+  return (
+    <form className="ci-name-form" onSubmit={(e) => { e.preventDefault(); if (v && v !== current) save.mutate(v); else setOpen(false); }}>
+      <textarea value={value} rows={2} maxLength={500} autoFocus onChange={(e) => setValue(e.target.value)} aria-label="Новое название" />
+      <div>
+        <button className="primary-action compact" type="submit" disabled={save.isPending || !v}>{save.isPending ? <Loader2 size={13} className="spin" /> : <Check size={13} />} Сохранить</button>
+        <button className="secondary-action compact" type="button" onClick={() => setOpen(false)}>Отмена</button>
+        <small>{v.length} симв.</small>
+      </div>
+    </form>
+  );
+}
+
+function SideView({ label, side, showText, fresh = false, nameEditor = null }: { label: string; side: Side | null; showText: boolean; fresh?: boolean; nameEditor?: ReactNode }) {
   return (
     <section className={`ci-side${fresh ? " is-new" : ""}`}>
       <h3>{label}</h3>
       {!side ? <p className="ci-muted">Нет данных о текущей карточке — появятся после пересборки.</p> : (
         <>
-          <p className="ci-name">{side.name || <span className="ci-muted">без названия</span>}</p>
+          <div className="ci-name">{side.name || <span className="ci-muted">без названия</span>}{nameEditor}</div>
           <div className="ci-photos">
             {side.photos.length ? side.photos.slice(0, 12).map((url, i) => (
               <PhotoThumb key={`${url}-${i}`} photos={side.photos} index={i} alt={`${label}: фото ${i + 1}`} title={label} />

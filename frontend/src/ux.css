@@ -2471,3 +2471,6 @@ body:has(.bulk-action-bar) .toast-stack { bottom: 88px; }
 /* Сборка: заказ отменён маркетплейсом после того, как товар собран */
 .picking-mp-cancelled { display: inline-block; margin-top: 4px; padding: 3px 8px; border-radius: 8px; background: rgba(255, 92, 92, .14); border: 1px solid rgba(255, 92, 92, .45); color: #ffb4b4; font-size: 12px; font-weight: 600; line-height: 1.35; }
 .picking-row:has(.picking-mp-cancelled) { border-left: 3px solid #ff5c5c; }
+/* Сборка → «Заменить»: сколько штук перезаказать у другого поставщика */
+.picking-replace-qty { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 0 4px; font-size: 13px; color: var(--muted); }
+.picking-replace-qty input { width: 64px; height: 32px; text-align: center; }

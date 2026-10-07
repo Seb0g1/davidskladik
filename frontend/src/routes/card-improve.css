@@ -60,3 +60,10 @@
 .ci-gender-opt:hover:not(:disabled) { border-color: rgba(var(--accent-rgb), 0.5); }
 .ci-gender-opt.is-on { border-color: var(--accent); background: rgba(var(--accent-rgb), 0.18); cursor: default; }
 .ci-gender-opt:disabled:not(.is-on) { opacity: 0.6; }
+/* «Станет»: название можно поправить вручную */
+.ci-name-edit { margin-left: 6px; vertical-align: middle; display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 6px; border: 1px solid var(--ux-border, rgba(255,255,255,.12)); background: transparent; color: var(--muted); cursor: pointer; }
+.ci-name-edit:hover { color: var(--text); }
+.ci-name-form { display: grid; gap: 6px; margin: 4px 0 8px; }
+.ci-name-form textarea { width: 100%; font: inherit; font-size: 13px; resize: vertical; }
+.ci-name-form > div { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.ci-name-form small { color: var(--muted); font-size: 11px; }
