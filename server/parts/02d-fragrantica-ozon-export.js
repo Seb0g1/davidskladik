@@ -1610,8 +1610,37 @@ async function fragranticaYandexCategoryParams(shop, categoryId) {
 // Код НДС Маркета (VatType): 10 — 5% УСН. FRAGRANTICA_YANDEX_VAT переопределяет.
 const fragranticaYandexVat = Number(process.env.FRAGRANTICA_YANDEX_VAT || 10) || 10;
 
+// Campaigns that answered «Partner use only default price» (423 LOCKED): they sell at the business-level
+// basic price only, so campaign offer-prices/updates is never sent to them again. Kept in fragrantica_state
+// (shared by api and worker, survives restarts) as { [campaignId]: lockedAt }.
+const FRAG_DEFAULT_PRICE_CAMPAIGNS_KEY = "yandex_default_price_campaigns";
+let fragDefaultPriceCampaigns = null;
+let fragDefaultPriceCampaignsAt = 0;
+
+async function fragranticaDefaultPriceCampaigns() {
+  if (!fragDefaultPriceCampaigns || Date.now() - fragDefaultPriceCampaignsAt > 10 * 60_000) {
+    try {
+      fragDefaultPriceCampaigns = await readFragranticaState(FRAG_DEFAULT_PRICE_CAMPAIGNS_KEY);
+      fragDefaultPriceCampaignsAt = Date.now();
+    } catch {
+      fragDefaultPriceCampaigns = fragDefaultPriceCampaigns || {};
+    }
+  }
+  return fragDefaultPriceCampaigns;
+}
+
+async function rememberFragranticaDefaultPriceCampaign(campaignId) {
+  const key = String(campaignId);
+  const lockedAt = new Date().toISOString();
+  fragDefaultPriceCampaigns = { ...(fragDefaultPriceCampaigns || {}), [key]: lockedAt };
+  try {
+    await writeFragranticaState(FRAG_DEFAULT_PRICE_CAMPAIGNS_KEY, { [key]: lockedAt });
+  } catch { /* the in-memory mark still stops repeats in this process */ }
+}
+
 async function sendFragranticaYandexVatPrice(shop, offerId, price) {
   if (!shop?.campaignId || !(Number(price) > 0)) return { vat: "skipped" };
+  if ((await fragranticaDefaultPriceCampaigns())[String(shop.campaignId)]) return { vat: "cabinet" };
   try {
     await yandexRequest(shop, "POST", `/v2/campaigns/${shop.campaignId}/offer-prices/updates`, {
       offers: [{ offerId, price: { value: Math.round(Number(price)), currencyId: "RUR", vat: fragranticaYandexVat } }],
@@ -1621,7 +1650,10 @@ async function sendFragranticaYandexVatPrice(shop, offerId, price) {
     const message = cleanText(error?.message);
     // «Partner use only default price; LOCKED»: the cabinet sells at one basic price — its VAT comes from
     // the Market cabinet settings, not from the API
-    if (/LOCKED|default price/i.test(message)) return { vat: "cabinet" };
+    if (/LOCKED|default price/i.test(message)) {
+      await rememberFragranticaDefaultPriceCampaign(shop.campaignId);
+      return { vat: "cabinet" };
+    }
     return { vat: "failed", vatError: message.slice(0, 300) };
   }
 }
