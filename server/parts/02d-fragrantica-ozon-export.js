@@ -696,6 +696,20 @@ function parfumoKey(text) {
   return String(text || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/&/g, " ").replace(/[^a-z0-9]+/g, "");
 }
 
+/**
+ * Pure: brand keys to look up on Parfumo — Fragrantica's full brand, then without its trailing words
+ * («Jo Malone London» → jomalonelondon, jomalone; Parfumo files it under «Jo_Malone»). Keys under 4 letters are not tried.
+ */
+function parfumoBrandKeys(brand) {
+  const words = String(brand || "").trim().split(/\s+/).filter(Boolean);
+  const keys = [];
+  for (let n = words.length; n >= 1; n -= 1) {
+    const key = parfumoKey(words.slice(0, n).join(" "));
+    if (key.length >= 4 && !keys.includes(key)) keys.push(key);
+  }
+  return keys;
+}
+
 /** Perfume addresses from Parfumo's sitemaps, refreshed once a month (one download at a time). */
 async function ensureParfumoIndex() {
   const prisma = await requireParfumoTables();
@@ -752,13 +766,13 @@ async function fillPerfumeFromParfumo(row) {
   const prisma = getPrisma();
   const parser = require("./lib/perfume-match");
   const brands = await supplierMatchBrands(prisma).catch(() => null);
-  const brandKey = parfumoKey(row.brand);
+  const brandKeys = parfumoBrandKeys(row.brand);
   const nameKey = parfumoKey(row.name);
-  if (!brandKey || !nameKey) return false;
-  // the same brand; the name exactly, else the name plus a concentration / flanker tail («Nahema_Eau_de_Parfum»)
+  if (!brandKeys.length || !nameKey) return false;
+  // the same brand (the full key first); the name exactly, else the name plus a concentration / flanker tail («Nahema_Eau_de_Parfum»)
   const urls = await prisma.$queryRawUnsafe(
-    `SELECT path, name_key FROM parfumo_urls WHERE brand_key = $1 AND (name_key = $2 OR name_key LIKE $2 || '%')
-      ORDER BY (name_key = $2) DESC, length(name_key) LIMIT 4`, brandKey, nameKey,
+    `SELECT path, name_key FROM parfumo_urls WHERE brand_key = ANY($1::text[]) AND (name_key = $2 OR name_key LIKE $2 || '%')
+      ORDER BY array_position($1::text[], brand_key), (name_key = $2) DESC, length(name_key) LIMIT 4`, brandKeys, nameKey,
   );
   const genderWord = { male: "men", female: "women", unisex: "unisex" };
   const want = parser.parsePerfumeName(`${row.brand} ${row.name} ${genderWord[row.gender] || ""} 100 ml`, { brands });
