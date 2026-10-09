@@ -8,7 +8,7 @@ import { fetchJson, mutationBody } from "../api";
 import { errorMessage, useDebounced } from "../lib/common";
 import { PhotoThumb } from "../components/PhotoLightbox";
 import { toast } from "../lib/toast";
-import { FragranticaQuickLoad, useFragranticaExtRun } from "../components/FragranticaQuickLoad";
+import { ExtensionDownload, FragranticaQuickLoad, useFragranticaExtRun } from "../components/FragranticaQuickLoad";
 
 // «Конвейер» страницы «Фрагрантика»: сервер раскладывает ароматы на объёмы из PriceMaster и сам собирает
 // карточки (привязка + цена, фото и пирамиды, описание ИИ — одно на аромат). Здесь — проверить и одобрить.
@@ -252,6 +252,7 @@ export function ConveyorPanel({ onClose }: { onClose: () => void }) {
             <button className="primary-action" type="button" disabled={!readyIds.length || approve.isPending} onClick={() => approve.mutate(readyIds)}>
               {approve.isPending ? <Loader2 size={14} className="spin" /> : <CheckCheck size={15} />} Одобрить все готовые ({readyIds.length})
             </button>
+            <ExtensionDownload installed={ext.installed} />
             {counts.sent || counts.skipped ? (
               <button className="secondary-action compact" type="button" disabled={clear.isPending} onClick={() => clear.mutate(["sent", "skipped"])}>
                 Убрать отправленные и пропущенные
@@ -276,6 +277,7 @@ export function ConveyorPanel({ onClose }: { onClose: () => void }) {
                 <span className="fr-hint">Расширение откроет их в фоновой вкладке по одному, с паузами, и загрузит сюда. Не закрывайте эту вкладку.</span>
               ) : null}
             </div>
+            {!ext.installed ? <ExtensionDownload installed={false} /> : null}
             {extRunning ? (
               <button className="secondary-action compact" type="button" onClick={ext.stop}><X size={13} /> Остановить</button>
             ) : (

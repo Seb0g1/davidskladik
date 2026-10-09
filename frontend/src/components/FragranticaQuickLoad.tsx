@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { ExternalLink } from "lucide-react";
+import { Download, ExternalLink } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { z } from "zod";
 import { fetchJson, mutationBody } from "../api";
@@ -87,6 +87,24 @@ export function useFragranticaExtRun() {
   }, []);
   const stop = useCallback(() => window.postMessage({ type: "ds-fragrantica-ext-stop" }, window.location.origin), []);
   return { installed, state, start, stop };
+}
+
+// the extension's folder zipped (tools/sklad-extension → frontend/public/sklad-extension.zip on each change)
+const EXTENSION_ZIP = "/app-modern/sklad-extension.zip";
+
+/** «Скачать расширение»: the zip and how to install it on any computer. */
+export function ExtensionDownload({ installed }: { installed: boolean }) {
+  return (
+    <a
+      className="secondary-action compact"
+      href={EXTENSION_ZIP}
+      download="sklad-extension.zip"
+      title="Распакуйте архив в постоянную папку → chrome://extensions → «Режим разработчика» → «Загрузить распакованное» → папка sklad-extension"
+      onClick={() => toast.info("Распакуйте архив в постоянную папку, откройте chrome://extensions, включите «Режим разработчика» и нажмите «Загрузить распакованное» → папка sklad-extension. Потом обновите эту вкладку (F5).")}
+    >
+      <Download size={13} /> {installed ? "Расширение «→ Склад»" : "Скачать расширение"}
+    </a>
+  );
 }
 
 declare global {
