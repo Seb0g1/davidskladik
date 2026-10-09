@@ -8,7 +8,7 @@ import { fetchJson, mutationBody } from "../api";
 import { errorMessage, useDebounced } from "../lib/common";
 import { PhotoThumb } from "../components/PhotoLightbox";
 import { toast } from "../lib/toast";
-import { FragranticaQuickLoad } from "../components/FragranticaQuickLoad";
+import { FragranticaQuickLoad, useFragranticaExtRun } from "../components/FragranticaQuickLoad";
 
 // «Конвейер» страницы «Фрагрантика»: сервер раскладывает ароматы на объёмы из PriceMaster и сам собирает
 // карточки (привязка + цена, фото и пирамиды, описание ИИ — одно на аромат). Здесь — проверить и одобрить.
@@ -223,6 +223,14 @@ export function ConveyorPanel({ onClose }: { onClose: () => void }) {
     return [...map.values()];
   }, [visible]);
   const readyIds = items.filter((d) => d.status === "ready").map((d) => d.id);
+  // perfumes whose page Fragrantica didn't give the server: the extension opens them one by one
+  const missingPages = useMemo(() => {
+    const seen = new Map<string, { url: string; name: string }>();
+    for (const d of items) if (needsPerfumePage(d) && d.perfumeUrl && !seen.has(d.perfumeUrl)) seen.set(d.perfumeUrl, { url: d.perfumeUrl, name: `${d.brand} ${d.perfumeName}`.trim() });
+    return [...seen.values()];
+  }, [items]);
+  const ext = useFragranticaExtRun();
+  const extRunning = Boolean(ext.state?.running);
   const tabs: Array<[Tab, string, number]> = [
     ["all", "Все", items.length],
     ["ready", "Готовы", counts.ready || 0],
@@ -251,6 +259,32 @@ export function ConveyorPanel({ onClose }: { onClose: () => void }) {
             ) : null}
           </div>
         </div>
+        {missingPages.length || ext.state ? (
+          <div className="fr-ext-run">
+            <div className="fr-ext-run-text">
+              {extRunning ? (
+                <b><Loader2 size={13} className="spin" /> Загружаем страницы с Фрагрантики: {ext.state!.done} из {ext.state!.total}{ext.state!.current ? ` · ${ext.state!.current}` : ""}</b>
+              ) : ext.state && ext.state.total ? (
+                <b>Загружено страниц: {ext.state.ok}{ext.state.failed ? `, не вышло: ${ext.state.failed}` : ""}. Черновики пересобираются сами.</b>
+              ) : (
+                <b>Нет страницы аромата у {missingPages.length} {missingPages.length === 1 ? "аромата" : "ароматов"}</b>
+              )}
+              {ext.state?.message ? <span className={ext.state.waitingCheck ? "fr-warn" : "fr-hint"}>{ext.state.message}</span> : null}
+              {!ext.installed ? (
+                <span className="fr-hint">Поставьте расширение «→ Склад» (папка tools/sklad-extension) — оно откроет их на Фрагрантике по одному и загрузит сюда.</span>
+              ) : !extRunning ? (
+                <span className="fr-hint">Расширение откроет их в фоновой вкладке по одному, с паузами, и загрузит сюда. Не закрывайте эту вкладку.</span>
+              ) : null}
+            </div>
+            {extRunning ? (
+              <button className="secondary-action compact" type="button" onClick={ext.stop}><X size={13} /> Остановить</button>
+            ) : (
+              <button className="secondary-action compact" type="button" disabled={!ext.installed || !missingPages.length} onClick={() => ext.start(missingPages)}>
+                <RefreshCw size={13} /> Загрузить {missingPages.length ? `${missingPages.length} ` : ""}через расширение
+              </button>
+            )}
+          </div>
+        ) : null}
         <div className="fr-conv-excluded"><ExcludedSuppliers /></div>
         {active.length ? (
           <div className="fr-overall">

@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { ExternalLink } from "lucide-react";
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { z } from "zod";
 import { fetchJson, mutationBody } from "../api";
 import { errorMessage } from "../lib/common";
@@ -60,6 +60,32 @@ export function FragranticaQuickLoad({ url, name }: { url?: string; name?: strin
   );
 }
 
+export type ExtRunState = { running: boolean; done: number; total: number; ok: number; failed: number; current?: string; message?: string; waitingCheck?: boolean };
+
+/** The «→ Склад» extension (1.1+): is it installed, and its queue of perfume pages — start, stop, progress. */
+export function useFragranticaExtRun() {
+  const [installed, setInstalled] = useState(() => Boolean(document.documentElement.dataset.dsFragranticaExt));
+  const [state, setState] = useState<ExtRunState | null>(null);
+  useEffect(() => {
+    // the bridge script marks the page at document_start; checked once more in case it came late
+    const t = window.setTimeout(() => setInstalled(Boolean(document.documentElement.dataset.dsFragranticaExt)), 1000);
+    const onMessage = (event: MessageEvent) => {
+      if (event.source !== window || event.origin !== window.location.origin || event.data?.type !== "ds-fragrantica-ext-progress") return;
+      const { type: _type, ...rest } = event.data as ExtRunState & { type: string };
+      setState(rest);
+    };
+    window.addEventListener("message", onMessage);
+    window.postMessage({ type: "ds-fragrantica-ext-status" }, window.location.origin);
+    return () => { window.clearTimeout(t); window.removeEventListener("message", onMessage); };
+  }, []);
+  const start = useCallback((items: Array<{ url: string; name: string }>) => {
+    setState({ running: true, done: 0, total: items.length, ok: 0, failed: 0 });
+    window.postMessage({ type: "ds-fragrantica-ext-run", items }, window.location.origin);
+  }, []);
+  const stop = useCallback(() => window.postMessage({ type: "ds-fragrantica-ext-stop" }, window.location.origin), []);
+  return { installed, state, start, stop };
+}
+
 declare global {
   interface Window { __dsFragranticaReceiver?: boolean }
 }
@@ -75,12 +101,13 @@ export function FragranticaExtReceiver() {
       try {
         const res = await importFragranticaHtml(String(event.data.url || ""), String(event.data.html || ""));
         const text = importedMessage(res);
-        toast.success(text);
+        // a page of the extension's queue: the conveyor shows the progress, no toast per page
+        if (!event.data.quiet) toast.success(text);
         void queryClient.invalidateQueries({ queryKey: ["fragrantica"] });
         reply(true, text);
       } catch (error) {
         const text = errorMessage(error);
-        toast.error(text);
+        if (!event.data.quiet) toast.error(text);
         reply(false, text);
       }
     };

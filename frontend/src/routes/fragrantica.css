@@ -464,3 +464,8 @@
 .fr-quickload .secondary-action { text-decoration: none; }
 .fr-quickload .fr-hint { flex: 1 1 260px; }
 .fr-quickload kbd { font: inherit; font-size: 11px; padding: 1px 5px; border: 1px solid var(--line, #d8d8d8); border-bottom-width: 2px; border-radius: 4px; background: var(--panel, #fff); }
+
+/* Очередь расширения «→ Склад»: недостающие страницы ароматов */
+.fr-ext-run { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 0 0 12px; padding: 10px 14px; border: 1px solid var(--line, #e2e2e2); border-radius: 10px; background: var(--panel-soft, rgba(37, 99, 235, 0.05)); font-size: 13px; }
+.fr-ext-run-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 280px; }
+.fr-ext-run-text b { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
