@@ -271,7 +271,7 @@ export function ConveyorPanel({ onClose }: { onClose: () => void }) {
               )}
               {ext.state?.message ? <span className={ext.state.waitingCheck ? "fr-warn" : "fr-hint"}>{ext.state.message}</span> : null}
               {!ext.installed ? (
-                <span className="fr-hint">Поставьте расширение «→ Склад» (папка tools/sklad-extension) — оно откроет их на Фрагрантике по одному и загрузит сюда.</span>
+                <span className="fr-hint">Расширение «→ Склад» не видно на этой вкладке: поставьте или обновите его (chrome://extensions) и перезагрузите страницу (F5). Оно откроет эти ароматы на Фрагрантике по одному и загрузит сюда.</span>
               ) : !extRunning ? (
                 <span className="fr-hint">Расширение откроет их в фоновой вкладке по одному, с паузами, и загрузит сюда. Не закрывайте эту вкладку.</span>
               ) : null}

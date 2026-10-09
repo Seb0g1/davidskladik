@@ -4,6 +4,9 @@
 // Проверку Cloudflare расширение не проходит за вас: видит её — останавливается и показывает вкладку.
 
 const SKLAD = "https://davidsklad.ru";
+// the sklad opens on both addresses (www is not redirected)
+const SKLAD_TABS = ["https://davidsklad.ru/app*", "https://www.davidsklad.ru/app*"];
+const SKLAD_ORIGIN = /^https:\/\/(www\.)?davidsklad\.ru\//;
 const PERFUME_PAGE = /^https:\/\/(www\.)?fragrantica\.[a-z.]+\/(perfume|parfum)\/.+-\d+\.html/i;
 const PAUSE_MS = [8000, 14000];
 const MAX_PER_RUN = 60;
@@ -75,8 +78,9 @@ function waitLoaded(tabId, timeoutMs = 45000) {
 }
 
 async function skladTab() {
-  const tabs = await chrome.tabs.query({ url: `${SKLAD}/app*` });
-  if (tabs.length) return tabs[0];
+  const tabs = await chrome.tabs.query({ url: SKLAD_TABS });
+  const active = tabs.find((t) => t.active);
+  if (tabs.length) return active || tabs[0];
   const tab = await chrome.tabs.create({ url: `${SKLAD}/app/fragrantica`, active: false });
   await waitLoaded(tab.id);
   return tab;
@@ -183,7 +187,7 @@ async function runQueue() {
 }
 
 chrome.runtime.onMessage.addListener((message, sender) => {
-  if (!sender.tab?.id || !String(sender.tab.url || "").startsWith(SKLAD)) return;
+  if (!sender.tab?.id || !SKLAD_ORIGIN.test(String(sender.tab.url || ""))) return;
   if (message?.type === "run") {
     if (run && !run.finished) { run.skladTabId = sender.tab.id; report(); return; }
     const seen = new Set();
@@ -200,3 +204,11 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     if (run) { run.skladTabId = sender.tab.id; report(); }
   }
 });
+
+// Chrome adds content scripts only to pages opened after an install or update: the sklad tabs open now get the bridge too
+async function bridgeOpenSkladTabs() {
+  const tabs = await chrome.tabs.query({ url: SKLAD_TABS });
+  for (const tab of tabs) chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["sklad-bridge.js"] }).catch(() => {});
+}
+chrome.runtime.onInstalled.addListener(bridgeOpenSkladTabs);
+chrome.runtime.onStartup.addListener(bridgeOpenSkladTabs);

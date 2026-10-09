@@ -67,16 +67,19 @@ export function useFragranticaExtRun() {
   const [installed, setInstalled] = useState(() => Boolean(document.documentElement.dataset.dsFragranticaExt));
   const [state, setState] = useState<ExtRunState | null>(null);
   useEffect(() => {
-    // the bridge script marks the page at document_start; checked once more in case it came late
-    const t = window.setTimeout(() => setInstalled(Boolean(document.documentElement.dataset.dsFragranticaExt)), 1000);
+    // the bridge marks the page at document_start, or later when the extension is installed / updated into an open tab
+    const check = () => setInstalled(Boolean(document.documentElement.dataset.dsFragranticaExt));
+    const t = window.setInterval(check, 2000);
     const onMessage = (event: MessageEvent) => {
-      if (event.source !== window || event.origin !== window.location.origin || event.data?.type !== "ds-fragrantica-ext-progress") return;
+      if (event.source !== window || event.origin !== window.location.origin) return;
+      if (event.data?.type === "ds-fragrantica-ext-hello") { check(); return; }
+      if (event.data?.type !== "ds-fragrantica-ext-progress") return;
       const { type: _type, ...rest } = event.data as ExtRunState & { type: string };
       setState(rest);
     };
     window.addEventListener("message", onMessage);
     window.postMessage({ type: "ds-fragrantica-ext-status" }, window.location.origin);
-    return () => { window.clearTimeout(t); window.removeEventListener("message", onMessage); };
+    return () => { window.clearInterval(t); window.removeEventListener("message", onMessage); };
   }, []);
   const start = useCallback((items: Array<{ url: string; name: string }>) => {
     setState({ running: true, done: 0, total: items.length, ok: 0, failed: 0 });
