@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import Image from "next/image";
-import { Quote, Star, ArrowUpRight, Sparkles, Gift, Map, FlaskConical, ShieldCheck, Truck } from "lucide-react";
+import { Quote, Star, ArrowUpRight, Sparkles, Gift, Map, FlaskConical, ShieldCheck, Truck, Play } from "lucide-react";
 import { fetchPopular, fetchAromaMesyatsa, fetchReviews, fetchNews, fetchBanners, fetchContests } from "@/lib/api";
-import { SITE_URL, SITE_NAME } from "@/lib/seo";
+import { SITE_URL } from "@/lib/seo";
 import { getFeatures } from "@/lib/features";
 import { toProductSlug } from "@/lib/slug";
 import ProductCard from "@/components/ProductCard";
@@ -17,26 +17,21 @@ import PageEffects from "@/components/PageEffects";
 import FlaconStory from "@/components/FlaconStory";
 import CollectionsGallery from "@/components/CollectionsGallery";
 import CountUp from "@/components/CountUp";
+import { NewsText } from "@/components/NewsPost";
+import SeoHub from "@/components/SeoHub";
 
 export const revalidate = 300;
 
-export const metadata: Metadata = {
-  title: `${SITE_NAME} — Оригинальный парфюм с доставкой по России`,
-  description: "Купить оригинальную парфюмерию в Magic Vibes. 22 000+ ароматов: Chanel, Dior, Tom Ford, Montale, Creed, Byredo. Нишевая, арабская, женская и мужская парфюмерия. Доставка по России 1–5 дней. Рейтинг 4.9 на Ozon.",
-  alternates: { canonical: "/" },
-  openGraph: { title: `${SITE_NAME} — Оригинальный парфюм`, url: SITE_URL },
-};
+// «парфюмерия купить» / «интернет-магазин парфюмерии» — the queries the home page competes for
+const HOME_TITLE = "Парфюмерия — купить оригинальные духи в интернет-магазине Magic Vibes";
+const HOME_DESC = "Интернет-магазин оригинальной парфюмерии Magic Vibes: 22 000+ ароматов Chanel, Dior, Tom Ford, Creed, Kilian, Montale. Женские и мужские духи, нишевая и арабская парфюмерия, пробники. Доставка по России 1–5 дней, рейтинг 4.9.";
 
-const STORE_SCHEMA = {
-  "@context": "https://schema.org",
-  "@type": "Store",
-  name: SITE_NAME,
-  url: SITE_URL,
-  description: "Оригинальная парфюмерия мировых брендов с доставкой по России",
-  priceRange: "₽₽",
-  openingHours: "Mo-Su 00:00-24:00",
-  address: { "@type": "PostalAddress", addressCountry: "RU" },
-  aggregateRating: { "@type": "AggregateRating", ratingValue: "4.9", reviewCount: "1240", bestRating: "5" },
+export const metadata: Metadata = {
+  title: { absolute: HOME_TITLE },
+  description: HOME_DESC,
+  alternates: { canonical: "/" },
+  openGraph: { title: HOME_TITLE, description: HOME_DESC, url: SITE_URL },
+  twitter: { title: HOME_TITLE, description: HOME_DESC },
 };
 
 /* Scent-family story blocks; the flacon changes liquid + label for each. */
@@ -97,6 +92,7 @@ export default async function HomePage() {
   const aromaValidUntil = aroma.status === "fulfilled" ? aroma.value.validUntil : null;
   const reviewsList = reviews.status === "fulfilled" ? reviews.value.reviews : [];
   const newsList = news.status === "fulfilled" ? news.value.posts : [];
+  const newsEmoji = news.status === "fulfilled" ? news.value.emoji : {};
   const bannersList = banners.status === "fulfilled" ? banners.value : [];
   const contestsList = contests.status === "fulfilled" ? contests.value : [];
 
@@ -104,7 +100,6 @@ export default async function HomePage() {
 
   return (
     <>
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(STORE_SCHEMA) }} />
       <PageEffects />
       <FlaconStory />
 
@@ -117,11 +112,11 @@ export default async function HomePage() {
         <span className="bg-word" style={{ left: "-2vw", bottom: "-4vw", color: "var(--ink)", opacity: 0.08 }}>магия</span>
         <div className="mv-stage-inner" style={{ width: "100%" }}>
           <div style={{ maxWidth: 680 }}>
-            <span className="eyebrow anim-slide-up">✦ Оригинальная парфюмерия</span>
-            <h1 className="h-mega anim-slide-up" style={{ marginTop: 22, animationDelay: "0.08s", fontSize: "clamp(40px,6.2vw,104px)" }}>
+            <h1 className="eyebrow anim-slide-up mv-home-h1">✦ Интернет-магазин оригинальной парфюмерии</h1>
+            <p className="h-mega anim-slide-up" style={{ marginTop: 22, marginBottom: 0, animationDelay: "0.08s", fontSize: "clamp(40px,6.2vw,104px)" }}>
               Магия,<br />которую<br />чувствуешь
               <span className="h-script">22 000 оригинальных ароматов</span>
-            </h1>
+            </p>
             <p className="anim-slide-up" style={{ margin: "26px 0 0", maxWidth: "44ch", fontSize: "clamp(15px,1.4vw,18px)", lineHeight: 1.6, color: "rgba(18,18,18,0.75)", animationDelay: "0.16s" }}>
               Chanel, Dior, Tom Ford, Creed, Byredo, Montale и ещё 200+ брендов. Проверяем каждый флакон и доставляем через Ozon за 1–5 дней.
             </p>
@@ -335,11 +330,18 @@ export default async function HomePage() {
                 {post.photoUrl && (
                   <div style={{ width: "100%", aspectRatio: "16/9", overflow: "hidden", background: "var(--surface2)", position: "relative" }}>
                     <Image src={post.photoUrl} alt="" fill sizes="(max-width: 768px) 100vw, 400px" style={{ objectFit: "cover" }} unoptimized={!post.photoUrl.includes("davidsklad.ru")} />
+                    {post.media?.[0]?.type === "video" && (
+                      <span aria-hidden style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>
+                        <span style={{ width: 52, height: 52, borderRadius: 999, background: "rgba(0,0,0,0.55)", display: "grid", placeItems: "center" }}>
+                          <Play size={22} color="#fff" fill="#fff" style={{ marginLeft: 3 }} />
+                        </span>
+                      </span>
+                    )}
                   </div>
                 )}
                 <div style={{ padding: "18px 20px 22px", flex: 1, display: "flex", flexDirection: "column", gap: 10 }}>
                   <p style={{ margin: 0, fontSize: 12, fontWeight: 600, color: "var(--muted)" }}>{new Date(post.publishedAt).toLocaleDateString("ru-RU", { day: "numeric", month: "long" })}</p>
-                  <p style={{ margin: 0, fontSize: 15, lineHeight: 1.6, flex: 1 }}>{post.text.replace(/#\S+/g, "").trim().slice(0, 220)}{post.text.length > 220 && "…"}</p>
+                  <NewsText text={post.text} entities={post.entities} emoji={newsEmoji} maxChars={220} plainLinks style={{ margin: 0, fontSize: 15, lineHeight: 1.5, flex: 1, whiteSpace: "pre-line", overflowWrap: "anywhere" }} />
                   <span style={{ fontSize: 13, fontWeight: 700, color: "var(--accent)" }}>Читать в Telegram →</span>
                 </div>
               </a>
@@ -350,6 +352,9 @@ export default async function HomePage() {
 
       {/* ════════ UNBOXINGS ════════ */}
       <UnboxingSection />
+
+      {/* ════════ SEO: copy, links to every landing + top brands, FAQ ════════ */}
+      <SeoHub />
 
       <div data-flacon={HIDE} style={{ height: 1 }} />
 

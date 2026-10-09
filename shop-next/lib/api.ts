@@ -1,4 +1,4 @@
-import type { ShopContest, ShopProduct, ShopBanner, ShopCategory, ShopSettings, CatalogResponse, BlogPost, TelegramNewsPost, ShopReview, MarketplaceReview, ProductQAItem, FragranceNotes } from "./types";
+import type { ShopContest, ShopProduct, ShopBanner, ShopCategory, ShopSettings, CatalogResponse, BlogPost, TelegramNewsPost, TelegramNewsEmoji, ShopReview, MarketplaceReview, ProductQAItem, FragranceNotes } from "./types";
 
 // Server-side API base — not exposed to browser
 const API_HOST = process.env.API_BASE ?? "https://davidsklad.ru";
@@ -86,14 +86,18 @@ export async function fetchReviews(limit = 8, offerId?: string): Promise<{ revie
   return get<{ ok: boolean; reviews: ShopReview[] }>(`/reviews?${qs}`, { next: { revalidate: 300 } });
 }
 
-export async function fetchNews(limit = 12): Promise<{ posts: TelegramNewsPost[] }> {
-  const res = await get<{ ok: boolean; posts: TelegramNewsPost[] }>(`/news?limit=${limit}`, { next: { revalidate: 300 } });
+export async function fetchNews(limit = 12): Promise<{ posts: TelegramNewsPost[]; emoji: Record<string, TelegramNewsEmoji> }> {
+  const res = await get<{ ok: boolean; posts: TelegramNewsPost[]; emoji?: Record<string, TelegramNewsEmoji> }>(`/news?limit=${limit}`, { next: { revalidate: 300 } });
   // Resolve relative photoUrls to absolute (photos are stored on the API server)
   res.posts = res.posts.map(p => ({
     ...p,
     photoUrl: p.photoUrl?.startsWith("/") ? `${API_HOST}${p.photoUrl}` : p.photoUrl,
   }));
-  return res;
+  return { posts: res.posts, emoji: res.emoji ?? {} };
+}
+
+export async function fetchBuyCompare(offerId: string): Promise<import("./buy").BuyCompare> {
+  return get(`/compare/${encodeURIComponent(offerId)}`, { next: { revalidate: 120 } });
 }
 
 export async function fetchBlog(params?: { page?: number; pageSize?: number; tag?: string }): Promise<{ posts: BlogPost[]; total: number }> {

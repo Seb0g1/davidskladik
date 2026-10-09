@@ -1,4 +1,6 @@
 import { useState, useEffect } from "react";
+import { DeliveryRulesEditor, type DeliveryRules } from "../components/DeliveryRulesEditor";
+import { CarriersEditor, type CarrierSettings } from "../components/CarriersEditor";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   ExternalLink, ShoppingBag, Users, TrendingUp, Package,
@@ -6,7 +8,7 @@ import {
   ChevronLeft, ChevronRight, Check, RefreshCw,
   LayoutDashboard, Settings, Tag, Image, ClipboardList, UserCheck,
   ChevronDown, ChevronUp, Newspaper, Star, Eye, EyeOff, MessageSquare, Bell, Video, BookOpen,
-  ToggleLeft, ToggleRight, Percent, Mail, Copy,
+  ToggleLeft, ToggleRight, Percent, Mail, Copy, Trophy,
 } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
@@ -34,6 +36,9 @@ interface ShopSettings {
   shopName: string; shopDescription: string;
   contactEmail?: string; contactPhone?: string; deliveryDays?: number; deliveryDaysMin?: number; deliveryPriceRub?: number; freeDeliveryFrom?: number;
   vipTelegramLink?: string;
+  deliveryRules?: DeliveryRules;
+  carriers?: CarrierSettings;
+  features?: { giftBuilder?: boolean; vipClub?: boolean };
   aromaMesyatsa?: { offerId: string; note: string; validUntil?: string } | null;
 }
 interface ShopCustomer {
@@ -180,8 +185,19 @@ function OrdersTab() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["shop-admin-orders"] }),
   });
 
+  const shipment = useMutation({
+    mutationFn: ({ id, action }: { id: string; action: "create" | "refresh" | "cancel" }) =>
+      apiFetch(`/api/shop/admin/orders/${id}/shipment`, { method: "POST", body: JSON.stringify({ action }) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["shop-admin-orders"] }),
+  });
+
   const COL = "minmax(130px,1.2fr) minmax(130px,1fr) minmax(70px,.4fr) minmax(100px,.7fr) minmax(130px,.9fr)";
-  const DELIVERY_LABELS: Record<string, string> = { firstName: "Имя", lastName: "Фамилия", pvz: "ПВЗ", address: "Адрес", city: "Город", zip: "Индекс", phone: "Телефон", email: "Email" };
+  const DELIVERY_LABELS: Record<string, string> = {
+    firstName: "Имя", lastName: "Фамилия", pvz: "ПВЗ", address: "Адрес", city: "Город", zip: "Индекс", phone: "Телефон", email: "Email",
+    carrierTitle: "Служба", pvzId: "Код пункта", pvzName: "Пункт", priceRub: "Доставка, ₽ (с покупателя)", carrierRawRub: "Тариф службы, ₽",
+    daysMin: "Срок от, дн.", daysMax: "Срок до, дн.", postalCode: "Индекс", tariffCode: "Тариф СДЭК",
+  };
+  const HIDDEN_DELIVERY = new Set(["carrier", "provider", "method", "kind", "cityCode", "consents", "shipment", "type"]);
 
   return (
     <div className="page-section">
@@ -242,7 +258,7 @@ function OrdersTab() {
                     <div>
                       <strong>Доставка</strong>
                       <dl>
-                        {Object.entries(o.delivery).map(([k, v]) => v ? (
+                        {Object.entries(o.delivery).filter(([k, v]) => !HIDDEN_DELIVERY.has(k) && (typeof v !== "object" || v === null)).map(([k, v]) => v ? (
                           <div key={k} className="sa-dl-row">
                             <dt className="sa-dl-term">{DELIVERY_LABELS[k] ?? k}</dt>
                             <dd>{String(v)}</dd>
@@ -270,6 +286,33 @@ function OrdersTab() {
                       </div>
                     </div>
                   </div>
+                  {["cdek", "yandex", "dostavista"].includes(String((o.delivery as Record<string, unknown>)?.carrier || "")) && (() => {
+                    const d = o.delivery as Record<string, unknown> & { shipment?: { carrier: string; id: string; status?: string; statusLabel?: string; number?: string; trackingUrl?: string } };
+                    const sh = d.shipment;
+                    const cancelled = sh && ["canceled", "cancelled"].includes(String(sh.status).toLowerCase());
+                    const busy = shipment.isPending && shipment.variables?.id === o.id;
+                    return (
+                      <div className="mv-order-status-bar" style={{ flexWrap: "wrap", gap: 8 }}>
+                        <span className="sa-muted-12-mr4">Отправка ({String(d.carrierTitle || d.carrier)}):</span>
+                        {sh && !cancelled ? (
+                          <>
+                            <span className="pill">{sh.statusLabel || sh.status || "создана"}</span>
+                            {sh.number && <code className="sa-inline-code">{sh.number}</code>}
+                            {sh.trackingUrl && <a href={sh.trackingUrl} target="_blank" rel="noreferrer">отследить</a>}
+                            <button type="button" className="secondary-action" disabled={busy} onClick={() => shipment.mutate({ id: o.id, action: "refresh" })}>Обновить статус</button>
+                            <button type="button" className="secondary-action" disabled={busy} onClick={() => { if (confirm("Отменить отправку в службе доставки?")) shipment.mutate({ id: o.id, action: "cancel" }); }}>Отменить отправку</button>
+                          </>
+                        ) : (
+                          <button type="button" className="secondary-action" disabled={busy || !["paid", "confirmed", "picking"].includes(o.status)}
+                            title={["paid", "confirmed", "picking"].includes(o.status) ? "" : "Доступно после оплаты заказа"}
+                            onClick={() => shipment.mutate({ id: o.id, action: "create" })}>
+                            {busy ? <Loader2 size={12} className="spin" /> : null} Создать отправку
+                          </button>
+                        )}
+                        {shipment.isError && shipment.variables?.id === o.id && <span className="inline-error">{String((shipment.error as Error)?.message || shipment.error)}</span>}
+                      </div>
+                    );
+                  })()}
                   <div className="mv-order-status-bar">
                     <span className="sa-muted-12-mr4">Статус:</span>
                     {Object.entries(STATUS_LABELS).map(([s, label]) => (
@@ -626,6 +669,142 @@ function BannersTab() {
   );
 }
 
+// ── Contests ──────────────────────────────────────────────────────────────────
+
+interface ContestStep { title: string; desc: string }
+interface ShopContest {
+  id: string; title: string; badge?: string; description?: string; prize?: string;
+  imageUrl?: string; linkUrl?: string; linkText?: string; rulesUrl?: string;
+  startDate?: string; endDate?: string; steps: ContestStep[]; active: boolean; live?: boolean;
+}
+
+const EMPTY_CONTEST: Omit<ShopContest, "id"> = {
+  title: "", badge: "Конкурс", description: "", prize: "", imageUrl: "", linkUrl: "https://t.me/magicvibes_ru",
+  linkText: "Участвовать", rulesUrl: "", startDate: "", endDate: "",
+  steps: [{ title: "", desc: "" }, { title: "", desc: "" }, { title: "", desc: "" }], active: true,
+};
+
+function ContestForm({ contest, onSave, onCancel, saving }: {
+  contest?: ShopContest; onSave: (d: Omit<ShopContest, "id">) => void; onCancel: () => void; saving: boolean;
+}) {
+  const [f, setF] = useState<Omit<ShopContest, "id">>(() => {
+    const base = contest ? { ...EMPTY_CONTEST, ...contest } : { ...EMPTY_CONTEST };
+    const steps = [...(base.steps || [])];
+    while (steps.length < 3) steps.push({ title: "", desc: "" });
+    return { ...base, steps };
+  });
+  const set = (k: "title" | "badge" | "description" | "prize" | "imageUrl" | "linkUrl" | "linkText" | "rulesUrl" | "startDate" | "endDate") =>
+    (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setF((p) => ({ ...p, [k]: e.target.value }));
+  const setStep = (i: number, k: keyof ContestStep, v: string) =>
+    setF((p) => ({ ...p, steps: p.steps.map((s, j) => (j === i ? { ...s, [k]: v } : s)) }));
+
+  return (
+    <div className="mv-form-section">
+      <h3>{contest ? "Редактировать конкурс" : "Новый конкурс"}</h3>
+      <div className="mv-field-grid">
+        <div className="mv-field"><label>Название / хештег *</label><input value={f.title} onChange={set("title")} placeholder="#МойАромат" /></div>
+        <div className="mv-field"><label>Метка над названием</label><input value={f.badge} onChange={set("badge")} placeholder="Конкурс октября" /></div>
+        <div className="mv-field"><label>Приз</label><input value={f.prize} onChange={set("prize")} placeholder="Флакон на выбор" /></div>
+        <div className="mv-field"><label>Картинка (URL, необязательно)</label><input value={f.imageUrl} onChange={set("imageUrl")} placeholder="https://..." /></div>
+        <div className="mv-field"><label>Начало</label><input type="date" value={f.startDate} onChange={set("startDate")} /></div>
+        <div className="mv-field"><label>Окончание (включительно)</label><input type="date" value={f.endDate} onChange={set("endDate")} /></div>
+        <div className="mv-field"><label>Ссылка на участие</label><input value={f.linkUrl} onChange={set("linkUrl")} placeholder="https://t.me/magicvibes_ru" /></div>
+        <div className="mv-field"><label>Текст кнопки</label><input value={f.linkText} onChange={set("linkText")} placeholder="Участвовать в Telegram" /></div>
+        <div className="mv-field"><label>Ссылка на правила</label><input value={f.rulesUrl} onChange={set("rulesUrl")} placeholder="https://... (необязательно)" /></div>
+      </div>
+      <div className="mv-field">
+        <label>Описание</label>
+        <textarea rows={3} value={f.description} onChange={set("description")} placeholder="Опубликуйте фото с вашим ароматом с тегом… Победитель получит…" />
+      </div>
+      <div className="mv-field">
+        <label>Шаги участия (пустые не показываются)</label>
+        {f.steps.map((st, i) => (
+          <div key={i} className="mv-field-grid">
+            <input value={st.title} onChange={(e) => setStep(i, "title", e.target.value)} placeholder={`Шаг ${i + 1}: заголовок`} />
+            <input value={st.desc} onChange={(e) => setStep(i, "desc", e.target.value)} placeholder="Пояснение" />
+          </div>
+        ))}
+      </div>
+      <label className="sa-flex-center-8">
+        <input type="checkbox" checked={f.active} onChange={(e) => setF((p) => ({ ...p, active: e.target.checked }))} /> Показывать на сайте
+      </label>
+      <div className="row-actions">
+        <button onClick={() => onSave(f)} disabled={saving || !f.title.trim()} className="primary-action">
+          {saving ? <Loader2 size={15} className="spin" /> : <Save size={15} />} Сохранить
+        </button>
+        <button onClick={onCancel} className="secondary-action"><X size={15} /> Отмена</button>
+      </div>
+    </div>
+  );
+}
+
+function ContestsTab() {
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState<string | "new" | null>(null);
+  const { data: contests = [], isLoading } = useQuery<ShopContest[]>({
+    queryKey: ["shop-admin-contests"],
+    queryFn: () => apiFetch<ShopContest[]>("/api/shop/admin/contests"),
+  });
+  const saveMut = useMutation({
+    mutationFn: (d: Partial<ShopContest> & { id?: string }) =>
+      apiFetch<{ ok: boolean }>(`/api/shop/admin/contests${d.id ? `/${d.id}` : ""}`, { method: d.id ? "PUT" : "POST", body: JSON.stringify(d) }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["shop-admin-contests"] }); setEditing(null); },
+  });
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => apiFetch<{ ok: boolean }>(`/api/shop/admin/contests/${id}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["shop-admin-contests"] }),
+  });
+  const fmt = (d?: string) => (d ? new Date(`${d}T00:00:00`).toLocaleDateString("ru-RU") : "");
+  const period = (c: ShopContest) =>
+    c.startDate || c.endDate ? `${fmt(c.startDate) || "…"} — ${fmt(c.endDate) || "без срока"}` : "без срока";
+
+  return (
+    <div className="page-section">
+      <div className="section-title">
+        <div>
+          <h2>Конкурсы</h2>
+          <p className="sa-muted-12">Показываются на главной странице magicvibes.ru, пока конкурс включён и идёт по датам.</p>
+        </div>
+        <button onClick={() => setEditing("new")} className="primary-action"><Plus size={16} /> Добавить конкурс</button>
+      </div>
+      {editing === "new" && <ContestForm onSave={(d) => saveMut.mutate(d)} onCancel={() => setEditing(null)} saving={saveMut.isPending} />}
+      {saveMut.isError && <div className="inline-error">Ошибка: {String(saveMut.error)}</div>}
+      {isLoading ? (
+        <div className="list-loading"><Loader2 size={16} className="spin" /> Загружаю конкурсы…</div>
+      ) : contests.length === 0 && editing !== "new" ? (
+        <div className="soft-empty"><Trophy size={18} /> Конкурсов нет — блок на главной скрыт</div>
+      ) : (
+        <div className="table-panel">
+          <div className="table-head"><span>Конкурс</span><span>Период</span><span>Статус</span><span /></div>
+          {contests.map((c) => (
+            <div key={c.id}>
+              <div className="table-row">
+                <span>
+                  <div className="sa-bold">{c.title}</div>
+                  {c.prize && <div className="sa-muted-12">Приз: {c.prize}</div>}
+                </span>
+                <span className="sa-muted-12">{period(c)}</span>
+                <span>
+                  <span className={`pill ${c.live ? "success" : ""}`}>{c.live ? "Идёт на сайте" : c.active ? "Вне дат" : "Скрыт"}</span>
+                </span>
+                <span className="sa-flex-4">
+                  <button onClick={() => setEditing(editing === c.id ? null : c.id)} className="secondary-action icon-action"><Edit2 size={14} /></button>
+                  <button onClick={() => { if (confirm("Удалить конкурс?")) deleteMut.mutate(c.id); }} className="icon-action danger"><Trash2 size={14} /></button>
+                </span>
+              </div>
+              {editing === c.id && (
+                <div className="sa-pad-bottom-12">
+                  <ContestForm contest={c} onSave={(d) => saveMut.mutate({ ...d, id: c.id })} onCancel={() => setEditing(null)} saving={saveMut.isPending} />
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Categories ────────────────────────────────────────────────────────────────
 
 function CategoriesTab() {
@@ -834,7 +1013,7 @@ function SettingsTab() {
           </div>
           <div className="mv-field">
             <label>Email для связи</label>
-            <input value={form.contactEmail ?? ""} onChange={setF("contactEmail")} placeholder="info@magicvibes.ru" />
+            <input value={form.contactEmail ?? ""} onChange={setF("contactEmail")} placeholder="noreply@magicvibes.ru" />
           </div>
           <div className="mv-field">
             <label>Телефон</label>
@@ -876,6 +1055,31 @@ function SettingsTab() {
             <label>Срок доставки макс (дней)</label>
             <input type="number" min="1" max="30" value={form.deliveryDays ?? 5} onChange={setF("deliveryDays")} />
           </div>
+        </div>
+
+        <DeliveryRulesEditor
+          value={form.deliveryRules}
+          onChange={(deliveryRules) => setForm((f) => ({ ...f, deliveryRules }))}
+          flatPrice={form.deliveryPriceRub ?? 350}
+          freeFrom={form.freeDeliveryFrom ?? 0}
+        />
+
+        <CarriersEditor value={form.carriers} onChange={(carriers) => setForm((f) => ({ ...f, carriers }))} />
+
+        {/* Features that can be switched off on the storefront */}
+        <div className="mv-form-section sa-section-sep">
+          <h3 className="sa-h3-mb12">Разделы сайта</h3>
+          <label className="mv-form-inline" style={{ cursor: "pointer" }}>
+            <input type="checkbox" checked={Boolean(form.features?.giftBuilder)}
+              onChange={(e) => setForm((f) => ({ ...f, features: { ...(f.features || {}), giftBuilder: e.target.checked } }))} />
+            <span>«Собрать подарок» — конструктор подарка (главная, меню, /gift)</span>
+          </label>
+          <label className="mv-form-inline" style={{ cursor: "pointer", marginTop: 8 }}>
+            <input type="checkbox" checked={Boolean(form.features?.vipClub)}
+              onChange={(e) => setForm((f) => ({ ...f, features: { ...(f.features || {}), vipClub: e.target.checked } }))} />
+            <span>VIP-клуб — блок в кабинете покупателя и упоминания на сайте</span>
+          </label>
+          <p className="sa-note-11-mt4">Выключенные разделы скрыты на magicvibes.ru; страницы отдают 404 и не попадают в sitemap. Изменения видны в течение ~5 минут.</p>
         </div>
 
         {/* VIP club */}
@@ -1839,7 +2043,7 @@ function PushTab() {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
-type Tab = "dashboard" | "orders" | "customers" | "banners" | "categories" | "news" | "reviews" | "unboxings" | "blog" | "emails" | "push" | "promocodes" | "subscribers" | "settings";
+type Tab = "dashboard" | "orders" | "customers" | "banners" | "contests" | "categories" | "news" | "reviews" | "unboxings" | "blog" | "emails" | "push" | "promocodes" | "subscribers" | "settings";
 
 type TabDef = { id: Tab; label: string; icon: React.ComponentType<{ size?: number }> };
 
@@ -1860,6 +2064,7 @@ const TAB_GROUPS: { label: string; tabs: TabDef[] }[] = [
   { label: "Контент", tabs: [
     { id: "news", label: "Новости", icon: Newspaper },
     { id: "blog", label: "Блог", icon: BookOpen },
+    { id: "contests", label: "Конкурсы", icon: Trophy },
   ] },
   { label: "Рассылки", tabs: [
     { id: "subscribers", label: "Подписчики", icon: Mail },
@@ -1929,6 +2134,7 @@ export default function ShopAdminPage() {
       {tab === "orders" && <OrdersTab />}
       {tab === "customers" && <CustomersTab />}
       {tab === "banners" && <BannersTab />}
+      {tab === "contests" && <ContestsTab />}
       {tab === "categories" && <CategoriesTab />}
       {tab === "news" && <NewsTab />}
       {tab === "reviews" && <ReviewsTab />}

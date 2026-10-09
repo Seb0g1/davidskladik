@@ -24,6 +24,8 @@ function requireAuth(request, response, next) {
   if (request.path.startsWith("/uploads/branding/")) return next();
   // Fragrantica catalog photos and processed card pictures: Ozon downloads them by URL.
   if (request.path.startsWith("/uploads/fragrantica/")) return next();
+  // Photos of Telegram channel news shown on magicvibes.ru
+  if (request.path.startsWith("/uploads/tg-news/")) return next();
   // Фид Avito Автозагрузки: Авито скачивает XML без сессии, доступ по секретному
   // токену в URL (проверяется в самом роуте).
   if (request.path.startsWith("/public/avito-feed/")) return next();
@@ -36,6 +38,8 @@ function requireAuth(request, response, next) {
   // Публичный API магазина — доступен без сессии, CORS проверяется в shopCors.
   // Административные роуты /api/shop/admin/* требуют сессии — не пропускаем их.
   if (request.path.startsWith("/api/shop/") && !request.path.startsWith("/api/shop/admin")) return next();
+  // Yandex Commerce Protocol: server-to-server calls, own Bearer token check in 02d-shop-ycp-routes.js
+  if (request.path.startsWith("/api/ycp/")) return next();
 
   const session = readSession(request);
   if (session) {

@@ -99,10 +99,36 @@ export interface ShopOrder {
   comment?: string;
 }
 
+export interface TelegramNewsMedia {
+  type: "photo" | "video" | "animation";
+  url: string;
+  poster?: string | null;
+  width?: number | null;
+  height?: number | null;
+}
+
+/** Premium emoji ({ id }) or link ({ url }) or formatting ({ t }) over text[offset, offset + length) in UTF-16 units. */
+export interface TelegramNewsEntity {
+  offset: number;
+  length: number;
+  id?: string;
+  url?: string;
+  t?: "b" | "i" | "u" | "s" | "spoiler" | "code" | "quote";
+}
+
+export interface TelegramNewsEmoji {
+  kind: "lottie" | "video" | "image";
+  url: string;
+  thumb?: string | null;
+  alt: string;
+}
+
 export interface TelegramNewsPost {
   id: string;
   text: string;
   photoUrl?: string | null;
+  media?: TelegramNewsMedia[];
+  entities?: TelegramNewsEntity[];
   publishedAt: string;
 }
 
@@ -145,6 +171,11 @@ export interface FragranceNotes {
   accords: string[];
   gender?: string;
   seasons?: string[];
+  /** our perfume catalog: accords with their share (10–100) and Fragrantica colours */
+  accordBars?: { name: string; share: number; background?: string; color?: string }[];
+  /** our perfume catalog: facts for the «Характеристики» block */
+  facts?: { brand?: string; aroma?: string; gender?: string; year?: number | null; family?: string; perfumers?: string[] };
+  source?: string;
 }
 
 export interface CatalogFacets {

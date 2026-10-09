@@ -3,19 +3,14 @@ import { notFound, permanentRedirect } from "next/navigation";
 import LandingPage from "@/components/LandingPage";
 import { fetchBrands, fetchCatalog } from "@/lib/api";
 import { SITE_URL } from "@/lib/seo";
-import { brandHref, slugify, COLLECTION_DEFS, collectionHref } from "@/lib/landings";
+import { brandHref, slugify, COLLECTION_DEFS, collectionHref, brandSubHref } from "@/lib/landings";
+import { brandSubCounts, resolveBrand } from "@/lib/brand-subs";
 
 export const revalidate = 600;
 const PAGE_SIZE = 48;
 
 interface Props { params: Promise<{ slug: string }>; searchParams: Promise<{ page?: string }> }
 
-async function resolveBrand(slug: string) {
-  const brands = await fetchBrands().catch(() => [] as { name: string; count: number }[]);
-  // several spellings can share a slug — take the one with the most products
-  const hits = brands.filter((b) => slugify(b.name) === slug).sort((a, b) => b.count - a.count);
-  return hits[0] || null;
-}
 
 // old long names («12-parfumeurs-francais») → the brand they resolve to now («12-parfumeurs»)
 // houses that used to have several spellings in the catalogue
@@ -40,8 +35,8 @@ export async function generateMetadata({ params, searchParams }: Props): Promise
   if (!b) return { title: "Бренд не найден", robots: { index: false } };
   const page = Math.max(1, Number((await searchParams).page) || 1);
   const path = brandHref(b.name) + (page > 1 ? `?page=${page}` : "");
-  const title = `${b.name} — купить оригинальную парфюмерию${page > 1 ? ` — страница ${page}` : ""}`;
-  const description = `Парфюмерия ${b.name} в Magic Vibes: ${b.count} ароматов в каталоге — парфюмерная и туалетная вода, духи. Оригинал, доставка по России 1–5 дней, оплата картой или СБП.`;
+  const title = `${b.name} — купить оригинальные духи и парфюмерию${page > 1 ? ` — страница ${page}` : ""}`;
+  const description = `Духи ${b.name} в интернет-магазине Magic Vibes: ${b.count} ${plural(b.count)} — парфюмерная и туалетная вода, женские и мужские ароматы. Оригинал, доставка по России 1–5 дней, оплата картой или СБП.`;
   return {
     title,
     description,
@@ -61,7 +56,10 @@ export default async function BrandPage({ params, searchParams }: Props) {
     notFound();
   }
   const page = Math.max(1, Number((await searchParams).page) || 1);
-  const data = await fetchCatalog({ brand: b.name, page, pageSize: PAGE_SIZE, sort: "price_desc" }).catch(() => ({ products: [], total: 0, page, pageSize: PAGE_SIZE, brands: [] }));
+  const [data, subCounts] = await Promise.all([
+    fetchCatalog({ brand: b.name, page, pageSize: PAGE_SIZE, sort: "price_desc" }).catch(() => ({ products: [], total: 0, page, pageSize: PAGE_SIZE, brands: [] })),
+    brandSubCounts(b.name),
+  ]);
   const prices = data.products.map((p) => p.priceRub).filter((x) => x > 0);
   const min = prices.length ? Math.min(...prices) : 0;
   const max = prices.length ? Math.max(...prices) : 0;
@@ -87,6 +85,14 @@ export default async function BrandPage({ params, searchParams }: Props) {
       pageSize={PAGE_SIZE}
       catalogHref={`/catalog?brand=${encodeURIComponent(b.name)}`}
       faq={faq}
+      subs={subCounts.map(({ sub, count }) => ({ label: `${sub.label.charAt(0).toUpperCase() + sub.label.slice(1)} · ${count}`, href: brandSubHref(b.name, sub) }))}
+      subsTitle={`Парфюмерия ${b.name} по разделам`}
+      seo={[
+        `В интернет-магазине Magic Vibes можно купить оригинальную парфюмерию ${b.name}: ${(data.total || b.count).toLocaleString("ru-RU")} ${plural(data.total || b.count)}${subCounts.length ? ` — ${subCounts.map(({ sub }) => sub.label).join(", ")}` : ""}. Все ароматы поставляются в заводской упаковке, подлинность подтверждается документами.`,
+        `Чтобы выбрать аромат ${b.name}, ориентируйтесь на семейство (цветочное, древесное, восточное, свежее), концентрацию и сезон: парфюмерная вода и духи звучат насыщеннее и стойче, туалетная вода — легче и подходит для жары и офиса. Если сомневаетесь, начните с пробника или миниатюры.`,
+        `Заказ передаём в доставку в течение 1 рабочего дня, доставляем курьером или в пункт выдачи Ozon, СДЭК и Яндекс Доставки по всей России. Оплата онлайн картой, через СБП или в рассрочку.`,
+      ]}
+      seoTitle={`Купить духи ${b.name} в Magic Vibes`}
       related={[{ label: "Все бренды", href: "/brands" }, ...COLLECTION_DEFS.slice(0, 8).map((c) => ({ label: c.h1, href: collectionHref(c) }))]}
       crumbs={[{ name: "Главная", url: "/" }, { name: "Бренды", url: "/brands" }, { name: b.name, url: brandHref(b.name) }]}
     />

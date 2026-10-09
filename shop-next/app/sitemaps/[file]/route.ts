@@ -1,7 +1,7 @@
 // /sitemaps/{pages|collections|brands|blog|products-N}.xml — parts listed by /sitemap.xml
 import {
   CATEGORY_SLUGS, COLLECTION_QUERIES, PRODUCTS_PER_FILE, STATIC_PAGES,
-  sitemapBlog, sitemapBrands, sitemapProducts, urlEntry, urlset, xmlResponse,
+  sitemapBlog, sitemapBrands, sitemapListings, sitemapProducts, urlEntry, urlset, xmlResponse,
 } from "@/lib/sitemap";
 import { COLLECTION_DEFS, brandHref, collectionHref } from "@/lib/landings";
 import { getFeatures } from "@/lib/features";
@@ -31,6 +31,10 @@ export async function GET(_req: Request, { params }: { params: Promise<{ file: s
     const brands = await sitemapBrands();
     const hrefs = [...new Set(brands.map(brandHref))].filter((h) => h !== "/brand/");
     return xmlResponse(urlset(hrefs.map((h) => urlEntry(h, { lastmod: today, changefreq: "weekly", priority: 0.75 }))));
+  }
+  if (name === "listings") {
+    const list = await sitemapListings();
+    return xmlResponse(urlset(list.map((l) => urlEntry(`/brand/${l.brand}/${l.sub}`, { lastmod: today, changefreq: "weekly", priority: 0.7 }))));
   }
   if (name === "blog") {
     const posts = await sitemapBlog();

@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { ShopProduct } from "@/lib/types";
 import { toProductSlug } from "@/lib/slug";
 import AddToCartButton from "./ui/AddToCartButton";
+import { useLivePrice } from "@/lib/live-prices";
 
 // hover tint per card — cycles through the scent-family palette
 const TINTS = ["#ffc8dc", "#a9dcff", "#e6f99b", "#ffd2a8", "#d9d2ff", "#fff0a0"];
@@ -15,7 +16,8 @@ interface Props {
   showBrand?: boolean;
 }
 
-export default function ProductCard({ product, showBrand = true }: Props) {
+export default function ProductCard({ product: rendered, showBrand = true }: Props) {
+  const product = useLivePrice(rendered); // ISR pages may carry an old price
   const [imgError, setImgError] = useState(false);
   const ref = useRef<HTMLAnchorElement>(null);
 

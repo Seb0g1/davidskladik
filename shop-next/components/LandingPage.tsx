@@ -19,6 +19,12 @@ export interface LandingProps {
   catalogHref: string;     // full catalog with filters
   faq: [string, string][];
   related?: { label: string; href: string }[];
+  /** narrower listings of this page (brand → «для женщин», «парфюмерная вода»…) */
+  subs?: { label: string; href: string }[];
+  subsTitle?: string;
+  /** long SEO copy under the grid */
+  seo?: string[];
+  seoTitle?: string;
   crumbs: { name: string; url: string }[];
 }
 
@@ -66,6 +72,11 @@ export default function LandingPage(p: LandingProps) {
           <h1 className="mv-land-title">{p.h1}</h1>
           {p.script && <div className="mv-legal-script">{p.script}</div>}
           <p className="mv-land-intro">{p.intro}</p>
+          {p.subs && p.subs.length > 0 && (
+            <nav className="mv-land-subs" aria-label={p.subsTitle || "Разделы"}>
+              {p.subs.map((r) => <Link key={r.href} href={r.href} className="chip">{r.label}</Link>)}
+            </nav>
+          )}
           <div className="mv-land-stats">
             <span><b>{p.total.toLocaleString("ru-RU")}</b> {p.total % 10 === 1 && p.total % 100 !== 11 ? "товар" : "товаров"}</span>
             {minPrice > 0 && <span>от <b>{rub(minPrice)}</b></span>}
@@ -88,6 +99,13 @@ export default function LandingPage(p: LandingProps) {
           {p.page < pages && <Link rel="next" href={pageHref(p.page + 1)} className="mv-acc-btn">Ещё товары →</Link>}
           <Link href={p.catalogHref} className="mv-acc-btn ghost">Фильтры и сортировка</Link>
         </div>
+
+        {p.seo && p.seo.length > 0 && p.page === 1 && (
+          <section className="mv-land-seo">
+            <h2>{p.seoTitle || `${p.h1}: как выбрать и где купить`}</h2>
+            {p.seo.map((t, i) => <p key={i}>{t}</p>)}
+          </section>
+        )}
 
         {p.related && p.related.length > 0 && (
           <section className="mv-land-related">

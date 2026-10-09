@@ -240,6 +240,7 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
 <p style="color:#999;font-size:12px">— Magic Vibes Склад</p>
 </body></html>`;
             await shopSendEmail({
+              account: "supplier", // suppliers get cancellations from the warehouse Gmail, not noreply@
               to: partnerEmail,
               subject: `Отмена заказа: ${nextRow.productName || nextRow.offerId || ""}`,
               html: cancelEmailHtml,

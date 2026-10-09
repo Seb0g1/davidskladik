@@ -368,6 +368,104 @@ function shopPriceFromLinks(links, pmMap, { currentPrice, defaultMarkup, rules, 
   return { priceRub: best || (current > 0 ? current : 0), fromSupplier: best > 0 };
 }
 
+// ── One row and one price per article for every storefront view ──────────────
+// The catalog (feed, rebuilt hourly), the product page (ISR), the cart (localStorage) and the order
+// disagreed after the 2026-10-01 markup change: each kept its own copy of the price, and an article
+// with several rows (Ozon + Yandex, two Ozon stores, even another product under the same code —
+// 32750 is Guerlain on one row and a Wella shampoo on another) was resolved by each view its own way.
+// pickShopRow is the only row choice; shopLivePrices is the price the order is charged at.
+const SHOP_ROW_SELECT = {
+  id: true, offerId: true, name: true, brand: true, marketplace: true,
+  images: true, raw: true, currentPrice: true, targetStock: true, status: true,
+  marketplaceState: true, updatedAt: true,
+  links: { take: 5, select: { supplierArticle: true, priceCurrency: true, partnerId: true } },
+};
+
+function shopRowRank(r) {
+  const sellable = ["ozon", "yandex"].includes(r.marketplace) && r.status !== "deleted"
+    && Number(r.currentPrice) > 0 && (r.links || []).length > 0;
+  // images column only: the rank must not depend on whether the caller loaded `raw`
+  const img = extractImages({ images: r.images })[0] || "";
+  return [sellable ? 0 : 1, shopNameMasked(r.name) ? 1 : 0, img && _shopPlaceholderImgs.has(img) ? 1 : 0, r.marketplace === "ozon" ? 0 : 1];
+}
+
+function pickShopRow(rows) {
+  const list = (rows || []).filter(Boolean);
+  if (list.length < 2) return list[0] || null;
+  return [...list].sort((a, b) => {
+    const ra = shopRowRank(a), rb = shopRowRank(b);
+    for (let i = 0; i < ra.length; i++) if (ra[i] !== rb[i]) return ra[i] - rb[i];
+    const ua = new Date(a.updatedAt || 0).getTime(), ub = new Date(b.updatedAt || 0).getTime();
+    if (ua !== ub) return ub - ua;
+    return String(a.id).localeCompare(String(b.id));
+  })[0];
+}
+
+async function shopPricingContext() {
+  const shopSettings = await readShopSettings();
+  let usdRate = Number(process.env.DEFAULT_USD_RATE || 95);
+  try { const r = await getUsdRate(); usdRate = Number(r?.rate || r || 95); } catch (_) {}
+  if (!usdRate || usdRate < 1) usdRate = Number(process.env.DEFAULT_USD_RATE || 95);
+  return { defaultMarkup: shopSettings.markup || 2.2, rules: shopSettings.markupRules || [], usdRate };
+}
+
+function shopPriceForRow(row, pmMap, ctx, stockMap) {
+  const currentPriceNum = Number(row.currentPrice || 0);
+  const { priceRub } = shopPriceFromLinks(row.links, pmMap, {
+    currentPrice: currentPriceNum, defaultMarkup: ctx.defaultMarkup, rules: ctx.rules, usdRate: ctx.usdRate,
+  });
+  const stockQty = Math.max(0, shopStockFor(stockMap, row));
+  return { offerId: row.offerId, priceRub, oldPriceRub: shopMarketplaceOldPrice(priceRub, currentPriceNum), inStock: stockQty > 0, stockQty };
+}
+
+/** offerIds → Map(lowercase offerId → { offerId, priceRub, oldPriceRub, inStock, stockQty }), straight from the DB. */
+async function shopLivePrices(offerIds) {
+  const out = new Map();
+  const prisma = getPrisma();
+  const ids = [...new Set((offerIds || []).map((x) => cleanText(x)).filter(Boolean))].slice(0, 200);
+  if (!prisma || !ids.length) return out;
+  const select = { ...SHOP_ROW_SELECT };
+  delete select.raw; // not needed for the price, and heavy
+  const [stockMap, ctx, rows] = await Promise.all([
+    shopStockMap(),
+    shopPricingContext(),
+    // case-insensitive like findShopProductByOfferId (the cart may hold «НФ-…» typed in another case)
+    prisma.warehouseProduct.findMany({
+      where: { archived: false, OR: ids.map((id) => ({ offerId: { equals: id, mode: "insensitive" } })) },
+      select,
+    }),
+  ]);
+  const byKey = new Map();
+  for (const r of rows) {
+    const k = cleanText(r.offerId).toLowerCase();
+    if (!byKey.has(k)) byKey.set(k, []);
+    byKey.get(k).push(r);
+  }
+  const chosen = [...byKey.values()].map(pickShopRow).filter(Boolean);
+  const articles = [...new Set(chosen.flatMap((r) => r.links.map((l) => cleanText(l.supplierArticle))).filter(Boolean))];
+  const snaps = articles.length ? await prisma.priceMasterSnapshotItem.findMany({
+    where: { article: { in: articles }, active: true },
+    select: { article: true, price: true, currency: true, partnerId: true },
+  }) : [];
+  const pmMap = shopPmIndex(snaps);
+  for (const r of chosen) out.set(cleanText(r.offerId).toLowerCase(), shopPriceForRow(r, pmMap, ctx, stockMap));
+  return out;
+}
+
+/** Copy of `list` with live price / stock on every item that has one (never mutates the feed cache). */
+async function shopOverlayLivePrices(list) {
+  if (!Array.isArray(list) || !list.length) return list;
+  const live = await shopLivePrices(list.map((p) => p?.offerId)).catch((err) => {
+    logger.warn("shop live prices failed", { detail: err?.message || String(err) });
+    return null;
+  });
+  if (!live) return list;
+  return list.map((p) => {
+    const l = p && live.get(cleanText(p.offerId).toLowerCase());
+    return l && l.priceRub > 0 ? { ...p, priceRub: l.priceRub, oldPriceRub: l.oldPriceRub, inStock: l.inStock, stockQty: l.stockQty } : p;
+  });
+}
+
 function resolveShopMarkup(priceUsd, defaultMarkup, rules) {
   if (!Array.isArray(rules) || !rules.length || !(priceUsd > 0)) return defaultMarkup;
   const sorted = [...rules].filter(r => Number(r.coefficient) > 0).sort((a, b) => b.minUsd - a.minUsd);
@@ -578,7 +676,64 @@ function buildShopCollectionConditions(col) {
   return or;
 }
 
+// ─── Site stock = the marketplace stock logic ─────────────────────────────────
+// The site shows the same stock the marketplaces get: an active supplier link → the target stock (5 by
+// default), an inactive link (the no-supplier automation sent "zero_stock") → 0, no link → 0. Per offerId,
+// over all its Ozon / Yandex rows: the latest successful stock send of a linked row decides; a linked row
+// that never had a send counts only while the marketplace actually shows stock.
+// (target_stock alone is not enough: it keeps its old value after a zero_stock send.)
+const SHOP_LINKED_STOCK = Math.max(1, Number(process.env.LINKED_DEFAULT_TARGET_STOCK || 5) || 5);
+const SHOP_STOCK_TTL_MS = 2 * 60 * 1000;
+let _shopStockCache = { at: 0, map: null, loading: null };
+
+async function _loadShopStockMap() {
+  const prisma = getPrisma();
+  const rows = await prisma.$queryRaw`
+    WITH r AS (
+      SELECT lower(w.offer_id) AS k,
+             EXISTS (SELECT 1 FROM product_links l WHERE l.product_id = w.id) AS has_link,
+             w.raw->'lastStockSend'->>'type' AS lt,
+             w.raw->'lastStockSend'->>'status' AS ls,
+             w.raw->'lastStockSend'->>'at' AS la,
+             CASE WHEN (w.marketplace_state->>'stock') ~ '^[0-9]+$' THEN (w.marketplace_state->>'stock')::int ELSE 0 END AS st,
+             COALESCE(w.target_stock, 0) AS ts
+      FROM warehouse_products w
+      WHERE w.archived = false AND w.marketplace IN ('ozon', 'yandex')
+    )
+    SELECT k,
+           MAX(ts) FILTER (WHERE has_link) AS ts,
+           (ARRAY_AGG(lt ORDER BY la DESC) FILTER (WHERE has_link AND lt IS NOT NULL AND ls = 'success'))[1] AS last_type,
+           BOOL_OR(has_link AND lt IS NULL AND st > 0) AS untouched_with_stock
+    FROM r GROUP BY k`;
+  const map = new Map();
+  for (const r of rows) {
+    const active = r.last_type ? ["target_stock", "restore_stock"].includes(r.last_type) : Boolean(r.untouched_with_stock);
+    map.set(r.k, active ? (Number(r.ts) > 0 ? Number(r.ts) : SHOP_LINKED_STOCK) : 0);
+  }
+  return map;
+}
+
+/** offerId (lowercase) → site stock. Stale-while-revalidate; null only if it never loaded. */
+async function shopStockMap() {
+  const c = _shopStockCache;
+  const fresh = c.map && Date.now() - c.at < SHOP_STOCK_TTL_MS;
+  if (!fresh && !c.loading) {
+    c.loading = _loadShopStockMap()
+      .then((map) => { c.map = map; c.at = Date.now(); })
+      .catch((err) => logger.warn("shop stock map failed", { detail: err?.message || String(err) }))
+      .finally(() => { c.loading = null; });
+  }
+  if (!c.map && c.loading) await c.loading;
+  return c.map;
+}
+
+function shopStockFor(stockMap, p) {
+  if (!stockMap) return Math.max(0, Number(p.targetStock ?? 0) || 0); // DB unavailable: old field
+  return stockMap.get(cleanText(p.offerId).toLowerCase()) ?? 0;
+}
+
 async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page, pageSize, createdAfter, andQ, perfumeOnly }) {
+  const stockMap = await shopStockMap();
   const prisma = getPrisma();
   if (!prisma) return { products: [], total: 0, brands: [] };
 
@@ -703,7 +858,7 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
     const currentPriceNum = Number(p.currentPrice || 0);
     const { priceRub } = shopPriceFromLinks(p.links, pmMap, { currentPrice: currentPriceNum, defaultMarkup, rules: shopMarkupRules, usdRate });
 
-    const stockQty = p.targetStock ?? 0;
+    const stockQty = shopStockFor(stockMap, p);
     const name = normalizeProductName(cleanText(p.name || ""));
     const _cat = extractProductCategory(name);
 
@@ -722,7 +877,7 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
       images,
       priceRub,
       oldPriceRub: shopMarketplaceOldPrice(priceRub, currentPriceNum),
-      inStock: stockQty > 0 || (p.status !== "archived" && currentPriceNum > 0),
+      inStock: stockQty > 0,
       stockQty: Math.max(0, stockQty),
       volume: extractVolume(name || p.name || ""),
       category: _cat.slug,
@@ -789,31 +944,19 @@ function normalizeProductName(name) {
 async function findShopProductByOfferId(offerId, { fast = false } = {}) {
   const prisma = getPrisma();
   if (!prisma) return null;
-
-  const shopSettings = await readShopSettings();
-  const defaultMarkupSingle = shopSettings.markup || 2.2;
-  const shopMarkupRulesSingle = shopSettings.markupRules || [];
-  let usdRate = Number(process.env.DEFAULT_USD_RATE || 95);
-  try { const r = await getUsdRate(); usdRate = Number(r?.rate || r || 95); } catch (_) {}
-  if (!usdRate || usdRate < 1) usdRate = Number(process.env.DEFAULT_USD_RATE || 95);
+  const stockMap = await shopStockMap();
+  const pricing = await shopPricingContext();
 
   const products = await prisma.warehouseProduct.findMany({
     where: { offerId: { equals: offerId, mode: "insensitive" }, archived: false },
-    select: {
-      id: true, offerId: true, name: true, brand: true, marketplace: true,
-      images: true, raw: true, currentPrice: true, targetStock: true, status: true,
-      marketplaceState: true,
-      links: { take: 5, select: { supplierArticle: true, priceCurrency: true, partnerId: true } },
-    },
-    take: 5,
+    select: SHOP_ROW_SELECT,
+    take: 10,
   });
 
   if (!products.length) return null;
 
-  // prefer Ozon
-  // prefer Ozon, unless its listing was anonymised («парфюмерная вода» + a blank-bottle photo) — then Yandex
-  const usable = products.filter((pr) => !shopNameMasked(pr.name) && !_shopPlaceholderImgs.has(shopFirstImage(pr)));
-  const p = usable.find((pr) => pr.marketplace === "ozon") || usable[0] || products.find((pr) => pr.marketplace === "ozon") || products[0];
+  // the same row the catalog, the feed and the cart use (sellable, not anonymised, Ozon first)
+  const p = pickShopRow(products);
   // fast (YCP, 5 s budget): only already-known image hashes, no downloads
   const perfumeId = await shopPerfumeIdForOffer(p.offerId).catch(() => 0);
   const images = await stripGeneratedPerfumeSlides(
@@ -844,11 +987,8 @@ async function findShopProductByOfferId(offerId, { fast = false } = {}) {
     where: { article: { in: articles }, active: true },
     select: { article: true, price: true, currency: true, partnerId: true },
   }) : [];
-  const currentPriceNum = Number(p.currentPrice || 0);
-  // same rule as the catalog and the feed, so the card, the cart and the order agree
-  const { priceRub } = shopPriceFromLinks(p.links, shopPmIndex(snapsSingle), {
-    currentPrice: currentPriceNum, defaultMarkup: defaultMarkupSingle, rules: shopMarkupRulesSingle, usdRate,
-  });
+  // shopPriceForRow is what shopLivePrices returns too, so the card, the cart and the order agree
+  const live = shopPriceForRow(p, shopPmIndex(snapsSingle), pricing, stockMap);
   const normalizedName = normalizeProductName(cleanText(p.name || ""));
   const _pCat = extractProductCategory(normalizedName);
 
@@ -873,10 +1013,10 @@ async function findShopProductByOfferId(offerId, { fast = false } = {}) {
     brand: brandResolved,
     description: shopCleanDescription(description),
     images,
-    priceRub,
-    oldPriceRub: shopMarketplaceOldPrice(priceRub, currentPriceNum),
-    inStock: (p.targetStock ?? 0) > 0 || (p.status !== "archived" && currentPriceNum > 0),
-    stockQty: Math.max(0, p.targetStock ?? 0),
+    priceRub: live.priceRub,
+    oldPriceRub: live.oldPriceRub,
+    inStock: live.inStock,
+    stockQty: live.stockQty,
     volume: extractVolume(normalizedName || p.name || ""),
     category: _pCat.slug,
     categoryLabel: _pCat.label,
@@ -888,6 +1028,20 @@ async function findShopProductByOfferId(offerId, { fast = false } = {}) {
 
 // ── CORS middleware for all shop routes (incl. OPTIONS preflight) ──────────
 app.use("/api/shop", shopCors);
+
+// Product lists come from caches (feed 1 h, /new and /popular 5 min) — they leave with the live
+// price and stock, the same numbers the product page, the cart and the order get.
+function shopLivePriceLists(_request, response, next) {
+  const send = response.json.bind(response);
+  response.json = (body) => {
+    const key = body && (Array.isArray(body.products) ? "products" : Array.isArray(body.variants) ? "variants" : null);
+    if (!key || !body[key].length || response.statusCode >= 400) return send(body);
+    shopOverlayLivePrices(body[key]).then((items) => send({ ...body, [key]: items }), () => send(body));
+    return response;
+  };
+  next();
+}
+app.use(["/api/shop/catalog", "/api/shop/new", "/api/shop/popular", "/api/shop/variants", "/api/shop/ai-search"], shopLivePriceLists);
 
 // ── Public routes ─────────────────────────────────────────────────────────
 
@@ -1039,6 +1193,17 @@ app.get("/api/shop/product/:offerId", shopCors, async (request, response, next) 
   } catch (error) {
     next(error);
   }
+});
+
+// Live price / stock for the cart and for product cards on cached (ISR) pages.
+// Body: { offerIds: string[] } (≤ 200) → { prices: [{ offerId, priceRub, oldPriceRub, inStock, stockQty }] }
+app.post("/api/shop/prices", shopCors, async (request, response, next) => {
+  try {
+    const ids = Array.isArray(request.body?.offerIds) ? request.body.offerIds.slice(0, 200) : [];
+    const live = await shopLivePrices(ids);
+    response.set("Cache-Control", "no-store");
+    response.json({ ok: true, prices: [...live.values()].filter((p) => p.priceRub > 0) });
+  } catch (error) { next(error); }
 });
 
 // AI semantic search for fragrances
@@ -1228,6 +1393,7 @@ app.get("/api/shop/popular", shopCors, async (request, response, next) => {
       orderBy: [{ marketplace: "asc" }],
     });
 
+    const stockMap = await shopStockMap();
     // De-duplicate by offerId
     const seen = new Set();
     const deduped = [];
@@ -1264,7 +1430,7 @@ app.get("/api/shop/popular", shopCors, async (request, response, next) => {
         const images = extractImages(p);
         const currentPriceNum = Number(p.currentPrice || 0);
         const { priceRub } = shopPriceFromLinks(p.links, pmMap2, { currentPrice: currentPriceNum, defaultMarkup, rules: shopMarkupRules, usdRate });
-        const stockQty = p.targetStock ?? 0;
+        const stockQty = shopStockFor(stockMap, p);
         const name = cleanText(p.name || "");
         const _cat = extractProductCategory(name);
         const ms = p.marketplaceState && typeof p.marketplaceState === "object" ? p.marketplaceState : {};
@@ -1276,7 +1442,7 @@ app.get("/api/shop/popular", shopCors, async (request, response, next) => {
           name: name || cleanText(p.offerId),
           brand: cleanText(p.brand || ""),
           description: "", images, priceRub, oldPriceRub: shopMarketplaceOldPrice(priceRub, currentPriceNum),
-          inStock: stockQty > 0 || (p.status !== "archived" && currentPriceNum > 0),
+          inStock: stockQty > 0,
           stockQty: Math.max(0, stockQty),
           volume: extractVolume(p.name || ""),
           category: _cat.slug, categoryLabel: _cat.label, tags: [],
@@ -1592,6 +1758,7 @@ let _shopPlaceholderImgs = new Set(); // refreshed on every feed build
 const shopFirstImage = (p) => extractImages(p)[0] || "";
 
 async function buildShopFeedProducts() {
+  const stockMap = await shopStockMap();
   const prisma = getPrisma();
   if (!prisma) return [];
   const shopSettings = await readShopSettings();
@@ -1624,8 +1791,9 @@ async function buildShopFeedProducts() {
   for (const [key, list] of byKey) {
     const good = list.filter((r) => !shopNameMasked(r.name));
     if (!good.length) continue; // only anonymised rows → not on the site
-    unique.push(good[0]);
-    altRows.set(key, good.slice(1));
+    const best = pickShopRow(good); // the row the product page and the cart use
+    unique.push(best);
+    altRows.set(key, good.filter((r) => r !== best));
   }
 
   // images column empty → the raw marketplace payload has them (fetched only for those rows)
@@ -1745,7 +1913,7 @@ async function buildShopFeedProducts() {
     const images = (await stripMarketplaceOnlyImages(extractImages(rawById.has(p.id) ? { ...p, raw: rawById.get(p.id) } : p), { fetchMissing: false }))
       .filter((u) => /^https:\/\//.test(u) && !_shopPlaceholderImgs.has(u)).slice(0, 10);
     const category = extractProductCategory(name);
-    const stock = p.targetStock ?? 0;
+    const stock = shopStockFor(stockMap, p);
     out.push({
       offerId: cleanText(p.offerId),
       slug: shopProductSlug(name, cleanText(p.offerId)),
@@ -1756,7 +1924,7 @@ async function buildShopFeedProducts() {
       category: category.slug,
       categoryLabel: category.label,
       volume: extractVolume(name) || "",
-      inStock: stock > 0 || (p.status !== "archived" && currentPriceNum > 0),
+      inStock: stock > 0,
       description: textByOffer.get(cleanText(p.offerId))?.desc || shopFeedDescription(p, name, category),
       lastmod: p.updatedAt ? p.updatedAt.toISOString().slice(0, 10) : null,
       id: p.id,
@@ -1808,6 +1976,34 @@ async function getShopFeedProducts() {
   // serve the stale copy while a rebuild runs
   return _shopFeedCache || _shopFeedBuilding;
 }
+
+// Markup changed (shop settings) → rebuild the feed now instead of within the hour, then tell
+// magicvibes.ru to drop its ISR pages (they carry prices in HTML, meta and JSON-LD).
+// The site side is shop-next/app/api/revalidate/route.ts; both read SHOP_REVALIDATE_SECRET.
+async function shopRepriceStorefront() {
+  _shopFeedCacheAt = 0;
+  _newProductsCache.clear();
+  _popularCache.clear();
+  getShopFeedProducts().catch(() => {});
+  if (_shopFeedBuilding) await _shopFeedBuilding.catch(() => {});
+  const secret = cleanText(process.env.SHOP_REVALIDATE_SECRET);
+  if (!secret) return { feed: true, site: "SHOP_REVALIDATE_SECRET not set" };
+  const site = cleanText(process.env.SHOP_SITE_URL) || "https://magicvibes.ru";
+  try {
+    const r = await fetch(`${site.replace(/\/+$/, "")}/api/revalidate`, {
+      method: "POST", headers: { "x-revalidate-secret": secret }, signal: AbortSignal.timeout(15000),
+    });
+    logger.info("shop storefront revalidated", { status: r.status });
+    return { feed: true, site: r.status };
+  } catch (err) {
+    logger.warn("shop storefront revalidate failed", { detail: err?.message || String(err) });
+    return { feed: true, site: err?.message || "failed" };
+  }
+}
+
+app.post("/api/shop/admin/reprice", requireAdmin, async (_request, response, next) => {
+  try { response.json({ ok: true, ...(await shopRepriceStorefront()) }); } catch (error) { next(error); }
+});
 
 function xmlEsc(s) {
   return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;")
@@ -1941,7 +2137,7 @@ app.get("/api/shop/variants/:offerId", shopCors, async (request, response, next)
     const variants = [...byVol.values()]
       .sort((a, b) => parseFloat(a.volume.replace(",", ".")) - parseFloat(b.volume.replace(",", ".")))
       .map((p) => ({ offerId: p.offerId, slug: p.slug, volume: p.volume, priceRub: p.priceRub, inStock: p.inStock, current: p === self }));
-    response.set("Cache-Control", "public, max-age=600");
+    response.set("Cache-Control", "public, max-age=60"); // prices are live (shopLivePriceLists)
     response.json({ variants: variants.length > 1 ? variants : [] });
   } catch (error) { next(error); }
 });
@@ -3841,7 +4037,9 @@ app.patch("/api/shop/admin/settings", requireAdmin, async (request, response, ne
     const merged = { ...current, ...updates };
     const appSettings = await readAppSettings();
     await writeAppSettings({ ...appSettings, [SHOP_SETTINGS_KEY]: merged });
-    response.json({ ok: true, settings: merged });
+    const pricesChanged = JSON.stringify([current.markup, current.markupRules]) !== JSON.stringify([merged.markup, merged.markupRules]);
+    if (pricesChanged) shopRepriceStorefront().catch(() => {});
+    response.json({ ok: true, settings: merged, repricing: pricesChanged });
   } catch (error) { next(error); }
 });
 
@@ -4345,18 +4543,89 @@ async function _imageHash(url) {
     }
     if (buf) hash = await _dHashFromBuffer(buf);
   } catch (_) { hash = null; }
-  if (_mpOnlyHashCache.size > 60000) _mpOnlyHashCache.clear();
+  if (_mpOnlyHashCache.size > 400000) _mpOnlyHashCache.clear();
   _mpOnlyHashCache.set(url, hash);
   return hash;
 }
 
-// dHashes of slides found repeated at the end of hundreds of Ozon galleries (checked by eye,
-// 2026-09-27): «поделитесь впечатлениями», «индивидуальное послание», «добавьте в избранное»
-// (Magic Stick), two AURA slides, «спасибо, что выбираете нас», «секреты нанесения».
+// Persistent hash cache: the worker hashes every gallery image (backfillShopImageHashes) and saves
+// data/shop-image-hashes.json; the api process loads it, so catalogue / feed (fetchMissing: false)
+// can drop store slides without downloading anything.
+const _shopImageHashFile = require("path").join(process.cwd(), "data", "shop-image-hashes.json");
+let _shopImageHashFileMtime = 0;
+let _shopImageHashFileCheckedAt = 0;
+function _loadPersistedImageHashes() {
+  if (Date.now() - _shopImageHashFileCheckedAt < 60 * 1000) return;
+  _shopImageHashFileCheckedAt = Date.now();
+  try {
+    const fsMod = require("fs");
+    const mtime = fsMod.statSync(_shopImageHashFile).mtimeMs;
+    if (mtime === _shopImageHashFileMtime) return;
+    const data = JSON.parse(fsMod.readFileSync(_shopImageHashFile, "utf8"));
+    for (const [url, hex] of Object.entries(data)) {
+      if (!_mpOnlyHashCache.has(url) || _mpOnlyHashCache.get(url) == null) _mpOnlyHashCache.set(url, hex ? BigInt("0x" + hex) : null);
+    }
+    _shopImageHashFileMtime = mtime;
+  } catch (_) { /* no file yet */ }
+}
+function _savePersistedImageHashes() {
+  const out = {};
+  for (const [url, h] of _mpOnlyHashCache) out[url] = h == null ? null : h.toString(16).padStart(16, "0");
+  require("fs").writeFileSync(_shopImageHashFile, JSON.stringify(out));
+}
+
+let _shopImageHashBackfillRunning = false;
+/** Worker: hashes all not-yet-known gallery images (except the main photo) of every live product. */
+async function backfillShopImageHashes({ concurrency = 12 } = {}) {
+  if (_shopImageHashBackfillRunning) return { status: "busy" };
+  _shopImageHashBackfillRunning = true;
+  try {
+    _shopImageHashFileCheckedAt = 0;
+    _loadPersistedImageHashes();
+    const prisma = getPrisma();
+    // only the picture fields — the full raw (price history etc.) of ~27k rows would be hundreds of MB
+    const rows = await prisma.$queryRaw`
+      SELECT images, raw->'ozon'->'images' AS oi, raw->'ozon'->>'primaryImage' AS pi,
+             raw->'yandex'->'pictures' AS yp, raw->>'imageUrl' AS iu
+      FROM warehouse_products WHERE archived = false AND marketplace::text IN ('ozon', 'yandex')`;
+    const todo = new Set();
+    for (const r of rows) {
+      const p = { images: r.images, raw: { ozon: { images: r.oi, primaryImage: r.pi }, yandex: { pictures: r.yp }, imageUrl: r.iu } };
+      for (const u of extractImages(p).slice(1)) if (/^https?:\/\//.test(u) && !_mpOnlyHashCache.has(u)) todo.add(u);
+    }
+    const list = [...todo];
+    let i = 0, done = 0;
+    const worker = async () => {
+      while (i < list.length) {
+        const u = list[i++];
+        await _imageHash(u);
+        if (++done % 3000 === 0) _savePersistedImageHashes();
+      }
+    };
+    await Promise.all(Array.from({ length: concurrency }, worker));
+    if (done) _savePersistedImageHashes();
+    logger.info("shop image hashes backfill", { products: rows.length, hashed: done, cached: _mpOnlyHashCache.size });
+    return { status: "ok", hashed: done };
+  } finally {
+    _shopImageHashBackfillRunning = false;
+  }
+}
+
+if (backgroundJobsEnabled) {
+  setTimeout(() => { backfillShopImageHashes().catch((e) => logger.warn("shop image hashes backfill failed", { detail: e?.message })); }, 3 * 60 * 1000);
+  setInterval(() => { backfillShopImageHashes().catch((e) => logger.warn("shop image hashes backfill failed", { detail: e?.message })); }, 6 * 60 * 60 * 1000).unref?.();
+}
+
+// dHashes of the marketplace stores' own slides (Magic Stick, AURA, Parfumerius), found repeated across
+// hundreds of Ozon / Market galleries and checked by eye (2026-09-27, 2026-10-01 scan of 3000 products):
+// «поделитесь впечатлениями», «индивидуальное послание», «понравилась наша продукция? добавьте в избранное»,
+// «спасибо, что выбираете нас» (AURA, Magic Stick), «секреты нанесения» (Magic Stick, AURA, Parfumerius),
+// «раскрой красоту» (AURA, Magic Stick), «ваши отзывы будут полезны» (AURA).
 // Product photos repeated across volumes (e.g. Mancera) and brand slides are NOT in this list.
 const SHOP_MP_ONLY_HASHES = [
-  "71e8ccb296d4e870", "11e8d0f071cc4002", "84222b396d698775", "363079ccd4fcd0d3",
-  "9233a8e8687931b2", "8e0b5d59193a35c4", "f0f0d6b6b217a6b2",
+  "71e8ccb296d4e870", "11e8d0f071cc4002", "84222b396d698775", "82222b3d6d698775", "363079ccd4fcd0d3",
+  "9233a8e8687931b2", "8e0b5d59193a35c4", "1f0b5d59191a3bc1", "f0f0d6b6b217a6b2", "f0f0c889890782b6",
+  "f8e8d4b6b29baef2", "88c0ea69cc796930",
 ].map((h) => BigInt("0x" + h));
 
 async function _mpOnlyReferenceHashes() {
@@ -4379,16 +4648,16 @@ async function _mpOnlyReferenceHashes() {
 
 function _hamming(a, b) { let x = a ^ b, n = 0; while (x) { n += Number(x & 1n); x >>= 1n; } return n; }
 
-/** Drops marketplace-only slides from the tail of a product gallery (never the first photo). */
+/** Drops marketplace-only slides from a product gallery (any position after the main photo). */
 async function stripMarketplaceOnlyImages(images, { fetchMissing = true } = {}) {
   if (!Array.isArray(images) || images.length < 2) return images || [];
   const refs = await _mpOnlyReferenceHashes().catch(() => []);
   if (!refs.length) return images;
-  const tailStart = Math.max(1, images.length - 4);
+  _loadPersistedImageHashes();
   const drop = new Set();
-  await Promise.all(images.slice(tailStart).map(async (url, i) => {
+  await Promise.all(images.slice(1).map(async (url, i) => {
     const h = fetchMissing ? await _imageHash(url) : (_mpOnlyHashCache.get(url) ?? null);
-    if (h != null && refs.some((r) => _hamming(r, h) <= 8)) drop.add(tailStart + i);
+    if (h != null && refs.some((r) => _hamming(r, h) <= 8)) drop.add(i + 1);
   }));
   return images.filter((_, i) => !drop.has(i));
 }

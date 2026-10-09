@@ -168,6 +168,9 @@ const API_PREFIX_PAGE_KEYS = [
   ["/api/questions", "questions"],
   ["/api/chats", "chats"],
   ["/api/warehouse/prices", "prices"],
+  // Склад → «Привязки»: the links panel saves through /links/bulk (requireAdmin); employees with the
+  // warehouse page may link (single add, delete and sync-group were already open to them).
+  ["/api/warehouse/products/links", "warehouse"],
   ["/api/problem-products", "problem-products"],
   ["/api/ozon-yandex-import", "import"],
   ["/api/avito", "avito"],

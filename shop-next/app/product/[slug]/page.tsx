@@ -16,15 +16,15 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { slug } = await params;
   try {
     const product = await fetchProduct(parseSlugForOfferId(slug));
-    const title = product.brand && !product.name.toLowerCase().includes(product.brand.toLowerCase())
-      ? `${product.name} — ${product.brand}, купить`
-      : `${product.name} — купить`;
-    const description = `Купить ${product.name} (${product.brand}) в Magic Vibes за ${product.priceRub.toLocaleString("ru-RU")} ₽. ${product.inStock ? "В наличии. " : ""}Оригинал, быстрая доставка по России.`;
+    // product names already start with the brand; the brand field is sometimes wrong («Burberry MR» → BDK), so it stays out
+    const title = `${product.name} — купить оригинал`;
+    const price = product.priceRub > 0 ? ` по цене ${product.priceRub.toLocaleString("ru-RU")} ₽` : "";
+    const description = `${product.name}: купить в интернет-магазине Magic Vibes${price}. ${product.inStock ? "В наличии. " : ""}100% оригинал, доставка по России 1–5 дней, оплата картой, СБП или в рассрочку.`;
     const url = `/product/${toProductSlug(product.name, product.offerId)}`;
     return {
       title,
       description,
-      keywords: `${product.name}, ${product.brand}, купить ${product.brand}, ${product.name} цена, оригинальный парфюм ${product.brand}`,
+      keywords: `${product.name}, купить ${product.name}, ${product.name} цена, ${product.name} оригинал${product.brand ? `, духи ${product.brand}` : ""}`,
       alternates: { canonical: url },
       openGraph: {
         title,

@@ -1,4 +1,5 @@
 // Site navigation — shared by the header drawer, search overlay and footer.
+import { landingHref } from "./landings";
 export interface MegaCol { title: string; items: { label: string; href: string }[] }
 export interface MegaGroup { id: string; label: string; href: string; shot: string; columns: MegaCol[] }
 
@@ -169,6 +170,12 @@ export const GROUPS: MegaGroup[] = [
     ],
   },
 ];
+
+// catalog filters that have an SEO landing link straight to it (one URL per listing for crawlers)
+for (const g of GROUPS) {
+  g.href = landingHref(g.href);
+  for (const col of g.columns) for (const it of col.items) it.href = landingHref(it.href);
+}
 
 /** Plain links shown under the groups in the menu drawer. */
 export const EXTRA_LINKS = [

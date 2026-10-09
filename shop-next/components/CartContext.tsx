@@ -2,6 +2,7 @@
 import { createContext, useContext, useReducer, useCallback, useEffect, useState, type ReactNode } from "react";
 import type { CartItem, ShopProduct } from "@/lib/types";
 import { ymGoal } from "@/lib/metrika";
+import { applyLivePrice, fetchLivePrices, type LivePrice } from "@/lib/live-prices";
 
 const CART_KEY = "mv_cart_v1";
 
@@ -10,7 +11,8 @@ type Action =
   | { type: "REMOVE"; offerId: string }
   | { type: "SET_QTY"; offerId: string; qty: number }
   | { type: "CLEAR" }
-  | { type: "LOAD"; items: CartItem[] };
+  | { type: "LOAD"; items: CartItem[] }
+  | { type: "REPRICE"; live: Map<string, LivePrice> };
 
 function reducer(state: { items: CartItem[] }, action: Action): { items: CartItem[] } {
   switch (action.type) {
@@ -28,6 +30,17 @@ function reducer(state: { items: CartItem[] }, action: Action): { items: CartIte
       return { items: state.items.map((i) => i.product.offerId === action.offerId ? { ...i, quantity: action.qty } : i) };
     case "CLEAR": return { items: [] };
     case "LOAD": return { items: action.items };
+    case "REPRICE": {
+      // the cart keeps the product as it was when added — put today's price and stock on it
+      let changed = false;
+      const items = state.items.map((i) => {
+        const product = applyLivePrice(i.product, action.live.get(i.product.offerId.trim().toLowerCase()));
+        if (product === i.product) return i;
+        changed = true;
+        return { ...i, product };
+      });
+      return changed ? { items } : state;
+    }
     default: return state;
   }
 }
@@ -68,6 +81,18 @@ export function CartProvider({ children }: { children: ReactNode }) {
     if (saved.items.length > 0) dispatch({ type: "LOAD", items: saved.items });
     setHydrated(true);
   }, []);
+
+  // re-price the saved cart on load and whenever the tab comes back (the order is charged at this price)
+  const offerIds = state.items.map((i) => i.product.offerId).join("\n");
+  useEffect(() => {
+    if (!hydrated || !offerIds) return;
+    let alive = true;
+    const reprice = () => fetchLivePrices(offerIds.split("\n")).then((live) => { if (alive && live.size) dispatch({ type: "REPRICE", live }); });
+    reprice();
+    const onVisible = () => { if (document.visibilityState === "visible") reprice(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { alive = false; document.removeEventListener("visibilitychange", onVisible); };
+  }, [hydrated, offerIds]);
 
   useEffect(() => {
     if (!hydrated) return;

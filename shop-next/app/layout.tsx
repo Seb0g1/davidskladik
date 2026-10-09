@@ -10,6 +10,7 @@ import CookieBanner from "@/components/CookieBanner";
 import YandexMetrika from "@/components/YandexMetrika";
 import { Suspense } from "react";
 import { SITE_NAME, SITE_URL, DEFAULT_DESC } from "@/lib/seo";
+import { SELLER } from "@/lib/legal";
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
@@ -18,9 +19,10 @@ export const metadata: Metadata = {
     template: `%s | ${SITE_NAME}`,
   },
   description: DEFAULT_DESC,
-  keywords: "парфюм купить, духи купить, оригинальный парфюм, интернет-магазин парфюмерии, парфюм с доставкой по России",
+  keywords: "парфюмерия купить, духи купить, интернет-магазин парфюмерии, оригинальная парфюмерия, парфюм с доставкой по России",
   authors: [{ name: SITE_NAME }],
   creator: SITE_NAME,
+  applicationName: SITE_NAME,
   openGraph: {
     siteName: SITE_NAME,
     locale: "ru_RU",
@@ -39,22 +41,35 @@ export const metadata: Metadata = {
   },
 };
 
+// OnlineStore is an Organization subtype: Google takes name/logo for the knowledge panel and the result's site name
 const ORG_SCHEMA = {
   "@context": "https://schema.org",
-  "@type": "Organization",
+  "@type": "OnlineStore",
+  "@id": `${SITE_URL}/#organization`,
   name: SITE_NAME,
+  alternateName: ["Мэджик Вайбс", "MagicVibes", "magicvibes.ru"],
+  legalName: SELLER.short,
   url: SITE_URL,
-  logo: `${SITE_URL}/brand/logo/logo-mark-dark.png`,
-  description: "Оригинальная парфюмерия мировых брендов с доставкой по России",
-  contactPoint: { "@type": "ContactPoint", contactType: "customer service", email: "noreply@magicvibes.ru", availableLanguage: "Russian" },
+  logo: { "@type": "ImageObject", url: `${SITE_URL}/icon-512.png`, width: 512, height: 512 },
+  image: `${SITE_URL}/brand/logo/logo-mark-dark.png`,
+  description: "Интернет-магазин оригинальной парфюмерии мировых брендов с доставкой по России",
+  taxID: SELLER.inn,
+  areaServed: { "@type": "Country", name: "Россия" },
+  currenciesAccepted: "RUB",
+  paymentAccepted: "Банковская карта, СБП, Ozon Pay, рассрочка",
+  contactPoint: { "@type": "ContactPoint", contactType: "customer service", email: "noreply@magicvibes.ru", availableLanguage: "Russian", areaServed: "RU" },
   sameAs: ["https://t.me/magicvibes_ru"],
 };
 
 const WEBSITE_SCHEMA = {
   "@context": "https://schema.org",
   "@type": "WebSite",
+  "@id": `${SITE_URL}/#website`,
   name: SITE_NAME,
-  url: SITE_URL,
+  alternateName: ["Magic Vibes — интернет-магазин парфюмерии", "magicvibes.ru"],
+  url: `${SITE_URL}/`,
+  inLanguage: "ru-RU",
+  publisher: { "@id": `${SITE_URL}/#organization` },
   potentialAction: { "@type": "SearchAction", target: `${SITE_URL}/catalog?q={search_term_string}`, "query-input": "required name=search_term_string" },
 };
 

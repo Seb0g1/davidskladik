@@ -22,17 +22,30 @@ async function writeNotificationsState(state) {
   await fs.writeFile(notificationsStatePath, JSON.stringify(state, null, 2)).catch(() => {});
 }
 
+// Ticks skipped since the last real attempt, per source. The failure count alone never
+// changes while a source is skipped, so a modulo on it alone skipped a failing source
+// forever: after 6 transient errors (network blips) order/chat polling stopped until restart.
+const notifySourceSkipped = new Map();
+
 function notifySourceShouldSkip(key) {
   const failures = notifySourceFailures.get(key) || 0;
   if (failures <= 0) return false;
-  // Permanent errors (permission denied, feature not enabled) get very long backoff.
-  // Every 200th tick ≈ 5 hours at 90-second poll interval.
-  if (failures >= 100) return (failures - 100) % 200 !== 0;
-  // After 5 consecutive transient failures: poll every ~15 minutes (1 in 10 ticks).
-  return failures >= 5 && (failures - 5) % 10 !== 0;
+  // Permanent errors (permission denied, feature not enabled): retry about every 5 hours
+  // (200 ticks at the 90-second poll interval). Transient errors after 5 in a row: about
+  // every 15 minutes (10 ticks).
+  const every = failures >= 100 ? 200 : failures >= 5 ? 10 : 1;
+  if (every <= 1) return false;
+  const skipped = (notifySourceSkipped.get(key) || 0) + 1;
+  if (skipped >= every) {
+    notifySourceSkipped.delete(key);
+    return false;
+  }
+  notifySourceSkipped.set(key, skipped);
+  return true;
 }
 
 function notifySourceResult(key, ok, { permanent = false } = {}) {
+  notifySourceSkipped.delete(key);
   if (ok) {
     notifySourceFailures.delete(key);
   } else {

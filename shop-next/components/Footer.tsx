@@ -5,6 +5,8 @@ import { OzonPayLogo } from "@/components/OzonPay";
 import Logo from "./Logo";
 import YandexRatingBadge from "./YandexRatingBadge";
 import { SELLER } from "@/lib/legal";
+import { fetchBrands } from "@/lib/api";
+import { COLLECTION_DEFS, brandHref, collectionHref } from "@/lib/landings";
 
 const FOOTER_CSS = `
 .mv-foot a.fl { font-size: 15px; color: rgba(245,242,236,0.62); text-decoration: none; transition: color 0.2s; line-height: 1.5; display: inline-block; }
@@ -17,6 +19,10 @@ const FOOTER_CSS = `
 .mv-foot .mv-legal-links { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; }
 .mv-foot .mv-legal-links a, .mv-foot .mv-legal-links button { color: rgba(245,242,236,0.55); text-decoration: none; background: none; border: 0; padding: 0; font: inherit; cursor: pointer; }
 .mv-foot .mv-legal-links a:hover, .mv-foot .mv-legal-links button:hover { color: #d9f84a; }
+.mv-foot .mv-foot-seo { display: flex; flex-direction: column; gap: 14px; padding: 0 0 clamp(28px,4vw,40px); }
+.mv-foot .mv-foot-seo div { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.mv-foot .mv-foot-seo a { font-size: 13px; color: rgba(245,242,236,0.5); text-decoration: none; }
+.mv-foot .mv-foot-seo a:hover { color: #d9f84a; }
 .mv-foot .ft { font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #ff3d7f; margin: 0 0 16px; }
 `;
 
@@ -56,6 +62,9 @@ const COLUMNS = [
 
 export default async function Footer() {
   const features = await getFeatures();
+  // site-wide links to the landings: every page passes weight to categories and top brands
+  const brands = await fetchBrands().catch(() => [] as { name: string; count: number }[]);
+  const topBrands = brands.filter((b) => b.count >= 40 && b.name.length <= 30).sort((a, b) => b.count - a.count).slice(0, 30);
   return (
     <>
       <style>{FOOTER_CSS}</style>
@@ -95,6 +104,18 @@ export default async function Footer() {
               </ul>
             </div>
           </div>
+
+          <nav className="mv-foot-seo" aria-label="Разделы и бренды">
+            <p className="ft" style={{ margin: 0 }}>Парфюмерия</p>
+            <div>{COLLECTION_DEFS.map((c) => <Link key={c.slug} prefetch={false} href={collectionHref(c)}>{c.h1}</Link>)}</div>
+            {topBrands.length > 0 && <>
+              <p className="ft" style={{ margin: "8px 0 0" }}>Популярные бренды</p>
+              <div>
+                {topBrands.map((b) => <Link key={b.name} prefetch={false} href={brandHref(b.name)}>{b.name}</Link>)}
+                <Link prefetch={false} href="/brands" style={{ color: "#d9f84a" }}>Все бренды →</Link>
+              </div>
+            </>}
+          </nav>
 
           <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "12px 24px", padding: "20px 0", borderTop: "1px solid rgba(245,242,236,0.12)" }}>
             <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "12px 20px" }}>

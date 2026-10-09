@@ -175,6 +175,7 @@ export function ConsignmentPage() {
   const [action, setAction] = useState<StockAction | null>(null);
   const [actionForm, setActionForm] = useState({ quantity: "1", price: "", note: "", fromBalance: false });
   const [priceDrafts, setPriceDrafts] = useState<Record<string, string>>({});
+  const [purchaseDrafts, setPurchaseDrafts] = useState<Record<string, string>>({});
   const [payoutForm, setPayoutForm] = useState({ kind: "sponsor_payout", amount: "", note: "" });
   const [topupForm, setTopupForm] = useState({ amount: "", note: "" });
   const [opFilter, setOpFilter] = useState("all");
@@ -281,11 +282,14 @@ export function ConsignmentPage() {
     setAddForm(emptyAddForm);
   };
 
+  // inline price edit in the stock table: sale price or purchase price of one lot.
+  // A new purchase price changes capitalization and the profit of future sales; past operations keep theirs.
   const savePrice = useMutation({
-    mutationFn: ({ id, salePrice }: { id: string; salePrice: number }) =>
-      fetchJson(`/api/consignment/items/${encodeURIComponent(id)}`, ConsignmentMutationSchema, patchBody({ salePrice })),
+    mutationFn: ({ id, field, value }: { id: string; field: "salePrice" | "purchasePrice"; value: number }) =>
+      fetchJson(`/api/consignment/items/${encodeURIComponent(id)}`, ConsignmentMutationSchema, patchBody({ [field]: value })),
     onSuccess: (_data, variables) => {
-      setPriceDrafts((current) => {
+      const setDrafts = variables.field === "purchasePrice" ? setPurchaseDrafts : setPriceDrafts;
+      setDrafts((current) => {
         const next = { ...current };
         delete next[variables.id];
         return next;
@@ -972,12 +976,40 @@ export function ConsignmentPage() {
             const draft = priceDrafts[item.id];
             const draftValue = draft ?? String(item.salePrice);
             const dirty = draft !== undefined && Number(draft) !== item.salePrice;
+            const purchaseDraft = purchaseDrafts[item.id];
+            const purchaseDirty = purchaseDraft !== undefined && purchaseDraft !== "" && Number(purchaseDraft) !== item.purchasePrice;
+            const savingThis = savePrice.isPending && savePrice.variables?.id === item.id;
             return (
               <div className={lot ? "table-row consignment-group-lot" : "table-row"} key={item.id}>
                 <span data-label="Товар">{item.name}</span>
                 <span data-label="Артикул">{displayArticle(item.article)}</span>
                 <span data-label="Поставщик">{item.supplierName || "-"}</span>
-                <span data-label="Закупка">{money(item.purchasePrice)}</span>
+                <span data-label="Закупка" className="finance-inline-edit">
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    aria-label="Цена закупки"
+                    value={purchaseDraft ?? String(item.purchasePrice)}
+                    onChange={(event) => setPurchaseDrafts((current) => ({ ...current, [item.id]: event.target.value }))}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && purchaseDirty) savePrice.mutate({ id: item.id, field: "purchasePrice", value: Number(purchaseDraft) });
+                      if (event.key === "Escape") setPurchaseDrafts((current) => { const next = { ...current }; delete next[item.id]; return next; });
+                    }}
+                    className="cn-w90"
+                  />
+                  {purchaseDirty ? (
+                    <button
+                      className="secondary-action"
+                      type="button"
+                      title="Сохранить цену закупки (прошлые продажи не пересчитываются)"
+                      disabled={savingThis}
+                      onClick={() => savePrice.mutate({ id: item.id, field: "purchasePrice", value: Number(purchaseDraft) })}
+                    >
+                      {savingThis && savePrice.variables?.field === "purchasePrice" ? <Loader2 className="spin" size={14} /> : <Check size={14} />}
+                    </button>
+                  ) : null}
+                </span>
                 <span data-label="Продажа" className="finance-inline-edit">
                   <input
                     type="number"
@@ -992,15 +1024,15 @@ export function ConsignmentPage() {
                       className="secondary-action"
                       type="button"
                       title="Сохранить цену продажи"
-                      disabled={savePrice.isPending}
-                      onClick={() => savePrice.mutate({ id: item.id, salePrice: Number(draft || 0) })}
+                      disabled={savingThis}
+                      onClick={() => savePrice.mutate({ id: item.id, field: "salePrice", value: Number(draft || 0) })}
                     >
-                      {savePrice.isPending ? <Loader2 className="spin" size={14} /> : <Check size={14} />}
+                      {savingThis && savePrice.variables?.field === "salePrice" ? <Loader2 className="spin" size={14} /> : <Check size={14} />}
                     </button>
                   ) : null}
                 </span>
                 <span data-label="Кол-во">{item.quantity} шт</span>
-                <span data-label="Сумма">{money(item.purchasePrice * item.quantity)}</span>
+                <span data-label="Сумма">{money(Number(purchaseDirty ? purchaseDraft : item.purchasePrice) * item.quantity)}</span>
                 <span data-label="Действия" className="row-actions">
                   <button className="secondary-action" type="button" title="Продать" disabled={!item.quantity} onClick={() => openAction(item, "sale")}><ShoppingCart size={14} /></button>
                   <button className="secondary-action" type="button" title="Списать" disabled={!item.quantity} onClick={() => openAction(item, "writeoff")}><PackageMinus size={14} /></button>
@@ -1023,7 +1055,7 @@ export function ConsignmentPage() {
                 </span>
                 <span data-label="Артикул">{displayArticle(group.article)}</span>
                 <span data-label="Поставщик">{supplierNames || "-"}</span>
-                <span data-label="Закупка" title="Средняя цена закупки по партиям">{money(group.avgPurchasePrice)} <span className="muted-note">сред.</span></span>
+                <span data-label="Закупка" title="Средняя цена закупки по партиям. Чтобы изменить — раскройте партии.">{money(group.avgPurchasePrice)} <span className="muted-note">сред.</span></span>
                 <span data-label="Продажа" title="Средняя цена продажи по партиям">{money(group.avgSalePrice)} <span className="muted-note">сред.</span></span>
                 <span data-label="Кол-во">{group.quantity} шт</span>
                 <span data-label="Сумма">{money(group.purchaseTotal)}</span>

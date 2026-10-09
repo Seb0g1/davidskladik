@@ -224,6 +224,7 @@ async function checkAndHandleCancelledOrders() {
         const partnerEmail = await getPickingRowPartnerEmail(row.partnerId);
         if (partnerEmail) {
           await shopSendEmail({
+            account: "supplier", // suppliers get cancellations from the warehouse Gmail, not noreply@
             to: partnerEmail,
             subject: `Отмена заказа: ${row.productName || row.offerId || ""}`,
             html: cancellationEmailHtml(row),

@@ -70,8 +70,14 @@ const serverCmd = [
   "echo '✓ git pull'",
   "npm ci --omit=dev 2>&1 | tail -5",
   "echo '✓ npm ci'",
-  "cd shop-next && npm ci --omit=dev 2>&1 | tail -3 && npm run build 2>&1 | tail -10 && cd ..",
-  "echo '✓ shop-next built'",
+  // shop-next: `next build` needs devDependencies (typescript, @types/*), so no --omit=dev here.
+  // The build runs against a copy of the live .next; if it fails (or leaves no BUILD_ID) the previous
+  // build is restored, so a broken deploy can never leave magicvibes.ru without a build (502).
+  "cd shop-next && npm ci --include=dev 2>&1 | tail -3"
+    + " && rm -rf .next-prev && { [ ! -d .next ] || cp -a .next .next-prev; }"
+    + " && if npm run build > /tmp/shop-next-build.log 2>&1 && [ -f .next/BUILD_ID ]; then tail -10 /tmp/shop-next-build.log; echo '✓ shop-next built'; rm -rf .next-prev;"
+    + " else tail -40 /tmp/shop-next-build.log; echo '✗ shop-next BUILD FAILED — previous build restored, shop keeps running the old version'; rm -rf .next && mv .next-prev .next; fi"
+    + " && cd ..",
   "node node_modules/prisma/build/index.js generate 2>&1 | tail -3",
   "node node_modules/prisma/build/index.js migrate deploy 2>&1 | tail -5",
   "echo '✓ prisma'",

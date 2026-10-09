@@ -3,6 +3,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { Newspaper, Calendar } from "lucide-react";
 import { fetchNews } from "@/lib/api";
+import { NewsMedia, NewsText } from "@/components/NewsPost";
 import { breadcrumbJsonLd, SITE_URL, SITE_NAME } from "@/lib/seo";
 
 export const revalidate = 300; // news is polled from Telegram every 15 min
@@ -29,7 +30,8 @@ const S = {
 
 export default async function NewsPage() {
   let posts: Awaited<ReturnType<typeof fetchNews>>["posts"] = [];
-  try { const d = await fetchNews(24); posts = d.posts; } catch {}
+  let emoji: Awaited<ReturnType<typeof fetchNews>>["emoji"] = {};
+  try { const d = await fetchNews(24); posts = d.posts; emoji = d.emoji; } catch {}
 
   const breadcrumb = breadcrumbJsonLd([
     { name: "Главная", url: "/" },
@@ -83,10 +85,8 @@ export default async function NewsPage() {
                     background: S.surface, overflow: "hidden",
                     transition: "border-color 0.2s",
                   }}>
-                    {post.photoUrl && (
-                      <div style={{ width: "100%", aspectRatio: "16/9", overflow: "hidden", position: "relative" }}>
-                        <Image src={post.photoUrl} alt="" fill sizes="(max-width: 768px) 100vw, 680px" style={{ objectFit: "cover" }} unoptimized={!post.photoUrl.includes("davidsklad.ru")} />
-                      </div>
+                    {post.media?.length ? <NewsMedia media={post.media} /> : post.photoUrl && (
+                      <Image src={post.photoUrl} alt="" width={1280} height={720} sizes="(max-width: 768px) 100vw, 800px" style={{ display: "block", width: "100%", height: "auto" }} unoptimized={!post.photoUrl.includes("davidsklad.ru")} />
                     )}
                     <div style={{ padding: "24px 28px" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
@@ -95,9 +95,10 @@ export default async function NewsPage() {
                           {new Date(post.publishedAt).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })}
                         </time>
                       </div>
-                      <p style={{ fontSize: 15, color: S.text, lineHeight: 1.8, margin: 0, whiteSpace: "pre-wrap" }}>
-                        {post.text?.replace(/#\S+/g, "").trim()}
-                      </p>
+                      <NewsText
+                        text={post.text} entities={post.entities} emoji={emoji}
+                        style={{ fontSize: 16, color: S.text, lineHeight: 1.5, margin: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
+                      />
                     </div>
                   </article>
                 ))}

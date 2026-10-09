@@ -101,7 +101,25 @@ function enqueueOzonRequest(task) {
         const waitMs = Math.max(0, ozonLastRequestAt + minIntervalMs - Date.now());
         if (waitMs > 0) await sleep(waitMs);
         ozonLastRequestAt = Date.now();
-        resolve(await task());
+        // Hard cap per slot. On 2026-10-01 ~06:00 a network outage left all four slots
+        // occupied by requests that never settled despite their AbortSignal timeouts; every
+        // Ozon caller (stock sync, express, action guard, new-offer discovery, auto sync)
+        // then waited in this queue for hours. A slot is now freed no matter what.
+        const hardTimeoutMs = Math.max(60_000, Number(process.env.OZON_QUEUE_TASK_HARD_TIMEOUT_MS || 6 * 60_000) || 6 * 60_000);
+        let hardTimer = null;
+        try {
+          resolve(await Promise.race([
+            task(),
+            new Promise((_, rejectHard) => {
+              hardTimer = setTimeout(() => {
+                logger.warn("ozon_queue_task_hard_timeout", { timeoutMs: hardTimeoutMs, active: ozonActiveRequests, waiting: ozonRequestWaiters.length });
+                rejectHard(new Error(`ozon_queue_task_timeout ${Math.round(hardTimeoutMs / 1000)}s`));
+              }, hardTimeoutMs);
+            }),
+          ]));
+        } finally {
+          clearTimeout(hardTimer);
+        }
       } catch (error) {
         reject(error);
       } finally {

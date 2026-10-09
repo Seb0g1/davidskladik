@@ -1140,6 +1140,31 @@ body:has(.st-root) .mv-header, body:has(.st-root) .mv-header-spacer, body:has(.s
 .mv-land-faq details:first-of-type { border-top: 0; padding-top: 0; }
 .mv-land-faq summary { cursor: pointer; font-weight: 700; font-size: 15px; list-style-position: inside; }
 .mv-land-faq p { margin: 10px 0 0; font-size: 14.5px; line-height: 1.6; color: #2b2a27; }
+.mv-land-seo { background: #fff; border-radius: var(--r-lg); padding: clamp(18px, 3vw, 28px); box-shadow: var(--shadow-sm); }
+.mv-land-seo h2 { margin: 0 0 12px; font-family: var(--font-display); font-weight: 700; font-size: clamp(17px, 2.4vw, 20px); text-transform: uppercase; }
+.mv-land-seo p { margin: 0 0 10px; max-width: 900px; font-size: 14.5px; line-height: 1.7; color: #2b2a27; }
+.mv-land-seo p:last-child { margin-bottom: 0; }
+.mv-land-subs { display: flex; flex-wrap: wrap; gap: 8px; }
+.mv-land-subs .chip { text-decoration: none; }
+
+/* ── Home SEO hub (components/SeoHub.tsx) ─────────────────────── */
+.mv-seo { max-width: 1460px; margin: clamp(56px, 8vw, 104px) auto 0; padding: 0 clamp(18px, 4vw, 56px); }
+.mv-seo-wrap { display: flex; flex-direction: column; gap: 18px; }
+.mv-seo-text { background: #fff; border-radius: var(--r-lg); box-shadow: var(--shadow-sm); padding: clamp(20px, 4vw, 40px); }
+.mv-seo-text h2 { margin: 0 0 16px; font-family: var(--font-display); font-weight: 800; text-transform: uppercase; letter-spacing: -0.03em; line-height: 1.05; font-size: clamp(22px, 3vw, 36px); max-width: 920px; }
+.mv-seo-text p { margin: 0 0 12px; max-width: 900px; font-size: 15.5px; line-height: 1.7; color: #2b2a27; }
+.mv-seo-text p:last-child { margin-bottom: 0; }
+.mv-seo-text a { color: var(--ink); font-weight: 600; text-decoration: underline; text-decoration-color: var(--pink); text-underline-offset: 3px; }
+.mv-seo-links { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 2fr); gap: 18px; }
+.mv-seo-links > div { background: #fff; border-radius: var(--r-lg); box-shadow: var(--shadow-sm); padding: clamp(18px, 3vw, 28px); min-width: 0; }
+.mv-seo-links h3 { margin: 0 0 12px; font-family: var(--font-display); font-weight: 700; font-size: 15px; text-transform: uppercase; letter-spacing: 0.02em; }
+.mv-seo-links ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px 18px; }
+.mv-seo-brands ul { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+.mv-seo-links li a { font-size: 14px; color: #2b2a27; text-decoration: none; overflow-wrap: anywhere; }
+.mv-seo-links li a:hover { color: var(--pink); }
+.mv-seo-all { display: inline-block; margin-top: 14px; font-size: 14px; font-weight: 700; color: var(--ink); }
+@media (max-width: 900px) { .mv-seo-links { grid-template-columns: 1fr 1fr; } .mv-seo-brands { grid-column: 1 / -1; } }
+@media (max-width: 520px) { .mv-seo-links { grid-template-columns: 1fr; } }
 
 /* ── Product volume variants ─────────────────────────────────── */
 .mv-variants { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 16px; }
@@ -1366,3 +1391,76 @@ body:has(.dp) .mv-cookie { z-index: 9990; }
 .mv-dl-sel-p { grid-column: 3; grid-row: 1; font-weight: 800; font-size: 17px; white-space: nowrap; }
 .mv-dl-change { grid-column: 3; grid-row: 2; align-self: end; }
 @media (max-width: 480px) { .mv-dl-big { padding: 14px 12px; gap: 10px; } .mv-dl-big-logos { display: none; } .mv-dl-big-t b { font-size: 15px; } }
+
+/* Telegram news: links behave like in Telegram (underline on hover only) */
+.news-link:hover { text-decoration: underline !important; text-underline-offset: 3px; }
+
+/* Telegram news video player */
+@keyframes nv-spin { to { transform: rotate(360deg); } }
+.nv-spin { animation: nv-spin .8s linear infinite; }
+.nv-big { transition: transform .25s cubic-bezier(.2,.8,.2,1), background .25s; }
+.nv-wrap:hover .nv-big { transform: scale(1.08); background: rgba(10,10,10,0.55) !important; }
+.nv-thumb { transform: scale(0); transition: transform .15s; }
+.nv-bar:hover .nv-thumb, .nv-bar:active .nv-thumb { transform: scale(1); }
+.nv-wrap button:hover { background: rgba(255,255,255,0.14) !important; }
+@media (hover: none) { .nv-thumb { transform: scale(1); } }
+
+/* Where-to-buy pages (/buy, /buy/[slug]) — linked from Telegram posts */
+.buy-kicker { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); margin-bottom: 10px; }
+.buy-h1 { font-family: var(--font-display); font-weight: 700; font-size: clamp(34px, 9vw, 48px); line-height: 1; margin: 0 0 12px; color: var(--text); }
+.buy-h2 { font-family: var(--font-display); font-weight: 700; font-size: clamp(18px, 4.6vw, 22px); line-height: 1.2; margin: 0; color: var(--text); overflow-wrap: anywhere; }
+.buy-section { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; font-size: 13px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 26px 0 12px; }
+.buy-save { font-size: 12px; letter-spacing: 0; text-transform: none; color: var(--pink); background: rgba(var(--pink-rgb), .1); padding: 3px 10px; border-radius: 999px; }
+.buy-product { display: flex; gap: 16px; align-items: center; background: var(--surface); border: 1px solid var(--border); border-radius: 22px; padding: 14px; }
+.buy-product-img { width: 96px; height: 96px; flex-shrink: 0; object-fit: contain; border-radius: 16px; background: var(--surface2); }
+.buy-card { position: relative; display: flex; flex-direction: column; gap: 14px; padding: 18px; border-radius: 22px; text-decoration: none; transition: transform .2s cubic-bezier(.2,.8,.2,1), box-shadow .2s; box-shadow: 0 1px 0 rgba(18,18,18,.06); }
+.buy-card:hover { transform: translateY(-2px); box-shadow: 0 16px 34px -18px rgba(18,18,18,.45); }
+.buy-card:active { transform: scale(.985); }
+.buy-badge { position: absolute; top: -10px; right: 16px; font-size: 11px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; padding: 5px 10px; border-radius: 999px; box-shadow: 0 6px 16px -6px rgba(0,0,0,.4); }
+.buy-row { display: flex; align-items: center; gap: 12px; }
+.buy-mark { width: 44px; height: 44px; flex-shrink: 0; display: grid; place-items: center; border-radius: 14px; font-family: var(--font-display); font-weight: 800; font-size: 17px; }
+.buy-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.buy-title { font-family: var(--font-display); font-weight: 700; font-size: 18px; line-height: 1.15; }
+.buy-sub { font-size: 13px; line-height: 1.35; }
+.buy-price { display: flex; flex-direction: column; align-items: flex-end; text-align: right; flex-shrink: 0; }
+.buy-price b { font-family: var(--font-display); font-weight: 800; font-size: 20px; white-space: nowrap; }
+.buy-price span { font-size: 12px; font-weight: 600; white-space: nowrap; }
+.buy-cta { display: flex; align-items: center; justify-content: center; gap: 6px; height: 48px; border-radius: 14px; font-weight: 700; font-size: 15px; }
+
+/* Studio → «Ссылки» */
+.st-results button.on { background: var(--paper); box-shadow: inset 0 0 0 1.5px var(--ink); }
+.lk-row { display: flex; flex-direction: column; gap: 6px; }
+.lk-label { font-size: 12px; font-weight: 600; color: var(--muted); }
+.lk-value { display: flex; gap: 6px; align-items: stretch; flex-wrap: wrap; }
+.lk-value code { flex: 1 1 220px; min-width: 0; padding: 12px; border-radius: 12px; background: var(--paper); font-size: 12.5px; line-height: 1.35; overflow-wrap: anywhere; }
+.lk-value .st-btn { min-height: 42px; }
+.lk-help { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; line-height: 1.45; }
+.lk-help kbd { font: inherit; font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 6px; background: var(--paper); border: 1px solid var(--border-md); }
+.lk-stage { justify-content: center; }
+.lk-empty { max-width: 380px; text-align: center; display: flex; flex-direction: column; gap: 8px; color: var(--muted); font-size: 14px; line-height: 1.5; }
+.lk-empty b { color: var(--ink); font-family: var(--font-display); font-size: 20px; }
+.lk-card { width: 100%; max-width: 560px; background: #fff; border-radius: 24px; padding: 20px; display: flex; flex-direction: column; gap: 18px; box-shadow: 0 30px 80px -40px rgba(18,18,18,0.45); }
+.lk-product { display: flex; gap: 14px; align-items: center; }
+.lk-product img { width: 72px; height: 72px; object-fit: contain; border-radius: 14px; background: var(--paper); flex-shrink: 0; }
+.lk-product span { display: block; font-size: 11px; font-weight: 700; color: var(--accent); text-transform: uppercase; }
+.lk-product b { font-size: 15px; line-height: 1.3; }
+.lk-prices { display: flex; flex-direction: column; gap: 6px; }
+.lk-price { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: center; padding: 12px 14px; border-radius: 14px; background: var(--paper); font-size: 14px; }
+.lk-price b { font-size: 15px; white-space: nowrap; }
+.lk-price em { font-style: normal; font-size: 12px; font-weight: 700; color: var(--muted); white-space: nowrap; }
+.lk-price.best { background: var(--lime); }
+.lk-price.best em { color: var(--pink); }
+.lk-muted { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+/* the Telegram landing stays focused: no footer / bottom nav */
+body:has(.buy-root) .mv-foot, body:has(.buy-root) .bottom-nav { display: none !important; }
+/* home: the hero chip carries the H1 («Интернет-магазин оригинальной парфюмерии»), the big slogan is a <p> */
+h1.mv-home-h1 { margin: 0; line-height: 1.4; }
+
+/* Product page: characteristics as a two-column list, accords as bars sized by their share */
+.mv-specs { margin: 0; display: grid; gap: 0; }
+.mv-specs > div { display: grid; grid-template-columns: minmax(110px, 38%) 1fr; gap: 12px; padding: 8px 0; border-bottom: 1px dashed rgba(var(--ink-rgb), 0.1); font-size: 13.5px; }
+.mv-specs > div:last-child { border-bottom: 0; }
+.mv-specs dt { color: rgba(var(--ink-rgb), 0.55); }
+.mv-specs dd { margin: 0; color: var(--ink); font-weight: 500; overflow-wrap: anywhere; }
+.mv-accords { display: grid; gap: 5px; }
+.mv-accord { border-radius: 8px; padding: 5px 10px; font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06); }

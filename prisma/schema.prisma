@@ -643,11 +643,17 @@ model TelegramNewsPost {
   messageId   Int      @unique @map("message_id")
   text        String?
   photoUrl    String?  @map("photo_url")
+  /// [{ type: "photo"|"video"|"animation", url, poster?, width?, height?, mid, uid }]
+  media       Json?
+  /// [{ offset, length, id }] premium emoji / [{ offset, length, url }] links (UTF-16 offsets into text)
+  entities    Json?
+  mediaGroupId String? @map("media_group_id")
   publishedAt DateTime @map("published_at")
   active      Boolean  @default(true)
   createdAt   DateTime @default(now()) @map("created_at")
 
   @@index([active, publishedAt])
+  @@index([mediaGroupId])
   @@map("telegram_news_posts")
 }
 

@@ -3,9 +3,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Download, Copy, Search, Upload, Check, Loader2, X } from "lucide-react";
 import type { ShopProduct } from "@/lib/types";
 import { productImg } from "@/lib/img";
-import { toProductSlug } from "@/lib/slug";
+
 import { brandHref } from "@/lib/landings";
 import StoryVideo from "./StoryVideo";
+import LinkStudio from "./LinkStudio";
+import { buyPath } from "@/lib/buy";
 
 /* ─────────────────────────── config ─────────────────────────── */
 const API = (process.env.NEXT_PUBLIC_API_BASE ?? "https://davidsklad.ru") + "/api/shop";
@@ -259,7 +261,7 @@ function Render({ tpl, fmt, t, f, slots }: { tpl: Tpl; fmt: Fmt; t: Theme; f: Fi
 
 /* ─────────────────────────── caption for the TG post ─────────────────────────── */
 function caption(tpl: Tpl, f: Fields, slots: Slot[]) {
-  const link = (p?: ShopProduct) => (p ? `${SITE}/product/${toProductSlug(p.name, p.offerId)}` : `${SITE}/catalog`);
+  const link = (p?: ShopProduct) => `${SITE}${buyPath(p)}`;
   const p = slots[0]?.product;
   switch (tpl) {
     case "new": return `✨ ${f.kicker || "Новинка"}: ${f.brand} ${f.title}\n\n${f.script ? f.script[0].toUpperCase() + f.script.slice(1) + ". " : ""}${f.text}\n\n💸 ${f.price}\n🛒 ${link(p)}`;
@@ -305,15 +307,17 @@ function embeddedFontCss() {
 
 /* ─────────────────────────── editor ─────────────────────────── */
 export default function StudioClient() {
-  const [mode, setMode] = useState<"post" | "video">("post");
+  const [mode, setMode] = useState<"post" | "video" | "links">("post");
   const modeSwitch = (
     <div className="st-group">
       <div className="st-chips sv-mode">
         <button className={mode === "post" ? "on" : ""} onClick={() => setMode("post")}>Посты (PNG)</button>
         <button className={mode === "video" ? "on" : ""} onClick={() => setMode("video")}>Видео-сторис</button>
+        <button className={mode === "links" ? "on" : ""} onClick={() => setMode("links")}>Ссылки «Купить»</button>
       </div>
     </div>
   );
+  if (mode === "links") return <LinkStudio modeSwitch={modeSwitch} />;
   return mode === "video" ? <StoryVideo modeSwitch={modeSwitch} /> : <PostStudio modeSwitch={modeSwitch} />;
 }
 

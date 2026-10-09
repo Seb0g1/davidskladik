@@ -1,5 +1,6 @@
 // Sitemap building blocks shared by app/sitemap.xml (index) and app/sitemaps/[file] (parts).
 import { SITE_URL } from "./seo";
+import { BRAND_SUBS, BRAND_SUB_MIN, slugify } from "./landings";
 
 const API = (process.env.NEXT_PUBLIC_API_BASE ?? "https://davidsklad.ru") + "/api/shop";
 
@@ -35,6 +36,28 @@ export async function sitemapBrands(): Promise<string[]> {
   const list: { name: string; count: number }[] = Array.isArray(d) ? d : d.brands ?? [];
   // real brands only: the brand field often holds "brand + model" with 1–2 items
   return list.filter((b) => b.count >= 3 && b.name.length <= 40).map((b) => b.name);
+}
+
+/** brand sub-listings with enough products: one catalog call per sub, brand counts come from its facets */
+export async function sitemapListings(): Promise<{ brand: string; sub: string }[]> {
+  const known = new Set((await sitemapBrands()).map(slugify));
+  const out: { brand: string; sub: string }[] = [];
+  await Promise.all(BRAND_SUBS.map(async (sub) => {
+    const qs = new URLSearchParams({ pageSize: "1" });
+    if (sub.gender) qs.set("gender", sub.gender);
+    if (sub.category) qs.set("category", sub.category);
+    const r = await fetch(`${API}/catalog?${qs}`, { next: { revalidate: 3600 } }).catch(() => null);
+    if (!r?.ok) return;
+    const d = await r.json();
+    const seen = new Set<string>();
+    for (const b of (d.facets?.brands ?? []) as { name: string; count: number }[]) {
+      const slug = slugify(b.name);
+      if (b.count < BRAND_SUB_MIN || !known.has(slug) || seen.has(slug)) continue;
+      seen.add(slug);
+      out.push({ brand: slug, sub: sub.slug });
+    }
+  }));
+  return out.sort((a, b) => a.brand.localeCompare(b.brand) || a.sub.localeCompare(b.sub));
 }
 
 export async function sitemapBlog(): Promise<{ slug: string; publishedAt?: string }[]> {

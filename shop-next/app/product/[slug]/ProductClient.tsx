@@ -17,6 +17,13 @@ import type { ShopProduct, ShopSettings, MarketplaceReview, FragranceNotes, Prod
 import type { ProductVariant } from "@/lib/api";
 import type { ShopReview } from "@/lib/client";
 import { brandHref } from "@/lib/landings";
+import { useLivePrice, useLivePrices } from "@/lib/live-prices";
+
+// Our own info slides after the product photos (perfume only) — instead of the marketplace stores' slides
+// (Magic Stick / AURA / Parfumerius), which the API strips from the gallery.
+const BRAND_SLIDES = ["/brand/slides/application.jpg", "/brand/slides/original.jpg", "/brand/slides/storage.jpg"];
+const PERFUME_RE = /парфюм|туалетн|духи|одеколон|eau de|\bedp\b|\bedt\b|parfum|cologne|отливант|пробник|миниатюр/i;
+const NON_PERFUME_RE = /лосьон|крем|гель|шампун|бальзам|мыло|дезодорант|масло для|скраб|маска|lotion|cream|shower/i;
 
 const S = {
   bg:      "var(--surface)",
@@ -54,7 +61,8 @@ function FragrancePyramid({ notes }: { notes: FragranceNotes }) {
             <div
               key={layer.key}
               style={{
-                width: `${layer.widthPct}%`, minWidth: 100, position: "relative",
+                // a percentage alone left the top layer ~125 px on a phone and cut long notes («Калабрийский бергамот»)
+                width: `min(100%, max(${layer.widthPct}%, ${180 + i * 50}px))`, position: "relative",
                 clipPath: isFirst && activeLayers.length > 1
                   ? "polygon(6% 0%, 94% 0%, 100% 100%, 0% 100%)"
                   : isLast && activeLayers.length > 1
@@ -93,7 +101,18 @@ function FragrancePyramid({ notes }: { notes: FragranceNotes }) {
           );
         })}
       </div>
-      {notes.accords && notes.accords.length > 0 && (
+      {notes.accordBars && notes.accordBars.length > 0 ? (
+        <div style={{ marginTop: 16 }}>
+          <div style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(var(--ink-rgb),0.45)", fontWeight: 600, marginBottom: 8, textAlign: "center" }}>Аккорды</div>
+          <div className="mv-accords">
+            {notes.accordBars.slice(0, 8).map((a) => (
+              <div key={a.name} className="mv-accord" style={{ width: `${Math.max(34, a.share)}%`, background: a.background || "rgba(var(--accent-rgb),0.22)", color: a.color || "var(--ink)" }}>
+                {a.name}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : notes.accords && notes.accords.length > 0 && (
         <div style={{ marginTop: 14 }}>
           <div style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(var(--ink-rgb),0.45)", fontWeight: 600, marginBottom: 8, textAlign: "center" }}>Аккорды</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center" }}>
@@ -120,6 +139,47 @@ function FragrancePyramid({ notes }: { notes: FragranceNotes }) {
   );
 }
 
+const GENDER_RU: Record<string, string> = { male: "Мужской", men: "Мужской", m: "Мужской", female: "Женский", women: "Женский", w: "Женский", f: "Женский", unisex: "Унисекс", u: "Унисекс" };
+
+/** Perfume type by the product name: the marketplace names always carry it, the catalog does not. */
+function perfumeType(name: string): string {
+  const n = name.toLowerCase();
+  if (/extrait|экстракт/.test(n)) return "Экстракт духов";
+  if (/парфюмерн[а-я]* вода|eau de parfum|\bedp\b/.test(n)) return "Парфюмерная вода";
+  if (/туалетн[а-я]* вода|eau de toilette|\bedt\b/.test(n)) return "Туалетная вода";
+  if (/одеколон|cologne|\bedc\b/.test(n)) return "Одеколон";
+  if (/(^|\s)духи(\s|$)|\bparfum\b/.test(n)) return "Духи";
+  return "";
+}
+
+function ProductSpecs({ product, notes }: { product: ShopProduct; notes: FragranceNotes | null }) {
+  const facts = notes?.facts || {};
+  const gender = GENDER_RU[String(facts.gender || notes?.gender || "").toLowerCase()] || "";
+  const rows: [string, string][] = [
+    ["Бренд", product.brand || facts.brand || ""],
+    ["Аромат", facts.aroma || ""],
+    ["Для кого", gender],
+    ["Тип", perfumeType(product.name || "")],
+    ["Объём", product.volume || ""],
+    ["Семейство", facts.family || ""],
+    ["Год выпуска", facts.year ? String(facts.year) : ""],
+    ["Парфюмер", (facts.perfumers || []).join(", ")],
+    ["Артикул", product.offerId],
+  ];
+  const shown = rows.filter(([, v]) => v);
+  if (shown.length < 3) return null;
+  return (
+    <div style={{ borderTop: `1px solid ${S.border}`, paddingTop: 20 }}>
+      <h3 style={{ fontSize: 13, fontWeight: 600, color: S.text, marginBottom: 10 }}>Характеристики</h3>
+      <dl className="mv-specs">
+        {shown.map(([k, v]) => (
+          <div key={k}><dt>{k}</dt><dd>{v}</dd></div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
 function baseViewerCount(offerId: string, rating?: number | null): number {
   let h = 0;
   for (let i = 0; i < offerId.length; i++) h = (h * 31 + offerId.charCodeAt(i)) >>> 0;
@@ -142,9 +202,13 @@ interface Props {
 }
 
 export default function ProductClient({
-  product, settings, initialMpReviews, initialAvgRating, initialReviewCount,
-  initialSiteReviews, fragranceNotes, relatedProducts, qaItems, variants = [],
+  product: rendered, settings, initialMpReviews, initialAvgRating, initialReviewCount,
+  initialSiteReviews, fragranceNotes, relatedProducts, qaItems, variants: renderedVariants = [],
 }: Props) {
+  // the page is ISR-cached: price, stock, other volumes and «С этим берут» are refreshed live
+  const product = useLivePrice(rendered);
+  const variants = useLivePrices(renderedVariants);
+  const relatedLive = useLivePrices(relatedProducts);
   const { add } = useCart();
   const { customer, token, updateProfile } = useAuth();
   const [qty, setQty] = useState(1);
@@ -181,10 +245,13 @@ export default function ProductClient({
   const mpAvgRating = initialAvgRating ?? 0;
   const mpReviewCount = initialReviewCount ?? 0;
   const productReviews = initialSiteReviews;
-  const relatedItems = relatedProducts.slice(0, 3);
+  const relatedItems = relatedLive.slice(0, 3);
 
   const discount = product.oldPriceRub ? Math.round((1 - product.priceRub / product.oldPriceRub) * 100) : 0;
-  const validImages = product.images.filter((_, i) => !imgErrors.has(i));
+  const galleryImages = PERFUME_RE.test(product.name) && !NON_PERFUME_RE.test(product.name) && product.images.length > 0
+    ? [...product.images, ...BRAND_SLIDES]
+    : product.images;
+  const validImages = galleryImages.filter((_, i) => !imgErrors.has(i));
   const activeValidImg = validImages[activeImg] || null;
   const freeDelivery = settings?.freeDeliveryFrom && product.priceRub >= settings.freeDeliveryFrom;
 
@@ -335,7 +402,7 @@ export default function ProductClient({
 
               {validImages.length > 1 && (
                 <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 4 }}>
-                  {product.images.map((img, i) => !imgErrors.has(i) && (
+                  {galleryImages.map((img, i) => !imgErrors.has(i) && (
                     <button key={i} onClick={() => setActiveImg(i)} style={{
                       flexShrink: 0, width: 56, height: 56, borderRadius: 12, overflow: "hidden",
                       background: "#fff",
@@ -549,6 +616,9 @@ export default function ProductClient({
                   </div>
                 ))}
               </div>
+
+              {/* Characteristics: what the buyer compares — from the product and our perfume catalog */}
+              <ProductSpecs product={product} notes={fragranceNotes} />
 
               {/* Description */}
               {product.description && (

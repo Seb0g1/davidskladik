@@ -17,7 +17,8 @@ export function productJsonLd(p: ShopProduct, settings?: ShopSettings | null) {
     name: p.name,
     ...(p.brand ? { brand: { "@type": "Brand", name: p.brand } } : {}),
     description: p.description?.slice(0, 300) || undefined,
-    image: p.images[0] || undefined,
+    image: p.images.length ? p.images.slice(0, 6) : undefined,
+    ...(p.categoryLabel ? { category: p.categoryLabel } : {}),
     sku: p.offerId,
     mpn: p.offerId,
     url,
@@ -34,9 +35,9 @@ export function productJsonLd(p: ShopProduct, settings?: ShopSettings | null) {
         "@type": "MerchantReturnPolicy",
         applicableCountry: "RU",
         returnPolicyCategory: "https://schema.org/MerchantReturnFiniteReturnWindow",
-        merchantReturnDays: 14,
+        // /terms: 7 days, unopened in factory packaging
+        merchantReturnDays: 7,
         returnMethod: "https://schema.org/ReturnByMail",
-        returnFees: "https://schema.org/FreeReturn",
       },
       shippingDetails: {
         "@type": "OfferShippingDetails",
