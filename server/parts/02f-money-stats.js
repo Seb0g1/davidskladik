@@ -89,6 +89,10 @@ async function requireMoneyTables() {
         amount numeric(14,2) NOT NULL DEFAULT 0, units integer NOT NULL DEFAULT 0, cancelled boolean NOT NULL DEFAULT false,
         returned boolean NOT NULL DEFAULT false, updated_at timestamptz NOT NULL DEFAULT now())`);
       await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS money_orders_day_idx ON money_orders (day)`);
+      // purchases typed by hand for orders bought outside the autocart (or a wrong $1 «Наш склад» price)
+      await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS money_costs (
+        marketplace text NOT NULL, ref text NOT NULL, cost numeric(14,2) NOT NULL, note text, updated_by text,
+        updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (marketplace, ref))`);
       return prisma;
     })();
     moneyTablesReady.catch(() => { moneyTablesReady = null; });
@@ -397,26 +401,44 @@ function moneyBucket(day, group) {
   return day;
 }
 
-/** Purchase cost per sold posting / order: the picking's real purchase first, else the current supplier's price. */
+// a purchase under this share of the sale is not believed («Наш склад» rows priced at $1): listed to be checked
+const MONEY_LOW_COST_SHARE = 0.08;
+
+/**
+ * Purchase cost per sold posting / order — only a purchase that really happened: the autocart's picking rows, or a
+ * cost typed by hand on the page (money_costs, wins). Orders without either (bought by hand outside the autocart)
+ * are left out of the profit until their cost is typed. Also the article and name of every order, for that list.
+ */
 async function moneyPurchaseCosts(refs) {
   const out = new Map();
+  const prisma = getPrisma();
   for (const marketplace of ["ozon", "yandex"]) {
     const list = [...new Set(refs.filter((r) => r.marketplace === marketplace).map((r) => r.ref))];
     if (!list.length) continue;
     const column = marketplace === "ozon" ? "posting_number" : "order_id";
-    const rows = await getPrisma().$queryRawUnsafe(
-      `SELECT ${column} AS ref, source, sum(coalesce(purchase_cost, 0))::float8 AS cost, sum(coalesce(sale_amount, 0))::float8 AS sale,
-              count(*) FILTER (WHERE coalesce(purchase_cost, 0) <= 0)::int AS missing
-         FROM finance_orders WHERE marketplace::text = $1 AND ${column} = ANY($2::text[]) GROUP BY 1, 2`,
-      marketplace, list,
-    );
+    const [rows, manual] = await Promise.all([
+      prisma.$queryRawUnsafe(
+        `SELECT ${column} AS ref, source, sum(coalesce(purchase_cost, 0))::float8 AS cost, sum(coalesce(sale_amount, 0))::float8 AS sale,
+                string_agg(DISTINCT offer_id, ', ') AS offer_ids, max(product_name) AS name
+           FROM finance_orders WHERE marketplace::text = $1 AND ${column} = ANY($2::text[]) GROUP BY 1, 2`,
+        marketplace, list,
+      ),
+      prisma.$queryRawUnsafe(`SELECT ref, cost::float8 AS cost, note FROM money_costs WHERE marketplace = $1 AND ref = ANY($2::text[])`, marketplace, list),
+    ]);
     for (const row of rows) {
       const key = `${marketplace}:${row.ref}`;
-      const prev = out.get(key);
-      // picking rows are the purchase that really happened
-      if (prev && prev.source === "supplier_picking") continue;
-      if (row.source !== "supplier_picking" && prev) continue;
-      out.set(key, { cost: Number(row.cost) || 0, sale: Number(row.sale) || 0, missing: Number(row.missing) || 0, source: row.source });
+      const info = out.get(key) || { cost: 0, sale: 0, source: "", offerIds: "", name: "" };
+      if (!info.offerIds && row.offer_ids) info.offerIds = row.offer_ids;
+      if (!info.name && row.name) info.name = row.name;
+      if (row.source === "supplier_picking" && Number(row.cost) > 0) {
+        info.cost = Number(row.cost); info.sale = Number(row.sale) || 0; info.source = "picking";
+      }
+      out.set(key, info);
+    }
+    for (const row of manual) {
+      const key = `${marketplace}:${row.ref}`;
+      const info = out.get(key) || { cost: 0, sale: 0, source: "", offerIds: "", name: "" };
+      out.set(key, { ...info, cost: Number(row.cost) || 0, source: "manual", note: row.note || "" });
     }
   }
   return out;
@@ -463,17 +485,64 @@ async function moneySummary({ from, to, group = "day", account = "all" }) {
     accountLine(op.marketplace, op.account)[op.category] += amount;
   }
 
-  // purchase cost of what was sold (and given back by returns), by the sale's day
+  // Orders without a real purchase (not through the autocart, no cost typed) are left out whole: their sale, return,
+  // commission and logistics. An Ozon order's item fees (acquiring) carry the order number, its postings «<order>-N».
   const costs = await moneyPurchaseCosts(refs);
-  let soldRefs = 0, refsWithoutCost = 0;
+  const excluded = new Map(); // "mp:ref" → { marketplace, account, ref, day, sale, payout, offerIds, name }
+  for (const r of refs) {
+    const info = costs.get(`${r.marketplace}:${r.ref}`);
+    if (info && info.cost > 0) continue;
+    const key = `${r.marketplace}:${r.ref}`;
+    const e = excluded.get(key) || { marketplace: r.marketplace, account: r.account, ref: r.ref, day: r.day, sale: 0, payout: 0, offerIds: info?.offerIds || "", name: info?.name || "" };
+    if (r.category === "sales") { e.sale += Number(r.amount) || 0; e.day = r.day; }
+    excluded.set(key, e);
+  }
+  if (excluded.size) {
+    const keys = [...excluded.values()].map((e) => e.ref);
+    const orderOf = (posting) => posting.replace(/-\d+$/, "");
+    const ozonOrders = [...excluded.values()].filter((e) => e.marketplace === "ozon").map((e) => orderOf(e.ref)).filter((o) => o && !keys.includes(o));
+    const n = args.length;
+    const [rows, typeRows] = await Promise.all([
+      prisma.$queryRawUnsafe(
+        `SELECT to_char(day, 'YYYY-MM-DD') AS day, marketplace, account, ref, category, sum(amount)::float8 AS amount FROM money_ops
+          WHERE ${where} AND (ref = ANY($${n + 1}::text[]) OR (marketplace = 'ozon' AND ref = ANY($${n + 2}::text[]))) GROUP BY 1, 2, 3, 4, 5`,
+        ...args, keys, ozonOrders,
+      ),
+      prisma.$queryRawUnsafe(
+        `SELECT category, marketplace, type_name, sum(amount)::float8 AS amount FROM money_ops
+          WHERE ${where} AND category NOT IN ('sales', 'returns') AND (ref = ANY($${n + 1}::text[]) OR (marketplace = 'ozon' AND ref = ANY($${n + 2}::text[]))) GROUP BY 1, 2, 3`,
+        ...args, keys, ozonOrders,
+      ),
+    ]);
+    const byOrder = new Map([...excluded.values()].filter((e) => e.marketplace === "ozon").map((e) => [orderOf(e.ref), e]));
+    for (const op of rows) {
+      const amount = Number(op.amount) || 0;
+      bucket(op.day)[op.category] -= amount;
+      totals[op.category] -= amount;
+      accountLine(op.marketplace, op.account)[op.category] -= amount;
+      const e = excluded.get(`${op.marketplace}:${op.ref}`) || (op.marketplace === "ozon" ? byOrder.get(op.ref) : null);
+      if (e) e.payout += amount;
+    }
+    const typeIndex = new Map(types.map((t) => [`${t.category}|${t.marketplace}|${t.type_name}`, t]));
+    for (const t of typeRows) {
+      const hit = typeIndex.get(`${t.category}|${t.marketplace}|${t.type_name}`);
+      if (hit) hit.amount = Number(hit.amount) - Number(t.amount);
+    }
+  }
+
+  // purchase cost of what was sold (and given back by returns), by the sale's day
+  let soldRefs = 0;
+  const lowCost = [];
   for (const r of refs) {
     const info = costs.get(`${r.marketplace}:${r.ref}`);
     const amount = Number(r.amount) || 0;
+    if (!info || info.cost <= 0) continue;
     if (r.category === "sales") {
       soldRefs += 1;
-      if (!info || info.cost <= 0) { refsWithoutCost += 1; continue; }
+      if (info.source === "picking" && info.cost < amount * MONEY_LOW_COST_SHARE) {
+        lowCost.push({ marketplace: r.marketplace, account: r.account, ref: r.ref, day: r.day, sale: amount, cost: info.cost, offerIds: info.offerIds, name: info.name });
+      }
     }
-    if (!info || info.cost <= 0) continue;
     // a return gives back the share of the purchase it takes back
     const share = r.category === "sales" ? 1 : Math.min(1, Math.abs(amount) / Math.max(info.sale, Math.abs(amount), 1));
     const cost = (r.category === "sales" ? -1 : 1) * info.cost * share;
@@ -510,7 +579,18 @@ async function moneySummary({ from, to, group = "day", account = "all" }) {
   const nameOf = new Map(accounts.map((a) => [a.id, a.name]));
   return {
     from, to, group, account,
-    totals: { ...finish(totals), ...orderTotals, soldRefs, refsWithoutCost },
+    totals: { ...finish(totals), ...orderTotals, soldRefs },
+    // orders left out (no purchase from the autocart, none typed) and purchases too small to believe: typed on the page
+    withoutCost: {
+      count: [...excluded.values()].filter((e) => e.sale > 0).length,
+      sales: moneyRound([...excluded.values()].reduce((s, e) => s + e.sale, 0)),
+      payout: moneyRound([...excluded.values()].reduce((s, e) => s + e.payout, 0)),
+      items: [...excluded.values()].sort((a, b) => b.day.localeCompare(a.day)).slice(0, 500)
+        .map((e) => ({ ...e, sale: moneyRound(e.sale), payout: moneyRound(e.payout), status: "missing" })),
+    },
+    lowCost: lowCost.sort((a, b) => b.day.localeCompare(a.day)).slice(0, 300)
+      .map((e) => ({ ...e, sale: moneyRound(e.sale), cost: moneyRound(e.cost), status: "low" })),
+    manualCosts: [...costs.entries()].filter(([, i]) => i.source === "manual").length,
     series: [...buckets.values()].sort((a, b) => a.key.localeCompare(b.key)).map(finish),
     byAccount: [...byAccount.values()].map((line) => ({ ...finish(line), name: nameOf.get(line.account) || line.account })),
     breakdown: types.map((t) => ({ category: t.category, marketplace: t.marketplace, name: t.type_name || "—", amount: moneyRound(t.amount) })),
@@ -554,6 +634,35 @@ app.post("/api/money/settings", requireAdmin, async (request, response, next) =>
     const value = await moneyWriteSetting(MONEY_SETTINGS_KEY, { taxMode, taxRate });
     await appendAudit(request, "money.settings", { entityType: "money", entityId: "settings", newValue: value });
     response.json({ ok: true, settings: value });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// A purchase typed by hand for one order: the order comes back into the profit with it; cost null removes it.
+app.post("/api/money/costs", requireAdmin, async (request, response, next) => {
+  try {
+    await requireMoneyTables();
+    const marketplace = ["ozon", "yandex"].includes(String(request.body?.marketplace)) ? String(request.body.marketplace) : "";
+    const ref = cleanText(request.body?.ref).slice(0, 80);
+    if (!marketplace || !ref) return response.status(400).json({ error: "Не указан заказ." });
+    const raw = request.body?.cost;
+    const prisma = getPrisma();
+    if (raw === null || raw === "" || raw === undefined) {
+      await prisma.$executeRawUnsafe(`DELETE FROM money_costs WHERE marketplace = $1 AND ref = $2`, marketplace, ref);
+      await appendAudit(request, "money.cost.delete", { entityType: "money_cost", entityId: `${marketplace}:${ref}` });
+      return response.json({ ok: true, removed: true });
+    }
+    const cost = moneyRound(Number(String(raw).replace(",", ".").replace(/\s/g, "")));
+    if (!(cost > 0)) return response.status(400).json({ error: "Укажите закупку больше нуля." });
+    const note = cleanText(request.body?.note).slice(0, 300) || null;
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO money_costs (marketplace, ref, cost, note, updated_by, updated_at) VALUES ($1, $2, $3, $4, $5, now())
+       ON CONFLICT (marketplace, ref) DO UPDATE SET cost = EXCLUDED.cost, note = EXCLUDED.note, updated_by = EXCLUDED.updated_by, updated_at = now()`,
+      marketplace, ref, cost, note, cleanText(request.user?.login || request.user?.email || request.user?.name || "") || null,
+    );
+    await appendAudit(request, "money.cost.set", { entityType: "money_cost", entityId: `${marketplace}:${ref}`, newValue: { cost } });
+    response.json({ ok: true, cost });
   } catch (error) {
     next(error);
   }

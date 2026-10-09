@@ -109,3 +109,12 @@
   .money-select { min-width: 0; width: 100%; }
   .money-sync { align-items: flex-start; }
 }
+
+/* закупка вручную */
+.money-costs-tabs { display: inline-flex; margin-bottom: 10px; }
+.money-costs td, .money-costs th { vertical-align: middle; }
+.money-costs .money-costs-name { text-align: left; white-space: normal; min-width: 220px; max-width: 420px; }
+.money-costs .money-costs-name small { color: var(--muted); }
+.money-costs-ref { font-variant-numeric: tabular-nums; }
+.money-costs-form { display: inline-flex; gap: 6px; align-items: center; justify-content: flex-end; }
+.money-costs-form input { width: 96px; font: inherit; font-size: 13px; color: var(--text); background: var(--field-bg, var(--panel)); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; text-align: right; }

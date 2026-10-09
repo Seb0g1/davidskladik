@@ -18,9 +18,12 @@ type Line = {
 };
 type Bucket = Line & { key: string; orders: number; ordersAmount: number; cancelled: number; cancelledAmount: number; returnedOrders: number };
 type AccountLine = Line & { key: string; marketplace: string; account: string; name: string; orders: number; cancelled: number };
+type CostRow = { marketplace: string; account: string; ref: string; day: string; sale: number; payout?: number; cost?: number; offerIds: string; name: string; status: "missing" | "low" };
 type Summary = {
   from: string; to: string; group: string; account: string;
-  totals: Line & { orders: number; ordersAmount: number; cancelled: number; cancelledAmount: number; returnedOrders: number; soldRefs: number; refsWithoutCost: number };
+  totals: Line & { orders: number; ordersAmount: number; cancelled: number; cancelledAmount: number; returnedOrders: number; soldRefs: number };
+  withoutCost: { count: number; sales: number; payout: number; items: CostRow[] };
+  lowCost: CostRow[];
   series: Bucket[];
   byAccount: AccountLine[];
   breakdown: Array<{ category: string; marketplace: string; name: string; amount: number }>;
@@ -153,6 +156,7 @@ export function MoneyPage() {
             <Ledger line={t} />
             <OrdersCard t={t} />
           </div>
+          <CostsToFill data={data} />
           <Chart series={data.series} group={data.group} />
           <PeriodTable series={data.series} group={data.group} />
           {data.byAccount.length > 1 ? <AccountsTable rows={data.byAccount} /> : null}
@@ -170,7 +174,8 @@ export function MoneyPage() {
 function Notices({ data }: { data: Summary }) {
   const t = data.totals;
   const notes: string[] = [];
-  if (t.refsWithoutCost) notes.push(`У ${t.refsWithoutCost} из ${t.soldRefs} продаж нет закупки (заказ не прошёл через сборку и у товара нет поставщика) — прибыль по ним завышена.`);
+  if (data.withoutCost.count) notes.push(`Не в расчёте ${data.withoutCost.count} ${data.withoutCost.count === 1 ? "заказ" : "заказов"} на ${rub(data.withoutCost.sales)}: их закупка была не через автокорзину. Впишите закупку ниже — заказ вернётся в прибыль.`);
+  if (data.lowCost.length) notes.push(`У ${data.lowCost.length} заказов закупка подозрительно мала (меньше 8% продажи, например «Наш склад» по $1) — проверьте её ниже.`);
   for (const e of data.sync.lastResult?.errors || []) notes.push(`Последнее обновление: ${e}`);
   if (!data.sync.lastRunAt) notes.push(`Данные ещё не собраны: воркер начнёт в течение 5 минут после перезапуска и заполнит историю за ${data.sync.historyDays} дней за несколько часов.`);
   return (
@@ -443,5 +448,74 @@ function TaxSettings({ settings }: { settings: Summary["settings"] }) {
         </button>
       </div>
     </section>
+  );
+}
+
+/** Orders left out of the profit (bought outside the autocart) and too-small purchases: the purchase typed by hand. */
+function CostsToFill({ data }: { data: Summary }) {
+  const [tab, setTab] = useState<"missing" | "low">("missing");
+  const [open, setOpen] = useState(false);
+  const rows = tab === "missing" ? data.withoutCost.items.filter((r) => r.sale > 0) : data.lowCost;
+  if (!data.withoutCost.count && !data.lowCost.length) return null;
+  const shown = open ? rows : rows.slice(0, 15);
+  return (
+    <section className="money-table-wrap">
+      <div className="money-section-head">
+        <b>Закупка вручную</b>
+        <span className="fr-hint">Заказы, купленные не через автокорзину, не входят в прибыль, пока не указана их закупка.</span>
+      </div>
+      <div className="money-chips money-costs-tabs" role="tablist">
+        <button type="button" role="tab" aria-selected={tab === "missing"} className={`money-chip${tab === "missing" ? " is-on" : ""}`} onClick={() => setTab("missing")}>
+          Без закупки · {data.withoutCost.count}
+        </button>
+        <button type="button" role="tab" aria-selected={tab === "low"} className={`money-chip${tab === "low" ? " is-on" : ""}`} onClick={() => setTab("low")}>
+          Низкая закупка · {data.lowCost.length}
+        </button>
+      </div>
+      {rows.length ? (
+        <div className="money-scroll">
+          <table className="money-table money-costs">
+            <thead>
+              <tr><th>Дата</th><th>Заказ</th><th>Товар</th><th>Продажа</th><th>{tab === "missing" ? "К выплате" : "Закупка сейчас"}</th><th>Закупка, ₽</th></tr>
+            </thead>
+            <tbody>
+              {shown.map((r) => <CostRowView key={`${r.marketplace}:${r.ref}`} row={r} />)}
+            </tbody>
+          </table>
+        </div>
+      ) : <p className="fr-hint">Здесь пусто.</p>}
+      {rows.length > 15 ? (
+        <button className="secondary-action compact money-more" type="button" onClick={() => setOpen(!open)}>
+          {open ? <ChevronUp size={13} /> : <ChevronDown size={13} />} {open ? "Свернуть" : `Показать все ${rows.length}`}
+        </button>
+      ) : null}
+    </section>
+  );
+}
+
+function CostRowView({ row }: { row: CostRow }) {
+  const queryClient = useQueryClient();
+  const [value, setValue] = useState("");
+  const save = useMutation({
+    mutationFn: () => api("/api/money/costs", mutationBody({ marketplace: row.marketplace, ref: row.ref, cost: value })),
+    onSuccess: () => { toast.success(`Закупка сохранена: заказ ${row.ref} в расчёте`); void queryClient.invalidateQueries({ queryKey: ["money"] }); },
+    onError: (error) => toast.error(errorMessage(error)),
+  });
+  return (
+    <tr>
+      <td>{new Date(`${row.day}T00:00:00`).toLocaleDateString("ru-RU", { day: "numeric", month: "short" })}</td>
+      <th scope="row" className="money-costs-ref">{row.marketplace === "ozon" ? "Ozon" : "Маркет"} · {row.ref}</th>
+      <td className="money-costs-name" title={row.name}>{row.name || "—"}{row.offerIds ? <small> · {row.offerIds}</small> : null}</td>
+      <td>{rub(row.sale)}</td>
+      <td>{row.status === "missing" ? rub(row.payout || 0) : rub(row.cost || 0)}</td>
+      <td>
+        <form className="money-costs-form" onSubmit={(e) => { e.preventDefault(); if (value) save.mutate(); }}>
+          <input inputMode="decimal" placeholder="₽" value={value} onChange={(e) => setValue(e.target.value)} aria-label={`Закупка по заказу ${row.ref}`} />
+          <button className="secondary-action compact" type="submit" disabled={!value || save.isPending}>
+            {save.isPending ? <Loader2 size={13} className="spin" /> : null} Сохранить
+          </button>
+        </form>
+      </td>
+    </tr>
   );
 }
