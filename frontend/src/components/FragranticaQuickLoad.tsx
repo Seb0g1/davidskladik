@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Download, ExternalLink } from "lucide-react";
+import { Download, ExternalLink, Loader2, RefreshCw, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { z } from "zod";
 import { fetchJson, mutationBody } from "../api";
@@ -104,6 +104,44 @@ export function ExtensionDownload({ installed }: { installed: boolean }) {
     >
       <Download size={13} /> {installed ? "Расширение «→ Склад»" : "Скачать расширение"}
     </a>
+  );
+}
+
+/**
+ * Perfumes without their Fragrantica page and the extension's queue for them: how many, progress, start / stop.
+ * The extension takes up to 60 per run, the list's first ones (the caller orders them).
+ */
+export function ExtensionQueueStrip({ items, total, drafts }: { items: Array<{ url: string; name: string }>; total?: number; drafts?: number }) {
+  const ext = useFragranticaExtRun();
+  const running = Boolean(ext.state?.running);
+  const count = total ?? items.length;
+  if (!count && !ext.state) return null;
+  return (
+    <div className="fr-ext-run">
+      <div className="fr-ext-run-text">
+        {running ? (
+          <b><Loader2 size={13} className="spin" /> Загружаем страницы с Фрагрантики: {ext.state!.done} из {ext.state!.total}{ext.state!.current ? ` · ${ext.state!.current}` : ""}</b>
+        ) : ext.state && ext.state.total ? (
+          <b>Загружено страниц: {ext.state.ok}{ext.state.failed ? `, не вышло: ${ext.state.failed}` : ""}. Черновики пересобираются сами.{count ? ` Осталось ароматов без страницы: ${count}.` : ""}</b>
+        ) : (
+          <b>Нет страницы Фрагрантики у {count} {count === 1 ? "аромата" : "ароматов"}{drafts ? ` (${drafts} карточек ждут)` : ""}</b>
+        )}
+        {ext.state?.message ? <span className={ext.state.waitingCheck ? "fr-warn" : "fr-hint"}>{ext.state.message}</span> : null}
+        {!ext.installed ? (
+          <span className="fr-hint">Расширение «→ Склад» не видно на этой вкладке: скачайте и поставьте его (chrome://extensions → «Загрузить распакованное») и обновите страницу (F5).</span>
+        ) : !running ? (
+          <span className="fr-hint">Расширение откроет их в фоновой вкладке по одному (до 60 за раз, сначала самые продаваемые), с паузами, и загрузит сюда. Не закрывайте эту вкладку.</span>
+        ) : null}
+      </div>
+      {!ext.installed ? <ExtensionDownload installed={false} /> : null}
+      {running ? (
+        <button className="secondary-action compact" type="button" onClick={ext.stop}><X size={13} /> Остановить</button>
+      ) : (
+        <button className="secondary-action compact" type="button" disabled={!ext.installed || !items.length} onClick={() => ext.start(items.slice(0, 60))}>
+          <RefreshCw size={13} /> Загрузить {Math.min(60, items.length) || ""} через расширение
+        </button>
+      )}
+    </div>
   );
 }
 

@@ -583,7 +583,8 @@ app.get("/api/card-improve", requireAdmin, async (request, response, next) => {
     }
     const [rows, counts] = await Promise.all([
       prisma.$queryRawUnsafe(
-        `SELECT d.*, p.brand, p.name AS perfume_name FROM fragrantica_drafts d LEFT JOIN fragrantica_perfumes p ON p.id = d.perfume_id
+        `SELECT d.*, p.brand, p.name AS perfume_name, p.url AS perfume_url, p.detail_at AS perfume_detail_at, p.detail->>'source' AS perfume_source
+           FROM fragrantica_drafts d LEFT JOIN fragrantica_perfumes p ON p.id = d.perfume_id
           WHERE ${where} ORDER BY coalesce((d.data->'existing'->>'sold')::int, 0) DESC, (d.data->'existing'->>'rating')::int ASC NULLS LAST, d.id LIMIT 200`,
         ...params,
       ),
@@ -623,6 +624,10 @@ app.get("/api/card-improve", requireAdmin, async (request, response, next) => {
           perfumeId: Number(r.perfume_id),
           brand: r.brand || "",
           perfumeName: r.perfume_name || "",
+          // the perfume's Fragrantica page: loaded through the browser («→ Склад») when Fragrantica doesn't let the server in
+          perfumeUrl: r.perfume_url || "",
+          hasPerfumeData: r.perfume_detail_at != null,
+          perfumeSource: r.perfume_source || "",
           volume: r.volume_ml === null ? null : Number(r.volume_ml),
           tester: Boolean(r.tester),
           shop: shops.join(", ") || target.label || ex.target || "",
@@ -654,6 +659,32 @@ app.get("/api/card-improve", requireAdmin, async (request, response, next) => {
           updatedAt: r.updated_at,
         };
       }),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Perfumes whose Fragrantica page the improvement still needs (queued without data, stopped for lack of it),
+// the best sellers first: the «→ Склад» extension opens them one by one in the browser.
+app.get("/api/card-improve/missing-pages", requireAdmin, async (_request, response, next) => {
+  try {
+    const prisma = await requireCardHealthTables();
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT p.id, p.url, p.brand, p.name, max(coalesce((d.data->'existing'->>'sold')::int, 0)) AS sold, count(*)::int AS drafts
+         FROM fragrantica_drafts d JOIN fragrantica_perfumes p ON p.id = d.perfume_id
+        WHERE d.data ? 'existing' AND coalesce(p.url, '') <> ''
+          AND ((d.status = 'queued' AND p.detail_at IS NULL)
+            OR (d.status = 'attention' AND (p.detail_at IS NULL OR d.error ~ '^(Нет данных аромата|Страница аромата не скачана)')))
+        GROUP BY p.id, p.url, p.brand, p.name
+        ORDER BY 5 DESC, 6 DESC, p.id
+        LIMIT 1000`,
+    );
+    response.json({
+      ok: true,
+      total: rows.length,
+      drafts: rows.reduce((s, r) => s + Number(r.drafts || 0), 0),
+      items: rows.map((r) => ({ id: Number(r.id), url: r.url, name: `${r.brand || ""} ${r.name || ""}`.trim() })),
     });
   } catch (error) {
     next(error);

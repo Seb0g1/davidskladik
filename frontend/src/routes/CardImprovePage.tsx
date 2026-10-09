@@ -8,6 +8,7 @@ import { errorMessage, useDebounced } from "../lib/common";
 import { toast } from "../lib/toast";
 import { OwnPhotos } from "./FragranticaConveyor";
 import { PhotoThumb } from "../components/PhotoLightbox";
+import { ExtensionQueueStrip, FragranticaQuickLoad } from "../components/FragranticaQuickLoad";
 import "./fragrantica.css";
 import "./card-health.css";
 import "./card-improve.css";
@@ -23,6 +24,7 @@ function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
 type Side = { name: string; photos: string[]; description: string };
 type Item = {
   id: number; status: string; stage: string | null; error: string | null; perfumeId: number; brand: string; perfumeName: string;
+  perfumeUrl?: string; hasPerfumeData?: boolean; perfumeSource?: string;
   volume: number | null; tester: boolean; shop: string; marketplace: string; offerId: string; rating: number | null; price: number;
   yandexPrice: number; sold: number;
   before: Side | null; after: Side; missing: string[]; exports: Array<{ status: string; error: string | null; shop: string }>;
@@ -104,6 +106,8 @@ export function CardImprovePage() {
       </div>
 
       <ImproveAdd />
+
+      <MissingPages />
 
       {list.data?.fragranticaPausedUntil ? (
         <div className="ci-pause">
@@ -213,6 +217,7 @@ function ImproveCard({ item, picked, onPick, onApprove, onSkip, onRestore, onReb
       ) : null}
       {item.brandMatched === false && editable ? <BrandPicker item={item} /> : null}
       {editable || item.status === "sent" ? <GenderPicker item={item} /> : null}
+      {needsPerfumePage(item) ? <FragranticaQuickLoad url={item.perfumeUrl} name={`${item.brand} ${item.perfumeName}`.trim()} /> : null}
       {/^(Вид меняется|Не выбран вид)/.test(String(item.error || "")) ? <TypePicker item={item} /> : null}
       {/^Ноты подобрал ИИ/.test(String(item.error || "")) ? <NotesConfirm id={item.id} /> : null}
       {/выберите аромат|другая версия аромата|не совпадает с товаром|Show Me Love/i.test(String(item.error || "")) ? <PerfumePicker item={item} /> : null}
@@ -503,4 +508,21 @@ function BrandPicker({ item }: { item: Item }) {
       </div>
     </div>
   );
+}
+
+/** The card waits for its perfume's Fragrantica page: Fragrantica didn't let the server in. */
+function needsPerfumePage(item: Item) {
+  if (!item.perfumeUrl || !['queued', 'attention'].includes(item.status)) return false;
+  return item.hasPerfumeData === false || /^(Нет данных аромата|Страница аромата не скачана)/.test(String(item.error || ""));
+}
+
+/** All perfumes the improvement still needs pages for (every tab), loaded by the «→ Склад» extension. */
+function MissingPages() {
+  const missing = useQuery({
+    queryKey: ["card-improve", "missing-pages"],
+    queryFn: () => apiJson<{ total: number; drafts: number; items: Array<{ url: string; name: string }> }>("/api/card-improve/missing-pages"),
+    refetchInterval: 60_000,
+  });
+  if (!missing.data) return null;
+  return <ExtensionQueueStrip items={missing.data.items} total={missing.data.total} drafts={missing.data.drafts} />;
 }
