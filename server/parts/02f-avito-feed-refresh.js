@@ -45,6 +45,79 @@ async function runAvitoUploadTriggerIfNeeded({ force = false } = {}) {
   }
 }
 
+// ─── Ежедневный запуск автозагрузки ───────────────────────────────────────
+// Профиль автозагрузки (Magic Stick) скачивает фид ParfumDeclaration, а тот на лету берёт этот фид и
+// добавляет документы. Расписание в кабинете Авито — раз в неделю; раз в день (AVITO_DAILY_UPLOAD_HOUR по
+// Москве) сравниваем объявления фида с теми, что ушли в прошлую загрузку, и если появились новые товары
+// или какие-то ушли из фида (продан, нет поставщика — Авито снимет их только при загрузке), просим Авито
+// скачать фид сейчас (POST /autoload/v1/upload). Цены сами по себе загрузку не запускают.
+const avitoDailyUploadEnabled = process.env.AVITO_DAILY_UPLOAD_ENABLED !== "false";
+const avitoDailyUploadHour = Math.max(0, Math.min(23, Number(process.env.AVITO_DAILY_UPLOAD_HOUR ?? 10) || 0));
+const avitoDailyUploadOn = new Set(String(process.env.AVITO_DAILY_UPLOAD_ON || "new,removed").split(",").map((s) => s.trim()).filter(Boolean));
+const AVITO_DAILY_UPLOAD_KEY = "avito-daily-upload";
+let avitoDailyUploadTimer = null;
+let avitoDailyUploadLast = null;
+
+/** Ads the feed publishes now: in stock and with photos (what buildAvitoFeedXml puts in, by its ad id). */
+async function avitoPublishedAdIds() {
+  const state = await readAvitoListingsFile();
+  return new Set(state.items
+    .filter((item) => item.outOfStock !== true && Array.isArray(item.imageUrls) && item.imageUrls.length)
+    .map((item) => avitoFeedAdId(item.adId))
+    .filter(Boolean));
+}
+
+async function runAvitoDailyUpload({ source = "schedule" } = {}) {
+  const prisma = getPrisma();
+  const row = await prisma.appSetting.findUnique({ where: { key: AVITO_DAILY_UPLOAD_KEY } }).catch(() => null);
+  const saved = row?.value && typeof row.value === "object" ? row.value : {};
+  const current = await avitoPublishedAdIds();
+  const save = (value) => prisma.appSetting.upsert({ where: { key: AVITO_DAILY_UPLOAD_KEY }, create: { key: AVITO_DAILY_UPLOAD_KEY, value }, update: { value } });
+  if (!Array.isArray(saved.ids)) {
+    // the first run only remembers what the feed has; the next days compare against it
+    await save({ ids: [...current], at: new Date().toISOString(), last: { status: "baseline", ads: current.size } });
+    avitoDailyUploadLast = { status: "baseline", ads: current.size, at: new Date().toISOString(), source };
+    logger.info("avito daily upload baseline", avitoDailyUploadLast);
+    return avitoDailyUploadLast;
+  }
+  const before = new Set(saved.ids);
+  const added = [...current].filter((id) => !before.has(id)).length;
+  const removed = [...before].filter((id) => !current.has(id)).length;
+  const needed = (added > 0 && avitoDailyUploadOn.has("new")) || (removed > 0 && avitoDailyUploadOn.has("removed"));
+  let result = { status: "nothing_new", added, removed, ads: current.size, at: new Date().toISOString(), source };
+  if (needed) {
+    const trigger = await runAvitoUploadTriggerIfNeeded({ force: true });
+    result = { ...result, status: trigger?.ok ? "uploaded" : "upload_failed", error: trigger?.error || null };
+  }
+  // the snapshot moves only when Avito was asked to download (or nothing had to be done)
+  if (result.status !== "upload_failed") await save({ ids: [...current], at: result.at, last: result });
+  else await save({ ...saved, last: result });
+  avitoDailyUploadLast = result;
+  logger.info("avito daily upload", result);
+  return result;
+}
+
+function scheduleAvitoDailyUpload() {
+  if (!avitoDailyUploadEnabled) return;
+  if (avitoDailyUploadTimer) clearTimeout(avitoDailyUploadTimer);
+  // the next AVITO_DAILY_UPLOAD_HOUR:00 by Moscow time (UTC+3)
+  const now = Date.now();
+  const msk = new Date(now + 3 * 3600_000);
+  let next = Date.UTC(msk.getUTCFullYear(), msk.getUTCMonth(), msk.getUTCDate(), avitoDailyUploadHour) - 3 * 3600_000;
+  if (next <= now + 60_000) next += 24 * 3600_000;
+  avitoDailyUploadTimer = setTimeout(async () => {
+    try {
+      await runAvitoDailyUpload();
+    } catch (error) {
+      logger.warn("avito daily upload failed", { detail: error?.message || String(error) });
+    } finally {
+      scheduleAvitoDailyUpload();
+    }
+  }, next - now);
+  avitoDailyUploadTimer.unref?.();
+  logger.info("avito daily upload scheduled", { at: new Date(next).toISOString(), on: [...avitoDailyUploadOn] });
+}
+
 function avitoSyncPublic() {
   return {
     feedRefreshEnabled: avitoFeedRefreshEnabled,
@@ -56,6 +129,9 @@ function avitoSyncPublic() {
     lastUploadTriggerAt: avitoLastUploadTriggerAt,
     lastUploadTriggerResult: avitoLastUploadTriggerResult,
     uploadTriggerRunning: avitoUploadTriggerRunning,
+    dailyUploadEnabled: avitoDailyUploadEnabled,
+    dailyUploadHour: avitoDailyUploadHour,
+    dailyUploadLast: avitoDailyUploadLast,
   };
 }
 
@@ -163,8 +239,9 @@ async function runAvitoFeedRefresh({ source = "schedule" } = {}) {
     };
     avitoFeedRefreshLastResult = result;
     if (changed) logger.info("avito feed refresh applied", result);
-    // При изменении цен/остатков — говорим Avito скачать обновлённый фид прямо сейчас.
-    if (changed && avitoAutoUploadEnabled) {
+    // При изменении цен/остатков — говорим Avito скачать обновлённый фид прямо сейчас (только без ежедневного
+    // режима: с ним Авито качает фид раз в день, когда в нём появились или ушли товары).
+    if (changed && avitoAutoUploadEnabled && !avitoDailyUploadEnabled) {
       runAvitoUploadTriggerIfNeeded().catch((error) => {
         logger.warn("avito auto upload trigger failed after refresh", { detail: error?.message || String(error) });
       });

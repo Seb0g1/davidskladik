@@ -325,6 +325,7 @@ function startBackgroundSchedulers() {
       intervalMinutes: Math.round(avitoFeedRefreshIntervalMs / 60000),
     });
   }
+  if (avitoDailyUploadEnabled) scheduleAvitoDailyUpload();
   if (avitoAutoSyncEnabled) {
     scheduleAvitoAutoSync(10 * 60_000);
     logger.info("avito auto sync scheduler enabled", {
