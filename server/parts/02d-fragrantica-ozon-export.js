@@ -131,11 +131,28 @@ function fragBrandKey(text) {
   return String(text || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^0-9a-zа-яё]+/gi, "");
 }
 
+/** Pure: the brand as Fragrantica writes it, then without its trailing words («Jo Malone London» → «Jo Malone»). */
+function fragranticaBrandVariants(brand) {
+  const words = String(brand || "").trim().split(/\s+/).filter(Boolean);
+  const out = [];
+  for (let n = words.length; n >= 1; n -= 1) {
+    const text = words.slice(0, n).join(" ");
+    if (fragBrandKey(text).length >= 4 && !out.includes(text)) out.push(text);
+  }
+  return out;
+}
+
 async function fragranticaFindBrand(account, typeId, brand) {
-  const candidates = await fragranticaSearchDict(account, typeId, FRAG_OZON_ATTR.brand, brand, 20).catch(() => []);
-  const key = fragBrandKey(brand);
-  const exact = candidates.find((c) => fragBrandKey(c.value) === key);
-  return { match: exact || null, candidates: candidates.slice(0, 10) };
+  // Ozon's dictionary has «Jo Malone», Fragrantica says «Jo Malone London»: the full name first, exact matches only
+  let first = null;
+  for (const variant of fragranticaBrandVariants(brand)) {
+    const candidates = await fragranticaSearchDict(account, typeId, FRAG_OZON_ATTR.brand, variant, 20).catch(() => []);
+    if (!first) first = candidates;
+    const key = fragBrandKey(variant);
+    const exact = candidates.find((c) => fragBrandKey(c.value) === key);
+    if (exact) return { match: exact, candidates: candidates.slice(0, 10) };
+  }
+  return { match: null, candidates: (first || []).slice(0, 10) };
 }
 
 function fragranticaTnvedCode(typeId) {

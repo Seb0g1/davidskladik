@@ -32,7 +32,8 @@ let fragranticaPauseShown = null;
 let fragranticaExpandInFlight = 0;
 let fragranticaDraftsStarted = false;
 const FRAG_EXPAND_PARALLEL = 6;
-const FRAG_PAGE_FETCH_TIMEOUT_MS = 60_000;
+// the perfume's data: Fragrantica, then the other sites and the text AI one after another — a minute was too short
+const FRAG_PAGE_FETCH_TIMEOUT_MS = 240_000;
 
 async function requireFragranticaDraftTables() {
   const prisma = await requireFragranticaTables();
@@ -212,9 +213,11 @@ async function expandFragranticaPerfumeDraft(draft) {
   try {
     perfume = await Promise.race([
       fragranticaPerfumeForExport(Number(draft.perfume_id)),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("Фрагрантика не ответила за минуту")), FRAG_PAGE_FETCH_TIMEOUT_MS).unref?.()),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("источники аромата не ответили за 4 минуты (rate limit)")), FRAG_PAGE_FETCH_TIMEOUT_MS).unref?.()),
     ]);
   } catch (error) {
+    // a busy text AI, a site's rate limit or a slow chain of sources: the draft waits and is built again by itself
+    if (/rate limit|\b429\b|занят|не ответил/i.test(String(error?.message || ""))) throw error;
     return updateFragranticaDraft(draft.id, { status: "attention", stage: null, error: `Страница аромата не скачана: ${error?.message || error}. Откройте аромат и загрузите его закладкой «→ Склад».` });
   }
   if (!perfume.notes && !perfume.accords) {
