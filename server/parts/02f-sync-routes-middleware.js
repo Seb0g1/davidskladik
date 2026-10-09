@@ -233,6 +233,10 @@ function startBackgroundSchedulers() {
       lookbackDays: financeOrdersLookbackDays,
     });
   }
+  if (moneySyncEnabled) {
+    scheduleMoneySync(5 * 60_000);
+    logger.info("money sync scheduler enabled", { intervalMinutes: Math.round(moneySyncIntervalMs / 60000), historyDays: MONEY_HISTORY_DAYS });
+  }
   if (feedbackAutopilotEnabled) {
     scheduleFeedbackAutopilot(3 * 60_000);
     logger.info("feedback autopilot enabled", { intervalMinutes: Math.round(feedbackAutopilotIntervalMs / 60000) });
