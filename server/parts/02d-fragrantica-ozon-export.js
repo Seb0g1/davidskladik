@@ -1688,6 +1688,17 @@ async function submitFragranticaYandexExport(row) {
     }
     const failure = (result.results || []).find((r) => !r.ok);
     const message = failure?.error || failure?.message || (failure?.errors || []).map((e) => e.message || e.type).join("; ") || "Маркет не принял карточку";
+    // UNKNOWN_PARAMETER: the card sits in a Market category without these parameters (an existing card improved
+    // in another category than «Парфюмерия» — the notes 15927566/15927560/15927641). They are dropped from the
+    // card and it is sent again without them (Market names only some of them at a time: up to three rounds).
+    const unknown = new Set([...String(message).matchAll(/UNKNOWN_PARAMETER#(\d+)/g)].map((m) => Number(m[1])));
+    const params = Array.isArray(row.item?.yandexExtra?.parameterValues) ? row.item.yandexExtra.parameterValues : [];
+    if (unknown.size && Number(row.unknownParamsDropped || 0) < 3 && params.some((p) => unknown.has(Number(p.parameterId)))) {
+      const item = { ...row.item, yandexExtra: { ...row.item.yandexExtra, parameterValues: params.filter((p) => !unknown.has(Number(p.parameterId))) } };
+      await updateFragranticaExport(row.id, { item });
+      logger.info("fragrantica market unknown parameters dropped", { id: Number(row.id), offerId: row.offer_id, parameters: [...unknown] });
+      return submitFragranticaYandexExport({ ...row, item, unknownParamsDropped: Number(row.unknownParamsDropped || 0) + 1 });
+    }
     return updateFragranticaExport(row.id, { status: "failed", attempts, error: `Маркет: ${message}`.slice(0, 2000) });
   } catch (error) {
     return updateFragranticaExport(row.id, { status: "failed", attempts, error: `Маркет: ${error?.message || error}`.slice(0, 2000) });
