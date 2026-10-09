@@ -318,7 +318,7 @@ async function loadAvitoLiveProductStates(listings) {
       // Снимок выбранного поставщика нужен для цены «от поставщика», поэтому
       // обычного select колонок недостаточно — тянем путь из raw.
       const rows = await prisma.$queryRaw`
-        SELECT id, target_price, target_stock, archived,
+        SELECT id, target_price, target_stock, archived, current_price,
                raw->'selectedSupplier' AS supplier,
                COALESCE(raw->'avitoImages', '[]'::jsonb) AS avito_images
         FROM warehouse_products
@@ -329,6 +329,7 @@ async function loadAvitoLiveProductStates(listings) {
           id: cleanText(row.id),
           targetPrice: Number(row.target_price || 0),
           targetStock: Number(row.target_stock || 0),
+          currentPrice: Number(row.current_price || 0),
           archived: Boolean(row.archived),
           supplier: row.supplier && typeof row.supplier === "object" ? row.supplier : null,
           avitoImages: Array.isArray(row.avito_images) ? row.avito_images.map((url) => cleanText(url)).filter(Boolean) : [],
@@ -385,6 +386,12 @@ function applyAvitoLiveState(listing, product, rules, pricing = {}, { trustStore
     return { listing: withStock(listing, true, false), outOfStock: true };
   }
   if (!product.supplier) {
+    // no supplier → the stored price can't be checked against a price list; one far above the product's
+    // marketplace price is a leftover of a broken row (Pepe Jeans 50 мл at 252 618 ₽) and leaves the feed
+    const stalePrice = Number(listing.priceRub) > 0 && (Number(product.currentPrice) > 0
+      ? Number(listing.priceRub) > Number(product.currentPrice) * 3
+      : Number(listing.priceRub) > 100_000);
+    if (stalePrice) return { listing: withStock(listing, true, false), outOfStock: true };
     if (Number(product.targetStock || 0) > 0) {
       // Есть физический FBS-остаток — точно в наличии.
       return { listing: withStock(listing, false, false), outOfStock: false };
@@ -406,9 +413,12 @@ function applyAvitoLiveState(listing, product, rules, pricing = {}, { trustStore
   // Поставщики «Наш склад» (stock-only) цены не дают — доступность определяем
   // по физическому остатку (targetStock), а не по PM-цене.
   const isStockOnlySupplier = supplierUsesStockOnlyPricing(null, product.supplier);
-  const outOfStock = isStockOnlySupplier
+  // a broken supplier row (roubles read as dollars, a «1000 $» placeholder) gave Avito ads at 250 000 ₽ for a 50 ml
+  // bottle: such an ad leaves the feed until the row is fixed, as the marketplaces' price guard holds it
+  const suspectSupplierPrice = typeof priceGuardRowProblem === "function" && Boolean(priceGuardRowProblem(product.supplier || {}, listing.title));
+  const outOfStock = suspectSupplierPrice || (isStockOnlySupplier
     ? Number(product.targetStock || 0) <= 0
-    : !hasSupplierPrice;
+    : !hasSupplierPrice);
   if (!rules.autoUpdatePrices) return { listing: withStock(listing, outOfStock, hasSupplierPrice), outOfStock };
   const markupOverride = Number(listing.markupCoefficient) > 0 ? Number(listing.markupCoefficient) : 0;
   const priceRub = resolveAvitoListingPriceRub(product, product.supplier, rules, pricing, markupOverride) || listing.priceRub;
