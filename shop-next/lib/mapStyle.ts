@@ -23,11 +23,12 @@ const MAJOR = ["primary", "secondary", "tertiary", "trunk"];
 
 export const DELIVERY_MAP_STYLE: StyleSpecification = {
   version: 8,
-  // through our own domain: Russian ISPs throttle tiles.openfreemap.org (nginx /ofm/ proxies and caches it)
-  glyphs: "https://magicvibes.ru/ofm/fonts/{fontstack}/{range}.pbf",
+  // through our own domain: Russian ISPs throttle tiles.openfreemap.org (nginx /map/ proxies and caches it).
+  // /map/, not /ofm/: browsers cached /ofm/ answers with a doubled CORS header for a week
+  glyphs: "https://magicvibes.ru/map/fonts/{fontstack}/{range}.pbf",
   sources: {
     omt: {
-      type: "vector", url: "https://magicvibes.ru/ofm/planet",
+      type: "vector", url: "https://magicvibes.ru/map/planet",
       // лицензия ODbL требует указать источник данных
       attribution: '<a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap</a> · <a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a>',
     },
