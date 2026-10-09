@@ -229,6 +229,8 @@ app.post("/api/supplier-ledger/payments", requireStaff, async (request, response
           id: `payment:${saved.id}`,
           amount: -deductRub,
           currency: "RUB",
+          // the dollars of this payment: the cash ledger shows them as they were, not at a later rate
+          originalUsd: Math.round((currency === "USD" ? amount : amount / usdRate) * 100) / 100,
           note: `Оплатил: ${cleanText(supplierName || partnerId)}`,
           createdAt: new Date().toISOString(),
           createdBy: pickerUsername,

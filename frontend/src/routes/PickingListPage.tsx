@@ -421,8 +421,8 @@ export function PickingListPage() {
   });
 
   const returnCashMutation = useMutation({
-    mutationFn: ({ pickerUsername, amount, note }: { pickerUsername: string; amount: number; note: string }) =>
-      fetchJson("/api/picker-cash/balance", PickerBalanceSchema, mutationBody({ pickerUsername, amount: -Math.abs(amount), note })),
+    mutationFn: ({ pickerUsername, amount, originalUsd, note }: { pickerUsername: string; amount: number; originalUsd?: number; note: string }) =>
+      fetchJson("/api/picker-cash/balance", PickerBalanceSchema, mutationBody({ pickerUsername, amount: -Math.abs(amount), originalUsd, note })),
     onSuccess: (_data, vars) => {
       setReturnDraftAmount("");
       setReturnDraftNote("");
@@ -892,7 +892,7 @@ export function PickingListPage() {
                     className="secondary-action picker-issue-submit"
                     type="button"
                     disabled={returnCashMutation.isPending || !issuePickerDraft.trim() || !(Number(returnDraftAmount) > 0)}
-                    onClick={() => returnCashMutation.mutate({ pickerUsername: issuePickerDraft.trim(), amount: Math.round(Number(returnDraftAmount) * usdRate), note: returnDraftNote || "Возврат наличных" })}
+                    onClick={() => returnCashMutation.mutate({ pickerUsername: issuePickerDraft.trim(), amount: Math.round(Number(returnDraftAmount) * usdRate), originalUsd: Number(returnDraftAmount), note: returnDraftNote || "Возврат наличных" })}
                   >
                     {returnCashMutation.isPending
                       ? <><Loader2 className="spin" size={15} /> Записываю…</>
@@ -1574,7 +1574,7 @@ export function PickingListPage() {
                   className="secondary-action picker-issue-submit"
                   type="button"
                   disabled={returnCashMutation.isPending || !issuePickerDraft.trim() || !(Number(returnDraftAmount) > 0)}
-                  onClick={() => returnCashMutation.mutate({ pickerUsername: issuePickerDraft.trim(), amount: Math.round(Number(returnDraftAmount) * usdRate), note: returnDraftNote || "Возврат наличных" })}
+                  onClick={() => returnCashMutation.mutate({ pickerUsername: issuePickerDraft.trim(), amount: Math.round(Number(returnDraftAmount) * usdRate), originalUsd: Number(returnDraftAmount), note: returnDraftNote || "Возврат наличных" })}
                 >
                   {returnCashMutation.isPending
                     ? <><Loader2 className="spin" size={15} /> Записываю…</>

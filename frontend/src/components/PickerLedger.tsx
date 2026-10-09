@@ -110,10 +110,17 @@ export function PickerLedger({
   const [exporting, setExporting] = useState(false);
 
   const rate = usdRate > 0 ? usdRate : 95;
-  const usd = (rub: number) => rub / rate;
-  const money = (rub: number, sign = false) => `${sign && rub > 0 ? "+" : ""}${rub < 0 ? "−" : ""}${Math.abs(usd(rub)).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $`;
-  // Меньше полудоллара — это округление курса, а не потерянный чек.
-  const tolerance = rate * 0.5;
+  // Каждая запись — в своих долларах: выданные 800 $ остаются 800 $, даже если курс за день сменился с 89 на 93.
+  // Рубли по сегодняшнему курсу — только для старых записей, где долларов не сохранили.
+  const usdOf = (credit: Credit) => {
+    const amount = Number(credit.amount) || 0;
+    const original = Number(credit.originalUsd);
+    if (credit.originalUsd != null && Number.isFinite(original) && original > 0) return (amount < 0 ? -1 : 1) * original;
+    return amount / rate;
+  };
+  const money = (value: number, sign = false) => `${sign && value > 0 ? "+" : ""}${value < 0 ? "−" : ""}${Math.abs(value).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $`;
+  // Меньше полудоллара — это округление, а не потерянный чек.
+  const tolerance = 0.5;
 
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["picker-balances"] });
@@ -151,7 +158,7 @@ export function PickerLedger({
       let spent = 0;
       let returned = 0;
       for (const credit of items) {
-        const amount = Number(credit.amount) || 0;
+        const amount = usdOf(credit);
         const kind = kindOf(credit);
         if (kind === "issue") issued += amount;
         else if (kind === "spend") spent += -amount;
@@ -186,7 +193,7 @@ export function PickerLedger({
     setHidden((prev) => new Set(prev).add(credit.id));
     const extra = kindOf(credit) === "spend" ? " Оплата в долгах поставщика тоже отменится." : "";
     undoable(
-      <span>Запись {money(Number(credit.amount), true)} удалена.{extra}</span>,
+      <span>Запись {money(usdOf(credit), true)} удалена.{extra}</span>,
       () => deleteMutation.mutate(credit.id),
       { onUndo: () => setHidden((prev) => { const next = new Set(prev); next.delete(credit.id); return next; }) },
     );
@@ -201,34 +208,34 @@ export function PickerLedger({
       for (const day of periodDays.slice().reverse()) {
         let running = day.opening;
         for (const credit of day.items.slice().reverse()) {
-          running += Number(credit.amount) || 0;
+          running += usdOf(credit);
           operations.push({
             "Дата": ruDate(day.key),
             "Время": timeOf(credit.createdAt),
             "Тип": KIND_LABEL[kindOf(credit)],
             "Комментарий": credit.note || "",
-            "Сумма, $": Math.round(usd(Number(credit.amount)) * 100) / 100,
+            "Сумма, $": Math.round(usdOf(credit) * 100) / 100,
             "Сумма, ₽": Math.round(Number(credit.amount)),
-            "На руках после, $": Math.round(usd(running) * 100) / 100,
+            "На руках после, $": Math.round(running * 100) / 100,
           });
         }
       }
       const daily = periodDays.slice().reverse().map((day) => ({
         "Дата": ruDate(day.key),
-        "На начало, $": Math.round(usd(day.opening) * 100) / 100,
-        "Выдано, $": Math.round(usd(day.issued) * 100) / 100,
-        "Оплачено поставщикам, $": Math.round(usd(day.spent) * 100) / 100,
-        "Возвращено, $": Math.round(usd(day.returned) * 100) / 100,
-        "На руках в конце дня, $": Math.round(usd(day.closing) * 100) / 100,
+        "На начало, $": Math.round(day.opening * 100) / 100,
+        "Выдано, $": Math.round(day.issued * 100) / 100,
+        "Оплачено поставщикам, $": Math.round(day.spent * 100) / 100,
+        "Возвращено, $": Math.round(day.returned * 100) / 100,
+        "На руках в конце дня, $": Math.round(day.closing * 100) / 100,
         "Сверка": statusText(day),
       }));
       daily.push({
         "Дата": "Итого",
-        "На начало, $": Math.round(usd(periodOpening) * 100) / 100,
-        "Выдано, $": Math.round(usd(totals.issued) * 100) / 100,
-        "Оплачено поставщикам, $": Math.round(usd(totals.spent) * 100) / 100,
-        "Возвращено, $": Math.round(usd(totals.returned) * 100) / 100,
-        "На руках в конце дня, $": Math.round(usd(periodClosing) * 100) / 100,
+        "На начало, $": Math.round(periodOpening * 100) / 100,
+        "Выдано, $": Math.round(totals.issued * 100) / 100,
+        "Оплачено поставщикам, $": Math.round(totals.spent * 100) / 100,
+        "Возвращено, $": Math.round(totals.returned * 100) / 100,
+        "На руках в конце дня, $": Math.round(periodClosing * 100) / 100,
         "Сверка": mismatchCount ? `Расхождений: ${mismatchCount}` : "Всё сходится",
       });
       const suppliers = periodSpending.slice().reverse().map((entry) => ({
@@ -357,14 +364,14 @@ export function PickerLedger({
                 }
                 return (
                   <div className={`picker-credit-row kind-${kind}`} key={credit.id}>
-                    <span className={`picker-credit-amount${Number(credit.amount) >= 0 ? " tone-success" : kind === "spend" ? " tone-warn" : " tone-danger"}`}>{money(Number(credit.amount), true)}</span>
+                    <span className={`picker-credit-amount${Number(credit.amount) >= 0 ? " tone-success" : kind === "spend" ? " tone-warn" : " tone-danger"}`}>{money(usdOf(credit), true)}</span>
                     <span className="muted-note picker-credit-note">{kind === "issue" ? `Выдано${credit.note ? ` · ${credit.note}` : ""}` : (credit.note || KIND_LABEL[kind])}</span>
                     <span className="muted-note picker-credit-date" title={credit.createdAt || ""}>{timeOf(credit.createdAt)}</span>
                     <button
                       className="icon-action"
                       type="button"
                       title={kind === "issue" ? "Изменить сумму или комментарий" : "Изменить комментарий"}
-                      onClick={() => setEditing({ id: credit.id, positive: kind === "issue", usd: String(Math.round(usd(Number(credit.amount)) * 100) / 100), note: credit.note || "" })}
+                      onClick={() => setEditing({ id: credit.id, positive: kind === "issue", usd: String(Math.round(Math.abs(usdOf(credit)) * 100) / 100), note: credit.note || "" })}
                     >
                       <Pencil size={11} />
                     </button>
