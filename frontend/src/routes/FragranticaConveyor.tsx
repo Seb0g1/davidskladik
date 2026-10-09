@@ -22,7 +22,7 @@ export type WorkTarget = { key: string; kind: "ozon" | "yandex"; id: string; lab
 type LinkRow = { id: string; name: string; supplierName: string; price: number; priceCurrency: string; ozonPrice: number; recommended: boolean; issues?: string[]; manual?: boolean; linked?: boolean };
 type DraftExport = { id: number; accountName: string; offerId: string; status: string; error: string | null; result?: { links?: string; docs?: string; docsInfo?: string } | null };
 type Draft = {
-  id: number; perfumeId: number; brand: string; perfumeName: string; perfumeUrl?: string; hasPerfumeData?: boolean; thumb: string; kind: "perfume" | "card";
+  id: number; perfumeId: number; brand: string; perfumeName: string; perfumeUrl?: string; hasPerfumeData?: boolean; perfumeSource?: string; thumb: string; kind: "perfume" | "card";
   volume: number | null; tester: boolean; typeKey: string; status: string; stage: string | null; startedAt?: string | null; targets: string[]; error: string | null;
   exports: DraftExport[];
   data: {
@@ -375,7 +375,9 @@ function PerfumeRow({ draft }: { draft: Draft }) {
 /** The draft stopped for lack of the perfume's page: Fragrantica didn't let the server in. */
 function needsPerfumePage(draft: Draft) {
   if (draft.status === "ready" || draft.status === "sent" || BUSY.has(draft.status)) return false;
-  return draft.hasPerfumeData === false || /Страница аромата не скачана|Нет данных аромата|закладкой «→ Склад»/.test(String(draft.error || ""));
+  if (draft.hasPerfumeData === false || /Страница аромата не скачана|Нет данных аромата|закладкой «→ Склад»/.test(String(draft.error || ""))) return true;
+  // the data came from another site (Parfumo…) and doesn't name the type: Fragrantica's own page may name it
+  return /^Не выбран вид/.test(String(draft.error || "")) && Boolean(draft.perfumeSource) && draft.perfumeSource !== "fragrantica";
 }
 
 function useRemoveDraft() {
