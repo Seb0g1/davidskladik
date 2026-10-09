@@ -199,10 +199,11 @@ export function SuppliersPage() {
     if (!selectedId && list.length && window.matchMedia("(min-width: 980px)").matches) setSelectedId(sid(list[0]));
   }, [list, selectedId]);
 
-  const pushedRef = useRef(false);
+  // the address pushed when a card was opened on a phone; «back» walks history only while we are still on it
+  const pushedRef = useRef<string>("");
   // phone: opening a card is a history step, so the system «back» returns to the list
   useEffect(() => {
-    const onPop = () => { pushedRef.current = false; setSelectedId(new URLSearchParams(window.location.search).get("id") || ""); };
+    const onPop = () => { pushedRef.current = ""; setSelectedId(new URLSearchParams(window.location.search).get("id") || ""); };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, []);
@@ -212,14 +213,25 @@ export function SuppliersPage() {
       const url = new URL(window.location.href);
       url.searchParams.set("id", sid(s));
       window.history.pushState(window.history.state, "", url.toString());
-      pushedRef.current = true;
+      pushedRef.current = window.location.href;
       window.scrollTo(0, 0);
     }
     setSelectedId(sid(s)); setTab("overview");
   };
   const back = () => {
-    if (pushedRef.current) window.history.back();
-    else setSelectedId("");
+    // The page stays alive while you visit other sections: a card opened before going to «Автокорзина» and
+    // coming back through the menu must not send «back» to the cart — only the step we pushed is undone.
+    if (pushedRef.current && pushedRef.current === window.location.href) {
+      window.history.back();
+      return;
+    }
+    pushedRef.current = "";
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("id")) {
+      url.searchParams.delete("id");
+      window.history.replaceState(window.history.state, "", url.toString());
+    }
+    setSelectedId("");
   };
   const filters: Array<[Filter, string, number]> = [
     ["active", "Активные", kpi.active],
