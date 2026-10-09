@@ -720,11 +720,40 @@ function parfumoKey(text) {
 function parfumoBrandKeys(brand) {
   const words = String(brand || "").trim().split(/\s+/).filter(Boolean);
   const keys = [];
+  // every run of consecutive words, the longest first: «By Kilian» → bykilian, kilian (Parfumo: «Kilian»)
   for (let n = words.length; n >= 1; n -= 1) {
-    const key = parfumoKey(words.slice(0, n).join(" "));
-    if (key.length >= 4 && !keys.includes(key)) keys.push(key);
+    for (let start = 0; start + n <= words.length; start += 1) {
+      const key = parfumoKey(words.slice(start, start + n).join(" "));
+      if (key.length >= 4 && !keys.includes(key)) keys.push(key);
+    }
   }
   return keys;
+}
+
+// the name's own concentration tail, which Parfumo leaves out («Red Roses Cologne» → Red_Roses)
+const PARFUMO_NAME_TAIL = /\s+(cologne\s+intense|cologne|eau\s+de\s+parfum|eau\s+de\s+toilette|eau\s+de\s+cologne|edp|edt|parfum|extrait(\s+de\s+parfum)?)$/i;
+// another product of the same name: hair mist, solid perfume, body lotion… — tried last
+const PARFUMO_OTHER_PRODUCT = "(solid|brume|hair|cheveux|body|candle|soap|lotion|deodorant|shower|cream|scentedwater)";
+
+/**
+ * Pure: name keys to look up on Parfumo — the name, without the brand repeated at its start («Gucci Guilty Intense
+ * Pour Homme» of Gucci → guiltyintensepourhomme), without its concentration tail. Keys under 3 letters are not tried.
+ */
+function parfumoNameKeys(name, brand) {
+  const out = [];
+  const add = (text) => { const key = parfumoKey(text); if (key.length >= 3 && !out.includes(key)) out.push(key); };
+  const full = String(name || "").trim();
+  const brandWords = String(brand || "").trim().split(/\s+/).filter(Boolean);
+  let bare = full;
+  for (let n = brandWords.length; n >= 1; n -= 1) {
+    const head = brandWords.slice(0, n).join(" ");
+    if (bare.toLowerCase().startsWith(`${head.toLowerCase()} `)) { bare = bare.slice(head.length).trim(); break; }
+  }
+  for (const text of [full, bare]) {
+    add(text);
+    add(text.replace(PARFUMO_NAME_TAIL, ""));
+  }
+  return out;
 }
 
 /** Perfume addresses from Parfumo's sitemaps, refreshed once a month (one download at a time). */
@@ -784,13 +813,45 @@ async function fillPerfumeFromParfumo(row) {
   const parser = require("./lib/perfume-match");
   const brands = await supplierMatchBrands(prisma).catch(() => null);
   const brandKeys = parfumoBrandKeys(row.brand);
-  const nameKey = parfumoKey(row.name);
-  if (!brandKeys.length || !nameKey) return false;
-  // the same brand (the full key first); the name exactly, else the name plus a concentration / flanker tail («Nahema_Eau_de_Parfum»)
-  const urls = await prisma.$queryRawUnsafe(
-    `SELECT path, name_key FROM parfumo_urls WHERE brand_key = ANY($1::text[]) AND (name_key = $2 OR name_key LIKE $2 || '%')
-      ORDER BY array_position($1::text[], brand_key), (name_key = $2) DESC, length(name_key) LIMIT 4`, brandKeys, nameKey,
+  const nameKeys = parfumoNameKeys(row.name, row.brand);
+  if (!brandKeys.length || !nameKeys.length) return false;
+  // Parfumo's own brand keys: an exact one when it has it, else one that contains a long one of ours
+  // («fredericmalle» in Editions_de_Parfum_Frederic_Malle); the page check below still decides
+  let brandRows = await prisma.$queryRawUnsafe(`SELECT DISTINCT brand_key FROM parfumo_urls WHERE brand_key = ANY($1::text[])`, brandKeys);
+  if (!brandRows.length) {
+    const long = brandKeys.filter((k) => k.length >= 10);
+    if (long.length) {
+      brandRows = await prisma.$queryRawUnsafe(
+        `SELECT DISTINCT brand_key FROM parfumo_urls WHERE EXISTS (SELECT 1 FROM unnest($1::text[]) k WHERE brand_key LIKE '%' || k || '%') LIMIT 5`, long,
+      );
+    }
+  }
+  const parfumoBrands = brandRows.map((r) => r.brand_key).sort((a, b) => {
+    const ia = brandKeys.indexOf(a), ib = brandKeys.indexOf(b);
+    return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+  });
+  if (!parfumoBrands.length) {
+    logger.info("parfumo perfume not found", { id: Number(row.id), brand: row.brand, name: row.name, candidates: 0, reason: "brand" });
+    return false;
+  }
+  // the name exactly, else the name plus a concentration / flanker tail («Nahema_Eau_de_Parfum»); other products last
+  let urls = await prisma.$queryRawUnsafe(
+    `SELECT path, name_key FROM parfumo_urls
+      WHERE brand_key = ANY($1::text[]) AND EXISTS (SELECT 1 FROM unnest($2::text[]) k WHERE name_key = k OR name_key LIKE k || '%')
+      ORDER BY array_position($1::text[], brand_key), (name_key = ANY($2::text[])) DESC,
+        (name_key ~ '${PARFUMO_OTHER_PRODUCT}') ASC, length(name_key) LIMIT 6`, parfumoBrands, nameKeys,
   );
+  // a collection's name in front of it («La Collection Privée La Colle Noire»): the name inside, long names only
+  if (!urls.length) {
+    const inner = nameKeys.filter((k) => k.length >= 8);
+    if (inner.length) {
+      urls = await prisma.$queryRawUnsafe(
+        `SELECT path, name_key FROM parfumo_urls
+          WHERE brand_key = ANY($1::text[]) AND EXISTS (SELECT 1 FROM unnest($2::text[]) k WHERE name_key LIKE '%' || k || '%')
+          ORDER BY array_position($1::text[], brand_key), (name_key ~ '${PARFUMO_OTHER_PRODUCT}') ASC, length(name_key) LIMIT 4`, parfumoBrands, inner,
+      );
+    }
+  }
   const genderWord = { male: "men", female: "women", unisex: "unisex" };
   const want = parser.parsePerfumeName(`${row.brand} ${row.name} ${genderWord[row.gender] || ""} 100 ml`, { brands });
   let page = null;
@@ -798,11 +859,17 @@ async function fillPerfumeFromParfumo(row) {
     const html = await parfumoRequest(url.path);
     const parsed = html ? parseParfumoPage(html) : null;
     if (!parsed || !(parsed.top.length + parsed.middle.length + parsed.base.length + parsed.flat.length)) continue;
-    // «Nahema by Guerlain (Parfum)»: the name before «by»; the concentration in brackets is not part of it
-    const name = parsed.title.replace(/\s+by\s+.+$/i, "").replace(/\s*\([^)]*\)\s*$/, "");
-    const candidate = parser.parsePerfumeName(`${row.brand} ${name} ${genderWord[parsed.gender] || ""} 100 ml`, { brands });
-    const result = parser.comparePerfumes(want, candidate);
-    if (result.ok && !result.probable) { page = parsed; break; }
+    // «Nahema by Guerlain (Parfum)»: the name before «by»; the concentration in brackets is not part of it —
+    // unless our name carries it («Velvet Rose & Oud (Cologne Intense)» is Jo Malone's «… Cologne Intense»)
+    const base = parsed.title.replace(/\s+by\s+.+$/i, "");
+    const bracket = (/\(([^)]*)\)\s*$/.exec(base) || [])[1] || "";
+    const bare = base.replace(/\s*\([^)]*\)\s*$/, "");
+    const fitsName = (name) => {
+      const candidate = parser.parsePerfumeName(`${row.brand} ${name} ${genderWord[parsed.gender] || ""} 100 ml`, { brands });
+      const result = parser.comparePerfumes(want, candidate);
+      return result.ok && !result.probable;
+    };
+    if (fitsName(bare) || (bracket && fitsName(`${bare} ${bracket}`))) { page = parsed; break; }
   }
   if (!page) {
     logger.info("parfumo perfume not found", { id: Number(row.id), brand: row.brand, name: row.name, candidates: urls.length });

@@ -376,7 +376,10 @@ function PerfumeRow({ draft }: { draft: Draft }) {
 
 /** The draft stopped for lack of the perfume's page: Fragrantica didn't let the server in. */
 function needsPerfumePage(draft: Draft) {
-  if (draft.status === "ready" || draft.status === "sent" || BUSY.has(draft.status)) return false;
+  if (draft.status === "sent" || BUSY.has(draft.status)) return false;
+  // notes the text AI guessed: Fragrantica's own page replaces them (ready drafts too)
+  if (draft.perfumeSource === "ai") return true;
+  if (draft.status === "ready") return false;
   if (draft.hasPerfumeData === false || /Страница аромата не скачана|Нет данных аромата|закладкой «→ Склад»/.test(String(draft.error || ""))) return true;
   // the data came from another site (Parfumo…) and doesn't name the type: Fragrantica's own page may name it
   return /^Не выбран вид/.test(String(draft.error || "")) && Boolean(draft.perfumeSource) && draft.perfumeSource !== "fragrantica";

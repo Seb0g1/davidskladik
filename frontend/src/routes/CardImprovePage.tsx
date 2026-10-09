@@ -512,7 +512,10 @@ function BrandPicker({ item }: { item: Item }) {
 
 /** The card waits for its perfume's Fragrantica page: Fragrantica didn't let the server in. */
 function needsPerfumePage(item: Item) {
-  if (!item.perfumeUrl || !['queued', 'attention'].includes(item.status)) return false;
+  if (!item.perfumeUrl || item.status === "sent" || item.status === "sending" || item.status === "approved") return false;
+  // notes the text AI guessed: Fragrantica's own page replaces them
+  if (item.perfumeSource === "ai") return true;
+  if (!["queued", "attention"].includes(item.status)) return false;
   return item.hasPerfumeData === false || /^(Нет данных аромата|Страница аромата не скачана)/.test(String(item.error || ""));
 }
 
@@ -520,9 +523,50 @@ function needsPerfumePage(item: Item) {
 function MissingPages() {
   const missing = useQuery({
     queryKey: ["card-improve", "missing-pages"],
-    queryFn: () => apiJson<{ total: number; drafts: number; items: Array<{ url: string; name: string }> }>("/api/card-improve/missing-pages"),
-    refetchInterval: 60_000,
+    queryFn: () => apiJson<MissingPagesResponse>("/api/card-improve/missing-pages"),
+    refetchInterval: (q) => (q.state.data?.ai?.refetch?.running ? 5000 : 60_000),
   });
   if (!missing.data) return null;
-  return <ExtensionQueueStrip items={missing.data.items} total={missing.data.total} drafts={missing.data.drafts} />;
+  return (
+    <>
+      <AiNotesStrip ai={missing.data.ai} />
+      <ExtensionQueueStrip items={missing.data.items} total={missing.data.total} drafts={missing.data.drafts} />
+    </>
+  );
+}
+
+type AiRefetch = { running?: boolean; startedAt?: string; finishedAt?: string; checked?: number; rebuilt?: number; error?: string;
+  fixed?: Array<{ id: number; name: string; source: string }>; left?: Array<{ id: number; name: string }> };
+type MissingPagesResponse = { total: number; drafts: number; items: Array<{ url: string; name: string }>; ai?: { perfumes: number; drafts: number; refetch?: AiRefetch } };
+
+/** Notes the text AI guessed: ask the other sites again; what they don't know the extension loads from Fragrantica. */
+function AiNotesStrip({ ai }: { ai?: MissingPagesResponse["ai"] }) {
+  const queryClient = useQueryClient();
+  const refetch = useMutation({
+    mutationFn: () => apiJson<{ status: string }>("/api/fragrantica/ai-notes/refetch", mutationBody({})),
+    onSuccess: (r) => {
+      toast.info(r.status === "already_running" ? "Поиск уже идёт" : "Ищем настоящие ноты на Parfumo, Parfumetrika, Aromo…");
+      window.setTimeout(() => void queryClient.invalidateQueries({ queryKey: ["card-improve"] }), 3000);
+    },
+    onError: (error) => toast.error(errorMessage(error)),
+  });
+  const last = ai?.refetch;
+  if (!ai?.perfumes && !last?.running) return null;
+  return (
+    <div className="fr-ext-run">
+      <div className="fr-ext-run-text">
+        <b>{last?.running ? <Loader2 size={13} className="spin" /> : <AlertTriangle size={13} />} Ноты подобрал ИИ у {ai?.perfumes || 0} {ai?.perfumes === 1 ? "аромата" : "ароматов"} ({ai?.drafts || 0} карточек)</b>
+        <span className="fr-hint">
+          {last?.running
+            ? "Ищем эти ароматы на других сайтах…"
+            : last?.finishedAt
+              ? `Последний поиск: нашлось ${last.fixed?.length || 0} из ${last.checked || 0}${last.rebuilt ? `, пересобираем карточек: ${last.rebuilt}` : ""}. Остальные загрузит расширение со страницы Фрагрантики — они уже в списке ниже.`
+              : "Сначала поищем их на других сайтах; что не найдётся, загрузит расширение со страницы Фрагрантики — они уже в списке ниже."}
+        </span>
+      </div>
+      <button className="secondary-action compact" type="button" disabled={refetch.isPending || last?.running} onClick={() => refetch.mutate()}>
+        {refetch.isPending || last?.running ? <Loader2 size={13} className="spin" /> : <RefreshCw size={13} />} Искать ноты на других сайтах
+      </button>
+    </div>
+  );
 }

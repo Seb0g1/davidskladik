@@ -108,19 +108,101 @@ app.post("/api/fragrantica/catalog/import-html", requireAdmin, async (request, r
     if (!detail.id || !detail.name || Number(detail.id) !== Number(parsed.id)) {
       return response.status(422).json({ error: "Не удалось разобрать страницу аромата (возможно, открыта проверка Cloudflare).", code: "fragrantica_html_unparsed" });
     }
+    // drafts built without real notes (none at all, or the text AI's guess) are built again — the ready ones too
+    const before = await readFragranticaPerfume(Number(detail.id)).catch(() => null);
+    const hadRealNotes = Boolean(before?.detail_at) && cleanText(before?.detail?.source) !== "ai";
     await saveFragranticaPerfumeDetail(detail);
     let requeued = 0;
     try {
-      const prisma = getPrisma();
-      requeued = Number(await prisma.$executeRawUnsafe(
-        `UPDATE fragrantica_drafts SET status = 'queued', stage = NULL, error = NULL, updated_at = now()
-          WHERE perfume_id = $1 AND status = 'attention'`, Number(detail.id),
-      )) || 0;
+      requeued = await requeueFragranticaPerfumeDrafts(Number(detail.id), hadRealNotes ? ["attention"] : FRAG_REBUILD_STATUSES);
     } catch (error) {
       logger.warn("fragrantica import-html: drafts not requeued", { id: Number(detail.id), detail: error?.message });
     }
     await appendAudit(request, "fragrantica.catalog.import_html", { entityType: "fragrantica_perfume", entityId: String(detail.id), requeued });
     response.json({ ok: true, id: Number(detail.id), name: detail.name, brand: detail.brand, requeued });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Drafts that are not sent yet: «Нужно поправить», «На проверке» and failed sends
+const FRAG_REBUILD_STATUSES = ["attention", "ready", "failed"];
+
+/** The perfume's unsent drafts go back to the queue and are built from its current data. */
+async function requeueFragranticaPerfumeDrafts(perfumeId, statuses = FRAG_REBUILD_STATUSES) {
+  const prisma = getPrisma();
+  return Number(await prisma.$executeRawUnsafe(
+    `UPDATE fragrantica_drafts SET status = 'queued', stage = NULL, error = NULL, updated_at = now()
+      WHERE perfume_id = $1 AND status = ANY($2::text[])`, Number(perfumeId), statuses,
+  )) || 0;
+}
+
+// ─── Notes the text AI guessed: real sources asked again ─────────────────────
+// A perfume got DeepSeek's notes when Fragrantica was closed and no other site knew it. The sites learn new perfumes
+// and our lookups got better (brand without its trailing words), so they are asked again: Fragella (while its quota
+// lasts) → Parfumetrika → Aromo → Parfumo. Found → the perfume's unsent drafts are rebuilt. Not found → it stays in
+// the «→ Склад» extension's list (/api/card-improve/missing-pages) to be loaded from Fragrantica in the browser.
+let fragranticaAiRefetchRunning = false;
+
+async function refetchAiNotedPerfumes({ limit = 200 } = {}) {
+  if (fragranticaAiRefetchRunning) return { status: "already_running" };
+  fragranticaAiRefetchRunning = true;
+  const startedAt = new Date().toISOString();
+  const result = { startedAt, checked: 0, fixed: [], left: [], rebuilt: 0 };
+  try {
+    const prisma = await requireFragranticaTables();
+    await writeFragranticaState("ai_refetch", { running: true, startedAt });
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT p.id FROM fragrantica_perfumes p
+        WHERE p.detail->>'source' = 'ai'
+          AND EXISTS (SELECT 1 FROM fragrantica_drafts d WHERE d.perfume_id = p.id AND d.status <> 'sent')
+        ORDER BY p.id LIMIT $1`, Math.max(1, Number(limit) || 200),
+    );
+    const sources = [
+      ["Fragella", (row) => (fragellaAvailable() ? fillPerfumeFromFragella(row) : false)],
+      ["Parfumetrika", fillPerfumeFromParfumetrika],
+      ["Aromo", fillPerfumeFromAromo],
+      ["Parfumo", fillPerfumeFromParfumo],
+    ];
+    for (const { id } of rows) {
+      const row = await readFragranticaPerfume(Number(id));
+      if (!row) continue;
+      result.checked += 1;
+      const label = `${row.brand || ""} ${row.name || ""}`.trim();
+      let found = "";
+      for (const [name, fill] of sources) {
+        const stored = await Promise.resolve().then(() => fill(row)).catch((error) => {
+          logger.warn("ai refetch source failed", { id: Number(id), source: name, detail: error?.message || String(error) });
+          return false;
+        });
+        if (stored) { found = name; break; }
+      }
+      const after = await readFragranticaPerfume(Number(id));
+      if (found && cleanText(after?.detail?.source) !== "ai") {
+        result.rebuilt += await requeueFragranticaPerfumeDrafts(Number(id));
+        result.fixed.push({ id: Number(id), name: label, source: found });
+      } else {
+        result.left.push({ id: Number(id), name: label });
+      }
+    }
+    result.finishedAt = new Date().toISOString();
+    logger.info("ai refetch done", { checked: result.checked, fixed: result.fixed.length, left: result.left.length, rebuilt: result.rebuilt });
+    await writeFragranticaState("ai_refetch", { running: false, ...result });
+    return { status: "ok", ...result };
+  } catch (error) {
+    await writeFragranticaState("ai_refetch", { running: false, startedAt, error: error?.message || String(error) }).catch(() => {});
+    throw error;
+  } finally {
+    fragranticaAiRefetchRunning = false;
+  }
+}
+
+app.post("/api/fragrantica/ai-notes/refetch", requireAdmin, async (request, response, next) => {
+  try {
+    if (fragranticaAiRefetchRunning) return response.json({ ok: true, status: "already_running" });
+    refetchAiNotedPerfumes().catch((error) => logger.warn("ai refetch failed", { detail: error?.message || String(error) }));
+    await appendAudit(request, "fragrantica.ai_notes.refetch", { entityType: "fragrantica_perfume", entityId: "ai" });
+    response.json({ ok: true, status: "started" });
   } catch (error) {
     next(error);
   }

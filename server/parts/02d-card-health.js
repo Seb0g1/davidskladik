@@ -675,13 +675,21 @@ app.get("/api/card-improve/missing-pages", requireAdmin, async (_request, respon
          FROM fragrantica_drafts d JOIN fragrantica_perfumes p ON p.id = d.perfume_id
         WHERE d.data ? 'existing' AND coalesce(p.url, '') <> ''
           AND ((d.status = 'queued' AND p.detail_at IS NULL)
-            OR (d.status = 'attention' AND (p.detail_at IS NULL OR d.error ~ '^(Нет данных аромата|Страница аромата не скачана)')))
+            OR (d.status = 'attention' AND (p.detail_at IS NULL OR d.error ~ '^(Нет данных аромата|Страница аромата не скачана)'))
+            -- notes guessed by the text AI: the real page replaces them
+            OR (d.status <> 'sent' AND p.detail->>'source' = 'ai'))
         GROUP BY p.id, p.url, p.brand, p.name
         ORDER BY 5 DESC, 6 DESC, p.id
         LIMIT 1000`,
     );
+    const [ai] = await prisma.$queryRawUnsafe(
+      `SELECT count(DISTINCT p.id)::int AS perfumes, count(*)::int AS drafts FROM fragrantica_drafts d JOIN fragrantica_perfumes p ON p.id = d.perfume_id
+        WHERE d.data ? 'existing' AND d.status <> 'sent' AND p.detail->>'source' = 'ai'`,
+    );
+    const refetch = await readFragranticaState("ai_refetch").catch(() => ({}));
     response.json({
       ok: true,
+      ai: { perfumes: Number(ai?.perfumes || 0), drafts: Number(ai?.drafts || 0), refetch },
       total: rows.length,
       drafts: rows.reduce((s, r) => s + Number(r.drafts || 0), 0),
       items: rows.map((r) => ({ id: Number(r.id), url: r.url, name: `${r.brand || ""} ${r.name || ""}`.trim() })),
