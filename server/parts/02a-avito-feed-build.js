@@ -318,7 +318,8 @@ async function loadAvitoLiveProductStates(listings) {
       // Снимок выбранного поставщика нужен для цены «от поставщика», поэтому
       // обычного select колонок недостаточно — тянем путь из raw.
       const rows = await prisma.$queryRaw`
-        SELECT id, target_price, target_stock, archived, current_price,
+        SELECT id, target_price, target_stock, archived, current_price, status,
+               jsonb_array_length(CASE WHEN jsonb_typeof(raw->'links') = 'array' THEN raw->'links' ELSE '[]'::jsonb END) AS link_count,
                raw->'selectedSupplier' AS supplier,
                COALESCE(raw->'avitoImages', '[]'::jsonb) AS avito_images
         FROM warehouse_products
@@ -330,6 +331,8 @@ async function loadAvitoLiveProductStates(listings) {
           targetPrice: Number(row.target_price || 0),
           targetStock: Number(row.target_stock || 0),
           currentPrice: Number(row.current_price || 0),
+          status: cleanText(row.status),
+          linkCount: Number(row.link_count || 0),
           archived: Boolean(row.archived),
           supplier: row.supplier && typeof row.supplier === "object" ? row.supplier : null,
           avitoImages: Array.isArray(row.avito_images) ? row.avito_images.map((url) => cleanText(url)).filter(Boolean) : [],
@@ -386,14 +389,24 @@ function applyAvitoLiveState(listing, product, rules, pricing = {}, { trustStore
     return { listing: withStock(listing, true, false), outOfStock: true };
   }
   if (!product.supplier) {
-    // no supplier → the stored price can't be checked against a price list; one far above the product's
-    // marketplace price is a leftover of a broken row (Pepe Jeans 50 мл at 252 618 ₽) and leaves the feed
-    const stalePrice = Number(listing.priceRub) > 0 && (Number(product.currentPrice) > 0
+    // no supplier (the refresh found none in PriceMaster) → the stored price can't be checked against a price list;
+    // one far above the product's marketplace price is a leftover of a broken row (Pepe Jeans 50 мл at 252 618 ₽)
+    // and leaves the feed. The XML / CSV builders have no supplier from the database: they keep the refresh's verdict.
+    const stalePrice = !trustStoredOutOfStock && Number(listing.priceRub) > 0 && (Number(product.currentPrice) > 0
       ? Number(listing.priceRub) > Number(product.currentPrice) * 3
       : Number(listing.priceRub) > 100_000);
     if (stalePrice) return { listing: withStock(listing, true, false), outOfStock: true };
-    if (Number(product.targetStock || 0) > 0) {
-      // Есть физический FBS-остаток — точно в наличии.
+    // target_stock counts as physical stock only for own goods: a product linked to a supplier (its row is gone —
+    // the feed refresh looked it up in PriceMaster) or sold out on the marketplace keeps a leftover target_stock
+    // (Acampora Vanyl: Ozon «нет в наличии», target_stock 1 → Avito stock 1). The XML / CSV builders get no
+    // supplier from the database at all, so there the refresh's saved verdict decides, as before.
+    const ownGoods = Number(product.linkCount || 0) === 0 && cleanText(product.status) !== "out_of_stock";
+    if (Number(product.targetStock || 0) > 0 && (ownGoods || trustStoredOutOfStock)) {
+      if (trustStoredOutOfStock && !ownGoods) {
+        const outOfStock = listing.outOfStock === true;
+        return { listing: withStock(listing, outOfStock, false), outOfStock };
+      }
+      // Есть физический FBS-остаток без привязки к поставщику — свой товар, в наличии.
       return { listing: withStock(listing, false, false), outOfStock: false };
     }
     if (trustStoredOutOfStock) {
