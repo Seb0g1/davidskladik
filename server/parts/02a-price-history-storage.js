@@ -204,7 +204,19 @@ async function readPriceHistory({ productId, offerId, marketplace, status, dateF
 // 3900, «Сафронова (марка)» 4205) became 230 403 ₽ … 1 244 177 ₽ on Ozon and Market. A price that looks
 // like that is never sent on its own: it waits on «Проверка цен» until a person approves it.
 const PRICE_GUARD_SUSPECT_USD = 900;       // a dollar row this high for a bottle up to 200 ml
-const PRICE_GUARD_MAX_RISE = 3;            // the new price is this many times the live one
+// 2026-10-09 (the owner's rule): a rise goes out by itself; a big drop only when the supplier's price list is fresh
+// — a stale or unread row must not sell the product below what it costs now
+const PRICE_GUARD_MAX_DROP = Math.min(0.9, Math.max(0.05, Number(process.env.PRICE_GUARD_MAX_DROP || 0.3) || 0.3));
+const PRICE_GUARD_FRESH_HOURS = Math.max(6, Number(process.env.PRICE_GUARD_FRESH_HOURS || 36) || 36);
+
+/** The supplier row's price list date (PriceMaster DocDate, Moscow time) and whether it is fresh enough to drop by. */
+function priceGuardSupplierFreshness(supplier = {}) {
+  const raw = cleanText(supplier.docDate || supplier.DocDate);
+  const at = raw ? Date.parse(/[zZ]|[+-]\d\d:?\d\d$/.test(raw) ? raw : `${raw.replace(" ", "T")}+03:00`) : NaN;
+  const unread = cleanText(supplier.priceSource) === "timeout";
+  const fresh = Number.isFinite(at) && Date.now() - at <= PRICE_GUARD_FRESH_HOURS * 3600_000 && !unread;
+  return { fresh, at: Number.isFinite(at) ? new Date(at) : null, unread };
+}
 
 /** Why a supplier row's price can't be trusted (rubles typed as dollars, a placeholder), or "". */
 function priceGuardRowProblem(row = {}, productName = "") {
@@ -224,9 +236,18 @@ function priceGuardVerdict(product = {}, approvedPrice = 0) {
   const current = Math.round(Number(product.currentPrice || 0));
   if (!(next > 0)) return null;
   if (approvedPrice > 0 && Math.abs(next - approvedPrice) <= Math.max(50, approvedPrice * 0.02)) return null;
-  const rowProblem = priceGuardRowProblem(product.selectedSupplier || {}, product.name);
+  const supplier = product.selectedSupplier || {};
+  // a broken supplier row (roubles read as dollars, a «1000 $» placeholder) is held whichever way the price goes
+  const rowProblem = priceGuardRowProblem(supplier, product.name);
   if (rowProblem) return { reason: rowProblem };
-  if (current > 0 && next > current * PRICE_GUARD_MAX_RISE) return { reason: `цена вырастет в ${(next / current).toFixed(1)} раза: ${current} → ${next} ₽` };
+  // a rise is sent as it is
+  if (current > 0 && next < current * (1 - PRICE_GUARD_MAX_DROP)) {
+    const { fresh, at, unread } = priceGuardSupplierFreshness(supplier);
+    if (!fresh) {
+      const when = at ? `от ${at.toLocaleString("ru-RU", { timeZone: "Europe/Moscow", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}` : "без даты";
+      return { reason: `цена упадёт на ${Math.round((1 - next / current) * 100)}%: ${current} → ${next} ₽, ${unread ? "прайс поставщика не прочитан" : `прайс поставщика ${when} — не свежий`}` };
+    }
+  }
   return null;
 }
 

@@ -1,5 +1,6 @@
 "use strict";
-// Price guard (server/parts/02a-price-history-storage.js): placeholder / rouble-as-dollar prices and 3× jumps
+// Price guard (server/parts/02a-price-history-storage.js): placeholder / rouble-as-dollar prices are held;
+// rises go out; a drop over 30% only with a fresh supplier price list
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
@@ -19,10 +20,11 @@ const pick = (file, name) => {
 };
 const ctx = vm.createContext({});
 vm.runInContext([
-  "const PRICE_GUARD_SUSPECT_USD = 900; const PRICE_GUARD_MAX_RISE = 3;",
+  "const PRICE_GUARD_SUSPECT_USD = 900; const PRICE_GUARD_MAX_DROP = 0.3; const PRICE_GUARD_FRESH_HOURS = 36;",
   "function cleanText(v) { return String(v ?? '').trim(); }",
   pick("02a-price-master-match-helpers.js", "priceMasterBottleVolumes"),
   pick("02a-price-history-storage.js", "priceGuardRowProblem"),
+  pick("02a-price-history-storage.js", "priceGuardSupplierFreshness"),
   pick("02a-price-history-storage.js", "priceGuardVerdict"),
   "this.api = { priceGuardRowProblem, priceGuardVerdict };",
 ].join("\n"), ctx);
@@ -41,9 +43,21 @@ test("normal and rouble prices pass", () => {
   assert.equal(priceGuardRowProblem({ price: 1200, priceCurrency: "USD", name: "Refill 1000 ml" }), "");
 });
 
-test("a 3× rise is held, an approved price passes, drops pass", () => {
-  const product = { nextPrice: 30000, currentPrice: 9000, selectedSupplier: { price: 120, priceCurrency: "USD", name: "Y 100ml" } };
-  assert.ok(priceGuardVerdict(product));
-  assert.equal(priceGuardVerdict(product, 30000), null);
-  assert.equal(priceGuardVerdict({ nextPrice: 7000, currentPrice: 230403, selectedSupplier: { price: 26, priceCurrency: "USD", name: "Z 50 мл" } }), null);
+test("a rise is sent, a broken supplier row is held, an approved price passes", () => {
+  const rise = { nextPrice: 30000, currentPrice: 9000, selectedSupplier: { price: 120, priceCurrency: "USD", name: "Y 100ml" } };
+  assert.equal(priceGuardVerdict(rise), null);
+  const broken = { nextPrice: 230403, currentPrice: 9000, selectedSupplier: { price: 3900, priceCurrency: "USD", name: "X 80ML" } };
+  assert.ok(priceGuardVerdict(broken));
+  assert.equal(priceGuardVerdict(broken, 230403), null);
+});
+
+test("a big drop needs a fresh supplier price list", () => {
+  const hoursAgo = (h) => new Date(Date.now() - h * 3600_000).toISOString();
+  const drop = (supplier) => ({ nextPrice: 7000, currentPrice: 230403, selectedSupplier: { price: 26, priceCurrency: "USD", name: "Z 50 мл", ...supplier } });
+  assert.equal(priceGuardVerdict(drop({ docDate: hoursAgo(3) })), null);
+  assert.match(priceGuardVerdict(drop({ docDate: hoursAgo(80) })).reason, /не свежий/);
+  assert.match(priceGuardVerdict(drop({})).reason, /без даты/);
+  assert.match(priceGuardVerdict(drop({ docDate: hoursAgo(1), priceSource: "timeout" })).reason, /не прочитан/);
+  // a small drop goes out whatever the list's date
+  assert.equal(priceGuardVerdict({ nextPrice: 8000, currentPrice: 9000, selectedSupplier: { price: 30, priceCurrency: "USD", name: "Q 50ml" } }), null);
 });
