@@ -112,7 +112,10 @@ module.exports = {
       // MALLOC_ARENA_MAX=2 (it only trims the top of the heap). Steady-state RSS is
       // ~3.4GB + request spikes ~0.7GB; 5120M was exceeded (5861M peak) after the
       // picking-list feature added more concurrent Prisma load. Raised to 6144M (=worker).
-      max_memory_restart: "6144M",
+      // 2026-10-09: api + worker at 6144M each + Postgres (4 GB shared_buffers) + shop on a 16 GB box without swap
+      // let the kernel OOM-kill pm2 (every site down, then a reboot) before either limit was reached. Limits now fit
+      // the box together; a 4 GB swapfile takes the peaks. A spike over the limit restarts only this process.
+      max_memory_restart: "4608M",
       kill_timeout: 15000,
       env: {
         NODE_ENV: "production",
@@ -127,7 +130,7 @@ module.exports = {
       exec_mode: "fork",
       autorestart: true,
       watch: false,
-      max_memory_restart: "6144M",
+      max_memory_restart: "4096M",
       max_restarts: 20,
       restart_delay: 3000,
       kill_timeout: 15000,
