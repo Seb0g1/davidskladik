@@ -8,6 +8,7 @@ import { SystemHealthIndicator } from "./components/SystemHealthIndicator";
 import { ThemeSwitcher } from "./components/ThemeSwitcher";
 import { AppRoute, NAV_SECTIONS, navItems, NavItem, pageComponent, prefetchRoute, prefetchRoutesWhenIdle, routeFromPath } from "./lib/nav";
 import { Toaster } from "./lib/toast";
+import { FragranticaExtReceiver } from "./components/FragranticaQuickLoad";
 
 type SessionState = { authenticated?: boolean; role?: string | null; username?: string | null; allowedPages?: string[] | null; displayName?: string | null; avatarUrl?: string | null };
 
@@ -530,6 +531,7 @@ function AppShell() {
       />
       {helpOpen ? <ShortcutsHelp onClose={() => setHelpOpen(false)} /> : null}
       <Toaster />
+      {sessionReady ? <FragranticaExtReceiver /> : null}
     </main>
   );
 }

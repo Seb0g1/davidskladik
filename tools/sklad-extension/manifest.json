@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "→ Склад (Фрагрантика)",
+  "version": "1.0.0",
+  "description": "Ctrl+Shift+B на странице аромата Фрагрантики отправляет её в открытую вкладку Magic Vibes Склад.",
+  "permissions": ["scripting", "tabs"],
+  "host_permissions": [
+    "https://www.fragrantica.ru/*",
+    "https://www.fragrantica.com/*",
+    "https://fragrantica.ru/*",
+    "https://fragrantica.com/*",
+    "https://davidsklad.ru/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "→ Склад: отправить страницу аромата (Ctrl+Shift+B)" },
+  "commands": {
+    "send-to-sklad": {
+      "suggested_key": { "default": "Ctrl+Shift+B", "mac": "Command+Shift+B" },
+      "description": "Отправить страницу аромата в склад"
+    }
+  }
+}

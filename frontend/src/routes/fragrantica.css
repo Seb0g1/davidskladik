@@ -457,3 +457,10 @@
 .fr-own-upload { cursor: pointer; }
 .fr-own-only { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: var(--text-soft); cursor: pointer; }
 .fr-conv-excluded { margin: 2px 0 10px; }
+
+/* Черновик без страницы аромата: открыть на Фрагрантике и загрузить в склад (Ctrl+Shift+B / закладка) */
+.fr-conv-row:has(.fr-quickload) { flex-wrap: wrap; }
+.fr-quickload { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; flex-basis: 100%; margin-top: 6px; }
+.fr-quickload .secondary-action { text-decoration: none; }
+.fr-quickload .fr-hint { flex: 1 1 260px; }
+.fr-quickload kbd { font: inherit; font-size: 11px; padding: 1px 5px; border: 1px solid var(--line, #d8d8d8); border-bottom-width: 2px; border-radius: 4px; background: var(--panel, #fff); }

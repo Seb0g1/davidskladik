@@ -4,6 +4,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tansta
 import { Check, CheckSquare, ExternalLink, Loader2, Pause, Play, Plus, RefreshCw, Ruler, Search, Send, Sparkles, Square, Store, Trash2, Workflow, X } from "lucide-react";
 import { z } from "zod";
 import { fetchJson, mutationBody } from "../api";
+import { BookmarkletLink, FRAGRANTICA_RECEIVE_PARAM, importedMessage } from "../components/FragranticaQuickLoad";
 import { PageHeader } from "../components/PageHeader";
 import { errorMessage, useDebounced } from "../lib/common";
 import { toast } from "../lib/toast";
@@ -640,29 +641,7 @@ function PerfumeDrawer({ id, workShops, onClose, onConveyor }: { id: number; wor
 // Закладка «→ Склад» на странице аромата берёт её HTML (тот же запрос, что делает сервер),
 // открывает эту страницу с ?receive=1 и передаёт HTML через postMessage; дальше — обычный парсер.
 
-const RECEIVE_PARAM = "receive";
-
-function fragranticaBookmarklet(origin: string) {
-  const target = JSON.stringify(`${origin}/app/fragrantica?${RECEIVE_PARAM}=1`);
-  const from = JSON.stringify(origin);
-  const code = String.raw`(async()=>{if(!/fragrantica\.[a-z.]+\/(perfume|parfum)\/.+-\d+\.html/i.test(location.href)){alert("Откройте страницу аромата на Фрагрантике и нажмите закладку ещё раз.");return}`
-    + String.raw`var w=window.open(${target},"ds_fragrantica");var h="";`
-    + String.raw`try{var r=await fetch(location.href,{credentials:"include"});h=r.ok?await r.text():""}catch(e){}`
-    + String.raw`if(!h)h=document.documentElement.outerHTML;`
-    + String.raw`h=h.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,"").replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi,"").replace(/<svg\b[^>]*>[\s\S]*?<\/svg>/gi,"<svg></svg>").replace(/<!--[\s\S]*?-->/g,"").replace(/\s{2,}/g," ");`
-    + String.raw`var sent=false;addEventListener("message",function(e){if(e.origin===${from}&&e.data&&e.data.type==="ds-fragrantica-ready"&&!sent){sent=true;w.postMessage({type:"ds-fragrantica-page",url:location.href,html:h},${from})}})})()`;
-  return `javascript:${encodeURIComponent(code)}`;
-}
-
-function BookmarkletLink() {
-  // React не ставит javascript:-ссылки через props, поэтому href выставляем сами.
-  const href = useMemo(() => fragranticaBookmarklet(window.location.origin), []);
-  return (
-    <a className="fr-bookmarklet" ref={(el) => { el?.setAttribute("href", href); }} onClick={(e) => { e.preventDefault(); toast.info("Перетащите эту кнопку на панель закладок браузера"); }} title="Перетащите на панель закладок">
-      → Склад
-    </a>
-  );
-}
+const RECEIVE_PARAM = FRAGRANTICA_RECEIVE_PARAM;
 
 function BrowserFetchHelp({ perfume, onRetry, retrying }: { perfume: Perfume; onRetry: () => void; retrying: boolean }) {
   return (
@@ -705,11 +684,11 @@ function useBrowserPageReceiver(onImported: (id: number) => void) {
       if (done || !FRAGRANTICA_ORIGIN.test(event.origin) || event.data?.type !== "ds-fragrantica-page") return;
       done = true;
       try {
-        const res = await apiJson<{ id: number; name: string; brand: string }>(
+        const res = await apiJson<{ id: number; name: string; brand: string; requeued?: number }>(
           "/api/fragrantica/catalog/import-html",
           mutationBody({ url: String(event.data.url || ""), html: String(event.data.html || "") }),
         );
-        toast.success(`Загружено с Фрагрантики: ${res.brand} ${res.name}`);
+        toast.success(importedMessage(res));
         handler.current(res.id);
       } catch (error) {
         toast.error(errorMessage(error));

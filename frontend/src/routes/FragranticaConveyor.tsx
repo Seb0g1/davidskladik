@@ -8,6 +8,7 @@ import { fetchJson, mutationBody } from "../api";
 import { errorMessage, useDebounced } from "../lib/common";
 import { PhotoThumb } from "../components/PhotoLightbox";
 import { toast } from "../lib/toast";
+import { FragranticaQuickLoad } from "../components/FragranticaQuickLoad";
 
 // «Конвейер» страницы «Фрагрантика»: сервер раскладывает ароматы на объёмы из PriceMaster и сам собирает
 // карточки (привязка + цена, фото и пирамиды, описание ИИ — одно на аромат). Здесь — проверить и одобрить.
@@ -21,7 +22,7 @@ export type WorkTarget = { key: string; kind: "ozon" | "yandex"; id: string; lab
 type LinkRow = { id: string; name: string; supplierName: string; price: number; priceCurrency: string; ozonPrice: number; recommended: boolean; issues?: string[]; manual?: boolean; linked?: boolean };
 type DraftExport = { id: number; accountName: string; offerId: string; status: string; error: string | null; result?: { links?: string; docs?: string; docsInfo?: string } | null };
 type Draft = {
-  id: number; perfumeId: number; brand: string; perfumeName: string; thumb: string; kind: "perfume" | "card";
+  id: number; perfumeId: number; brand: string; perfumeName: string; perfumeUrl?: string; hasPerfumeData?: boolean; thumb: string; kind: "perfume" | "card";
   volume: number | null; tester: boolean; typeKey: string; status: string; stage: string | null; startedAt?: string | null; targets: string[]; error: string | null;
   exports: DraftExport[];
   data: {
@@ -332,8 +333,15 @@ function PerfumeRow({ draft }: { draft: Draft }) {
         <button className="icon-action" type="button" title="Проверить ещё раз" onClick={() => rebuild.mutate({ id: draft.id })}><RefreshCw size={14} /></button>
         <button className="icon-action" type="button" title="Убрать из конвейера" onClick={() => remove.mutate(draft.id)}><Trash2 size={14} /></button>
       </span>
+      {needsPerfumePage(draft) ? <FragranticaQuickLoad url={draft.perfumeUrl} name={draft.perfumeName} /> : null}
     </div>
   );
+}
+
+/** The draft stopped for lack of the perfume's page: Fragrantica didn't let the server in. */
+function needsPerfumePage(draft: Draft) {
+  if (draft.status === "ready" || draft.status === "sent" || BUSY.has(draft.status)) return false;
+  return draft.hasPerfumeData === false || /Страница аромата не скачана|Нет данных аромата|закладкой «→ Склад»/.test(String(draft.error || ""));
 }
 
 function useRemoveDraft() {
@@ -529,6 +537,7 @@ function DraftRow({ draft, targets, timing }: { draft: Draft; targets: WorkTarge
         ) : null}
 
         {draft.error && draft.status !== "ready" ? <div className="fr-warn">{draft.error}</div> : null}
+        {needsPerfumePage(draft) ? <FragranticaQuickLoad url={draft.perfumeUrl} name={draft.perfumeName} /> : null}
         {/^Ноты подобрал ИИ/.test(String(draft.error || "")) && editable ? (
           <button className="secondary-action compact" type="button" disabled={patch.isPending} onClick={() => patch.mutate({ notesConfirmed: true })}>Ноты верны</button>
         ) : null}

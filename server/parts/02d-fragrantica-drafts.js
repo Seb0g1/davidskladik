@@ -1155,6 +1155,8 @@ function fragranticaDraftResponse(row, exportsById = new Map()) {
     perfumeId: Number(row.perfume_id),
     brand: row.brand || "",
     perfumeName: row.perfume_name || "",
+    perfumeUrl: row.perfume_url || "",
+    hasPerfumeData: row.perfume_detail_at != null,
     thumb: fragranticaMediaUrl("thumbs", `${Number(row.perfume_id)}.jpg`),
     kind: row.kind,
     volume: row.volume_ml === null ? null : Number(row.volume_ml),
@@ -1175,7 +1177,7 @@ app.get("/api/fragrantica/drafts", requireAdmin, async (_request, response, next
   try {
     const prisma = await requireFragranticaDraftTables();
     const rows = await prisma.$queryRawUnsafe(
-      `SELECT d.*, p.brand, p.name AS perfume_name FROM fragrantica_drafts d
+      `SELECT d.*, p.brand, p.name AS perfume_name, p.url AS perfume_url, p.detail_at AS perfume_detail_at FROM fragrantica_drafts d
          LEFT JOIN fragrantica_perfumes p ON p.id = d.perfume_id
         WHERE (d.status <> 'sent' OR d.updated_at > now() - interval '3 days')
           -- improvement drafts live on their own page «Улучшение карточек»

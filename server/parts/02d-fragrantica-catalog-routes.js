@@ -109,8 +109,18 @@ app.post("/api/fragrantica/catalog/import-html", requireAdmin, async (request, r
       return response.status(422).json({ error: "Не удалось разобрать страницу аромата (возможно, открыта проверка Cloudflare).", code: "fragrantica_html_unparsed" });
     }
     await saveFragranticaPerfumeDetail(detail);
-    await appendAudit(request, "fragrantica.catalog.import_html", { entityType: "fragrantica_perfume", entityId: String(detail.id) });
-    response.json({ ok: true, id: Number(detail.id), name: detail.name, brand: detail.brand });
+    let requeued = 0;
+    try {
+      const prisma = getPrisma();
+      requeued = Number(await prisma.$executeRawUnsafe(
+        `UPDATE fragrantica_drafts SET status = 'queued', stage = NULL, error = NULL, updated_at = now()
+          WHERE perfume_id = $1 AND status = 'attention'`, Number(detail.id),
+      )) || 0;
+    } catch (error) {
+      logger.warn("fragrantica import-html: drafts not requeued", { id: Number(detail.id), detail: error?.message });
+    }
+    await appendAudit(request, "fragrantica.catalog.import_html", { entityType: "fragrantica_perfume", entityId: String(detail.id), requeued });
+    response.json({ ok: true, id: Number(detail.id), name: detail.name, brand: detail.brand, requeued });
   } catch (error) {
     next(error);
   }
