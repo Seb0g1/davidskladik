@@ -643,14 +643,23 @@ export function PickingListPage() {
   };
   const supplierLedger = listQuery.data?.supplierLedger || {};
   const invoiceRows = invoiceQuery.data?.rows || [];
-  const myBalance = myBalanceQuery.data?.total ?? 0;
   const allBalances = allBalancesQuery.data?.balances ?? [];
+  // Каждая запись — в своих долларах (originalUsd): выданные 800 $ остаются 800 $, когда курс за день сменился.
+  // Рубли по сегодняшнему курсу — только у старых записей без долларов.
+  const usdOfCredit = (c: { amount?: number | null; originalUsd?: unknown }) => {
+    const amount = Number(c.amount) || 0;
+    const original = Number(c.originalUsd);
+    if (c.originalUsd != null && Number.isFinite(original) && original > 0) return (amount < 0 ? -1 : 1) * original;
+    return amount / usdRate;
+  };
+  const usdTotal = (credits: Array<{ amount?: number | null; originalUsd?: unknown }> = []) => credits.reduce((sum, c) => sum + usdOfCredit(c), 0);
+  const myBalance = usdTotal(myBalanceQuery.data?.credits ?? []);
   // Lifetime breakdown: issued = all positive credits, spent = all negative credits (absolute).
   // Using the full credits array from myBalanceQuery so Выдано/Потрачено/Остаток are always
   // consistent with the main myBalance figure (not filtered to today only).
   const allMyCredits = myBalanceQuery.data?.credits ?? [];
-  const issuedLifetime = allMyCredits.filter((c) => Number(c.amount) > 0).reduce((sum, c) => sum + Number(c.amount), 0);
-  const spentLifetime = allMyCredits.filter((c) => Number(c.amount) < 0).reduce((sum, c) => sum + Math.abs(Number(c.amount)), 0);
+  const issuedLifetime = allMyCredits.filter((c) => Number(c.amount) > 0).reduce((sum, c) => sum + usdOfCredit(c), 0);
+  const spentLifetime = allMyCredits.filter((c) => Number(c.amount) < 0).reduce((sum, c) => sum + Math.abs(usdOfCredit(c)), 0);
   // All non-admin active accounts, for populating the picker datalist
   const knownPickerUsernames = useMemo(() => {
     const fromUsers = (allUsersQuery.data?.users ?? [])
@@ -680,8 +689,9 @@ export function PickingListPage() {
       return next;
     });
 
-  const balanceTone = myBalance > 500 ? "success" : myBalance > 0 ? "warn" : myBalance < 0 ? "danger" : "";
-  const balanceStr = (n: number) => `${(n / usdRate).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $`;
+  const balanceTone = myBalance > 5 ? "success" : myBalance > 0 ? "warn" : myBalance < 0 ? "danger" : "";
+  // dollars in, dollars out (every amount is already in dollars — see usdOfCredit)
+  const balanceStr = (usd: number) => `${usd.toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $`;
   const rubStr = (n: number) => `₽${Math.round(n).toLocaleString("ru-RU")}`;
   const dailyTotal = dailyTotalQuery.data?.total ?? 0;
   const dailyItems = dailyTotalQuery.data?.items ?? 0;
@@ -792,7 +802,7 @@ export function PickingListPage() {
               <div className="picker-balance-history">
                 {(myBalanceQuery.data?.credits ?? []).slice(-8).reverse().map((c) => (
                   <div className="picker-balance-history-row" key={c.id}>
-                    <span className={`picker-cash-amount${Number(c.amount) >= 0 ? " tone-success" : " tone-danger"}`}>{Number(c.amount) >= 0 ? "+" : ""}{balanceStr(c.amount ?? 0)}</span>
+                    <span className={`picker-cash-amount${Number(c.amount) >= 0 ? " tone-success" : " tone-danger"}`}>{Number(c.amount) >= 0 ? "+" : ""}{balanceStr(usdOfCredit(c))}</span>
                     <span className="muted-note">{c.note || "—"}</span>
                     <span className="muted-note pl-ml-auto">{compactDate(c.createdAt ?? null)}</span>
                   </div>
@@ -814,7 +824,7 @@ export function PickingListPage() {
                   <div className="picker-select-chips">
                     {knownPickerUsernames.map((u) => {
                       const b = allBalances.find((x) => x.username === u);
-                      const total = b?.total ?? 0;
+                      const total = usdTotal(b?.credits ?? []);
                       return (
                         <button
                           key={u}
@@ -901,7 +911,7 @@ export function PickingListPage() {
                 </div>
                 {/* "Принять всё" — records exact RUB balance to bring picker to zero without rounding drift */}
                 {issuePickerDraft ? (() => {
-                  const pickerBal = allBalances.find((b) => b.username === issuePickerDraft)?.total ?? 0;
+                  const pickerBal = usdTotal(allBalances.find((b) => b.username === issuePickerDraft)?.credits ?? []);
                   if (pickerBal <= 0) return null;
                   return (
                     <button
@@ -909,7 +919,7 @@ export function PickingListPage() {
                       type="button"
                       style={{ marginTop: 4 }}
                       disabled={returnCashMutation.isPending}
-                      onClick={() => returnCashMutation.mutate({ pickerUsername: issuePickerDraft.trim(), amount: pickerBal, note: returnDraftNote || "Возврат всего остатка" })}
+                      onClick={() => returnCashMutation.mutate({ pickerUsername: issuePickerDraft.trim(), amount: Math.round(pickerBal * usdRate), originalUsd: Math.round(pickerBal * 100) / 100, note: returnDraftNote || "Возврат всего остатка" })}
                     >
                       <RotateCcw size={15} /> Принять весь остаток ({balanceStr(pickerBal)})
                     </button>
@@ -928,8 +938,8 @@ export function PickingListPage() {
                     {credits.length === 0 ? (
                       <p className="picker-balance-empty-hint">Выдач ещё не было.</p>
                     ) : groupByDay(credits.slice().reverse(), (c) => c.createdAt).map((day) => {
-                    const dayIssued = day.items.reduce((sum, c) => sum + Math.max(0, Number(c.amount) || 0), 0);
-                    const daySpent = day.items.reduce((sum, c) => sum + Math.max(0, -(Number(c.amount) || 0)), 0);
+                    const dayIssued = day.items.reduce((sum, c) => sum + Math.max(0, usdOfCredit(c)), 0);
+                    const daySpent = day.items.reduce((sum, c) => sum + Math.max(0, -usdOfCredit(c)), 0);
                     return (
                     <div className="picker-day-group" key={day.key}>
                       <div className="picker-day-head">
@@ -1484,7 +1494,7 @@ export function PickingListPage() {
               <div className="picker-balance-history">
                 {(myBalanceQuery.data?.credits ?? []).slice(-8).reverse().map((c) => (
                   <div className="picker-balance-history-row" key={c.id}>
-                    <span className={`picker-cash-amount${Number(c.amount) >= 0 ? " tone-success" : " tone-danger"}`}>{Number(c.amount) >= 0 ? "+" : ""}{balanceStr(c.amount ?? 0)}</span>
+                    <span className={`picker-cash-amount${Number(c.amount) >= 0 ? " tone-success" : " tone-danger"}`}>{Number(c.amount) >= 0 ? "+" : ""}{balanceStr(usdOfCredit(c))}</span>
                     <span className="muted-note">{c.note || "—"}</span>
                     <span className="muted-note pl-ml-auto">{compactDate(c.createdAt ?? null)}</span>
                   </div>
@@ -1501,7 +1511,7 @@ export function PickingListPage() {
                 <div className="picker-select-chips">
                   {knownPickerUsernames.map((u) => {
                     const b = allBalances.find((x) => x.username === u);
-                    const total = b?.total ?? 0;
+                    const total = usdTotal(b?.credits ?? []);
                     return (
                       <button
                         key={u}
@@ -1582,14 +1592,14 @@ export function PickingListPage() {
                 </button>
               </div>
               {issuePickerDraft ? (() => {
-                const pickerBal = allBalances.find((b) => b.username === issuePickerDraft)?.total ?? 0;
+                const pickerBal = usdTotal(allBalances.find((b) => b.username === issuePickerDraft)?.credits ?? []);
                 if (pickerBal <= 0) return null;
                 return (
                   <button
                     className="secondary-action picker-issue-submit pl-btn-mt4"
                     type="button"
                     disabled={returnCashMutation.isPending}
-                    onClick={() => returnCashMutation.mutate({ pickerUsername: issuePickerDraft.trim(), amount: pickerBal, note: returnDraftNote || "Возврат всего остатка" })}
+                    onClick={() => returnCashMutation.mutate({ pickerUsername: issuePickerDraft.trim(), amount: Math.round(pickerBal * usdRate), originalUsd: Math.round(pickerBal * 100) / 100, note: returnDraftNote || "Возврат всего остатка" })}
                   >
                     <RotateCcw size={15} /> Принять весь остаток ({balanceStr(pickerBal)})
                   </button>
