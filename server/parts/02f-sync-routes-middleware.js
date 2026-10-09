@@ -326,6 +326,7 @@ function startBackgroundSchedulers() {
     });
   }
   if (avitoDailyUploadEnabled) scheduleAvitoDailyUpload();
+  if (avitoPriceSyncEnabled) scheduleAvitoPriceSync(3 * 60_000);
   if (avitoAutoSyncEnabled) {
     scheduleAvitoAutoSync(10 * 60_000);
     logger.info("avito auto sync scheduler enabled", {

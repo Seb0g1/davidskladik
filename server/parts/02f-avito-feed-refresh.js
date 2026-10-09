@@ -118,6 +118,91 @@ function scheduleAvitoDailyUpload() {
   logger.info("avito daily upload scheduled", { at: new Date(next).toISOString(), on: [...avitoDailyUploadOn] });
 }
 
+// ─── Цены активных объявлений напрямую через API ──────────────────────────
+// Автозагрузка идёт раз в неделю / при новых товарах, а цена должна меняться сразу: каждые
+// AVITO_PRICE_SYNC_MINUTES активные объявления Авито сравниваются с ценой фида (тот же расчёт, что в фиде)
+// и расходящиеся больше чем на 1% меняются методом POST /core/v1/items/{id}/update_price — без загрузки и
+// без лимитов размещения. Скачок больше чем в AVITO_PRICE_SYNC_MAX_JUMP раз не применяется, а пишется в лог.
+const avitoPriceSyncEnabled = process.env.AVITO_PRICE_SYNC_ENABLED !== "false";
+const avitoPriceSyncIntervalMs = Math.max(10 * 60_000, Number(process.env.AVITO_PRICE_SYNC_MINUTES || 30) * 60_000 || 30 * 60_000);
+const avitoPriceSyncMaxJump = Math.max(1.5, Number(process.env.AVITO_PRICE_SYNC_MAX_JUMP || 3) || 3);
+const avitoAdIdCache = new Map(); // avito item id → feed ad id
+let avitoPriceSyncTimer = null;
+let avitoPriceSyncRunning = false;
+let avitoPriceSyncLast = null;
+
+async function runAvitoPriceSync({ source = "schedule" } = {}) {
+  if (avitoPriceSyncRunning) return { status: "already_running" };
+  const account = (getAvitoAccounts ? getAvitoAccounts() : [])[0];
+  if (!account) return { status: "no_avito_account" };
+  avitoPriceSyncRunning = true;
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const result = { status: "ok", source, active: 0, checked: 0, updated: 0, skippedJump: [], failed: 0, at: new Date().toISOString() };
+  try {
+    const active = [];
+    for (let page = 1; page < 100; page += 1) {
+      const r = await avitoRequest("/core/v1/items", { account, query: { status: "active", per_page: 100, page } });
+      const list = r?.resources || [];
+      active.push(...list);
+      if (list.length < 100) break;
+      await sleep(1000);
+    }
+    result.active = active.length;
+    const unknown = active.map((a) => Number(a.id)).filter((id) => !avitoAdIdCache.has(id));
+    for (let i = 0; i < unknown.length; i += 100) {
+      const r = await getAvitoAdIdsByAvitoIds(account, unknown.slice(i, i + 100));
+      for (const it of r?.items || []) if (it.ad_id) avitoAdIdCache.set(Number(it.avito_id), String(it.ad_id));
+      await sleep(1000);
+    }
+    const state = await readAvitoListingsFile();
+    const byAd = new Map(state.items.map((item) => [avitoFeedAdId(item.adId), item]));
+    for (const ad of active) {
+      const listing = byAd.get(avitoAdIdCache.get(Number(ad.id)));
+      const want = Math.round(Number(listing?.priceRub) || 0);
+      const have = Number(ad.price) || 0;
+      if (!listing || !(want > 0) || listing.outOfStock === true) continue;
+      result.checked += 1;
+      if (have > 0 && Math.abs(want - have) / have <= 0.01) continue;
+      if (have > 0 && (want / have > avitoPriceSyncMaxJump || have / want > avitoPriceSyncMaxJump)) {
+        result.skippedJump.push({ id: ad.id, title: cleanText(ad.title).slice(0, 60), avito: have, feed: want });
+        continue;
+      }
+      try {
+        await avitoRequest(`/core/v1/items/${ad.id}/update_price`, { method: "POST", account, body: { price: want } });
+        result.updated += 1;
+      } catch (error) {
+        result.failed += 1;
+        logger.warn("avito price update failed", { id: ad.id, detail: error?.message || String(error) });
+      }
+      await sleep(400);
+    }
+    if (result.skippedJump.length) logger.warn("avito price jumps not applied", { items: result.skippedJump.slice(0, 20) });
+    logger.info("avito price sync", { ...result, skippedJump: result.skippedJump.length });
+    return result;
+  } catch (error) {
+    result.status = "error";
+    result.error = error?.message || String(error);
+    logger.warn("avito price sync failed", { detail: result.error });
+    return result;
+  } finally {
+    avitoPriceSyncLast = { ...result, skippedJump: result.skippedJump.slice(0, 50) };
+    avitoPriceSyncRunning = false;
+  }
+}
+
+function scheduleAvitoPriceSync(delayMs = avitoPriceSyncIntervalMs) {
+  if (!avitoPriceSyncEnabled) return;
+  if (avitoPriceSyncTimer) clearTimeout(avitoPriceSyncTimer);
+  avitoPriceSyncTimer = setTimeout(async () => {
+    try {
+      await runAvitoPriceSync();
+    } finally {
+      scheduleAvitoPriceSync(avitoPriceSyncIntervalMs);
+    }
+  }, Math.max(30_000, Number(delayMs) || avitoPriceSyncIntervalMs));
+  avitoPriceSyncTimer.unref?.();
+}
+
 function avitoSyncPublic() {
   return {
     feedRefreshEnabled: avitoFeedRefreshEnabled,
@@ -132,6 +217,8 @@ function avitoSyncPublic() {
     dailyUploadEnabled: avitoDailyUploadEnabled,
     dailyUploadHour: avitoDailyUploadHour,
     dailyUploadLast: avitoDailyUploadLast,
+    priceSyncEnabled: avitoPriceSyncEnabled,
+    priceSyncLast: avitoPriceSyncLast,
   };
 }
 

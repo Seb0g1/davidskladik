@@ -186,6 +186,51 @@ function avitoFeedAdId(adId) {
   return id.endsWith(AVITO_FEED_AD_ID_SUFFIX) ? id : id + AVITO_FEED_AD_ID_SUFFIX;
 }
 
+// Адреса объявлений по всей Москве (крупные ТЦ во всех округах): Авито показывает объявление тем, кто рядом,
+// поэтому каждое объявление получает один постоянный адрес из списка (по своему Id). Свой адрес у объявления
+// (listing.address, отличный от общего) не трогаем. AVITO_SPREAD_ADDRESSES=false — везде общий адрес.
+const AVITO_SPREAD_ADDRESSES = process.env.AVITO_SPREAD_ADDRESSES !== "false";
+const AVITO_MOSCOW_ADDRESSES = [
+  "Москва, Манежная пл., 1с2",
+  "Москва, ул. Земляной Вал, 33",
+  "Москва, Комсомольская пл., 6",
+  "Москва, Пресненская наб., 2",
+  "Москва, пл. Киевского Вокзала, 2",
+  "Москва, Ленинградское ш., 16Ас4",
+  "Москва, Ходынский бул., 4",
+  "Москва, Дмитровское ш., 89",
+  "Москва, Дмитровское ш., 163А",
+  "Москва, Щукинская ул., 42",
+  "Москва, Сходненская ул., 56",
+  "Москва, пр-т Мира, 211к2",
+  "Москва, Щёлковское ш., 100",
+  "Москва, Рязанский пр-т, 2к3",
+  "Москва, ш. Энтузиастов, 12к2",
+  "Москва, Кировоградская ул., 13А",
+  "Москва, Варшавское ш., 87Б",
+  "Москва, Ореховый бул., 22А",
+  "Москва, ул. Вавилова, 3",
+  "Москва, ул. Большая Черёмушкинская, 1",
+  "Москва, Профсоюзная ул., 61А",
+  "Москва, пр-т Вернадского, 6",
+  "Москва, Мичуринский пр-т, Олимпийская деревня, 3",
+  "Москва, Кутузовский пр-т, 57",
+  "Москва, Ярцевская ул., 19",
+];
+
+/** Pure: the ad's address — its own, else one of the Moscow addresses chosen by its Id (stable), else the common one. */
+function avitoAdAddress(listing, feedDefaults = {}) {
+  const own = cleanText(listing?.address);
+  const common = cleanText(feedDefaults?.address);
+  if (own && own !== common) return own;
+  if (!AVITO_SPREAD_ADDRESSES) return own || common;
+  const key = cleanText(listing?.adId || listing?.id || listing?.title);
+  if (!key) return own || common;
+  let hash = 0;
+  for (let i = 0; i < key.length; i += 1) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+  return AVITO_MOSCOW_ADDRESSES[hash % AVITO_MOSCOW_ADDRESSES.length];
+}
+
 function buildAvitoAdXml(listing, feedDefaults = {}) {
   const description = listing.description?.trim() || buildUniqueAvitoDescription(listing, feedDefaults);
   const emitted = new Set();
@@ -229,7 +274,7 @@ function buildAvitoAdXml(listing, feedDefaults = {}) {
     emit("AdType", listing.adType || feedDefaults.adType);
     emit("Condition", feedDefaults.condition || listing.condition);
   }
-  emit("Address", listing.address || feedDefaults.address);
+  emit("Address", avitoAdAddress(listing, feedDefaults));
   emit("Brand", listing.brand);
   const tnVed = cleanText(listing.tnVed || AVITO_CATEGORY_TNVED[listing.categoryKey] || feedDefaults.tnVed || "");
   if (tnVed) emit("TnVed", tnVed);
