@@ -278,6 +278,162 @@ async function runAvitoPriceSync({ source = "schedule" } = {}) {
   }
 }
 
+// ─── Мгновенно: цена и остаток на Авито сразу после реального изменения цены ──────────────
+// sendWarehousePrices (привязка, новый прайс поставщика, смена поставщика — любой процесс) ставит товары, чья цена
+// только что ушла на Ozon / Маркет, в avito_price_queue. Воркер каждые AVITO_INSTANT_PRICE_SECONDS (20) берёт их,
+// пересчитывает объявление тем же applyAvitoLiveState, что фид, сохраняет в файл объявлений и сразу меняет цену
+// (update_price) и остаток (stock-management) на Авито. Полный обход раз в 30 минут остаётся страховкой.
+const avitoInstantPriceEnabled = process.env.AVITO_INSTANT_PRICE !== "false";
+const avitoInstantPriceIntervalMs = Math.max(5, Number(process.env.AVITO_INSTANT_PRICE_SECONDS || 20) || 20) * 1000;
+let avitoPriceQueueReady = false;
+let avitoInstantPriceTimer = null;
+let avitoInstantPriceRunning = false;
+let avitoInstantPriceLast = null;
+
+async function ensureAvitoPriceQueue() {
+  if (avitoPriceQueueReady) return true;
+  const prisma = getPrisma();
+  if (!prisma) return false;
+  await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS avito_price_queue (product_id TEXT PRIMARY KEY, queued_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+  avitoPriceQueueReady = true;
+  return true;
+}
+
+/** Products whose marketplace price just changed: Avito follows within seconds. Never throws. */
+async function queueAvitoPriceRefresh(productIds = []) {
+  if (!avitoInstantPriceEnabled) return 0;
+  const ids = [...new Set((productIds || []).map((id) => cleanText(id)).filter(Boolean))];
+  if (!ids.length) return 0;
+  try {
+    if (!(await ensureAvitoPriceQueue())) return 0;
+    await getPrisma().$executeRawUnsafe(
+      `INSERT INTO avito_price_queue (product_id) SELECT unnest($1::text[]) ON CONFLICT (product_id) DO UPDATE SET queued_at = now()`, ids);
+    return ids.length;
+  } catch (error) {
+    logger.warn("avito price queue insert failed", { detail: error?.message || String(error) });
+    return 0;
+  }
+}
+
+async function drainAvitoPriceQueue() {
+  if (avitoInstantPriceRunning || !(await ensureAvitoPriceQueue().catch(() => false))) return null;
+  const account = (getAvitoAccounts ? getAvitoAccounts() : [])[0];
+  if (!account) return null;
+  avitoInstantPriceRunning = true;
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const result = { at: new Date().toISOString(), queued: 0, listings: 0, priceUpdated: 0, priceHeld: 0, stockUpdated: 0, failed: 0, noAvitoId: 0 };
+  let taken = [];
+  try {
+    taken = (await getPrisma().$queryRawUnsafe(
+      `DELETE FROM avito_price_queue WHERE product_id IN (SELECT product_id FROM avito_price_queue ORDER BY queued_at LIMIT 400) RETURNING product_id`))
+      .map((row) => cleanText(row.product_id));
+    result.queued = taken.length;
+    if (!taken.length) return null;
+    const ids = new Set(taken);
+    const [state, rules] = await Promise.all([readAvitoListingsFile(), readAvitoImportRules()]);
+    const listings = state.items.filter((item) => item.enabled !== false && ids.has(cleanText(item.sourceProductId)));
+    result.listings = listings.length;
+    if (!listings.length) return result;
+    const liveStates = await loadAvitoLiveProductStates(listings);
+    if (liveStates === null) throw new Error("postgres unavailable");
+    const pricing = await loadAvitoPricingContext();
+    const missing = [...liveStates.entries()].filter(([, live]) => live && !live.supplier).map(([id]) => id);
+    if (missing.length) {
+      const supplierMap = await loadAvitoSupplierPricingMap(missing);
+      for (const id of missing) { const supplier = supplierMap.get(id); if (supplier) liveStates.get(id).supplier = supplier; }
+    }
+    const next = new Map();
+    for (const item of listings) {
+      const { listing, outOfStock } = applyAvitoLiveState(item, liveStates.get(cleanText(item.sourceProductId)), rules, pricing);
+      next.set(avitoFeedAdId(item.adId), { before: item, after: { ...listing, outOfStock, lastSyncedAt: result.at } });
+    }
+    // the listings file: the feed shows the same price at its next download
+    const fresh = await readAvitoListingsFile();
+    await writeAvitoListingsFile({ ...fresh, items: fresh.items.map((item) => next.get(avitoFeedAdId(item.adId))?.after || item) });
+
+    // feed ad id → Avito item id (the 30-minute sync fills the cache; the rest is asked from autoload)
+    const avitoIdByAd = new Map();
+    for (const [avitoId, adId] of avitoAdIdCache.entries()) avitoIdByAd.set(adId, avitoId);
+    const unknown = [...next.keys()].filter((adId) => !avitoIdByAd.has(adId));
+    for (let i = 0; i < unknown.length; i += 100) {
+      const r = await getAvitoIdsByAdIds(account, unknown.slice(i, i + 100)).catch(() => null);
+      for (const it of r?.items || []) {
+        if (!it.avito_id || !it.ad_id) continue;
+        avitoIdByAd.set(String(it.ad_id), Number(it.avito_id));
+        avitoAdIdCache.set(Number(it.avito_id), String(it.ad_id));
+      }
+    }
+    const stockState = avitoStockSyncEnabled ? await readAvitoStockSyncState() : null;
+    const stockUpdates = [];
+    for (const [adId, { before, after }] of next) {
+      const avitoId = avitoIdByAd.get(adId);
+      if (!avitoId) { result.noAvitoId += 1; continue; }
+      const want = Math.round(Number(after.priceRub) || 0);
+      const was = Math.round(Number(before.priceRub) || 0);
+      if (!after.outOfStock && want > 0 && want !== was) {
+        // owner's rule: a rise goes out, a drop over AVITO_PRICE_SYNC_MAX_JUMP waits for a person
+        if (was > 0 && was / want > avitoPriceSyncMaxJump) {
+          result.priceHeld += 1;
+          logger.warn("avito instant price drop held", { adId, from: was, to: want });
+        } else {
+          try {
+            await avitoRequest(`/core/v1/items/${avitoId}/update_price`, { method: "POST", account, body: { price: want } });
+            result.priceUpdated += 1;
+          } catch (error) {
+            result.failed += 1;
+            logger.warn("avito instant price update failed", { adId, detail: error?.message || String(error) });
+          }
+          await sleep(300);
+        }
+      }
+      const stock = stockState ? avitoWantedStock(after) : null;
+      if (stock !== null && stockState.sent[String(avitoId)] !== stock) stockUpdates.push({ item_id: Number(avitoId), quantity: stock });
+    }
+    for (let i = 0; i < stockUpdates.length; i += 200) {
+      const batch = stockUpdates.slice(i, i + 200);
+      try {
+        const r = await avitoRequest("/stock-management/1/stocks", { method: "PUT", account, body: { stocks: batch } });
+        const refused = new Set((r?.stocks || []).filter((row) => row.success === false).map((row) => Number(row.item_id)));
+        for (const u of batch) {
+          if (refused.has(u.item_id)) { result.failed += 1; continue; }
+          stockState.sent[String(u.item_id)] = u.quantity;
+          result.stockUpdated += 1;
+        }
+      } catch (error) {
+        result.failed += batch.length;
+        logger.warn("avito instant stock update failed", { detail: error?.message || String(error) });
+      }
+    }
+    if (stockUpdates.length) await writeAvitoStockSyncState(stockState);
+    logger.info("avito instant price", result);
+    return result;
+  } catch (error) {
+    result.error = error?.message || String(error);
+    logger.warn("avito instant price failed", { detail: result.error });
+    // nothing is lost: the products go back to the queue for the next tick
+    await queueAvitoPriceRefresh(taken);
+    return result;
+  } finally {
+    if (result.queued) avitoInstantPriceLast = result;
+    avitoInstantPriceRunning = false;
+  }
+}
+
+function scheduleAvitoInstantPrice(delayMs = avitoInstantPriceIntervalMs) {
+  if (!avitoInstantPriceEnabled) return;
+  if (avitoInstantPriceTimer) clearTimeout(avitoInstantPriceTimer);
+  avitoInstantPriceTimer = setTimeout(async () => {
+    try {
+      await drainAvitoPriceQueue();
+    } catch (error) {
+      logger.warn("avito instant price tick failed", { detail: error?.message || String(error) });
+    } finally {
+      scheduleAvitoInstantPrice(avitoInstantPriceIntervalMs);
+    }
+  }, Math.max(5_000, Number(delayMs) || avitoInstantPriceIntervalMs));
+  avitoInstantPriceTimer.unref?.();
+}
+
 function scheduleAvitoPriceSync(delayMs = avitoPriceSyncIntervalMs) {
   if (!avitoPriceSyncEnabled) return;
   if (avitoPriceSyncTimer) clearTimeout(avitoPriceSyncTimer);
@@ -307,6 +463,8 @@ function avitoSyncPublic() {
     dailyUploadLast: avitoDailyUploadLast,
     priceSyncEnabled: avitoPriceSyncEnabled,
     priceSyncLast: avitoPriceSyncLast,
+    instantPriceEnabled: avitoInstantPriceEnabled,
+    instantPriceLast: avitoInstantPriceLast,
   };
 }
 

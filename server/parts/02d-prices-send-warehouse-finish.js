@@ -198,6 +198,8 @@
   if (failedQueued.length || delayedQueueUpdates.length) await writePriceRetryQueue({ items: deduped });
   schedulePriceRetryItems([...failedQueued, ...delayedQueueUpdates]);
 
+  // Avito follows at once: the worker re-prices these products' ads within seconds (avito_price_queue)
+  if (successIds.size && typeof queueAvitoPriceRefresh === "function") void queueAvitoPriceRefresh([...successIds]);
   const stats = warehousePriceMarketplaceStats(items, failed, skipped);
   updateSalesAutomationFromPriceResult({ items, failed, skipped, stockActions, sentAt })
     .catch((error) => logger.warn("sales automation state background update failed", { detail: error?.message || String(error) }));
