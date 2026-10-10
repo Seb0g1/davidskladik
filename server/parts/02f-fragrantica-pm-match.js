@@ -82,6 +82,31 @@ async function runFragranticaPmMatch() {
 const FRAG_SET_NAME_PATTERN = "(набор|подарочн|коллекц|(^|[^a-z])(set|gift)([^a-z]|$)|[0-9] *[xх×*] *[0-9]|(ml|мл) *[+])";
 const FRAG_SET_NAME_RE = new RegExp(FRAG_SET_NAME_PATTERN, "i");
 
+// Goods that are not a perfume bottle: card improvement must not rebuild them as «Парфюмерная вода» with a bottle
+// photo (2026-10-10: Armaf Odyssey Mega «в виде спрея для тела» became an EDP card with the EDP bottle). The same
+// pattern runs in Postgres (the improvement queue) and in JS (the build) — kinds in FRAG_NON_PERFUME_KINDS.
+const FRAG_NON_PERFUME_KINDS = [
+  ["дезодорант", "дезодорант|антиперспирант|deodorant|antiperspirant|(^|[^a-z])deo([^a-z]|$)"],
+  ["спрей / мист для тела", "спре[йя][ -]+для[ -]+тела|body[ -]*(spray|mist)|(^|[^а-яё])мист([^а-яё]|$)|(^|[^a-z])mist([^a-z]|$)|дымк"],
+  ["для волос", "для волос|hair[ -]*(mist|perfume|spray)"],
+  ["лосьон / молочко", "лосьон|lotion|молочко|body[ -]*milk"],
+  ["крем", "крем|(^|[^a-z])cream([^a-z]|$)"],
+  ["гель / мыло / шампунь", "гел[ьи]|(^|[^a-z])gel([^a-z]|$)|мыло|(^|[^a-z])soap|шампун|shampoo|бальзам|(^|[^a-z])balm([^a-z]|$)|скраб|scrub"],
+  ["масло для тела", "масло для (тела|волос)|body[ -]*oil"],
+  ["после бритья", "после бритья|after[ -]*shave"],
+  ["свеча / диффузор", "свеч[аи]|candle|диффузор|diffuser"],
+];
+const FRAG_NON_PERFUME_NAME_PATTERN = `(${FRAG_NON_PERFUME_KINDS.map(([, re]) => re).join("|")})`;
+const FRAG_NON_PERFUME_KIND_RES = FRAG_NON_PERFUME_KINDS.map(([label, re]) => [label, new RegExp(re, "i")]);
+
+/** Pure: the kind of a non-perfume product named so («спрей / мист для тела», «крем»…), or "" for a perfume. */
+function fragranticaNonPerfumeKind(name) {
+  const text = String(name || "").toLowerCase();
+  if (!text) return "";
+  const hit = FRAG_NON_PERFUME_KIND_RES.find(([, re]) => re.test(text));
+  return hit ? hit[0] : "";
+}
+
 /**
  * «Уже есть в магазине» — cards that were on the shops before Fragrantica: every active warehouse product
  * (warehouse_products, per shop = target) is indexed like a PriceMaster row and every catalog perfume is

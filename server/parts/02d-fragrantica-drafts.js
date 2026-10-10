@@ -538,7 +538,7 @@ async function enqueueFragranticaImprovements({ limit = FRAG_IMPROVE_PER_SCAN, c
               (w.status = 'active' AND coalesce(w.target_stock, 0) > 0) AS live
          FROM fragrantica_card_matches m
          JOIN warehouse_products w ON w.target = m.target AND w.offer_id = m.offer_id AND w.archived = false
-        WHERE m.volume_ml IS NOT NULL AND m.offer_id !~* '^FR[0-9]' AND w.name !~* $2
+        WHERE m.volume_ml IS NOT NULL AND m.offer_id !~* '^FR[0-9]' AND w.name !~* $2 AND w.name !~* $4
      ), g AS (
        SELECT lower(offer_id) AS k, min(offer_id) AS offer_id,
               mode() WITHIN GROUP (ORDER BY perfume_id) AS perfume_id, max(volume_ml) AS volume_ml, bool_or(tester) AS tester,
@@ -556,7 +556,7 @@ async function enqueueFragranticaImprovements({ limit = FRAG_IMPROVE_PER_SCAN, c
         AND (g.live OR NOT $3::boolean)
       ORDER BY g.live DESC, sold DESC, rating ASC NULLS LAST, g.k
       LIMIT $1`,
-    wanted, FRAG_SET_NAME_PATTERN, Boolean(activeOnly),
+    wanted, FRAG_SET_NAME_PATTERN, Boolean(activeOnly), FRAG_NON_PERFUME_NAME_PATTERN,
   );
   const all = fragranticaTargets();
   let queued = 0;
@@ -896,6 +896,16 @@ async function buildFragranticaCardDraft(draft) {
       // every shop of the product: Ozon gives the price, old price, barcode and sizes; Market its own price
       if (existingResult?.error) throw existingResult.error;
       const { shopStates } = existingResult;
+      // a deodorant, body spray / mist, cream, lotion…: the improvement never turns it into a perfume card — its
+      // photos, name and kind stay. The card's own titles in every shop decide (supplier rows linked to a perfume
+      // article often include its sets and body products, so they are not asked).
+      {
+        const names = shopStates.map((x) => x.state?.before?.name).filter(Boolean);
+        const kind = names.map((n) => fragranticaNonPerfumeKind(n)).find(Boolean);
+        if (kind) {
+          return updateFragranticaDraft(draft.id, { status: "skipped", stage: null, error: `Не парфюм (${kind}): улучшение не меняет фото, название и вид таких карточек` });
+        }
+      }
       // not on Market → the improvement uploads it there (content; its price and stock come with the usual sync);
       // not on Ozon → that shop is left out (a new Ozon card needs a price the improvement does not set)
       const allKeys = fragranticaTargets();
