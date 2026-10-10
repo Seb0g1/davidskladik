@@ -175,6 +175,71 @@ app.get("/api/fragrantica/ozon/link-suggestions", requireAdmin, async (request, 
   }
 });
 
+// Ticked supplier rows of the form are kept in the database per perfume + type + volume + tester, so a page
+// reload, another device or a server restart shows the same ticks. No row yet = nobody ticked anything there,
+// the form takes the suggested rows.
+//   GET /api/fragrantica/ozon/link-picks?perfumeId&typeKey&volume&tester → { rows: LinkRow[] | null }
+//   PUT /api/fragrantica/ozon/link-picks { perfumeId, typeKey, volume, tester, rows }
+let fragranticaLinkPicksReady = false;
+async function ensureFragranticaLinkPicks() {
+  if (fragranticaLinkPicksReady) return;
+  await requireFragranticaTables();
+  await getPrisma().$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS fragrantica_link_picks (
+      perfume_id BIGINT NOT NULL,
+      type_key TEXT NOT NULL,
+      volume TEXT NOT NULL,
+      tester BOOLEAN NOT NULL,
+      rows JSONB NOT NULL DEFAULT '[]'::jsonb,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (perfume_id, type_key, volume, tester)
+    )`);
+  fragranticaLinkPicksReady = true;
+}
+
+function fragranticaLinkPicksKey(source = {}) {
+  const perfumeId = Number(source.perfumeId);
+  if (!Number.isFinite(perfumeId) || perfumeId <= 0) {
+    const error = new Error("perfumeId не указан");
+    error.statusCode = 400;
+    throw error;
+  }
+  const tester = source.tester === true || source.tester === 1 || ["1", "true"].includes(cleanText(source.tester));
+  return [perfumeId, cleanText(source.typeKey), cleanText(source.volume), tester];
+}
+
+app.get("/api/fragrantica/ozon/link-picks", requireAdmin, async (request, response, next) => {
+  try {
+    await ensureFragranticaLinkPicks();
+    const [row] = await getPrisma().$queryRawUnsafe(
+      `SELECT rows FROM fragrantica_link_picks WHERE perfume_id = $1 AND type_key = $2 AND volume = $3 AND tester = $4`,
+      ...fragranticaLinkPicksKey(request.query),
+    );
+    response.json({ rows: row ? row.rows : null });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/fragrantica/ozon/link-picks", requireAdmin, async (request, response, next) => {
+  try {
+    await ensureFragranticaLinkPicks();
+    const body = request.body || {};
+    const rows = (Array.isArray(body.rows) ? body.rows : [])
+      .filter((row) => row && typeof row === "object" && cleanText(row.id))
+      .slice(0, 200);
+    await getPrisma().$executeRawUnsafe(
+      `INSERT INTO fragrantica_link_picks (perfume_id, type_key, volume, tester, rows, updated_at)
+       VALUES ($1, $2, $3, $4, $5::jsonb, now())
+       ON CONFLICT (perfume_id, type_key, volume, tester) DO UPDATE SET rows = EXCLUDED.rows, updated_at = now()`,
+      ...fragranticaLinkPicksKey(body), JSON.stringify(rows),
+    );
+    response.json({ ok: true, count: rows.length });
+  } catch (error) {
+    next(error);
+  }
+});
+
 async function fragranticaPricePreview(rows = []) {
   const settings = await readAppSettings();
   const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;

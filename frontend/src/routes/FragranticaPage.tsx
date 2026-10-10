@@ -953,13 +953,32 @@ function CardStep({ perfume, typeKey, volume, tester, workShops, description, on
     queryFn: () => apiJson<LinkSuggestions>(`/api/fragrantica/ozon/link-suggestions?perfumeId=${perfume.id}&typeKey=${typeKey}&volume=${encodeURIComponent(volume)}&tester=${tester ? 1 : 0}&q=${encodeURIComponent(debouncedLinkQuery.trim())}`),
     staleTime: 5 * 60_000,
   });
-  const suggestedApplied = useRef(false);
+  // Ticks live in the database per perfume + type + volume + tester: a reload or a server restart keeps them.
+  // Nothing saved yet → the suggested rows are ticked.
+  const picksParams = `perfumeId=${perfume.id}&typeKey=${typeKey}&volume=${encodeURIComponent(volume)}&tester=${tester ? 1 : 0}`;
+  const savedPicks = useQuery({
+    queryKey: ["fragrantica", "link-picks", picksParams],
+    queryFn: () => apiJson<{ rows: LinkRow[] | null }>(`/api/fragrantica/ozon/link-picks?${picksParams}`),
+    staleTime: Infinity,
+  });
+  const savePicks = useMutation({
+    mutationFn: (rows: LinkRow[]) => apiJson("/api/fragrantica/ozon/link-picks", { ...mutationBody({ perfumeId: perfume.id, typeKey, volume, tester, rows }), method: "PUT" }),
+    onSuccess: (_res, rows) => queryClient.setQueryData(["fragrantica", "link-picks", picksParams], { rows }),
+    onError: (error) => toast.error(`Галочки не сохранились: ${errorMessage(error)}`),
+  });
+  const appliedPicks = useRef("");
   useEffect(() => {
-    if (suggestedApplied.current || !suggestions.data || debouncedLinkQuery.trim()) return;
-    suggestedApplied.current = true;
+    if (appliedPicks.current === picksParams || !savedPicks.data) return;
+    if (savedPicks.data.rows) {
+      appliedPicks.current = picksParams;
+      setSelectedLinks(Object.fromEntries(savedPicks.data.rows.map((r) => [r.id, r])));
+      return;
+    }
+    if (!suggestions.data || debouncedLinkQuery.trim()) return;
+    appliedPicks.current = picksParams;
     const ids = suggestions.data.suggested;
     setSelectedLinks(Object.fromEntries(suggestions.data.rows.filter((r) => ids.includes(r.id)).map((r) => [r.id, r])));
-  }, [suggestions.data, debouncedLinkQuery]);
+  }, [savedPicks.data, suggestions.data, debouncedLinkQuery, picksParams]);
   const selectedRows = Object.values(selectedLinks);
   const selectionKey = selectedRows.map((r) => r.id).sort().join(",");
   const pricePreview = useQuery({
@@ -975,12 +994,13 @@ function CardStep({ perfume, typeKey, volume, tester, workShops, description, on
   useEffect(() => {
     if (!priceTouched && pricePreview.data?.price) applyPreview(pricePreview.data);
   }, [pricePreview.data, priceTouched]);
-  const toggleLink = (row: LinkRow) => setSelectedLinks((prev) => {
-    const next = { ...prev };
+  const toggleLink = (row: LinkRow) => {
+    const next = { ...selectedLinks };
     if (next[row.id]) delete next[row.id];
     else next[row.id] = row;
-    return next;
-  });
+    setSelectedLinks(next);
+    savePicks.mutate(Object.values(next));
+  };
 
   // «Написать описание ИИ»: DeepSeek по фактам Фрагрантики (ноты, семейство, парфюмер, год)
   const describe = useMutation({
