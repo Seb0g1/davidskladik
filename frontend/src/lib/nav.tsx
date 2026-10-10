@@ -1,8 +1,8 @@
-import { ShieldAlert, Activity, FileCheck2, Flower2, AlertCircle, AlertTriangle, BadgeDollarSign, Ban, BarChart3, BookOpen, CirclePlay, ClipboardList, DollarSign, Download, HandCoins, HelpCircle, Home, Link2, MessageCircle, MessageCircleHeart, PackageCheck, PackagePlus, RefreshCcw, Settings, ShoppingCart, Sparkles, Star, Store, Tag, Truck, Upload, Wrench } from "lucide-react";
+import { ShieldAlert, Activity, Bot, FileCheck2, Flower2, AlertCircle, AlertTriangle, BadgeDollarSign, Ban, BarChart3, BookOpen, CirclePlay, ClipboardList, DollarSign, Download, HandCoins, HelpCircle, Home, Link2, MessageCircle, MessageCircleHeart, PackageCheck, PackagePlus, RefreshCcw, Settings, ShoppingCart, Sparkles, Star, Store, Tag, Truck, Upload, Wrench } from "lucide-react";
 import { ComponentType, lazy, LazyExoticComponent, ReactNode } from "react";
 import { TabbedPage } from "../components/PageTabs";
 
-export type AppRoute = "dashboard" | "import" | "avito" | "shop" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "prices" | "problem-products" | "finance" | "consignment" | "settings" | "system" | "tnved" | "support" | "brand-bans" | "fragrantica" | "ozon-docs" | "card-health" | "card-improve" | "supplier-match";
+export type AppRoute = "dashboard" | "import" | "avito" | "shop" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "prices" | "problem-products" | "finance" | "consignment" | "settings" | "system" | "tnved" | "support" | "brand-bans" | "fragrantica" | "ozon-docs" | "card-health" | "card-improve" | "supplier-match" | "avito-chats";
 
 export type NavItem = { route: AppRoute; href: string; label: string; icon: ReactNode; keywords?: string };
 
@@ -14,6 +14,7 @@ export const navItems: NavItem[] = [
   { route: "consignment", href: "/app/consignment", label: "Реализация", icon: <HandCoins size={16} />, keywords: "спонсор накладные realizaciya" },
   { route: "reviews", href: "/app/reviews", label: "Отзывы и вопросы", icon: <Star size={16} />, keywords: "отзывы оценки вопросы покупателей otzyvy voprosy" },
   { route: "chats", href: "/app/chats", label: "Чаты", icon: <MessageCircle size={16} />, keywords: "сообщения покупатели chaty" },
+  { route: "avito-chats", href: "/app/avito-chats", label: "Мессенджер Авито", icon: <Bot size={16} />, keywords: "авито чаты мессенджер автоответ оригинал автопилот спасибо за покупку avito" },
   { route: "questions", href: "/app/questions", label: "Вопросы покупателей", icon: <HelpCircle size={16} />, keywords: "вопросы покупателей voprosy" },
   { route: "support", href: "/app/support", label: "Поддержка сайта", icon: <MessageCircleHeart size={16} />, keywords: "сайт чат поддержка" },
   { route: "settings", href: "/app/settings", label: "Настройки", icon: <Settings size={16} />, keywords: "сотрудники доступы ключи nastroyki" },
@@ -39,7 +40,7 @@ export const navItems: NavItem[] = [
 // задачам: покупатели → карточки → деньги → каналы продаж → справочники → система.
 export const NAV_SECTIONS: Array<{ id: string; title?: string; routes: AppRoute[] }> = [
   { id: "daily", routes: ["dashboard", "warehouse", "picking-list", "supplier-cart", "suppliers"] },
-  { id: "customers", title: "Покупатели", routes: ["chats", "reviews", "support"] },
+  { id: "customers", title: "Покупатели", routes: ["chats", "avito-chats", "reviews", "support"] },
   { id: "cards", title: "Карточки товаров", routes: ["card-improve", "card-health", "fragrantica", "supplier-match", "ozon-docs", "problem-products"] },
   { id: "money", title: "Цены и деньги", routes: ["prices", "finance", "consignment"] },
   { id: "channels", title: "Каналы продаж", routes: ["shop", "avito", "import"] },
@@ -96,6 +97,7 @@ const LOADERS: Record<AppRoute, Loader> = {
   reviews: { load: () => import("../routes/FeedbackPage"), exportName: "FeedbackPage" },
   questions: { load: () => import("../routes/FeedbackPage"), exportName: "FeedbackPage" },
   chats: { load: () => import("../routes/ChatsPage"), exportName: "ChatsPage" },
+  "avito-chats": { load: () => import("../routes/AvitoMessengerPage"), exportName: "AvitoMessengerPage" },
   support: { load: () => import("../routes/SupportChatsPage"), exportName: "SupportChatsPage" },
   settings: { load: () => import("../routes/SettingsPage"), exportName: "SettingsPage" },
   system: { load: async () => ({ Page: () => <TabbedPage title="Система" tabs={[{ id: "health", label: "Состояние", load: () => import("../routes/SystemPage"), exportName: "SystemPage" }, { id: "recovery", label: "Восстановление из архива", load: () => import("../routes/RecoveryQueuePage"), exportName: "RecoveryQueuePage" }]} /> }), exportName: "Page" },

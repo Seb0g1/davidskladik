@@ -194,9 +194,18 @@ function ChatAttachments({ attachments, onOpen }: { attachments: ChatAttachment[
 
 type PendingImage = { localUrl: string; serverUrl: string };
 
-export function ChatsPage() {
+type ChatsPageProps = {
+  /** one marketplace only (the «Мессенджер Авито» page): no marketplace picker */
+  lockMarketplace?: string;
+  title?: string;
+  subtitle?: string;
+  /** shown between the header and the chats (the autopilot panel) */
+  top?: ReactNode;
+};
+
+export function ChatsPage({ lockMarketplace, title = "Чаты", subtitle = "Переписка с покупателями на Ozon, Avito, Яндекс.Маркете и Wildberries в одном месте.", top }: ChatsPageProps = {}) {
   const queryClient = useQueryClient();
-  const [marketplace, setMarketplace] = useState("all");
+  const [marketplace, setMarketplace] = useState(lockMarketplace || "all");
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [selected, setSelected] = useState<ChatRow | null>(null);
   const [mobileView, setMobileView] = useState<"list" | "thread">("list");
@@ -316,8 +325,8 @@ export function ChatsPage() {
   return (
     <section className="page-section chats-page">
       <PageHeader
-        title="Чаты"
-        subtitle="Переписка с покупателями на Ozon, Avito, Яндекс.Маркете и Wildberries в одном месте."
+        title={title}
+        subtitle={subtitle}
         action={(
           <div className="row-actions">
             <button className="secondary-action" type="button" onClick={() => setTemplatesOpen(true)}>
@@ -330,12 +339,13 @@ export function ChatsPage() {
         )}
       />
       {(chatsQuery.data?.warnings || []).map((warning) => <div className="inline-warn" key={warning}>{warning}</div>)}
+      {top}
 
       <div className="chats-layout">
         <div className={`chats-list${mobileView === "thread" ? " mobile-hidden" : ""}`}>
           {/* фильтры и счётчик — над списком, как в мессенджере */}
           <div className="chats-list-head">
-            <SelectField
+            {lockMarketplace ? null : <SelectField
               ariaLabel="Маркетплейс"
               value={marketplace}
               onChange={(next) => { setMarketplace(next); setSelected(null); }}
@@ -346,7 +356,7 @@ export function ChatsPage() {
                 { value: "wb", label: "Wildberries" },
                 { value: "avito", label: "Avito" },
               ]}
-            />
+            />}
             <label className="settings-toggle">
               <input type="checkbox" checked={unreadOnly} onChange={(event) => { setUnreadOnly(event.target.checked); setSelected(null); }} />
               Только непрочитанные

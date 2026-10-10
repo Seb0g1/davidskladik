@@ -271,6 +271,8 @@ function AppShell() {
     const merged: Record<string, AppRoute> = { statistics: "dashboard", "recovery-queue": "system", "no-supplier": "supplier-match", "ozon-card-fix": "card-health", "brands-tnved": "tnved", "price-guard": "prices" };
     const grantedPages = (session?.allowedPages || []).map((page) => merged[page] || page).filter((page): page is AppRoute => (allRouteKeys as string[]).includes(page));
     const allowed = new Set<AppRoute>(isAdmin ? allRouteKeys : (grantedPages.length ? grantedPages : defaultEmployeeRoutes));
+    // «Мессенджер Авито» is the Avito part of «Чаты»: the same grant opens it
+    if (allowed.has("chats")) allowed.add("avito-chats");
     return navItems.filter((item) => allowed.has(item.route));
   }, [isAdmin, session?.allowedPages]);
   const allowedRoutes = useMemo(() => new Set(visibleNavItems.map((item) => item.route)), [visibleNavItems]);

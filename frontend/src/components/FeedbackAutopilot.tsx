@@ -8,7 +8,7 @@ import { MarketplaceBadge } from "./MarketplaceBadge";
 type Check = { ok: boolean; answersQuestion: boolean; issues: string[] };
 type Pending = { id: string; marketplace: string; target: string; productName?: string; text: string; draft: string; facts: string[]; check: Check; createdAt: string };
 type LogEntry = { at: string; kind: string; action: string; marketplace?: string; product?: string; question?: string; text?: string; error?: string; reason?: string; rating?: number; check?: string };
-type Settings = { reviews: boolean; originality: boolean; questionDrafts: boolean };
+type Settings = { reviews: boolean; originality: boolean; questionDrafts: boolean; productAnswersAuto: boolean };
 type State = { ok: boolean; enabled: boolean; intervalMinutes: number; settings: Settings; lastRun: Record<string, unknown> | null; runRequestedAt: string | null; pending: Pending[]; log: LogEntry[] };
 
 const time = (iso?: unknown) => (iso ? new Date(String(iso)).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—");
@@ -17,6 +17,7 @@ const MODES: Array<{ key: keyof Settings; label: string; hint: string }> = [
   { key: "reviews", label: "Отзывы 4–5★", hint: "ИИ отвечает и сразу отправляет" },
   { key: "originality", label: "Типовые вопросы", hint: "«оригинал?» и «проверить в пункте выдачи» — ответ сразу, без проверки" },
   { key: "questionDrafts", label: "Остальные вопросы", hint: "ИИ собирает данные товара, проверяет ответ — отправляете вы" },
+  { key: "productAnswersAuto", label: "Вопросы об аромате", hint: "страна, ноты, сравнение с другим ароматом — ответ уходит сам, если проверка прошла" },
 ];
 
 function PendingCard({ item, onDone }: { item: Pending; onDone: () => void }) {

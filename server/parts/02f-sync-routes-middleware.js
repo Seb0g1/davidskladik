@@ -241,6 +241,10 @@ function startBackgroundSchedulers() {
     scheduleFeedbackAutopilot(3 * 60_000);
     logger.info("feedback autopilot enabled", { intervalMinutes: Math.round(feedbackAutopilotIntervalMs / 60000) });
   }
+  if (chatAutopilotEnabled) {
+    scheduleChatAutopilot(2 * 60_000);
+    logger.info("chat autopilot enabled", { intervalMinutes: Math.round(chatAutopilotIntervalMs / 60000) });
+  }
   if (notifyPollEnabled) {
     scheduleNotificationPolling(60_000);
     logger.info("notification polling enabled", {

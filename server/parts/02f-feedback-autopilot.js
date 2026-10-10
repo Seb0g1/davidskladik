@@ -13,7 +13,9 @@ const feedbackAutopilotPath = path.join(dataDir, "feedback-autopilot.json");
 const feedbackAutopilotIntervalMs = Math.max(5, Number(process.env.FEEDBACK_AUTOPILOT_INTERVAL_MINUTES || 20) || 20) * 60_000;
 const feedbackAutopilotEnabled = process.env.FEEDBACK_AUTOPILOT !== "false";
 const FEEDBACK_AUTOPILOT_PER_RUN = Math.max(1, Number(process.env.FEEDBACK_AUTOPILOT_PER_RUN || 15) || 15);
-const FEEDBACK_AUTOPILOT_DEFAULTS = { reviews: true, originality: true, questionDrafts: true };
+// productAnswersAuto: a question about the perfume itself (country, notes, comparison…) whose answer passed the check
+// goes out by itself (owner, 2026-10-10); anything else stays a draft for a person
+const FEEDBACK_AUTOPILOT_DEFAULTS = { reviews: true, originality: true, questionDrafts: true, productAnswersAuto: true };
 let feedbackAutopilotTimer = null;
 let feedbackAutopilotRunning = false;
 
@@ -279,6 +281,11 @@ async function findMentionedProducts(question) {
 async function draftQuestionAnswer(question, aiSettings) {
   const { offerId, facts } = await collectQuestionFacts(question);
   const mentioned = await findMentionedProducts(question).catch(() => []);
+  // perfumes named by name («чем отличается от Sauvage Elixir?») — notes from our Fragrantica catalog
+  for (const name of await namedPerfumesInMessage(question.text, question.productName, aiSettings)) {
+    const found = await catalogFactsByText(name).catch(() => null);
+    if (found) mentioned.push({ ref: name, name: found.name, facts: found.facts });
+  }
   const withMentioned = { ...question, mentioned };
   const draft = await buildQuestionAnswerWithFacts(withMentioned, facts, aiSettings);
   if (!draft) throw new Error("ИИ не вернул текст");
@@ -353,7 +360,7 @@ ok=false, если в ответе есть утверждение о товар
 async function runFeedbackAutopilot({ source = "schedule" } = {}) {
   if (feedbackAutopilotRunning) return { status: "already_running" };
   feedbackAutopilotRunning = true;
-  const totals = { reviewsAnswered: 0, originalityAnswered: 0, drafts: 0, errors: 0 };
+  const totals = { reviewsAnswered: 0, originalityAnswered: 0, productAnswered: 0, drafts: 0, errors: 0 };
   try {
     const { settings } = await readFeedbackAutopilotState();
     const aiSettings = await readEffectiveAiSettings();
@@ -417,6 +424,15 @@ async function runFeedbackAutopilot({ source = "schedule" } = {}) {
             });
           } else {
             const { offerId, facts, draft, check } = await draftQuestionAnswer(question, aiSettings);
+            if (settings.productAnswersAuto && check.ok && check.answersQuestion && isChatProductQuestion(question.text)) {
+              await sendQuestionAnswer({ ...question, text: draft });
+              totals.productAnswered += 1;
+              await updateFeedbackAutopilotState((state) => {
+                state.handled[id] = { at: new Date().toISOString(), action: "auto_product_answer" };
+                feedbackAutopilotLog(state, { kind: "question", action: "sent", reason: "вопрос об аромате", marketplace: question.marketplace, target: question.target, product: question.productName, question: question.text, text: draft });
+              });
+              continue;
+            }
             totals.drafts += 1;
             await updateFeedbackAutopilotState((state) => {
               if (state.pending.some((p) => p.id === id)) return;
