@@ -15,7 +15,26 @@ const FRAG_OZON_TYPES = [
   { key: "parfum", typeId: 93397, label: "Духи", nameLabel: "Парфюм" },
   { key: "cologne", typeId: 93402, label: "Одеколон", nameLabel: "Одеколон" },
   { key: "oil", typeId: 970674005, label: "Духи-масло", nameLabel: "Духи-масло" },
+  // not a perfume bottle (owner, 2026-10-10): own Ozon types; a deodorant lives in «Средства для гигиены тела»
+  { key: "mist", typeId: 971214875, label: "Парфюмированный мист", nameLabel: "Парфюмированный мист", special: true },
+  { key: "set", typeId: 93404, label: "Набор парфюмерный", nameLabel: "Парфюмерный набор", special: true },
+  { key: "deodorant", typeId: 93466, categoryId: 17028983, label: "Дезодорант", nameLabel: "Дезодорант", special: true },
 ];
+
+/** The Ozon description category of a type (by key, id or the type itself): Парфюмерия unless the type says else. */
+function fragOzonCategoryForType(typeOrId) {
+  const type = typeof typeOrId === "object" && typeOrId
+    ? typeOrId
+    : FRAG_OZON_TYPES.find((t) => t.typeId === Number(typeOrId) || t.key === typeOrId);
+  return Number(type?.categoryId) || FRAG_OZON_CATEGORY_ID;
+}
+
+// supplier rows of a special kind must name it: a body-spray card is not linked to the eau de parfum
+const FRAG_SPECIAL_KIND_RE = {
+  mist: /(^|[^a-zа-я])(mist|мист|дымка|вуаль|body\s*spray|спрей\s+для\s+тела|hair\s*mist)/,
+  deodorant: /(^|[^a-zа-я])(deo|deodorant|дезодорант|антиперспирант|stick|стик)([^a-zа-я]|$)/,
+  set: /(^|[^a-zа-я])(set|набор|gift|подарочн|coffret|kit)([^a-zа-я]|$)/,
+};
 
 const FRAG_OZON_ATTR = {
   brand: 85,
@@ -127,6 +146,10 @@ function fragOzonTypeById(typeId) {
 // «Eau de Toilette» / «Cologne» в названии подсказывают тип; по умолчанию — парфюмерная вода.
 function fragOzonGuessTypeKey(perfume = {}) {
   const text = `${perfume.name || ""} ${perfume.title || ""}`.toLowerCase().trim();
+  // «212 NYC Body Spray», «… Hair Mist», «… Deodorant», «… Gift Set» are not a bottle of perfume
+  if (/body\s*(spray|mist)|hair\s*mist|(^|\s)mist(\s|$)|мист|дымка/.test(text)) return "mist";
+  if (/deodorant|(^|\s)deo(\s|$)|дезодорант/.test(text)) return "deodorant";
+  if (/gift\s*set|coffret|(^|\s)set(\s|$)|набор/.test(text)) return "set";
   if (/eau de toilette|\bedt\b|туалетн/.test(text)) return "edt";
   if (/eau de cologne|cologne|одеколон/.test(text)) return "cologne";
   // «attar» is not a type: Attar Collection makes eau de parfum
@@ -361,16 +384,19 @@ function buildFragranticaOzonPrefill({ perfume = {}, typeKey = "edp", volume, te
 // Итоговый item для /v3/product/import + список того, чего не хватает (по обязательным атрибутам категории).
 function buildFragranticaOzonItem(input = {}, categoryAttributes = []) {
   const type = fragOzonTypeById(input.typeId) || fragOzonTypeByKey(input.typeKey);
+  // only what the type's category knows: a deodorant / set category lacks some perfume attributes (12141, 8008…)
+  const known = new Set((categoryAttributes || []).map((a) => Number(a.id)));
   const attributes = (Array.isArray(input.attributes) ? input.attributes : [])
     .map((a) => fragAttr(Number(a.id), a.values || []))
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((a) => !known.size || known.has(Number(a.id)));
   const images = (Array.isArray(input.images) ? input.images : []).map((u) => String(u || "").trim()).filter(Boolean).slice(0, 30);
   const price = Number(String(input.price ?? "").replace(",", "."));
   const oldPrice = Number(String(input.oldPrice ?? "").replace(",", "."));
   const item = {
     offer_id: String(input.offerId || "").trim(),
     name: String(input.name || "").trim(),
-    description_category_id: FRAG_OZON_CATEGORY_ID,
+    description_category_id: fragOzonCategoryForType(type),
     type_id: type.typeId,
     price: Number.isFinite(price) && price > 0 ? String(Math.round(price)) : "",
     old_price: Number.isFinite(oldPrice) && oldPrice > price ? String(Math.round(oldPrice)) : "",
@@ -469,10 +495,14 @@ function assessFragranticaSupplierRow(rowName, { brand = "", name = "", typeKey 
   const aliasHit = aliases.some((alias) => (alias.includes("&") ? outside.includes(alias) : outsideSet.has(alias)));
   const clone = brandTokens.length > 0 && present < Math.ceil(brandTokens.length / 2) && !aliasHit;
   const afterShave = /after\s*-?\s*shave|a\s*\/\s*sh(?![a-z])|после\s+бритья/.test(text);
-  const notPerfume = afterShave || fragRowTokens(text).some((w) => FRAG_ROW_NOT_PERFUME.has(w) && !(oilAllowed && (w === "oil" || w === "масло")));
+  const specialKind = FRAG_SPECIAL_KIND_RE[typeKey];
+  // a mist / deodorant / set card wants exactly such rows; a perfume card never takes them
+  const notPerfume = specialKind
+    ? !specialKind.test(text)
+    : afterShave || fragRowTokens(text).some((w) => FRAG_ROW_NOT_PERFUME.has(w) && !(oilAllowed && (w === "oil" || w === "масло")));
   const concentration = fragRowConcentration(outsideTokens, outside);
   const wanted = fragTypeFamily(typeKey);
-  const concentrationOk = !concentration || fragTypeFamily(concentration) === wanted;
+  const concentrationOk = Boolean(specialKind) || !concentration || fragTypeFamily(concentration) === wanted;
   // brand aliases are part of the brand, not extra words («Thierry Mugler» = Mugler)
   const known = new Set([...brandTokens, ...fragRowTokens(brand), ...nameTokens, ...aliases.flatMap((alias) => fragRowTokens(alias))]);
   // «eau de parfum» is a concentration, a lone «eau» is part of a name (Eau Sauvage ≠ Sauvage)

@@ -91,7 +91,7 @@ function BuildProgress({ draft, timing }: { draft: Draft; timing: Timing }) {
   );
 }
 
-const TYPES: Array<[string, string]> = [["edp", "Парфюмерная вода (EDP)"], ["edt", "Туалетная вода (EDT)"], ["extrait", "Духи (Extrait)"], ["parfum", "Парфюм (Parfum)"], ["cologne", "Одеколон"], ["oil", "Духи-масло"]];
+const TYPES: Array<[string, string]> = [["edp", "Парфюмерная вода (EDP)"], ["edt", "Туалетная вода (EDT)"], ["extrait", "Духи (Extrait)"], ["parfum", "Парфюм (Parfum)"], ["cologne", "Одеколон"], ["oil", "Духи-масло"], ["mist", "Парфюмерный мист"], ["set", "Набор парфюмерный"], ["deodorant", "Дезодорант"]];
 const STAGE: Record<string, string> = {
   start: "начинаем", build: "характеристики, поставщики, фото и описание", volumes: "ищем объёмы в PriceMaster", form: "характеристики Ozon", links: "поставщики и цена", photos: "фото и пирамиды", description: "описание ИИ",
 };

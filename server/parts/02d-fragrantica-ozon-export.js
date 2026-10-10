@@ -100,7 +100,7 @@ async function fragranticaDictValues(account, typeId, attributeId) {
   const key = `${account.id}:${typeId}:${attributeId}`;
   const cached = fragranticaDictCache.get(key);
   if (cached && Date.now() - cached.at < 6 * 3_600_000) return cached.values;
-  const values = await ozonGetAttributeDictValues(account, FRAG_OZON_CATEGORY_ID, typeId, attributeId);
+  const values = await ozonGetAttributeDictValues(account, fragOzonCategoryForType(typeId), typeId, attributeId);
   fragranticaDictCache.set(key, { at: Date.now(), values });
   return values;
 }
@@ -115,7 +115,7 @@ async function fragranticaSearchDict(account, typeId, attributeId, value, limit 
   const cached = fragranticaDictSearchCache.get(key);
   if (cached && Date.now() - cached.at < 6 * 3_600_000) return cached.values;
   const data = await ozonRequest("/v1/description-category/attribute/values/search", {
-    description_category_id: FRAG_OZON_CATEGORY_ID,
+    description_category_id: fragOzonCategoryForType(typeId),
     type_id: Number(typeId),
     attribute_id: Number(attributeId),
     value: query,
@@ -159,8 +159,9 @@ function fragranticaTnvedCode(typeId) {
   try {
     const file = require("fs").readFileSync(path.join(dataDir, "ozon-tnved-assignments.json"), "utf8");
     const assignments = JSON.parse(file).assignments || [];
-    const hit = assignments.find((a) => Number(a.descCatId) === FRAG_OZON_CATEGORY_ID && Number(a.typeId) === Number(typeId))
-      || assignments.find((a) => Number(a.descCatId) === FRAG_OZON_CATEGORY_ID && !Number(a.typeId));
+    const categoryId = fragOzonCategoryForType(typeId);
+    const hit = assignments.find((a) => Number(a.descCatId) === categoryId && Number(a.typeId) === Number(typeId))
+      || assignments.find((a) => Number(a.descCatId) === categoryId && !Number(a.typeId));
     if (hit?.tnvedCode) return cleanText(hit.tnvedCode);
   } catch {
     // no assignments file — default code
@@ -1067,7 +1068,7 @@ async function buildFragranticaFormData(query = {}) {
   const brandInfo = await fragranticaBrandInfo(perfume.brandSlug).catch(() => ({ country: "", owner: "" }));
   const countryRu = fragranticaCountryRu(brandInfo.country);
   const [categoryAttrs, brand, genderDict, classificationDict, tnved, countryValues] = await Promise.all([
-    ozonGetCategoryAttributes(account, FRAG_OZON_CATEGORY_ID, type.typeId),
+    ozonGetCategoryAttributes(account, fragOzonCategoryForType(type), type.typeId),
     fragranticaFindBrand(account, type.typeId, perfume.brand),
     fragranticaDictValues(account, type.typeId, FRAG_OZON_ATTR.gender).catch(() => []),
     fragranticaDictValues(account, type.typeId, FRAG_OZON_ATTR.classification).catch(() => []),
@@ -1958,7 +1959,7 @@ async function createFragranticaExports(body = {}, request = { session: {} }) {
 
   const type = fragOzonTypeById(body.typeId) || fragOzonTypeByKey(body.typeKey);
   const attrsAccount = fragranticaResolveOzonAccount(wanted.find((t) => t.kind === "ozon")?.id || body.accountId);
-  const categoryAttrs = await ozonGetCategoryAttributes(attrsAccount, FRAG_OZON_CATEGORY_ID, type.typeId);
+  const categoryAttrs = await ozonGetCategoryAttributes(attrsAccount, fragOzonCategoryForType(type), type.typeId);
   const bottle = (Array.isArray(body.images) ? body.images : []).map(fragranticaAbsoluteUrl).filter(Boolean)[0] || "";
   const { item: baseItem, missing } = buildFragranticaOzonItem({ ...body, typeId: type.typeId, images: bottle ? [bottle] : [] }, categoryAttrs);
   if (missing.length) {
@@ -2111,10 +2112,13 @@ function fragranticaOzonMediaExtras({ perfumeId, style, notes, baseItem, categor
 function fragranticaMarketBlockReasons(perfume = {}, { volume, typeKey, tester } = {}) {
   const vol = fragFormatVolume(volume);
   const type = fragOzonTypeByKey(typeKey || fragOzonGuessTypeKey(perfume));
-  return yandexHardBlockReasons({
-    name: buildFragranticaMarketName({ perfume, typeKey: type.key, volume: vol, tester: Boolean(tester) }),
-    brand: perfume.brand,
-  });
+  const name = buildFragranticaMarketName({ perfume, typeKey: type.key, volume: vol, tester: Boolean(tester) });
+  const reasons = yandexHardBlockReasons({ name, brand: perfume.brand });
+  // a mist / set / deodorant needs its own Market category: the Ozon-type rules give one only for a men's deodorant
+  if (type.special && !resolveYandexCategoryForOzonProduct({ typeId: type.typeId, name }).categoryId) {
+    reasons.push(`Маркет: нет подходящей категории для вида «${type.label}» — карточка только на Ozon`);
+  }
+  return reasons;
 }
 
 function fragranticaHttpError(statusCode, message, detail = {}) {
@@ -2163,7 +2167,7 @@ async function refreshFragranticaExportMedia(row) {
   }
   if (row.marketplace === "ozon") {
     const account = fragranticaResolveOzonAccount(row.account_id);
-    const categoryAttrs = await ozonGetCategoryAttributes(account, FRAG_OZON_CATEGORY_ID, type.typeId).catch(() => []);
+    const categoryAttrs = await ozonGetCategoryAttributes(account, fragOzonCategoryForType(type), type.typeId).catch(() => []);
     const attributes = (item.attributes || []).filter((a) => Number(a.id) !== FRAG_RICH_ATTR);
     const extra = fragranticaOzonMediaExtras({ perfumeId, style: target.style, notes, baseItem: { attributes }, categoryAttrs, perfume });
     // parfumdeclaration appended its «фото в конце» after our photos (Ozon re-hosts them): keep that tail
