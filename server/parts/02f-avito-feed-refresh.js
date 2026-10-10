@@ -319,10 +319,41 @@ async function queueAvitoPriceRefresh(productIds = []) {
   }
 }
 
+// Any change of a warehouse product behind an ad — a link removed or added, archived, another supplier — is queued
+// too, not only a price send: Serge Lutens Arabie lost its link and kept «в наличии, 5» on Avito until the next
+// full refresh. Products of the ad's offer on every marketplace count (a link can live on the Market twin).
+let avitoChangeWatermark = new Date(Date.now() - 2 * 60_000);
+let avitoSourceByOfferCache = { at: 0, map: new Map() };
+async function avitoSourceByOffer() {
+  if (Date.now() - avitoSourceByOfferCache.at > 5 * 60_000) {
+    const state = await readAvitoListingsFile();
+    const map = new Map();
+    for (const item of state.items || []) {
+      const offer = cleanText(item.sourceOfferId).toLowerCase();
+      if (offer && cleanText(item.sourceProductId)) map.set(offer, cleanText(item.sourceProductId));
+    }
+    avitoSourceByOfferCache = { at: Date.now(), map };
+  }
+  return avitoSourceByOfferCache.map;
+}
+
+async function queueChangedAvitoSources() {
+  const since = avitoChangeWatermark;
+  const now = new Date();
+  const byOffer = await avitoSourceByOffer();
+  if (!byOffer.size) return 0;
+  const rows = await getPrisma().$queryRawUnsafe(
+    `SELECT DISTINCT lower(offer_id) AS offer FROM warehouse_products WHERE updated_at > $1 AND lower(offer_id) = ANY($2::text[])`,
+    since, [...byOffer.keys()]);
+  avitoChangeWatermark = now;
+  return queueAvitoPriceRefresh(rows.map((row) => byOffer.get(cleanText(row.offer))).filter(Boolean));
+}
+
 async function drainAvitoPriceQueue() {
   if (avitoInstantPriceRunning || !(await ensureAvitoPriceQueue().catch(() => false))) return null;
   const account = (getAvitoAccounts ? getAvitoAccounts() : [])[0];
   if (!account) return null;
+  await queueChangedAvitoSources().catch((error) => logger.warn("avito changed sources queue failed", { detail: error?.message || String(error) }));
   // right after a restart the walk has not listed the active ads yet: the queue waits for it
   if (!avitoActiveItemIds.size) return null;
   avitoInstantPriceRunning = true;
