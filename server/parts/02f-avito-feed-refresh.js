@@ -122,7 +122,8 @@ function scheduleAvitoDailyUpload() {
 // Автозагрузка идёт раз в неделю / при новых товарах, а цена должна меняться сразу: каждые
 // AVITO_PRICE_SYNC_MINUTES активные объявления Авито сравниваются с ценой фида (тот же расчёт, что в фиде)
 // и расходящиеся больше чем на 1% меняются методом POST /core/v1/items/{id}/update_price — без загрузки и
-// без лимитов размещения. Скачок больше чем в AVITO_PRICE_SYNC_MAX_JUMP раз не применяется, а пишется в лог.
+// без лимитов размещения. Падение цены больше чем в AVITO_PRICE_SYNC_MAX_JUMP раз не применяется, а пишется в лог;
+// повышение уходит всегда (правило владельца, как у защиты цен маркетплейсов).
 const avitoPriceSyncEnabled = process.env.AVITO_PRICE_SYNC_ENABLED !== "false";
 const avitoPriceSyncIntervalMs = Math.max(10 * 60_000, Number(process.env.AVITO_PRICE_SYNC_MINUTES || 30) * 60_000 || 30 * 60_000);
 const avitoPriceSyncMaxJump = Math.max(1.5, Number(process.env.AVITO_PRICE_SYNC_MAX_JUMP || 3) || 3);
@@ -130,6 +131,82 @@ const avitoAdIdCache = new Map(); // avito item id → feed ad id
 let avitoPriceSyncTimer = null;
 let avitoPriceSyncRunning = false;
 let avitoPriceSyncLast = null;
+
+// Остатки тем же проходом: PUT /stock-management/1/stocks (до 200 объявлений за запрос, 100 запросов в минуту).
+// Значение — то же, что <Stock> в фиде (listing.stockQuantity, 0 у «нет в наличии»), так что API и фид не спорят.
+// Отправляется только изменившееся; что ушло — в data/avito-stock-sync.json. Раз в сутки уходит всё заново:
+// Авито само уменьшает остаток при заказе, и без этого наше «5» больше не дошло бы.
+const avitoStockSyncEnabled = process.env.AVITO_STOCK_SYNC_ENABLED !== "false";
+const avitoStockSyncPath = path.join(dataDir, "avito-stock-sync.json");
+const AVITO_STOCK_FULL_RESEND_MS = 24 * 60 * 60_000;
+
+async function readAvitoStockSyncState() {
+  try {
+    const raw = JSON.parse(await fs.readFile(avitoStockSyncPath, "utf8"));
+    return { sent: raw.sent && typeof raw.sent === "object" ? raw.sent : {}, fullAt: raw.fullAt || null };
+  } catch {
+    return { sent: {}, fullAt: null };
+  }
+}
+
+async function writeAvitoStockSyncState(state) {
+  await fs.mkdir(dataDir, { recursive: true }).catch(() => {});
+  const tmp = `${avitoStockSyncPath}.${process.pid}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(state));
+  await fs.rename(tmp, avitoStockSyncPath);
+}
+
+/** Pure: the stock an ad must show — the feed's <Stock>; null = the feed has none (leave Avito's). */
+function avitoWantedStock(listing) {
+  if (!listing) return null;
+  if (listing.outOfStock === true) return 0;
+  const qty = Number(listing.stockQuantity);
+  if (listing.stockQuantity === null || listing.stockQuantity === undefined || !Number.isFinite(qty)) return null;
+  return Math.max(0, Math.min(999999, Math.round(qty)));
+}
+
+async function syncAvitoStocks(account, active, byAd, sleep) {
+  const out = { stockChecked: 0, stockUpdated: 0, stockFailed: 0, stockErrors: [] };
+  const state = await readAvitoStockSyncState();
+  const full = !state.fullAt || Date.now() - Date.parse(state.fullAt) > AVITO_STOCK_FULL_RESEND_MS;
+  const updates = [];
+  for (const ad of active) {
+    const want = avitoWantedStock(byAd.get(avitoAdIdCache.get(Number(ad.id))));
+    if (want === null) continue;
+    out.stockChecked += 1;
+    if (!full && state.sent[String(ad.id)] === want) continue;
+    updates.push({ item_id: Number(ad.id), quantity: want });
+  }
+  for (let i = 0; i < updates.length; i += 200) {
+    const batch = updates.slice(i, i + 200);
+    try {
+      const r = await avitoRequest("/stock-management/1/stocks", { method: "PUT", account, body: { stocks: batch } });
+      const byId = new Map((r?.stocks || []).map((row) => [Number(row.item_id), row]));
+      for (const u of batch) {
+        const row = byId.get(u.item_id);
+        if (row && row.success === false) {
+          out.stockFailed += 1;
+          if (out.stockErrors.length < 10) out.stockErrors.push({ id: u.item_id, errors: row.errors || [] });
+          continue;
+        }
+        state.sent[String(u.item_id)] = u.quantity;
+        out.stockUpdated += 1;
+      }
+    } catch (error) {
+      out.stockFailed += batch.length;
+      if (out.stockErrors.length < 10) out.stockErrors.push({ batch: i / 200, error: error?.message || String(error) });
+      // the whole method refused (not enabled for the account, wrong scope): no point sending the rest
+      if ([401, 403, 404].includes(Number(error?.statusCode))) break;
+    }
+    await sleep(700);
+  }
+  // ads no longer active drop out of the memory, so a reactivated ad gets its stock again
+  const activeIds = new Set(active.map((ad) => String(ad.id)));
+  for (const id of Object.keys(state.sent)) if (!activeIds.has(id)) delete state.sent[id];
+  if (full && !out.stockFailed) state.fullAt = new Date().toISOString();
+  await writeAvitoStockSyncState(state);
+  return out;
+}
 
 async function runAvitoPriceSync({ source = "schedule" } = {}) {
   if (avitoPriceSyncRunning) return { status: "already_running" };
@@ -140,7 +217,8 @@ async function runAvitoPriceSync({ source = "schedule" } = {}) {
   const result = { status: "ok", source, active: 0, checked: 0, updated: 0, skippedJump: [], failed: 0, at: new Date().toISOString() };
   try {
     const active = [];
-    for (let page = 1; page < 100; page += 1) {
+    // no page cap at 99: the old «page < 100» stopped at 9 900 ads and ~1 400 active ads never got a price
+    for (let page = 1; page <= 500; page += 1) {
       const r = await avitoRequest("/core/v1/items", { account, query: { status: "active", per_page: 100, page } });
       const list = r?.resources || [];
       active.push(...list);
@@ -163,7 +241,8 @@ async function runAvitoPriceSync({ source = "schedule" } = {}) {
       if (!listing || !(want > 0) || listing.outOfStock === true) continue;
       result.checked += 1;
       if (have > 0 && Math.abs(want - have) / have <= 0.01) continue;
-      if (have > 0 && (want / have > avitoPriceSyncMaxJump || have / want > avitoPriceSyncMaxJump)) {
+      // owner's rule (as the marketplaces' price guard): a rise goes out by itself, only a big drop waits
+      if (have > 0 && have / want > avitoPriceSyncMaxJump) {
         result.skippedJump.push({ id: ad.id, title: cleanText(ad.title).slice(0, 60), avito: have, feed: want });
         continue;
       }
@@ -175,6 +254,15 @@ async function runAvitoPriceSync({ source = "schedule" } = {}) {
         logger.warn("avito price update failed", { id: ad.id, detail: error?.message || String(error) });
       }
       await sleep(400);
+    }
+    if (avitoStockSyncEnabled) {
+      try {
+        Object.assign(result, await syncAvitoStocks(account, active, byAd, sleep));
+        if (result.stockErrors.length) logger.warn("avito stock update errors", { errors: result.stockErrors });
+      } catch (error) {
+        result.stockError = error?.message || String(error);
+        logger.warn("avito stock sync failed", { detail: result.stockError });
+      }
     }
     if (result.skippedJump.length) logger.warn("avito price jumps not applied", { items: result.skippedJump.slice(0, 20) });
     logger.info("avito price sync", { ...result, skippedJump: result.skippedJump.length });
