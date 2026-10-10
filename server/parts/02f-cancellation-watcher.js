@@ -194,6 +194,26 @@ async function checkAndHandleCancelledOrders() {
     }
   }
 
+  // Avito: orders cancelled by the buyer or by Avito (order-management API)
+  const hasAvitoRows = openRows.some((r) => r.marketplace === "avito" && r.orderId);
+  if (hasAvitoRows) {
+    try {
+      for (const account of getAvitoAccounts()) {
+        for (let page = 1; page <= 15; page += 1) {
+          const data = await avitoRequest("/order-management/1/orders", { query: { statuses: "canceled", limit: 20, page }, account });
+          const orders = Array.isArray(data?.orders) ? data.orders : [];
+          for (const order of orders) {
+            const lookupKey = `avito:${cleanText(order.id)}`;
+            if (byOrderId.has(lookupKey)) cancelledRows.push(...byOrderId.get(lookupKey));
+          }
+          if (!data?.hasMore || !orders.length) break;
+        }
+      }
+    } catch (e) {
+      logger.warn("cancellation watcher: Avito poll failed", { detail: e?.message || String(e) });
+    }
+  }
+
   // Deduplicate
   const seen = new Set();
   const unique = cancelledRows.filter((r) => { if (seen.has(r.key)) return false; seen.add(r.key); return true; });

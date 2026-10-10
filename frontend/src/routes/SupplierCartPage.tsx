@@ -845,6 +845,7 @@ const ALL_MARKETPLACES = [
   { id: "ozon", label: "Ozon" },
   { id: "yandex", label: "Yandex Market" },
   { id: "wb", label: "Wildberries" },
+  { id: "avito", label: "Avito" },
 ] as const;
 
 const PmPendingCountSchema = z.object({
@@ -984,7 +985,7 @@ export function SupplierCartPage() {
     <section className="page-section supplier-cart-page">
       <PageHeader
         title="Автокорзина"
-        subtitle={`Заказы ${activeMarketplaces.map((m) => m === "wb" ? "Wildberries" : m === "yandex" ? "Yandex Market" : "Ozon").join(", ")} автоматически отправляются в корзину PriceMaster по расписанию.`}
+        subtitle={`Заказы ${activeMarketplaces.map((m) => m === "wb" ? "Wildberries" : m === "avito" ? "Avito" : m === "yandex" ? "Yandex Market" : "Ozon").join(", ")} автоматически отправляются в корзину PriceMaster по расписанию.`}
         action={
           <div className="sc-actions-row">
             <button

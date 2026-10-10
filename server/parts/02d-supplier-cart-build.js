@@ -40,6 +40,13 @@ async function buildSupplierCartPreview(params = {}) {
       warnings.push({ marketplace: "wb", error: error?.message || String(error) });
     }
   }
+  if ((marketplace === "all" || marketplace === "avito") && enabledMarketplaces.has("avito")) {
+    try {
+      lines.push(...await fetchAvitoSupplierCartLines({ limit: Math.max(1, limit - lines.length) }));
+    } catch (error) {
+      warnings.push({ marketplace: "avito", error: error?.message || String(error) });
+    }
+  }
   const uniqueLines = Array.from(new Map(lines.map((line) => [line.key, line])).values()).slice(0, limit);
   const warehouse = await hydrateSupplierCartWarehouse(
     await readWarehouse(),

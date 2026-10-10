@@ -62,8 +62,10 @@ async function upsertFinanceOrderFromPickingRow(row = {}, request = null) {
   });
   if (shouldUsePostgresStorage()) {
     try {
+      // the Postgres enum knows only ozon / yandex: an Avito / WB order is stored without it (raw.picking keeps it)
+      const dbMarketplace = ["ozon", "yandex"].includes(financeOrder.marketplace) ? financeOrder.marketplace : null;
       const updatePayload = {
-        marketplace: financeOrder.marketplace || null,
+        marketplace: dbMarketplace,
         target: financeOrder.target || null,
         orderId: financeOrder.orderId,
         postingNumber: financeOrder.postingNumber || null,
@@ -95,7 +97,7 @@ async function upsertFinanceOrderFromPickingRow(row = {}, request = null) {
         // find by composite unique key and update in-place.
         const existing = await getPrisma().financeOrder.findFirst({
           where: {
-            marketplace: financeOrder.marketplace || null,
+            marketplace: dbMarketplace,
             target: financeOrder.target || null,
             orderId: financeOrder.orderId,
             offerId: financeOrder.offerId || null,

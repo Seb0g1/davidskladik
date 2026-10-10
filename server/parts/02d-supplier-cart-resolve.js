@@ -576,6 +576,72 @@ async function fetchWbSupplierCartLines({ limit } = {}) {
   return lines.slice(0, limit);
 }
 
+// Avito orders (order-management API, Авито Доставка): an item's `id` is our feed ad id (oz-<offer>-r1) → the
+// listing → the warehouse product it was built from. Only orders the seller still has to ship.
+const AVITO_CART_STATUSES = ["on_confirmation", "ready_to_ship"];
+
+async function avitoListingsByFeedAdId() {
+  const state = await readAvitoListingsFile().catch(() => ({ items: [] }));
+  const map = new Map();
+  for (const item of state.items || []) {
+    const adId = avitoFeedAdId(item.adId);
+    if (adId) map.set(adId, item);
+  }
+  return map;
+}
+
+function normalizeAvitoSupplierCartOrders(orders = [], account = {}, listingsByAdId = new Map()) {
+  const lines = [];
+  for (const order of Array.isArray(orders) ? orders : []) {
+    if (!AVITO_CART_STATUSES.includes(cleanText(order.status))) continue;
+    const orderId = cleanText(order.id);
+    for (const [index, item] of (Array.isArray(order.items) ? order.items : []).entries()) {
+      const adId = cleanText(item.id);
+      const listing = listingsByAdId.get(adId);
+      // an ad of ours carries its source offer; a feed id «oz-<offer>-r1» still names it without the listing
+      const offerId = cleanText(listing?.sourceOfferId) || cleanText((adId.match(/^oz-#?(.+?)#?-r\d+$/) || [])[1]);
+      if (!offerId) continue;
+      const quantity = Math.max(1, Math.round(Number(item.count || 1) || 1));
+      lines.push(normalizeSupplierCartLine({
+        marketplace: "avito",
+        accountId: cleanText(account.id || "avito"),
+        accountName: cleanText(account.name || "Avito"),
+        orderId,
+        externalOrderId: cleanText(order.marketplaceId),
+        itemId: `${orderId}:${cleanText(item.avitoId) || index}`,
+        offerId,
+        productName: cleanText(item.title) || cleanText(listing?.title) || offerId,
+        quantity,
+        orderedAt: cleanText(order.createdAt),
+        status: cleanText(order.status),
+        raw: {
+          avitoOrderId: orderId, avitoItemId: cleanText(item.avitoId), adId, sourceProductId: cleanText(listing?.sourceProductId),
+          delivery: cleanText(order.delivery?.serviceName), payoutAmount: Number(item.prices?.total || 0) || 0,
+          // the sale price per unit, read by computeMarketplaceSaleAmountRub (the «purchase never dearer than the sale» rule)
+          product: { price: (Number(item.prices?.price || 0) || 0) / quantity },
+        },
+      }));
+    }
+  }
+  return lines;
+}
+
+async function fetchAvitoSupplierCartLines({ limit } = {}) {
+  const listingsByAdId = await avitoListingsByFeedAdId();
+  const lines = [];
+  for (const account of getAvitoAccounts()) {
+    for (const status of AVITO_CART_STATUSES) {
+      for (let page = 1; page <= 25 && lines.length < limit; page += 1) {
+        const data = await avitoRequest("/order-management/1/orders", { query: { statuses: status, limit: 20, page }, account });
+        const orders = Array.isArray(data?.orders) ? data.orders : [];
+        lines.push(...normalizeAvitoSupplierCartOrders(orders, account, listingsByAdId));
+        if (!data?.hasMore || !orders.length) break;
+      }
+    }
+  }
+  return lines.slice(0, limit);
+}
+
 // The api process keeps the warehouse in memory only as a postgres stub
 // (postgresOnly) after the OOM hardening. Unrelated routes partially hydrate
 // that stub via mergeWarehouseProductsIntoMemory, so a non-empty products list
@@ -618,6 +684,13 @@ function findSupplierCartWarehouseProduct(warehouse = {}, line = {}) {
   const candidates = products.filter((product) => cleanText(product.offerId).toLowerCase() === offer);
   if (!candidates.length) return null;
   const marketplace = cleanText(line.marketplace).toLowerCase();
+  if (marketplace === "avito") {
+    // the ad was built from this warehouse product (an Ozon card); otherwise any Ozon card of the offer
+    const sourceId = cleanText(line.raw?.sourceProductId);
+    return (sourceId && candidates.find((product) => String(product.id) === sourceId))
+      || candidates.find((product) => normalizeWarehouseProduct(product).marketplace === "ozon")
+      || candidates[0];
+  }
   const target = cleanText(line.accountId || line.campaignId).toLowerCase();
   // Exact target match first — prevents primary "ozon" account products from being selected
   // when the same offerId exists on both Ozon accounts (matchesOzonTarget returns true for

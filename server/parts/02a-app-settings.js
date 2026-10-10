@@ -222,7 +222,7 @@ function normalizeSorinExpressSettings(input = {}, fallback = defaultAppSettings
 function normalizeSupplierCartSettings(input = {}, fallback = defaultAppSettings().supplierCart) {
   const raw = input && typeof input === "object" ? input : {};
   const marketplaces = Array.isArray(raw.marketplaces)
-    ? raw.marketplaces.map((item) => cleanText(item).toLowerCase()).filter((item) => item === "ozon" || item === "yandex" || item === "wb")
+    ? raw.marketplaces.map((item) => cleanText(item).toLowerCase()).filter((item) => item === "ozon" || item === "yandex" || item === "wb" || item === "avito")
     : fallback.marketplaces;
   const lookbackHours = Number(raw.lookbackHours ?? raw.lookback_hours ?? fallback.lookbackHours);
   const normalizeStatuses = (value, fallbackValue) => {
@@ -239,7 +239,7 @@ function normalizeSupplierCartSettings(input = {}, fallback = defaultAppSettings
       .slice(0, 10),
     timezone: cleanText(raw.timezone || fallback.timezone || "Europe/Moscow") || "Europe/Moscow",
     mode: "draft",
-    marketplaces: marketplaces.length ? Array.from(new Set(marketplaces)) : ["ozon", "yandex", "wb"],
+    marketplaces: marketplaces.length ? Array.from(new Set(marketplaces)) : ["ozon", "yandex", "wb", "avito"],
     lookbackHours: Number.isFinite(lookbackHours) && lookbackHours > 0 ? Math.min(720, Math.round(lookbackHours)) : fallback.lookbackHours,
     includeOzonStatuses: normalizeStatuses(raw.includeOzonStatuses || raw.include_ozon_statuses, fallback.includeOzonStatuses),
     includeYandexStatuses: normalizeStatuses(raw.includeYandexStatuses || raw.include_yandex_statuses, fallback.includeYandexStatuses),
