@@ -128,6 +128,9 @@ const avitoPriceSyncEnabled = process.env.AVITO_PRICE_SYNC_ENABLED !== "false";
 const avitoPriceSyncIntervalMs = Math.max(10 * 60_000, Number(process.env.AVITO_PRICE_SYNC_MINUTES || 30) * 60_000 || 30 * 60_000);
 const avitoPriceSyncMaxJump = Math.max(1.5, Number(process.env.AVITO_PRICE_SYNC_MAX_JUMP || 3) || 3);
 const avitoAdIdCache = new Map(); // avito item id → feed ad id
+// active Avito item ids from the last walk: the instant path touches only these (an archived or removed ad answers
+// «Can not update item price in current status»)
+let avitoActiveItemIds = new Set();
 let avitoPriceSyncTimer = null;
 let avitoPriceSyncRunning = false;
 let avitoPriceSyncLast = null;
@@ -226,6 +229,7 @@ async function runAvitoPriceSync({ source = "schedule" } = {}) {
       await sleep(1000);
     }
     result.active = active.length;
+    avitoActiveItemIds = new Set(active.map((a) => Number(a.id)));
     const unknown = active.map((a) => Number(a.id)).filter((id) => !avitoAdIdCache.has(id));
     for (let i = 0; i < unknown.length; i += 100) {
       const r = await getAvitoAdIdsByAvitoIds(account, unknown.slice(i, i + 100));
@@ -319,9 +323,11 @@ async function drainAvitoPriceQueue() {
   if (avitoInstantPriceRunning || !(await ensureAvitoPriceQueue().catch(() => false))) return null;
   const account = (getAvitoAccounts ? getAvitoAccounts() : [])[0];
   if (!account) return null;
+  // right after a restart the walk has not listed the active ads yet: the queue waits for it
+  if (!avitoActiveItemIds.size) return null;
   avitoInstantPriceRunning = true;
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const result = { at: new Date().toISOString(), queued: 0, listings: 0, priceUpdated: 0, priceHeld: 0, stockUpdated: 0, failed: 0, noAvitoId: 0 };
+  const result = { at: new Date().toISOString(), queued: 0, listings: 0, priceUpdated: 0, priceHeld: 0, stockUpdated: 0, failed: 0, noAvitoId: 0, inactive: 0 };
   let taken = [];
   try {
     taken = (await getPrisma().$queryRawUnsafe(
@@ -368,6 +374,7 @@ async function drainAvitoPriceQueue() {
     for (const [adId, { before, after }] of next) {
       const avitoId = avitoIdByAd.get(adId);
       if (!avitoId) { result.noAvitoId += 1; continue; }
+      if (!avitoActiveItemIds.has(Number(avitoId))) { result.inactive += 1; continue; }
       const want = Math.round(Number(after.priceRub) || 0);
       const was = Math.round(Number(before.priceRub) || 0);
       if (!after.outOfStock && want > 0 && want !== was) {
